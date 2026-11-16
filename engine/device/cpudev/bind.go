@@ -11,14 +11,31 @@ import (
 // Bindings is where the CPU device's forms read their weights: each form's
 // weights resolved once for the frame its block is in (Bind), each block's
 // routed banks as one view of its experts in the frames' expert pages, and
-// the row table's rows in a view of the frames.
+// each row table's rows in a view of the frames.
 type Bindings struct {
-	fr       *jlm.Frames
-	banks    [][3][3]unsafe.Pointer
-	table    *jlm.RowView
-	tableRow int
-	bound    map[bindKey]*bound
-	err      error
+	fr     *jlm.Frames
+	banks  [][3][3]unsafe.Pointer
+	tables []rowTable
+	bound  map[bindKey]*bound
+	err    error
+}
+
+// rowTable is a row table's view of the frames, by its role, its rows
+// rowBytes apart.
+type rowTable struct {
+	role     jlm.Role
+	view     *jlm.RowView
+	rowBytes int
+}
+
+// table is the row table of role r, nil where none is open.
+func (b *Bindings) table(r jlm.Role) *rowTable {
+	for i := range b.tables {
+		if b.tables[i].role == r {
+			return &b.tables[i]
+		}
+	}
+	return nil
 }
 
 // NewBindings binds forms to weights read into fr (nil for weights from no
@@ -101,10 +118,7 @@ func (b *Bindings) Check(f *Form, li int, t Tensors) error {
 			if li < 0 || li >= len(b.banks) || b.banks[li][x.Role-jlm.RoleExpGateBank][x.Region] == nil {
 				return fmt.Errorf("block %d: its form binds the bank %v, which has no view in the expert pages", li, x.Role)
 			}
-		case jlm.RowTableRole(x.Role):
-			if b.table == nil {
-				return fmt.Errorf("block %d: its form binds the row table %v, which has no view in the frames", li, x.Role)
-			}
+		case b.table(x.Role) != nil:
 		default:
 			data, p, _ := t.Bytes(x.Role)
 			if p == nil && len(data) == 0 {
@@ -126,8 +140,9 @@ func (b *Bindings) at(li int, t Tensors, x Weight) unsafe.Pointer {
 		return unsafe.Pointer(unsafe.SliceData(t.Floats(x.Role)))
 	case jlm.ExpertBank(x.Role):
 		return b.banks[li][x.Role-jlm.RoleExpGateBank][x.Region]
-	case jlm.RowTableRole(x.Role):
-		return unsafe.Add(b.table.Base(), x.From*b.tableRow)
+	}
+	if rt := b.table(x.Role); rt != nil {
+		return unsafe.Add(rt.view.Base(), x.From*rt.rowBytes)
 	}
 	data, p, _ := t.Bytes(x.Role)
 	if p == nil && len(data) == 0 {
@@ -161,29 +176,40 @@ func (b *Bindings) BankViews(li, n int, banks [3]*jlm.Entry) bool {
 }
 
 // OpenTable reads the row table e's rows, rowBytes apart, through a view
-// of the frames (jlm.Frames.NewRowView), opened once.
+// of the frames (jlm.Frames.NewRowView), opened once per role.
 func (b *Bindings) OpenTable(e *jlm.Entry, rowBytes int) error {
-	if b.table != nil {
+	if b.table(e.Role) != nil {
 		return nil
 	}
 	v, err := b.fr.NewRowView(e)
 	if err != nil {
 		return err
 	}
-	b.table, b.tableRow = v, rowBytes
+	b.tables = append(b.tables, rowTable{role: e.Role, view: v, rowBytes: rowBytes})
 	return nil
 }
 
-// Rows makes the row table's rows own resident in its view.
-func (b *Bindings) Rows(own []uint32) error { return b.table.Ensure(own) }
-
-// DropRows lets the row table's rows go.
-func (b *Bindings) DropRows() { b.table.Drop() }
-
-// Close returns the row table's view, held off the heap.
-func (b *Bindings) Close() {
-	if b.table != nil {
-		b.table.Close()
-		b.table = nil
+// Rows makes the rows own names of the row table of role r resident in its
+// view.
+func (b *Bindings) Rows(r jlm.Role, own []uint32) error {
+	t := b.table(r)
+	if t == nil {
+		return fmt.Errorf("the row table %v has no view in the frames", r)
 	}
+	return t.view.Ensure(own)
+}
+
+// DropRows lets every row table's rows go.
+func (b *Bindings) DropRows() {
+	for i := range b.tables {
+		b.tables[i].view.Drop()
+	}
+}
+
+// Close returns the row tables' views, held off the heap.
+func (b *Bindings) Close() {
+	for i := range b.tables {
+		b.tables[i].view.Close()
+	}
+	b.tables = nil
 }

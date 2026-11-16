@@ -4,6 +4,7 @@ import (
 	"slices"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -63,12 +64,12 @@ type Bound struct {
 
 // Resources is what a block's call reads that the caller pages in during
 // it: the routed experts its selection picks (count says the step counts
-// them as used), held until ReleaseExperts, and the row table's rows its
+// them as used), held until ReleaseExperts, and each row table's rows its
 // hash names, held until DropRows.
 type Resources interface {
 	Experts(li int, sel []int32, count bool) error
 	ReleaseExperts()
-	Rows(own []uint32) error
+	Rows(role jlm.Role, own []uint32) error
 	DropRows()
 }
 
@@ -176,7 +177,7 @@ func (r *Runner) Form(b *Bound, f *Form, li int) error {
 	if f.RowSplit > 0 {
 		r.dev.Calls(c, f.Codes[:f.RowSplit])
 		defer r.res.DropRows()
-		if err := r.res.Rows(b.Own[f.RowSel][:b.N*f.RowN]); err != nil {
+		if err := r.rows(b, f, b.N); err != nil {
 			return err
 		}
 		lo = f.RowSplit
@@ -202,7 +203,7 @@ func (r *Runner) Codes(b *Bound, f *Form, li, lo, hi, k int) error {
 	c := r.CallOf(b, f)
 	for i := lo; i < hi; i++ {
 		if i == f.RowSplit && f.RowSplit > 0 {
-			if err := r.res.Rows(b.Own[f.RowSel][:k*f.RowN]); err != nil {
+			if err := r.rows(b, f, k); err != nil {
 				r.res.DropRows()
 				return err
 			}
@@ -226,6 +227,17 @@ func (r *Runner) Codes(b *Bound, f *Form, li, lo, hi, k int) error {
 	}
 	r.res.ReleaseExperts()
 	r.dropRows(f)
+	return nil
+}
+
+// rows makes resident the rows k rows of b name of each row table form f
+// gathers from.
+func (r *Runner) rows(b *Bound, f *Form, k int) error {
+	for _, t := range f.RowSels {
+		if err := r.res.Rows(t.Role, b.Own[t.Own][:k*t.N]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

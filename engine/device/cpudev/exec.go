@@ -3,6 +3,7 @@ package cpudev
 import (
 	"cmp"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -85,7 +86,7 @@ type resources struct {
 	b *Bindings
 }
 
-func (r resources) Rows(own []uint32) error { return r.b.Rows(own) }
+func (r resources) Rows(role jlm.Role, own []uint32) error { return r.b.Rows(role, own) }
 
 func (r resources) DropRows() { r.b.DropRows() }
 
@@ -270,9 +271,16 @@ func (e *Exec) specOf(li int, p *nn.LayerPlan) (nn.BlockSpec, bool) {
 		return nn.BlockSpec{}, false
 	}
 	s := *p.Spec
-	if s.Why == nn.DeclineServes && s.Table != nil && s.Graph.TableRows() >= 0 {
-		if err := e.b.OpenTable(s.Table, s.TableRow); err != nil {
-			s.Why = e.comp.Decline(err)
+	if s.Why == nn.DeclineServes {
+		for _, t := range s.Graph.TableRows() {
+			i := slices.IndexFunc(s.Tables, func(rt nn.RowTable) bool { return rt.Entry.Role == t.Role })
+			if i < 0 {
+				continue
+			}
+			if err := e.b.OpenTable(s.Tables[i].Entry, s.Tables[i].RowBytes); err != nil {
+				s.Why = e.comp.Decline(err)
+				break
+			}
 		}
 	}
 	return s, true
