@@ -69,6 +69,14 @@ type mjStates struct {
 	// Retarget is the roles whose name in the source means what another
 	// role does (retargets).
 	Retarget []mjRetarget `json:"retarget"`
+	// DeltaGate is the delta rule's output gate, by name (mjDeltaGates;
+	// StateDelta's where unstated).
+	DeltaGate string `json:"delta_gate"`
+	// QSARatios is each block's compress ratio for query-sparse attention,
+	// a list of counts (stateQSA; none for none), and NGram, true, reads the
+	// n-gram block (ngramConfig).
+	QSARatios string `json:"qsa_ratios"`
+	NGram     bool   `json:"ngram"`
 	// YarnMagnitude is where a YaRN's magnitude reaches, by name
 	// (mjYarnMagnitudes; cos and sin and the softmax both where unstated).
 	YarnMagnitude string `json:"yarn_magnitude"`
@@ -185,11 +193,18 @@ func mjGates() map[string]int64 {
 }
 
 // mjStatesStreams is Count residual streams, each block's mix normalised by
-// Iterations Sinkhorn rounds at Eps where both are stated.
+// Iterations Sinkhorn rounds at Eps where both are stated, or gated through
+// LowRank where that is.
 type mjStatesStreams struct {
 	Count      string `json:"count"`
 	Iterations string `json:"sinkhorn_iterations"`
 	Eps        string `json:"eps"`
+	LowRank    string `json:"low_rank"`
+}
+
+// mjDeltaGates is each delta rule output gate a file may state by name.
+func mjDeltaGates() map[string]func() *jlm.Program {
+	return map[string]func() *jlm.Program{"sigmoid": jlm.DeltaGateSigmoid, "silu": jlm.DeltaGateSiLU}
 }
 
 // mjStatesOutputGroups is the attention output projected through Groups
@@ -324,7 +339,7 @@ func (mj *modelJSON) checkStates() error {
 			if x.Count == "" || (x.Iterations == "") != (x.Eps == "") {
 				return fmt.Errorf("convert: %s: %s: streams state their count, and sinkhorn_iterations with eps", mj.name, arch)
 			}
-			srcs = append(srcs, x.Count, x.Iterations, x.Eps)
+			srcs = append(srcs, x.Count, x.Iterations, x.Eps, x.LowRank)
 		}
 		if x := st.OutputGroups; x != nil {
 			if x.Groups == "" || x.Rank == "" {
@@ -357,6 +372,10 @@ func (mj *modelJSON) checkStates() error {
 				return fmt.Errorf("convert: %s: %s: retarget %+v: %q is not a container role", mj.name, arch, m, m.To)
 			}
 		}
+		if _, ok := mjDeltaGates()[st.DeltaGate]; st.DeltaGate != "" && !ok {
+			return fmt.Errorf("convert: %s: %s: delta gate %q is not one the container states", mj.name, arch, st.DeltaGate)
+		}
+		srcs = append(srcs, st.QSARatios)
 		if st.YarnMagnitude != "" && !slices.Contains(mjYarnMagnitudes(), st.YarnMagnitude) {
 			return fmt.Errorf("convert: %s: %s: yarn magnitude %q is not one the container states", mj.name, arch, st.YarnMagnitude)
 		}
@@ -728,6 +747,14 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 					c.HCIters, c.HCEps)
 			}
 		}
+		if x.LowRank != "" {
+			if c.HCLowRank, err = whole("streams.low_rank", x.LowRank); err != nil {
+				return err
+			}
+			if c.HCLowRank == 0 {
+				return fmt.Errorf("convert: %s: %s: %d streams gated at rank 0", by, arch, c.HCMult)
+			}
+		}
 	}
 	if x := st.OutputGroups; x != nil {
 		if err := counts(map[string]*uint32{"output_groups.groups": &c.OGroups, "output_groups.rank": &c.OLoraRank},
@@ -772,6 +799,37 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		if c.NHashLayers > c.NLayer {
 			return fmt.Errorf("convert: %s: %s: %d hash-routed blocks of %d", by, arch, c.NHashLayers, c.NLayer)
+		}
+	}
+	if st.DeltaGate != "" {
+		c.DeltaGate = mjDeltaGates()[st.DeltaGate]()
+	}
+	if st.QSARatios != "" {
+		v, err := value("qsa_ratios", st.QSARatios)
+		if err != nil {
+			return err
+		}
+		var rs []uint64
+		if !v.IsNone() {
+			if !v.IsList() {
+				return fmt.Errorf("convert: %s: %s: qsa_ratios is %v, not a list", by, arch, v)
+			}
+			rs = make([]uint64, v.AsList().Len())
+			for i := range rs {
+				x := v.AsList().Get(i)
+				if !x.IsInt() || x.AsInt() < 0 {
+					return fmt.Errorf("convert: %s: %s: qsa ratio %d is %v, not a count", by, arch, i, x)
+				}
+				rs[i] = uint64(x.AsInt())
+			}
+		}
+		if err := stateQSA(f, c, rs); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
+		}
+	}
+	if st.NGram {
+		if err := ngramConfig(f, c); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
 		}
 	}
 	if w := st.Window; w != nil {

@@ -58,45 +58,14 @@ func qwen4expRoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// qwen4expConfig is llama.cpp's qwen4exp.cpp and transformers'
-// Qwen4ExpForCausalLM, text only, on top of what convert/models/qwen3_5.json
-// states for it (the delta rule's geometry, the gated query, per-head q/k
-// norms, the tiled value heads) and the M-RoPE sections:
-//
-//   - HCMult streams mixed through a HCLowRank gate (hyper_connection.*);
-//   - the delta rule's output norm gated by sigmoid, not silu: llama.cpp's
-//     graph hardcodes it and the GGUF carries no key, transformers reads
-//     output_gate_type, which the release states as sigmoid
-//     (jlm.DeltaGateSigmoid);
-//   - QSA on the attention blocks: the indexer's heads, width and token
-//     budget, and one block size, which compress_ratios states per block
-//     (the ratio on every attention block, zero on every linear one; any
-//     other pattern is refused);
-//   - the n-gram embedding on one linear block (ple.*), with the hash's
-//     constants carried exactly.
-//
-// Refused: no hyper-connections or a count of one (every reference refuses
-// it), a QSA block whose ratio differs from another's or sits on a linear
-// block, more than one n-gram block or one on an attention block, and
-// constants too short for the heads they describe.
-func qwen4expConfig(f *meta.File, c *Config) error {
-	c.DeltaGate = jlm.DeltaGateSigmoid()
-	if err := partialRotary(c); err != nil {
-		return err
-	}
-	c.HCMult = uint32(f.UintKey("hyper_connection.count", 0))
-	c.HCLowRank = uint32(f.UintKey("hyper_connection.low_rank", 0))
-	if c.HCMult < 2 || c.HCLowRank == 0 {
-		return fmt.Errorf("hyper-connections: %d streams at rank %d", c.HCMult, c.HCLowRank)
-	}
-	c.IdxHeads = uint32(f.UintKey("attention.indexer.head_count", 0))
-	c.IdxHeadDim = uint32(f.UintKey("attention.indexer.key_length", 0))
-	c.IdxTopK = uint32(f.UintKey("attention.indexer.top_k", 0))
-	if kv, ok := f.Key("attention.compress_ratios"); ok {
-		rs, err := kv.Uint64s()
-		if err != nil {
-			return fmt.Errorf("attention.compress_ratios: %w", err)
-		}
+// stateQSA states QSA (query-sparse attention) on the attention blocks from
+// the ratio each block compresses by, rs (llama.cpp's qwen4exp.cpp and
+// transformers' Qwen4ExpForCausalLM, the qsa_ratios statement; none stated
+// for nil): the ratio on every attention block, zero on every linear one,
+// one ratio throughout, and the indexer's heads, width and a budget of
+// whole compressed blocks. Any other pattern is refused.
+func stateQSA(f *meta.File, c *Config, rs []uint64) error {
+	if rs != nil {
 		c.QSARatio = 0
 		for _, r := range rs {
 			if r == 0 {
@@ -140,11 +109,13 @@ func qwen4expConfig(f *meta.File, c *Config) error {
 			return fmt.Errorf("a rotary of %d on an indexer key of %d", c.NRot, c.IdxHeadDim)
 		}
 	}
-	return ngramConfig(f, c)
+	return nil
 }
 
-// ngramConfig reads the n-gram embedding's keys, the hash constants as the
-// unsigned integers they are.
+// ngramConfig reads the n-gram embedding's keys (the ngram statement): one
+// linear block's table of hashed n-grams (ple.*), the hash constants as the
+// unsigned integers they are. Refused: more than one n-gram block, and
+// constants too short for the heads they describe.
 func ngramConfig(f *meta.File, c *Config) error {
 	kv, ok := f.Key("ple.layers")
 	if !ok {

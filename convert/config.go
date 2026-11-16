@@ -336,10 +336,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 	switch arch {
 	case ArchGemma2, ArchGemma3:
 		gemmaAttnScale(c)
-	case ArchQwen4Exp:
-		if err := qwen4expConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchGemma4:
 		if err := gemma4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)

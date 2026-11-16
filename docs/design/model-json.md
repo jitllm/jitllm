@@ -209,7 +209,13 @@ schema; `convert/modeljson.go` reads it. Its sections:
   of a class stated `ffn_ungated` (arcee's), and no `position_embd.weight`
   where `learned_positions` states the input rows add one (a starcoder's);
   each of those two is true or false. A learned position table is as wide
-  as the rows and bounds the context. `yarn_magnitude` is where a YaRN's
+  as the rows and bounds the context. `delta_gate` names the delta rule's
+  output gate (`sigmoid`, `silu`; the readers' where unstated), `streams.low_rank`
+  the rank a block's streams are gated through (at least one where stated),
+  `qsa_ratios` each block's compress ratio for query-sparse attention (a list
+  of counts, `none` for none; `stateQSA` holds it to one ratio on every
+  attention block and a budget of whole blocks), and `ngram: true` reads the
+  n-gram block (`ngramConfig`). `yarn_magnitude` is where a YaRN's
   magnitude reaches, by name: `softmax` (DeepSeek's, the score alone) or
   `mscale_ratio` (Ministral 3's, cos and sin by mscale(s, 1)/mscale(s, m)
   and the score not at all); both where unstated. `retarget` is the roles whose name in
