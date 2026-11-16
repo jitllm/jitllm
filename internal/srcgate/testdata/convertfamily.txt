@@ -6,7 +6,6 @@
 1 convert/acts.go:RouterScore
 1 convert/acts.go:RouterWeight
 1 convert/acts.go:StateActivations
-1 convert/apertus.go:apertusXIELU
 59 convert/arch.go:coreArchName
 14 convert/arch.go:denseArchName
 2 convert/arch.go:encoderArchName
@@ -17,7 +16,7 @@
 1 convert/bitnet.go:bitnetTensors
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
-60 convert/config.go:configOfFile
+55 convert/config.go:configOfFile
 19 convert/config.go:projectorOf
 4 convert/config.go:ropeScalingOf
 1 convert/config.go:visionOf

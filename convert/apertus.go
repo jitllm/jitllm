@@ -4,47 +4,35 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// apertusConfig is llama.cpp's apertus.cpp and transformers'
-// ApertusForCausalLM:
-//
-//	attention_layernorm, feedforward_layernorm  -> attn_norm, ffn_norm (RMSNorm)
-//	per-head q/k RMSNorm before the rotary      -> FlagQKNorm
-//	rotate_half rotary, llama 3's factors        -> FlagRopeNeox, rope_freqs
-//	up, xIELU, down -- no gate                   -> the absent ffn_gate, and the
-//	                                                arch's activation with four
-//	                                                numbers a block (RoleXIELU)
-//
-// The activation is the arch's: a GGUF names it only through the xielu.* keys
-// apertusXIELU folds, and refuses a file without; a safetensors checkpoint's
-// model.json gathers the same vector from the block's own four tensors.
-func apertusConfig(f *meta.File, c *Config) error {
-	c.Flags |= jlm.FlagQKNorm | jlm.FlagRopeNeox
-	return nil
-}
-
-// apertusXIELU writes each block's xIELU numbers (llama.cpp's converter
-// stores the raw parameters as four per-layer keys, a scalar standing for
-// every layer) as that block's RoleXIELU vector, folded.
-func apertusXIELU(c *Config, f *meta.File, s *jlm.Source) error {
-	if c == nil || c.Arch != ArchApertus {
+// xieluTensors writes each block's xIELU numbers, for a file stating any
+// (llama.cpp's converter stores the raw parameters as four per-layer keys,
+// a scalar standing for every layer), as that block's RoleXIELU vector,
+// folded; a file stating some and not all is refused.
+func xieluTensors(c *Config, f *meta.File, s *jlm.Source) error {
+	keys := []string{"xielu.alpha_p", "xielu.alpha_n", "xielu.beta", "xielu.eps"}
+	if c == nil || !slices.ContainsFunc(keys, func(k string) bool {
+		_, ok := xieluKey(f, k)
+		return ok
+	}) {
 		return nil
 	}
 	n := int(c.NLayer)
 	var raw [4][]float64
-	for i, k := range []string{"xielu.alpha_p", "xielu.alpha_n", "xielu.beta", "xielu.eps"} {
+	for i, k := range keys {
 		v, ok := xieluKey(f, k)
 		if !ok {
-			return fmt.Errorf("convert: apertus: no %s", k)
+			return fmt.Errorf("convert: xielu: no %s", k)
 		}
 		if v.Len() == 0 {
 			x, ok := v.Float()
 			if !ok {
-				return fmt.Errorf("convert: apertus: %s is %v, not a number", k, v.Type)
+				return fmt.Errorf("convert: xielu: %s is %v, not a number", k, v.Type)
 			}
 			for range n {
 				raw[i] = append(raw[i], x)
@@ -53,10 +41,10 @@ func apertusXIELU(c *Config, f *meta.File, s *jlm.Source) error {
 		}
 		xs, err := v.Float32s()
 		if err != nil {
-			return fmt.Errorf("convert: apertus: %s: %w", k, err)
+			return fmt.Errorf("convert: xielu: %s: %w", k, err)
 		}
 		if len(xs) != n {
-			return fmt.Errorf("convert: apertus: %s has %d values for %d blocks", k, len(xs), n)
+			return fmt.Errorf("convert: xielu: %s has %d values for %d blocks", k, len(xs), n)
 		}
 		for _, x := range xs {
 			raw[i] = append(raw[i], float64(x))

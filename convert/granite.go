@@ -7,42 +7,6 @@ import (
 	"github.com/jitllm/jitllm/convert/meta"
 )
 
-// graniteConfig reads Granite's four scaling constants (ArchGranite).
-//
-// llama.cpp's granite graph multiplies the embedding by embedding_scale, each
-// attention and FFN output by residual_scale before its residual add, takes
-// attention.scale as the score multiplier, and divides the logits by
-// logit_scale. All are far from one and each is fluent when ignored. The
-// mixture is read off expert_count like every other.
-func graniteConfig(f *meta.File, c *Config) error {
-	// llama.cpp requires logit_scale; the other three are optional there.
-	ls, ok := f.Key("logit_scale")
-	if !ok {
-		return fmt.Errorf("no logit_scale, which every Granite carries")
-	}
-	v, ok := ls.Float()
-	if !ok || !(v > 0) {
-		return fmt.Errorf("logit_scale %v", ls.Short())
-	}
-	c.LogitScale = float32(v)
-	c.EmbdScale = float32(f.FloatKey("embedding_scale", 1))
-	c.ResidualScale = float32(f.FloatKey("residual_scale", 0))
-	c.AttnScale = float32(f.FloatKey("attention.scale", 0))
-	// rope.scaling.finetuned false means no rotary at all in this arch;
-	// no shipped Granite turns it off, so it is refused.
-	if kv, ok := f.Key("rope.scaling.finetuned"); ok {
-		if b, ok := kv.Uint(); ok && b == 0 {
-			return fmt.Errorf("a Granite with no rotary (rope.scaling.finetuned false): %w", ErrNotImplemented)
-		}
-	}
-	for _, s := range []float32{c.EmbdScale, c.ResidualScale, c.AttnScale} {
-		if !(s >= 0) || math.IsInf(float64(s), 0) {
-			return fmt.Errorf("scale %g", s)
-		}
-	}
-	return nil
-}
-
 // gemmaAttnScale sets the score scale of a 27B gemma2/gemma3.
 //
 // The 27B is the one gemma whose score is not 1/sqrt(head_dim): its

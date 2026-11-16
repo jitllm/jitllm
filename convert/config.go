@@ -373,14 +373,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := mropeSectionsOf(f, name, c); err != nil {
 			return nil, err
 		}
-	case ArchLlama4:
-		if err := llama4Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchGranite:
-		if err := graniteConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchStarcoder:
 		if err := starcoderConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -389,60 +381,14 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := stableLMConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchDBRX:
-		if err := dbrxConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchGLM4MoE:
-		if err := glm4moeConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 		// GLM-4.5V / 4.6V: the same block under Qwen2-VL's M-RoPE, a code of
 		// its own (ArchGLM4VMoE).
 		if _, ok := f.Key("rope.dimension_sections"); ok {
 			c.Arch = ArchGLM4VMoE
-			if err := mropeSectionsOf(f, name, c); err != nil {
-				return nil, err
-			}
-		}
-	case ArchGLM4:
-		// llama's block with biased q/k/v (tensors), a norm after the
-		// attention and after the MLP (RolePostAttnNorm, RolePostFFNNorm), a
-		// fused gate|up (unfuse), and a rotary on rope.dimension_count of each
-		// head: NORM pairs, or with sections the NEOX M-RoPE llama.cpp's
-		// converter permutes q and k into.
-		if _, ok := f.Key("rope.dimension_sections"); ok {
-			c.Flags |= jlm.FlagRopeNeox
-			if err := mropeSectionsOf(f, name, c); err != nil {
-				return nil, err
-			}
-		}
-		if f.UintKey("nextn_predict_layers", 0) != 0 {
-			return nil, fmt.Errorf("convert: %s: a glm4 file with prediction layers (GLM-OCR): %w",
-				name, ErrNotImplemented)
-		}
-	case ArchQwen2MoE:
-		if err := qwen2moeConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchErnie45MoE:
-		if err := ernie45moeConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchSmolLM3, ArchArcee, ArchSeedOSS, ArchOLMo2, ArchExaone4, ArchMistral3, ArchOLMo3:
 		if err := denseConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchHunyuan:
-		if err := hunyuanConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchHunyuanVL:
-		if err := hunyuanVLConfig(f, name, c); err != nil {
-			return nil, err
-		}
-	case ArchMiniMaxM2:
-		if err := minimaxM2Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchGemma4:
@@ -467,22 +413,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchMiniMaxM3:
 		if err := minimaxM3Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchBailingMoE2:
-		if err := bailingmoe2Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchDots1:
-		if err := dots1Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchPhiMoE:
-		if err := phimoeConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchApertus:
-		if err := apertusConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchDeepseek4:
@@ -520,6 +450,20 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	}
 
+	// A head narrower than embedding/heads is stated only by key_length; a
+	// file that states none where its q projection says otherwise is refused
+	// (llama.cpp refuses to load it too), and its safetensors input, which
+	// reads head_dim, converts the model. A gated q projection carries the
+	// gate's rows beside the heads'.
+	if _, ok := f.Key("attention.key_length"); !ok && !c.Flags.Has(jlm.FlagAttnOutGate) {
+		if q, ok := f.Layer(0, "attn_q.weight"); ok && len(q.Dims) == 2 &&
+			q.Dims[1] != uint64(c.NHead)*uint64(c.HeadDim) {
+			return nil, fmt.Errorf("convert: %s: blk.0.attn_q.weight has %d rows for %d heads of %d: the file "+
+				"states no attention.key_length for its head width; convert the model from its safetensors: %w",
+				name, q.Dims[1], c.NHead, c.HeadDim, ErrBadInput)
+		}
+	}
+
 	// A per-head q/k norm under LayerNorm blocks (command-r-plus, StableLM 2
 	// 12B: a weight per head) is refused by name: running without it would be
 	// fluent and wrong.
@@ -536,13 +480,20 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	}
 
-	// A clamp on any other architecture is refused, not dropped: this converter
-	// writes it only for ArchDBRX, whose code an older reader refuses.
-	if arch != ArchDBRX {
-		if v := f.FloatKey("attention.clamp_kqv", 0); v != 0 {
-			return nil, fmt.Errorf("convert: %s: attention.clamp_kqv %g outside dbrx: %w",
-				name, v, ErrNotImplemented)
+	// A clamp on q, k and v is read for every architecture whose file states
+	// one; zero is none, and a bound that is not positive and finite clamps
+	// nothing sensibly.
+	if kv, ok := f.Key("attention.clamp_kqv"); ok {
+		v, _ := kv.Float()
+		if !(v >= 0) || math.IsInf(v, 0) {
+			return nil, fmt.Errorf("convert: %s: attention.clamp_kqv %g", name, v)
 		}
+		c.ClampKQV = float32(v)
+	}
+	// A per-head q/k norm normalises both or neither.
+	_, q := f.Get("blk.0.attn_q_norm.weight")
+	if _, k := f.Get("blk.0.attn_k_norm.weight"); q != k {
+		return nil, fmt.Errorf("convert: %s: blk.0 carries a q norm %v and a k norm %v", name, q, k)
 	}
 
 	// An embedding model is flagged by two keys, read for every architecture:
@@ -688,7 +639,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 		// key with a default of false, and DeepSeek-V2-Lite's config.json says
 		// norm_topk_prob: false. Renormalising it generates fluent nonsense from the
 		// first token. See docs/engineering-history/model-correctness.md.
-		if arch == ArchDeepseek2 || arch == ArchDeepseek32 || arch == ArchQwen2MoE {
+		if arch == ArchDeepseek2 || arch == ArchDeepseek32 {
 			if _, ok := f.Key("expert_weights_norm"); !ok {
 				c.Flags |= jlm.FlagNoExpertNorm
 			}
@@ -745,11 +696,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 	}
 
 	// The leading dense run is read for every architecture, as a property of the
-	// file. Llama 4's shared expert is as wide as a routed one and the file does
-	// not say so (llama.cpp sets n_ff_shexp = n_ff_exp), which needs NFFNExp.
-	if arch == ArchLlama4 && c.NFFNShExp == 0 {
-		c.NFFNShExp = c.NFFNExp
-	}
+	// file.
 	// A dense model has no shared expert, whatever a key says: granite-4.0-micro
 	// carries expert_shared_feed_forward_length beside expert_count 0.
 	if c.NExpert == 0 {
@@ -782,54 +729,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	return c, nil
-}
-
-// llama4Config reads Llama 4's graph into c. llama.cpp hardcodes the chunk
-// (8192), the temperature's scale (0.1), floor (8192) and offset (1), and a
-// NoPE period of 4; each is read here from a key a file may carry and falls
-// back to that constant.
-func llama4Config(f *meta.File, c *Config) error {
-	// Normal rotary over adjacent pairs, as llama.cpp's rope-type table and
-	// transformers do; the checkpoint is not permuted the way llama's is.
-	//
-	// A sliding_window of zero is MobileLLM's "every layer full attention", with
-	// no experts, which llama.cpp itself refuses at load; refused here by name.
-	if kv, ok := f.Key("attention.sliding_window"); ok {
-		if v, ok := kv.Uint(); ok && v == 0 {
-			return fmt.Errorf("attention.sliding_window 0 (every layer full attention, "+
-				"MobileLLM) is not implemented: %w", ErrNotImplemented)
-		}
-	}
-	c.SWAWindow = uint32(f.UintKey("attention.chunk_size", 8192))
-	period := uint64(4)
-	if kv, ok := f.Key("attention.sliding_window_pattern"); ok {
-		v, ok := kv.Uint()
-		if !ok {
-			// llama.cpp reads it with get_key_or_arr; a per-layer array is a
-			// pattern this container can only say through the period.
-			return fmt.Errorf("attention.sliding_window_pattern is not a scalar: %w", ErrNotImplemented)
-		}
-		period = v
-	}
-	if period < 2 || c.SWAWindow == 0 {
-		return fmt.Errorf("chunk %d with a NoPE period of %d", c.SWAWindow, period)
-	}
-	c.SWAPeriod = uint32(period)
-	c.Flags |= jlm.FlagSWAChunked | jlm.FlagNoPEGlobal
-	c.AttnTempScale = float32(f.FloatKey("attention.temperature_scale", 0.1))
-	c.AttnTempFloor = uint32(f.UintKey("attention.temperature_length", 8192))
-	c.AttnTempOffset = 1
-	// The qk norm is keyed on the expert count, which is llama.cpp's rule: the
-	// GGUF has no key for use_qk_norm (Scout true, Maverick false). A checkpoint
-	// that breaks that correlation needs a key.
-	if f.UintKey("expert_count", 0) != 128 {
-		c.Flags |= jlm.FlagQKL2Norm
-	}
-	// The router: top-1 sigmoid, not renormalised, weighting the expert's input
-	// (literals in llama.cpp's build_moe_ffn call for this arch).
-	c.Flags |= jlm.FlagExpertSigmoid | jlm.FlagExpertWeightIn
-	c.MoEStep = uint32(f.UintKey("interleave_moe_layer_step", 1))
-	return neverRenormalises(f, c, "Llama 4's router")
 }
 
 // ropeScalingOf reads the rotary scaling keys into c.

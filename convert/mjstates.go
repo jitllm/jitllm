@@ -5,6 +5,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -42,7 +43,28 @@ type mjStates struct {
 	// Layers is each layer's kind, read off the tensors it carries
 	// (stateLayers).
 	Layers []mjStatesLayer `json:"layers"`
-	exprs  map[string]*jinja.Expr
+	// RopeBase is the rotary base, ResidualScale the factor each block's
+	// attention and FFN output is scaled by (0 for none), and MoEStep the
+	// mixture blocks' interleave (jlm.Config.MoEStep), each a number.
+	RopeBase      string `json:"rope_base"`
+	ResidualScale string `json:"residual_scale"`
+	MoEStep       string `json:"moe_step"`
+	// AttnTemp scales the queries by position (jlm.Config.AttnTempScale).
+	AttnTemp *mjStatesTemp `json:"attn_temp"`
+	// MRope, true, reads the rotary's sections off rope.dimension_sections
+	// (mropeSectionsOf).
+	MRope string `json:"mrope"`
+	// WholeRotary states that the class turns every dimension of a head.
+	WholeRotary bool `json:"whole_rotary"`
+	// Router is what the class's router does whatever a file's keys say.
+	Router *mjRouter `json:"router"`
+	// Requires names the keys and tensors the class always has, Lacks the
+	// ones it never has; a key is had when it is stated and not zero, and
+	// "blk.*." names a tensor of every block.
+	Requires []string `json:"requires"`
+	Lacks    []string `json:"lacks"`
+	exprs    map[string]*jinja.Expr
+	tensors  bool
 }
 
 // mjStatesLatent is latent attention's ranks: KV the key-value latent's, Q
@@ -92,6 +114,31 @@ func mjLayerKinds() map[string]jlm.LayerKind {
 	}
 }
 
+// mjStatesTemp is the queries' temperature by position: Scale, Floor and
+// Offset, each a number.
+type mjStatesTemp struct {
+	Scale  string `json:"scale"`
+	Floor  string `json:"floor"`
+	Offset string `json:"offset"`
+}
+
+// mjRouter is a mixture's router as its class computes it: Gate the
+// function its scores go through (mjGates), Renormalise "always" or
+// "never" for the chosen weights, Unscaled for no routed scale, Selects the
+// number of experts it picks (0 for the file's).
+type mjRouter struct {
+	Gate        string `json:"gate"`
+	Renormalise string `json:"renormalise"`
+	Unscaled    bool   `json:"unscaled"`
+	Selects     uint32 `json:"selects"`
+}
+
+// mjGates is each gate a router states by name, with the expert_gating_func
+// value that names it (-1 for none: the class reads no gating key).
+func mjGates() map[string]int64 {
+	return map[string]int64{"softmax": 1, "sigmoid": 2, "sparsemixer": -1}
+}
+
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
 // nothing else of it applies); every Period'th layer attends globally, or
 // Pattern's where the file's attention.sliding_window_pattern does not say
@@ -112,7 +159,27 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s states the container of %s, which it names no GGUF architecture", mj.name, arch)
 		}
 		st := mj.Container[arch]
-		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv}
+		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv,
+			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope}
+		if tp := st.AttnTemp; tp != nil {
+			if tp.Scale == "" || tp.Floor == "" || tp.Offset == "" {
+				return fmt.Errorf("convert: %s: %s: a temperature states its scale, floor and offset", mj.name, arch)
+			}
+			srcs = append(srcs, tp.Scale, tp.Floor, tp.Offset)
+		}
+		if r := st.Router; r != nil {
+			if _, ok := mjGates()[r.Gate]; r.Gate != "" && !ok {
+				return fmt.Errorf("convert: %s: %s: router gate %q is not one the container states", mj.name, arch, r.Gate)
+			}
+			if r.Renormalise != "" && r.Renormalise != "always" && r.Renormalise != "never" {
+				return fmt.Errorf("convert: %s: %s: router renormalise %q, not always or never", mj.name, arch, r.Renormalise)
+			}
+		}
+		for _, n := range slices.Concat(st.Requires, st.Lacks) {
+			if n == "" {
+				return fmt.Errorf("convert: %s: %s: an empty key or tensor name", mj.name, arch)
+			}
+		}
 		if w := st.Window; w != nil {
 			if w.Size == "" || w.Period != "" && w.Pattern != "" {
 				return fmt.Errorf("convert: %s: %s: a window states its size, and a period or a pattern, not both", mj.name, arch)
@@ -177,8 +244,12 @@ func (st *mjStates) compile(srcs []string) error {
 			return err
 		}
 		for _, n := range x.Names() {
-			if n != "src" && n != "layer_tensors" {
-				return fmt.Errorf("%q reads %q, which is not the keys (src) or the layers' tensors (layer_tensors)", src, n)
+			switch n {
+			case "src", "layer_tensors":
+			case "tensors":
+				st.tensors = true
+			default:
+				return fmt.Errorf("%q reads %q, which is not the keys (src), the layers' tensors (layer_tensors) or the tensors' names (tensors)", src, n)
 			}
 		}
 		st.exprs[src] = x
@@ -216,6 +287,13 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	arch := f.Arch()
 	var err error
 	vars := map[string]jinja.Value{"src": ggufKeys(f), "layer_tensors": layerTensors(f)}
+	if st.tensors {
+		names := jinja.NewDict()
+		for i := range f.Tensors {
+			names.AsDict().Set(f.Tensors[i].Name, jinja.NewBool(true))
+		}
+		vars["tensors"] = names
+	}
 	value := func(what, src string) (jinja.Value, error) {
 		v, err := st.exprs[src].Eval(vars, blockExprSteps)
 		if err == nil && v.IsUndefined() {
@@ -282,6 +360,70 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		if x := float64(*s.to); x < 0 || math.IsInf(x, 0) || math.IsNaN(x) {
 			return fmt.Errorf("convert: %s: %s: %s is %g", by, arch, s.what, x)
 		}
+	}
+	for _, s := range []struct {
+		what, src string
+		to        *float32
+	}{{"rope_base", st.RopeBase, &c.RopeBase}, {"residual_scale", st.ResidualScale, &c.ResidualScale}} {
+		if s.src == "" {
+			continue
+		}
+		if *s.to, err = number(s.what, s.src); err != nil {
+			return err
+		}
+		if x := float64(*s.to); x < 0 || math.IsInf(x, 0) || math.IsNaN(x) {
+			return fmt.Errorf("convert: %s: %s: %s is %g", by, arch, s.what, x)
+		}
+	}
+	if tp := st.AttnTemp; tp != nil {
+		if c.AttnTempScale, err = number("attn_temp.scale", tp.Scale); err != nil {
+			return err
+		}
+		floor, err := number("attn_temp.floor", tp.Floor)
+		if err != nil {
+			return err
+		}
+		if floor < 1 || floor != float32(uint32(floor)) {
+			return fmt.Errorf("convert: %s: %s: attn_temp.floor is %g, not a count", by, arch, floor)
+		}
+		c.AttnTempFloor = uint32(floor)
+		if c.AttnTempOffset, err = number("attn_temp.offset", tp.Offset); err != nil {
+			return err
+		}
+	}
+	if st.MoEStep != "" {
+		x, err := number("moe_step", st.MoEStep)
+		if err != nil {
+			return err
+		}
+		if x < 0 || x != float32(uint32(x)) {
+			return fmt.Errorf("convert: %s: %s: moe_step is %g, not a count", by, arch, x)
+		}
+		c.MoEStep = uint32(x)
+	}
+	if err := st.have(by, f, c); err != nil {
+		return err
+	}
+	if err := st.Router.apply(f, c); err != nil {
+		return fmt.Errorf("convert: %s: %w", arch, err)
+	}
+	if st.MRope != "" {
+		v, err := value("mrope", st.MRope)
+		if err != nil {
+			return err
+		}
+		if !v.IsBool() {
+			return fmt.Errorf("convert: %s: %s: mrope is %v, not true or false", by, arch, v)
+		}
+		if v.AsBool() {
+			if err := mropeSectionsOf(f, arch, c); err != nil {
+				return err
+			}
+		}
+	}
+	if st.WholeRotary && c.NRot != c.HeadDim {
+		return fmt.Errorf("convert: %s: a rotary over %d of a head's %d dimensions, where the reference turns "+
+			"the whole head (%s): %w", arch, c.NRot, c.HeadDim, by, ErrNotImplemented)
 	}
 	whole := func(what, src string) (uint32, error) {
 		x, err := number(what, src)
@@ -351,6 +493,9 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if err != nil {
 		return err
 	}
+	if size == 0 && c.Flags.Has(jlm.FlagSWAChunked) {
+		return fmt.Errorf("convert: %s: chunked attention over no chunk", arch)
+	}
 	if size == 0 {
 		if w.Period != "" {
 			return fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
@@ -394,6 +539,85 @@ func indexerFits(c *Config) error {
 			c.QLoraRank, c.KVLoraRank)
 	case c.IdxHeadDim%8 != 0 || c.NRot > c.IdxHeadDim:
 		return fmt.Errorf("indexer heads of %d with a %d-wide rotary", c.IdxHeadDim, c.NRot)
+	}
+	return nil
+}
+
+// have refuses a file lacking a key or tensor st requires, or carrying one
+// it lacks.
+func (st *mjStates) have(by string, f *meta.File, c *Config) error {
+	missing := -1
+	has := func(n string) bool {
+		if rel, ok := strings.CutPrefix(n, "blk.*."); ok {
+			for i := range int(c.NLayer) {
+				if _, ok := f.Get("blk." + itoa(i) + "." + rel); !ok {
+					missing = i
+					return false
+				}
+			}
+			return c.NLayer > 0
+		}
+		if _, ok := f.Get(n); ok {
+			return true
+		}
+		kv, ok := f.Key(n)
+		if !ok {
+			return false
+		}
+		if v, ok := kv.Float(); ok && kv.Len() == 0 {
+			return v != 0
+		}
+		return true
+	}
+	for _, n := range st.Requires {
+		missing = -1
+		if !has(n) {
+			if rel, ok := strings.CutPrefix(n, "blk.*."); ok && missing >= 0 {
+				return fmt.Errorf("convert: %s: block %d has no %s, which %s's class always has", f.Arch(), missing, rel, by)
+			}
+			return fmt.Errorf("convert: %s: no %s, which %s's class always has", f.Arch(), n, by)
+		}
+	}
+	for _, n := range st.Lacks {
+		if has(n) {
+			return fmt.Errorf("convert: %s: %s, which %s's class does not have: %w", f.Arch(), n, by, ErrNotImplemented)
+		}
+	}
+	return nil
+}
+
+// apply refuses a file whose keys contradict what r states its class's
+// router does, and states the gate and the renormalisation in c.
+func (r *mjRouter) apply(f *meta.File, c *Config) error {
+	if r == nil {
+		return nil
+	}
+	if r.Gate != "" {
+		if kv, ok := f.Key("expert_gating_func"); ok {
+			if v, _ := kv.Uint(); int64(v) != mjGates()[r.Gate] {
+				return fmt.Errorf("expert_gating_func %d, and the class's router is %s: %w", v, r.Gate, ErrNotImplemented)
+			}
+		}
+		if r.Gate == "sigmoid" {
+			c.Flags |= jlm.FlagExpertSigmoid
+		}
+	}
+	if kv, ok := f.Key("expert_weights_norm"); ok && r.Renormalise != "" {
+		if v, _ := kv.Uint(); (v != 0) != (r.Renormalise == "always") {
+			does := map[string]string{"always": "always renormalises", "never": "does not renormalise"}[r.Renormalise]
+			return fmt.Errorf("expert_weights_norm %v, and the class's router %s: %w", v != 0, does, ErrNotImplemented)
+		}
+	}
+	if r.Renormalise == "never" {
+		c.Flags |= jlm.FlagNoExpertNorm
+	}
+	if kv, ok := f.Key("expert_weights_scale"); ok && r.Unscaled {
+		if v, _ := kv.Float(); v != 0 && v != 1 {
+			return fmt.Errorf("expert_weights_scale %g, and the class's router scales nothing: %w", v, ErrNotImplemented)
+		}
+	}
+	if k := f.UintKey("expert_used_count", 0); r.Selects != 0 && k != uint64(r.Selects) {
+		return fmt.Errorf("expert_used_count %d, and the class's router selects %d: %w", k, r.Selects, ErrNotImplemented)
 	}
 	return nil
 }

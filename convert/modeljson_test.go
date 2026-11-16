@@ -290,7 +290,7 @@ func TestModelJSONHandsConfigOfTheTensorTable(t *testing.T) {
 		t.Errorf("mixture %d of %d experts %d wide, shared %d, flags %v", cfg.NExpertUsed, cfg.NExpert,
 			cfg.NFFNExp, cfg.NFFNShExp, cfg.Flags)
 	}
-	if _, err := mj.config(c, names[:4]); err == nil || !strings.Contains(err.Error(), "block 1 has no router") {
+	if _, err := mj.config(c, names[:4]); err == nil || !strings.Contains(err.Error(), "block 1 has no ffn_gate_inp.weight") {
 		t.Errorf("a block without its router: %v", err)
 	}
 	_, err = mj.config(hfConfigOf(t, strings.Replace(js, `"num_experts"`, `"scoring_func": "sigmoid", "num_experts"`, 1)), names)

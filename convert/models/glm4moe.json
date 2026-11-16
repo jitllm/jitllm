@@ -1,6 +1,10 @@
 {
   "classes": ["Glm4MoeForCausalLM"],
   "gguf": ["glm4moe"],
+  "container": {
+    "glm4moe": {"flags": {"rope_neox": "true", "qk_norm": "'blk.0.attn_q_norm.weight' in tensors"},
+                "router": {"gate": "sigmoid"}, "mrope": "src['rope.dimension_sections'] is defined"}
+  },
   "config": {
     "arch": "glm4moe",
     "keys": {

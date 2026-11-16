@@ -171,6 +171,7 @@ func mjFlags() map[string]jlm.Flags {
 		"non_causal":            jlm.FlagNonCausal,
 		"qk_norm":               jlm.FlagQKNorm,
 		"qk_norm_wide":          jlm.FlagQKNormWide,
+		"qk_norm_post_rope":     jlm.FlagQKNormPostRope,
 		"rope_neox":             jlm.FlagRopeNeox,
 		"no_expert_norm":        jlm.FlagNoExpertNorm,
 		"layer_norm":            jlm.FlagLayerNorm,
@@ -180,13 +181,21 @@ func mjFlags() map[string]jlm.Flags {
 		"no_pe_global":          jlm.FlagNoPEGlobal,
 		"no_pos_enc":            jlm.FlagNoPosEnc,
 		"delta_key_tiled":       jlm.FlagDeltaKeyTiled,
+		"swa_chunked":           jlm.FlagSWAChunked,
+		"qk_l2_norm":            jlm.FlagQKL2Norm,
+		"expert_weight_in":      jlm.FlagExpertWeightIn,
 	}
 }
 
 // mjFlagsNotImplemented is each graph feature a file may state by name that
 // the engine does not run, with what it is: stated true, it is refused.
 func mjFlagsNotImplemented() map[string]string {
-	return map[string]string{"post_norm": "each sublayer normed after it in place of before"}
+	return map[string]string{
+		"post_norm":              "each sublayer normed after it in place of before",
+		"no_rotary":              "attention with neither a rotary nor a position table",
+		"window_past_max_layers": "a sliding window on the layers past max_window_layers",
+		"all_global":             "every layer attending globally (attention.sliding_window 0) under a NoPE interleave",
+	}
 }
 
 // mjKey is one GGUF key's value, an expression with the key's type.

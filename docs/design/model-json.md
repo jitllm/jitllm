@@ -164,9 +164,21 @@ schema; `convert/modeljson.go` reads it. Its sections:
   layer meets is refused, and one a reader has already set the kinds for
   does not apply. Besides `src`, an expression may read `layer_tensors`, the
   set of names the layers' tensors take past their "blk.N." prefix
-  (`'attn_q_norm.weight' in layer_tensors`). It replaces `configOfFile`'s
+  (`'attn_q_norm.weight' in layer_tensors`).
+  `rope_base` (the rotary base),
+  `residual_scale` and `moe_step` (the mixture blocks' interleave) are
+  numbers; `mrope`, true, reads the rotary's sections off
+  `rope.dimension_sections`; `whole_rotary: true` refuses a rotary narrower
+  than the head. `router` is what the class's router does whatever the
+  keys say: `gate` (softmax, sigmoid, or sparsemixer, which reads no gating
+  key), `renormalise` (always or never), `unscaled`, `selects` (the experts
+  it picks); a key contradicting it is refused. `requires` and `lacks` name
+  the keys and tensors the class always or never has (a key of zero is
+  not had; `blk.*.` names every block's tensor), each absence or presence
+  refused. An expression may read the tensors' names too
+  (`'blk.0.attn_q_norm.weight' in tensors`). It replaces `configOfFile`'s
   case for the architecture; one statement per architecture, and an
-  expression reading anything else is refused.
+  expression reading anything but `src`, `layer_tensors` and `tensors` is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform

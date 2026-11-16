@@ -13,6 +13,12 @@
                  "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
     "starcoder2": {"flags": {"layer_norm": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
                    "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
+    "dbrx": {"flags": {"layer_norm": "true", "rope_neox": "true"}, "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
+             "requires": ["attention.clamp_kqv", "expert_count"]},
+    "phimoe": {"flags": {"layer_norm": "true", "rope_neox": "true"},
+               "router": {"gate": "sparsemixer", "renormalise": "never", "selects": 2}, "requires": ["expert_count"],
+               "window": {"size": "(src['attention.sliding_window'] | default(0)) if (src['attention.sliding_window'] | default(0)) < (src['context_length'] | default(2048)) else 0",
+                          "pattern": "src['block_count'] + 1"}},
     "falcon": {"flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
                "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"}
   },

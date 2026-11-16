@@ -2,7 +2,6 @@ package convert
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -109,34 +108,6 @@ func stableLMConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
 	if _, ok := f.Get("blk.0.ffn_norm.weight"); !ok {
 		c.Flags |= jlm.FlagParallel
-	}
-	return nil
-}
-
-// dbrxConfig is Databricks' DBRX, llama.cpp's dbrx.cpp:
-//
-//	attn_norm (LayerNorm, NO bias)                -> LayerNorm
-//	attn_qkv, split at conversion; q, k, v each
-//	    clamped to [-clamp_kqv, clamp_kqv]        -> ClampKQV
-//	NEOX rotary over the whole head               -> RopeNeox
-//	attn_output_norm (LayerNorm, no bias) before
-//	    the FFN, sequential residual              -> the FFN norm (retarget)
-//	a softmax top-k mixture of SwiGLU experts,
-//	    renormalised over the chosen k            -> expert_count, as any mixture
-//	output_norm (LayerNorm, no bias), output
-//
-// The clamp must be positive and finite: zero would mean no clamp, which is
-// not DBRX, and a negative or NaN bound clamps nothing sensibly.
-func dbrxConfig(f *meta.File, c *Config) error {
-	layerNormEps(f, c)
-	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
-	v := f.FloatKey("attention.clamp_kqv", 0)
-	if !(v > 0) || math.IsInf(v, 0) {
-		return fmt.Errorf("attention.clamp_kqv %g; a dbrx clamps q, k and v", v)
-	}
-	c.ClampKQV = float32(v)
-	if f.UintKey("expert_count", 0) == 0 {
-		return fmt.Errorf("no expert_count; every dbrx block is a mixture")
 	}
 	return nil
 }

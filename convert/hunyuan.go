@@ -5,80 +5,9 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
-
-// hunyuanConfig is llama.cpp's hunyuan-moe.cpp / hunyuan-vl.cpp (which serves
-// hunyuan-dense) and transformers' HunYuanMoEV1ForCausalLM and
-// HunYuanDenseV1ForCausalLM:
-//
-//	no biases on a published checkpoint      -> tensors
-//	NEOX rotary over the whole head           -> FlagRopeNeox
-//	per-head q/k RMSNorm AFTER the rotary     -> FlagQKNorm | FlagQKNormPostRope,
-//	                                             the k weight folded into q's
-//	                                             (foldPostRopeQKNorm)
-//	softmax top-k, renormalised, no scale     -> the defaults, and a file that
-//	                                             states otherwise is refused
-//	one ungated shared expert in every block  -> its width off the tensor
-//
-// The gate, the renormalisation and the absent scale are read from no key:
-// llama.cpp's builder passes softmax and true as literals and never loads
-// expert_weights_scale for this arch, and HunYuanMoEV1Gate hardcodes
-// F.softmax and the division (RULE 7m: the two agree, so a file disagreeing
-// with both is refused rather than obeyed).
-//
-// The NTK-alpha rotary base (rope_theta * alpha^(d/(d-2))) is already folded
-// into rope.freq_base by llama.cpp's converter; a GGUF says nothing else.
-func hunyuanConfig(f *meta.File, c *Config) error {
-	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagQKNormPostRope
-	if kv, ok := f.Key("expert_gating_func"); ok {
-		if v, _ := kv.Uint(); v != 1 {
-			return fmt.Errorf("expert_gating_func %d, and HunYuanMoEV1Gate is softmax: %w",
-				v, ErrNotImplemented)
-		}
-	}
-	if kv, ok := f.Key("expert_weights_norm"); ok {
-		if v, _ := kv.Uint(); v == 0 {
-			return fmt.Errorf("expert_weights_norm false, and HunYuanMoEV1Gate always "+
-				"renormalises: %w", ErrNotImplemented)
-		}
-	}
-	if kv, ok := f.Key("expert_weights_scale"); ok {
-		if v, _ := kv.Float(); v != 0 && v != 1 {
-			return fmt.Errorf("expert_weights_scale %g, and neither llama.cpp nor "+
-				"transformers scales a Hunyuan mixture: %w", v, ErrNotImplemented)
-		}
-	}
-	return nil
-}
-
-// hunyuanVLConfig is HunyuanVL's text model: hunyuan-dense's (hunyuanConfig)
-// under XD-RoPE's four sections (rope.dimension_sections, per element; see
-// ArchHunyuanVL). llama.cpp's converter writes the NTK alpha beside
-// rope.freq_base rather than folding it in, and its loader and transformers'
-// HunYuanVLRotaryEmbedding both take base = theta * alpha^(d/(d-2)) over the
-// rotary's width.
-func hunyuanVLConfig(f *meta.File, name string, c *Config) error {
-	if err := hunyuanConfig(f, c); err != nil {
-		return fmt.Errorf("convert: %s: %w", name, err)
-	}
-	if err := mropeSectionsOf(f, name, c); err != nil {
-		return err
-	}
-	// transformers' XD-RoPE turns the whole head: a file turning part of it
-	// states a rotary its reference never runs.
-	if c.NRot != c.HeadDim {
-		return fmt.Errorf("convert: %s: XD-RoPE over %d of a head's %d dimensions, where the reference turns the whole head",
-			name, c.NRot, c.HeadDim)
-	}
-	if alpha := f.FloatKey("rope.scaling.alpha", 0); alpha > 0 {
-		d := float64(c.NRot)
-		c.RopeBase = float32(float64(c.RopeBase) * math.Pow(alpha, d/(d-2)))
-	}
-	return nil
-}
 
 // foldPostRopeQKNorm moves k's q/k-norm weight into q's, for a model whose
 // per-head norm follows the rotary (jlm.FlagQKNormPostRope).
