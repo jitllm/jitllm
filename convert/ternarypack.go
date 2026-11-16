@@ -36,17 +36,8 @@ import (
 //
 // The graph's other facts -- squared ReLU on the gate, NEOX rotary on the
 // rows as shipped, the two inner norms, per-token int8 activations -- are the
-// file's (mixtral.json's container statement: act_quant row_int8 makes the
-// projections ternary).
-
-// ternaryProjections are the roles a BitNet block runs as BitLinear.
-func ternaryProjections(r jlm.Role) bool {
-	switch r {
-	case jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown:
-		return true
-	}
-	return false
-}
+// file's (mixtral.json's container statement: act_quant row_int8, and its
+// table's ternary naming the projections).
 
 // exactHalf is v as an f16, and false when no f16 is exactly v.
 func exactHalf(v float32) (uint16, bool) {
@@ -228,31 +219,32 @@ func repackedTernary(t quant.Type) bool { return t == quant.TQ1_0 || t == quant.
 // ternaryPacked is the types ternaryPack writes.
 func ternaryPacked() []quant.Type { return []quant.Type{quant.TQ2_0, quant.TQ2_F32} }
 
-// ternaryScaleOf reports a GGUF's optional per-tensor projection scale
-// (llama.cpp's "blk.N.attn_q.scale"): the tensor name it scales.
-func ternaryScaleOf(name string) (string, bool) {
-	if !strings.HasPrefix(name, "blk.") || !strings.HasSuffix(name, ".scale") {
+// ternaryScaleOf reports a GGUF block tensor that is a ternary projection's
+// optional per-tensor scale, named by the statement's suffix in place of
+// .weight (llama.cpp's "blk.N.attn_q.scale"): the tensor name it scales.
+func (s *Statement) ternaryScaleOf(name string) (string, bool) {
+	if s == nil || s.ternaryScale == "" || !strings.HasPrefix(name, "blk.") || !strings.HasSuffix(name, s.ternaryScale) {
 		return "", false
 	}
-	return strings.TrimSuffix(name, ".scale") + ".weight", true
+	return strings.TrimSuffix(name, s.ternaryScale) + ".weight", true
 }
 
-// ternaryTensors finishes a source whose projections are ternary (ActQuant
-// row_int8, BitNet b1.58's BitLinear): every projection becomes a ternary
-// type, its optional per-tensor scale folded into each block's scale, and
-// anything that is not ternary is refused by name. scales maps a weight's
-// name to its scale.
+// ternaryTensors finishes a source whose statement names its ternary
+// projections (BitNet b1.58's BitLinear): every one becomes a ternary type,
+// its optional per-tensor scale folded into each block's scale, and anything
+// that is not ternary is refused by name. scales maps a weight's name to its
+// scale.
 func ternaryTensors(c *Config, s *jlm.Source, scales map[string]float32) error {
-	if c == nil || c.Stated == nil || c.Stated.actQuant != jlm.ActQuantRowInt8 {
+	if c == nil || c.Stated == nil || len(c.Stated.ternaryRoles) == 0 {
 		if len(scales) > 0 {
-			return fmt.Errorf("convert: %d projection scales on a model that is not BitNet", len(scales))
+			return fmt.Errorf("convert: %d projection scales on a model whose statement states no ternary projections", len(scales))
 		}
 		return nil
 	}
 	used := 0
 	for i := range s.Tensors {
 		e := &s.Tensors[i]
-		if !ternaryProjections(e.Role) {
+		if !c.Stated.ternaryRoles[e.Role] {
 			continue
 		}
 		n := 1

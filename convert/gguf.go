@@ -338,7 +338,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// A ternary projection's optional per-tensor scale is folded into
 		// its weight's blocks (ternaryTensors).
-		if w, ok := ternaryScaleOf(t.Name); ok && !tower && c.Stated.actQuant == jlm.ActQuantRowInt8 {
+		if w, ok := c.Stated.ternaryScaleOf(t.Name); ok && !tower {
 			e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
 			copy(e.Dims[:], t.Dims)
 			if e.Type, err = typeOf(t.Type); err != nil {

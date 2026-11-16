@@ -343,6 +343,8 @@ type Statement struct {
 	modelTensors, blockTensors          map[string][]statedCut
 	drops                               []statedDrop
 	sizes                               map[string]*exprNode
+	ternaryRoles                        map[jlm.Role]bool
+	ternaryScale                        string
 	gathers                             []hfGatherStep
 	keys                                []string
 	linearTensors                       map[string][]statedCut
@@ -449,10 +451,21 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s: %s: pre-tokenizer %q is not one the tokenizer has", mj.name, arch, st.PreTokenizer)
 		}
 		if t := st.Tensors; t != nil {
-			if t.BlockPrefix != "" || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil ||
-				t.Ternary != nil || t.Present != nil {
+			if t.BlockPrefix != "" || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil || t.Present != nil {
 				return fmt.Errorf("convert: %s: %s: tensors: a GGUF's table states its model, block and recurrent "+
 					"block tensors and its joins: %w", mj.name, arch, ErrNotImplemented)
+			}
+			if x := t.Ternary; x != nil {
+				if len(x.Roles) == 0 || x.Scale == "" || x.Latent != "" || x.Reciprocal != "" {
+					return fmt.Errorf("convert: %s: %s: tensors: a GGUF's ternary states its roles and the suffix its "+
+						"scales are named by", mj.name, arch)
+				}
+				for _, n := range x.Roles {
+					if _, ok := mj.names.roleOf(n); !ok {
+						return fmt.Errorf("convert: %s: %s: tensors: ternary role %q is not a tensor name the container "+
+							"knows", mj.name, arch, n)
+					}
+				}
 			}
 			for r, srcs := range t.Fuse {
 				if _, ok := mj.names.roleOf(r); !ok || len(srcs) < 2 {
@@ -721,6 +734,13 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			c.Stated.gathers = append(c.Stated.gathers, step)
 		}
 		c.Stated.keys = t.Keys
+		if x := t.Ternary; x != nil {
+			c.Stated.ternaryRoles, c.Stated.ternaryScale = map[jlm.Role]bool{}, x.Scale
+			for _, n := range x.Roles {
+				r, _ := names.roleOf(n)
+				c.Stated.ternaryRoles[r] = true
+			}
+		}
 		if c.Stated.sizes, err = statedSizes(t.Sizes); err != nil {
 			return fmt.Errorf("convert: %s: %s: tensors: %w", by, arch, err)
 		}
