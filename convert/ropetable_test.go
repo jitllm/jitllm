@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// TestConverterStatesTheRotaryTable holds each architecture's pair map, as
+// TestConverterStatesTheRotaryTable holds each stated layout's pair map, as
 // the converter states it, against one written out by hand from the
 // references (transformers' mrope_section split, Qwen3-VL's
 // apply_interleaved_mrope, HunyuanVL's XD-RoPE), each picture layout's
@@ -16,18 +16,18 @@ import (
 func TestConverterStatesTheRotaryTable(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		arch       Arch
+		layout     string
 		nrot       uint32
 		sec        [4]uint32
 		axes, freq []int
 		side       bool
 	}{
-		{"contiguous", ArchQwen2VL, 12, [4]uint32{1, 2, 3, 0}, []int{0, 1, 1, 2, 2, 2}, []int{0, 1, 2, 3, 4, 5}, true},
-		{"interleaved", ArchQwen3VL, 12, [4]uint32{2, 2, 2, 0}, []int{0, 1, 2, 0, 1, 2}, []int{0, 1, 2, 3, 4, 5}, true},
-		{"interleaved short", ArchQwen3VL, 12, [4]uint32{2, 1, 1, 0}, []int{0, 1, 2, 0, 0, 0}, []int{0, 1, 2, 3, 4, 5}, true},
-		{"over the elements", ArchHunyuanVL, 8, [4]uint32{1, 1, 1, 1}, []int{0, 0, 1, 1, 2, 2, 3, 3}, []int{0, 1, 2, 3, 0, 1, 2, 3}, false},
+		{"contiguous", "", 12, [4]uint32{1, 2, 3, 0}, []int{0, 1, 1, 2, 2, 2}, []int{0, 1, 2, 3, 4, 5}, true},
+		{"interleaved", "interleaved", 12, [4]uint32{2, 2, 2, 0}, []int{0, 1, 2, 0, 1, 2}, []int{0, 1, 2, 3, 4, 5}, true},
+		{"interleaved short", "interleaved", 12, [4]uint32{2, 1, 1, 0}, []int{0, 1, 2, 0, 0, 0}, []int{0, 1, 2, 3, 4, 5}, true},
+		{"over the elements", "xd", 8, [4]uint32{1, 1, 1, 1}, []int{0, 0, 1, 1, 2, 2, 3, 3}, []int{0, 1, 2, 3, 0, 1, 2, 3}, false},
 	} {
-		c := &Config{Arch: tc.arch, Config: &jlm.Config{NRot: tc.nrot, RopeSections: tc.sec}}
+		c := &Config{Stated: &Statement{ropeLayout: tc.layout}, Config: &jlm.Config{NRot: tc.nrot, RopeSections: tc.sec}}
 		stateRopeTable(c)
 		var axes, freq []int
 		for _, p := range c.RopeTable {
@@ -41,25 +41,25 @@ func TestConverterStatesTheRotaryTable(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name string
-		arch Arch
-		nrot uint32
-		sec  [4]uint32
+		name   string
+		layout string
+		nrot   uint32
+		sec    [4]uint32
 	}{
-		{"short of the pairs", ArchQwen2VL, 12, [4]uint32{1, 1, 0, 0}},
-		{"past the pairs", ArchQwen2VL, 12, [4]uint32{3, 3, 3, 0}},
-		{"elements short", ArchHunyuanVL, 8, [4]uint32{1, 1, 1, 0}},
-		{"an interleaved fourth axis", ArchQwen3VL, 12, [4]uint32{2, 2, 1, 1}},
-		{"no rotary", ArchQwen2VL, 0, [4]uint32{1, 0, 0, 0}},
-		{"an odd rotary", ArchQwen2VL, 3, [4]uint32{1, 0, 0, 0}},
+		{"short of the pairs", "", 12, [4]uint32{1, 1, 0, 0}},
+		{"past the pairs", "", 12, [4]uint32{3, 3, 3, 0}},
+		{"elements short", "xd", 8, [4]uint32{1, 1, 1, 0}},
+		{"an interleaved fourth axis", "interleaved", 12, [4]uint32{2, 2, 1, 1}},
+		{"no rotary", "", 0, [4]uint32{1, 0, 0, 0}},
+		{"an odd rotary", "", 3, [4]uint32{1, 0, 0, 0}},
 	} {
-		c := &Config{Arch: tc.arch, Config: &jlm.Config{NRot: tc.nrot, RopeSections: tc.sec}}
+		c := &Config{Stated: &Statement{ropeLayout: tc.layout}, Config: &jlm.Config{NRot: tc.nrot, RopeSections: tc.sec}}
 		stateRopeTable(c)
 		if c.RopeTable != nil || c.PictureRope != (jlm.PictureRope{}) {
 			t.Errorf("%s: sections %v over %d stated %v, %+v", tc.name, tc.sec, tc.nrot, c.RopeTable, c.PictureRope)
 		}
 	}
-	c := &Config{Arch: ArchLlama, Config: &jlm.Config{NRot: 64}}
+	c := &Config{Stated: &Statement{}, Config: &jlm.Config{NRot: 64}}
 	if stateRopeTable(c); c.RopeTable != nil {
 		t.Fatalf("a rotary of one position states %v", c.RopeTable)
 	}
