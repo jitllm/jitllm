@@ -441,11 +441,15 @@ type Instance struct {
 	// a tail of its rows has the head write every row (stepRowsDevice), the
 	// tail then copied out; rowsTok is where a greedy one's tokens land.
 	rowsLog, rowsHid []float32
-	// rowsHeads counts a hyper-connected model's verifications whose head
-	// ran on the device (rowsHead); devHeads a decode token's projections a
-	// device served, folded into its blocks' call or after them.
-	rowsHeads, devHeads int
-	rowsTok             []int32
+	// rowsHeads counts the verifications whose head ran on the device, in
+	// the blocks' call or after them (rowsHead); devHeads a decode token's
+	// projections a device served, folded into its blocks' call or after
+	// them, and ownHeads those of them through a block's own head (headOwn).
+	rowsHeads, devHeads, ownHeads int
+	// headOwn says the instance projects through the head the block it
+	// starts at states (ownHead), not the model's.
+	headOwn bool
+	rowsTok []int32
 	// prepLater holds a lane binding's block preparation for the caller to
 	// run once the blocks' routes are settled (SetDeviceLayers). unprepped
 	// is each block a placement on an unlisted CPU left unprepared there
@@ -1415,11 +1419,20 @@ func (s *Instance) markStreamed(li int, on bool) {
 // streamedAt says placement streamed block li.
 func (s *Instance) streamedAt(li int) bool { return li < len(s.streamedOn) && s.streamedOn[li] }
 
+// countDevHead counts a projection a device served (devHeads, ownHeads).
+func (s *Instance) countDevHead() {
+	s.devHeads++
+	if s.headOwn {
+		s.ownHeads++
+	}
+}
+
 // newHead is the output projection as a device takes it.
 func (s *Instance) newHead() *nn.Head {
 	c := s.c
 	f := s.m.FrontGraphs()
 	head, hidden, li := s.ownHead()
+	s.headOwn = li >= 0
 	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: head, HiddenGraph: hidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Vectors: s.headVectors(), W: model.Wt(*s.outW), Logits: s.logits,
 		Embeds: c.TiedEmbd, NoCPU: !s.listed(routeLanes)}
 	if p := s.opt.place; p != nil && p.Head != nil {
@@ -3154,7 +3167,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if fold != nil {
 			// The device ran the output norm and the projection too, so the
 			// token is finished and the residual never came home.
-			s.devHeads++
+			s.countDevHead()
 			s.advance(0, 1)
 			// The token is complete, so it steps what every token steps:
 			// a head on the device is no reason for the seam tuner or the
@@ -3189,7 +3202,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs, s.head) {
 			done = true
-			s.devHeads++
+			s.countDevHead()
 		} else if err := s.refusal(s.gpuLayers); err != nil {
 			return nil, err
 		} else if !s.fallsBack() {

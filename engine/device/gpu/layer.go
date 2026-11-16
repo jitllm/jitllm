@@ -4127,25 +4127,22 @@ func (g *devTier) layersSession(s backend.Session) {
 			// scratch's planes, and decode's head on them.
 			err = g.foldTake(lc, bs, hb, R)
 			out := hb.logits
-			in := hb.x
+			src, srcRows := hb, 1
 			if g.rowsFaulted("foldrow") {
-				in = bs.x
+				// The chunk's first row of every plane, not its last.
+				src, srcRows = bs, R
 			}
 			if pickHeadSrv {
 				if err == nil {
-					err = g.runPickHead(lc, hb, hVecs, in)
+					err = g.runPickHead(lc, hb, hVecs, src.x)
 				}
 			} else {
 				sv, serr := g.servedHead(hb, headOf(head), hVecs, 1)
 				var ins []backend.Buf
 				if serr == nil {
-					ins, serr = g.headIns(hb, 1)
+					ins, serr = g.headIns(src, srcRows)
 				}
 				if serr == nil {
-					if in != hb.x {
-						g.rows.headX[0] = in
-						ins = g.rows.headX[:]
-					}
 					serr = sv.runHead(g, lc, ins, out, hb.h)
 				}
 				if err == nil {

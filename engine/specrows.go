@@ -267,6 +267,9 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		}
 		return errRowsRefused{n, why}
 	}
+	if h != nil {
+		s.rowsHeads++
+	}
 	s.advance(0, n)
 	from := 0
 	if tail {
@@ -299,6 +302,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	}
 	cnt := total - r.from
 	if headDone {
+		s.rowsHeads++
 		if cnt == 1 {
 			copy(r.logits, s.logits[:c.NVocab])
 		}

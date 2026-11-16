@@ -20,9 +20,12 @@ import (
 // The last row is the whole risk, so the prompt ends partway into a chunk: 700
 // tokens is a full 512-row chunk and a 188-row one whose scratch is wider than
 // its rows. Stats.HeadFolds must move on the folded arm only. gemma-2-2b
-// carries a final softcap, which the fold must apply too.
+// carries a final softcap, which the fold must apply too; synth-gemma3n and
+// synth-qwen4exp a residual of several streams, every plane's last row the
+// folded head's.
 func TestPrefillFoldsTheHead(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "gemma-2-2b-it-Q4_K_M"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "gemma-2-2b-it-Q4_K_M",
+		"synth-gemma3n", "synth-qwen4exp"} {
 		t.Run(name, func(t *testing.T) {
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) { foldsTheHead(t, name, spec) })
