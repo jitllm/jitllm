@@ -214,10 +214,18 @@ type Form struct {
 	WReads                 []int
 	// Toks says a code reads the rows' tokens (SrcTokens).
 	Toks bool
-	// A form gathering a row table's rows likewise runs to RowSplit,
-	// its first code that reads the table, then reads in the rows the own
-	// buffer RowSel names, RowN a call's row, before the rest.
-	RowSplit, RowSel, RowN int
+	// A form gathering row tables' rows likewise runs to RowSplit, its
+	// first code that reads a table, then reads in the rows each of
+	// RowSels names before the rest.
+	RowSplit int
+	RowSels  []RowSel
+}
+
+// RowSel is the rows a form gathers of the row table of Role: the own
+// buffer Own names them, N a call's row.
+type RowSel struct {
+	Role   jlm.Role
+	Own, N int
 }
 
 // ownUse is a code's use of an own buffer, by their indices.
@@ -257,9 +265,12 @@ func stepsState(gr *graph.Graph) bool {
 // its own. A whole form is run at its rows and no fewer (a convolutional
 // block's, over its grid), so its kernels need not be held to a call's rows.
 func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
-	f := &Form{Consts: map[int][]uint32{}, Rows: rows, Sel: -1, WSel: -1, RowSel: -1, Rec: stepsState(gr),
+	f := &Form{Consts: map[int][]uint32{}, Rows: rows, Sel: -1, WSel: -1, Rec: stepsState(gr),
 		Places: len(gr.In) + len(gr.Out)}
-	selV, wsV, rowV := selOf(gr), weightsOf(gr), gr.TableRows()
+	selV, wsV, rowVs := selOf(gr), weightsOf(gr), gr.TableRows()
+	for _, t := range rowVs {
+		f.RowSels = append(f.RowSels, RowSel{Role: t.Role, Own: -1, N: gr.Values[t.Rows].Width})
+	}
 	wOwn := map[graph.ValueID]int{}
 	var wrote, read []ownUse
 	// A kernel's constant block is its own: two kernels' blocks may share a
@@ -413,11 +424,14 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 				switch o.Value {
 				case selV:
 					f.Sel = ar.i
-				case rowV:
-					f.RowSel = ar.i
 				default:
 					if slices.Contains(wsV, o.Value) {
 						wOwn[o.Value] = ar.i
+					}
+				}
+				for k, t := range rowVs {
+					if o.Value == t.Rows {
+						f.RowSels[k].Own = ar.i
 					}
 				}
 			case o.Kind == composer.OperandScratch:
@@ -576,7 +590,7 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 		f.Close()
 		return nil, err
 	}
-	if err := f.rowHalves(gr); err != nil {
+	if err := f.rowHalves(); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -711,8 +725,10 @@ func (f *Form) shareOwn(wrote, read []ownUse) {
 	if f.Sel >= 0 {
 		f.Sel = slot[f.Sel]
 	}
-	if f.RowSel >= 0 {
-		f.RowSel = slot[f.RowSel]
+	for k := range f.RowSels {
+		if f.RowSels[k].Own >= 0 {
+			f.RowSels[k].Own = slot[f.RowSels[k].Own]
+		}
 	}
 	if f.WSel >= 0 {
 		f.WSel = slot[f.WSel]
@@ -1002,25 +1018,25 @@ func (f *Form) bankHalves(gr *graph.Graph, rows int) error {
 	return nil
 }
 
-// rowHalves finds where a form gathering a row table's rows is cut: at its
-// first code that reads the table, the rows written by a code before it.
-func (f *Form) rowHalves(gr *graph.Graph) error {
-	rv := gr.TableRows()
-	if rv < 0 {
+// rowHalves finds where a form gathering row tables' rows is cut: at its
+// first code that reads a table, the rows written by a code before it.
+func (f *Form) rowHalves() error {
+	if len(f.RowSels) == 0 {
 		return nil
 	}
 	f.RowSplit = -1
 	for ci, c := range f.Codes {
 		for _, a := range c.args {
-			if a.src == SrcWeight && jlm.RowTableRole(a.role) && f.RowSplit < 0 {
+			if a.src == SrcWeight && f.RowSplit < 0 && slices.ContainsFunc(f.RowSels, func(t RowSel) bool { return t.Role == a.role }) {
 				f.RowSplit = ci
 			}
 		}
 	}
-	if f.RowSel < 0 || f.RowSplit <= 0 || f.Split > 0 && f.Split <= f.RowSplit {
-		return fmt.Errorf("a form gathering table rows with no rows of its own (%d), no code before its gathers (%d), or banks before them (%d)", f.RowSel, f.RowSplit, f.Split)
+	for _, t := range f.RowSels {
+		if t.Own < 0 || f.RowSplit <= 0 || f.Split > 0 && f.Split <= f.RowSplit {
+			return fmt.Errorf("a form gathering the table %v's rows with no rows of its own (%d), no code before its gathers (%d), or banks before them (%d)", t.Role, t.Own, f.RowSplit, f.Split)
+		}
 	}
-	f.RowN = gr.Values[rv].Width
 	return nil
 }
 

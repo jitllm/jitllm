@@ -233,8 +233,8 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 				formats[w.Role] = e.Type
 				// A table with no row size has no view, which the device
 				// names when its form binds it.
-				if rb, err := jlm.RowBytes(e); err == nil {
-					p.Table, p.TableRow = e, int(rb)
+				if rb, err := jlm.RowBytes(e); err == nil && !slices.ContainsFunc(p.Tables, func(t nn.RowTable) bool { return t.Entry == e }) {
+					p.Tables = append(p.Tables, nn.RowTable{Entry: e, RowBytes: int(rb)})
 				}
 			} else if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type

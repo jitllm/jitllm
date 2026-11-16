@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"math/bits"
+	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -179,18 +180,26 @@ func (s *Builder) NGramRows(win ValueID, n int, h *jlm.NGramHash) (ValueID, erro
 	return s.Emit(OpConcat, rows, []Result{{Name: "ng.rows", Width: len(rows), Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0], nil
 }
 
-// TableRows is the row of words g's gathers of a row table (jlm.RowTable)
-// read their rows from -- the row each gather's index is sliced from, or
-// the index itself -- and -1 where g gathers no row table's rows or its
-// gathers read rows from two rows.
-func (g *Graph) TableRows() ValueID {
+// TableRow is a row table (jlm.RowTable) a graph gathers from: its role,
+// and the row of words its gathers read their rows from -- the row each
+// gather's index is sliced from, or the index itself.
+type TableRow struct {
+	Role jlm.Role
+	Rows ValueID
+}
+
+// TableRows is each row table g gathers from, in the order g first gathers
+// it, any number of them; a table whose gathers read rows from two rows is
+// left out, so no view is opened for it and a form binding it is declined.
+func (g *Graph) TableRows() []TableRow {
 	from := map[ValueID]ValueID{}
 	for _, o := range g.Ops {
 		if o.Kind == OpSlice && len(o.In) == 1 && len(o.Out) == 1 {
 			from[o.Out[0]] = o.In[0]
 		}
 	}
-	rv := ValueID(-1)
+	var ts []TableRow
+	two := map[jlm.Role]bool{}
 	for _, o := range g.Ops {
 		if o.Kind != OpEmbed || len(o.In) != 1 || len(o.Weight) != 1 || !jlm.RowTableRole(o.Weight[0].Role) {
 			continue
@@ -199,10 +208,14 @@ func (g *Graph) TableRows() ValueID {
 		if !ok {
 			v = o.In[0]
 		}
-		if rv >= 0 && v != rv {
-			return -1
+		r := o.Weight[0].Role
+		i := slices.IndexFunc(ts, func(t TableRow) bool { return t.Role == r })
+		switch {
+		case i < 0:
+			ts = append(ts, TableRow{Role: r, Rows: v})
+		case ts[i].Rows != v:
+			two[r] = true
 		}
-		rv = v
 	}
-	return rv
+	return slices.DeleteFunc(ts, func(t TableRow) bool { return two[t.Role] })
 }

@@ -480,6 +480,13 @@ const (
 	BackendAMDGCN
 )
 
+// RowTable is a table of rows a block's gathers read (jlm.RowTable): the
+// container's entry, its rows RowBytes apart.
+type RowTable struct {
+	Entry    *jlm.Entry
+	RowBytes int
+}
+
 // BlockSpec is what a block is composed from, as the instance states it for
 // whichever device takes the block: the graph its front end states (Source)
 // and the one its forms are composed from (Graph), its weights' formats and
@@ -487,7 +494,7 @@ const (
 // positions, the keys a row reads, the activation window, the sequences), a
 // history holding values in its keys, the rotaries it turns by (each device
 // states its own device to the composer), where its side input starts, the
-// table of rows its rows read (Table, TableRow bytes a row; nil for none),
+// tables of rows its rows read (Tables, any number, each by its role),
 // whether its history is kept at f32, whether it reads both ways inside a
 // prompt's runs (Bidir: attends, or convolves centred), reads the whole
 // picture (Whole) or steps a recurrent state in order (Rec) -- or why it is
@@ -510,8 +517,7 @@ type BlockSpec struct {
 	Seqs         int
 	ValuesInKeys bool
 	Rotaries     []graph.Rotary
-	Table        *jlm.Entry
-	TableRow     int
+	Tables       []RowTable
 	F32          bool
 	// KVRow, past 0, is the head width of a quantized history's rows (F32
 	// is then true: no store narrows to halves): q8 rows, or KVBlock's
@@ -684,7 +690,7 @@ type LayerPlan struct {
 type RecurrentPlan struct {
 	Conv      int // causal convolution width, in positions
 	Chans     int // convolved channels
-	StateLen  int // the recurrence's state and TailLen more, floats per sequence, CONSTANT in context
+	StateLen  int // the recurrence's state and any tail its graph states, floats per sequence, CONSTANT in context
 	ConvState int // (Conv-1)*Chans floats, per sequence
 	// ChanDecay is Kimi Delta Attention rather than qwen3next's gated delta
 	// rule: the state decays at a rate per channel instead of one per head,
@@ -692,11 +698,6 @@ type RecurrentPlan struct {
 	// sigmoid where qwen3next's is a SiLU. The geometry above is identical for
 	// both, so no shape field can say it.
 	ChanDecay bool
-	// TailLen is what the block's state carries per sequence after the
-	// recurrence's, inside StateLen: a tail its graph states (a token window,
-	// a convolution's history), the same on every recurrent block so a device
-	// keeps one slot width. A sequence's slot is [recurrence | tail].
-	TailLen int
 	// Scan is the per-element selective scan (jlm.LayerScan): each channel's
 	// own state row, B and C shared, the decay a vector exp(dt*A) per
 	// channel.

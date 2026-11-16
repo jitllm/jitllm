@@ -43,9 +43,9 @@ type composedPart struct {
 	graph   *graph.Graph
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
-	// rowTab is a row table's rows on the card, each range a gather
-	// binds the table from its own (rowTable).
-	rowTab  *rowTable
+	// rowTabs is the row tables' rows on the card, each range a gather
+	// binds a table from its own (rowTable).
+	rowTabs []*rowTable
 	vectors map[jlm.Role]backend.Buf
 	tables  map[composer.TableKey]backend.Buf
 	// history, keys and page are a block's history layout and its step's
@@ -98,11 +98,11 @@ type partForm struct {
 	// selection, of selN words, and table the own buffer the step's table
 	// "experts" is written to.
 	split, sel, selN, table int
-	// A form gathering a row table's rows runs in two halves too
+	// A form gathering row tables' rows runs in two halves too
 	// (rowsRun): its codes before rowSplit, up to the hash, then the
-	// gathers. rowSel is the own buffer of the hash's rows, rowN of them a
-	// row, rowIDs at the form's rows.
-	rowSplit, rowSel, rowN, rowIDs int
+	// gathers, each table's rows those of rowSels.
+	rowSplit int
+	rowSels  []partRowSel
 	// A form over a history read in passes (composer.History.Passes) runs
 	// each sweep's codes once a pass (streamRun): a selection's, then its
 	// attention's.
@@ -917,8 +917,8 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 				b = sl.tables[a.table]
 			case partWeight:
 				r := sl.weights[a.role]
-				if jlm.RowTableRole(a.role) && sl.rowTab != nil {
-					r = sl.rowTab.at(a.from)
+				if t := rowTableOf(sl.rowTabs, a.role); t != nil {
+					r = t.at(a.from)
 				}
 				if r != nil {
 					b = [3]backend.Buf{r.qs, r.d, r.sc}[a.region]
@@ -2303,8 +2303,8 @@ func (f *partForm) inPlace(in, out int) bool {
 // roleWeight is the block's matrix its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleWeight(r jlm.Role) *resident {
-	if jlm.RowTableRole(r) && l.rowTab != nil && len(l.rowTab.ranges) > 0 {
-		return &l.rowTab.ranges[0].rows
+	if t := rowTableOf(l.rowTabs, r); t != nil && len(t.ranges) > 0 {
+		return &t.ranges[0].rows
 	}
 	for _, x := range l.mats {
 		if x.role == r {
@@ -2522,23 +2522,7 @@ func (g *devTier) unserved(li int) string {
 // the other; a pool of one shared half is stepped in place, through the
 // composer's own descriptor (bs.cRows).
 func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
-	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
-		(p.Recurrent.TailLen == 0 || tailStated(l.graph, p.Recurrent.StateLen))
-}
-
-// tailStated says graph g's delta rule reads its state at slots of n floats:
-// a tail past the scan's matrices that the graph states (graph.OpStateScan's
-// Span), so the composer's slot is the pool's.
-func tailStated(g *graph.Graph, n int) bool {
-	if g == nil {
-		return false
-	}
-	for _, o := range g.Ops {
-		if o.Kind == graph.OpStateScan {
-			return o.Attr.Span == n
-		}
-	}
-	return false
+	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil)
 }
 
 // bindRec binds linear block l's step in sv to session sid's half of its
@@ -3112,8 +3096,8 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			for _, w := range o.Weight {
 				// A row table is read in its stated format, a call's
 				// rows at a time (rowTable).
-				if jlm.RowTableRole(w.Role) && l.rowTab != nil {
-					sl.formats[w.Role] = l.rowTab.typ
+				if t := rowTableOf(l.rowTabs, w.Role); t != nil {
+					sl.formats[w.Role] = t.typ
 					continue
 				}
 				// A bank's bias is a row an expert, held as one vector.
@@ -3146,7 +3130,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	for r := range sv.sl.weights {
 		sv.sl.weights[r] = l.roleWeight(r)
 	}
-	sv.sl.rowTab = l.rowTab
+	sv.sl.rowTabs = l.rowTabs
 	for r := range sv.sl.vectors {
 		sv.sl.vectors[r] = l.roleVector(r)
 	}

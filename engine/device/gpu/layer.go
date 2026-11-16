@@ -33,8 +33,9 @@ type layer struct {
 	// is the first half of a block cut in two (nn.LayerPlan.Cut), writing
 	// its rows to the scratch's cut, read back to the session's (SetCut).
 	cut int
-	// rowTab is the row table the block gathers from, read in a call at a time.
-	rowTab *rowTable
+	// rowTabs is the row tables the block gathers from, each read in a call
+	// at a time.
+	rowTabs []*rowTable
 	// graph is the block as ops from the model's front end
 	// (nn.LayerPlan.Graph): what serving it whole forms (served.go), and
 	// win and chunked the window its attention states.
