@@ -850,7 +850,10 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 		return nil, err
 	}
 	if windowed {
-		untile := gather.Untile(int(merge), int(window/merge))
+		untile, err := gather.Untile(int(merge), int(window/merge))
+		if err != nil {
+			return nil, fmt.Errorf("convert: clip: %w", err)
+		}
 		untile.In = []uint16{5}
 		t.Head.Ops = append(t.Head.Ops, untile)
 		t.Head.Out = 6

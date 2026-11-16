@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -281,7 +282,9 @@ func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
 	if err := quantizeTower(out); err != nil {
 		return nil, nil, err
 	}
-	a.Tower = d1OmniAudioTower(a)
+	if a.Tower, err = d1OmniAudioTower(a); err != nil {
+		return nil, nil, err
+	}
 	if err := a.Tower.Valid(); err != nil {
 		return nil, nil, fmt.Errorf("convert: the audio tower: %w", err)
 	}
@@ -312,7 +315,7 @@ func audioRows(a *jlm.Audio) int {
 // centred depthwise convolution, the folded BatchNorm, SiLU, pointwise), the
 // other half MLP and a LayerNorm. The head: the adapter and the residual
 // correction.
-func d1OmniAudioTower(a *jlm.Audio) *jlm.Tower {
+func d1OmniAudioTower(a *jlm.Audio) (*jlm.Tower, error) {
 	eps, d := a.Eps, int32(a.NEmbd)
 	f1 := (int32(a.MelBins) + 1) / 2
 	f2, f3 := (f1+1)/2, ((f1+1)/2+1)/2
@@ -330,8 +333,12 @@ func d1OmniAudioTower(a *jlm.Audio) *jlm.Tower {
 	ln := func(p *program, x uint16, w, b jlm.Role) uint16 {
 		return op(p, jlm.TowerOp{Code: jlm.TOpLayerNorm, In: []uint16{x}, Bind: []jlm.Role{w, b}, Eps: eps})
 	}
+	var maskErr error
 	mask := func(p *program, x uint16, gw, halvings int32) uint16 {
-		m := gather.ClipMask(int(gw), int(hop), int(halvings))
+		m, err := gather.ClipMask(int(gw), int(hop), int(halvings))
+		if err != nil {
+			maskErr = cmp.Or(maskErr, err)
+		}
 		m.In = []uint16{x}
 		return op(p, m)
 	}
@@ -391,7 +398,10 @@ func d1OmniAudioTower(a *jlm.Audio) *jlm.Tower {
 	r := h.expr(0, gelu, lin(h, ln(h, x5, jlm.RoleAResNorm, jlm.RoleAResNrmB), jlm.RoleAResDown, jlm.RoleAResDnB))
 	h.p.Out = h.add(x5, lin(h, r, jlm.RoleAResUp, jlm.RoleAResUpB))
 	t.Head = *h.p
-	return t
+	if maskErr != nil {
+		return nil, fmt.Errorf("convert: the audio tower: %w", maskErr)
+	}
+	return t, nil
 }
 
 // d1OmniFrontTables is the front end's tables (audio.py's MelFrontend),
