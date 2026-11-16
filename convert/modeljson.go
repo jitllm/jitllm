@@ -424,9 +424,6 @@ func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error
 	if len(mj.Classes) == 0 {
 		return nil, fmt.Errorf("convert: %s names no class", name)
 	}
-	if classArch(mj.Config.Arch) == ArchNone {
-		return nil, fmt.Errorf("convert: %s: graph %q is not one configOf builds", name, mj.Config.Arch)
-	}
 	if mj.Config.Vocab == "" || mj.Config.Head.Tensor == "" {
 		return nil, fmt.Errorf("convert: %s states no vocab or no head tensor", name)
 	}
@@ -561,16 +558,6 @@ func libraryContainers(files []*modelJSON) error {
 		}
 	}
 	return nil
-}
-
-// classArch is the graph a class's statement names: a GGUF architecture's,
-// or its own container's, which no GGUF reaches; ArchNone for neither.
-func classArch(name string) Arch {
-	if a, ok := archOf()[name]; ok {
-		return a
-	}
-	a, _ := archNamed(name)
-	return a
 }
 
 // libraryUses refuses a use naming no graph of files, or one that uses
@@ -711,7 +698,6 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		template = string(b)
 	}
 	a := &hfArch{
-		arch:         classArch(mj.Config.Arch),
 		name:         mj.Config.Arch,
 		template:     template,
 		graph:        mj.Graph,

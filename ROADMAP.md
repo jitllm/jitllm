@@ -35,18 +35,14 @@ Left:
 
 ## 2. Small models: BERT and ModernBERT
 
-**BERT is done; ModernBERT is not started.**
+**BERT and ModernBERT are done.**
 
-`bert` and `nomic-bert` run as encoder graphs (`engine/model/encoder.go`), and
+`bert`, `nomic-bert` and `modern-bert` (Laya's encoder) run as encoder graphs, and
 qwen3-embedding and EmbeddingGemma run as pooled readouts of their decoder
 graphs. One API serves both (`Model.NewEmbedder`, `jitllm embed`), WordPiece is
 in `tok/wpm.go`, and the outputs are gated against llama.cpp and float32
 sentence-transformers.
 
-Left: ModernBERT (llama.cpp's `modern-bert` pre-tokenizer is already in the
-table; the architecture is not in `convert.archOf`).
-ModernBERT is also the encoder most current PII taggers and routing
-classifiers are built on, so it comes before items 13 and 14.
 
 ## 3. Model and request parameters, complete
 

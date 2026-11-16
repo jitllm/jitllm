@@ -12,7 +12,7 @@ import (
 func valueWidthFits(c *Config) error {
 	if c.KVLoraRank == 0 && c.HeadDimV != 0 && c.HeadDimV != c.HeadDim {
 		return fmt.Errorf("convert: %v's value heads are %d wide beside keys %d wide: %w",
-			c.Arch, c.HeadDimV, c.HeadDim, ErrNotImplemented)
+			c.Name, c.HeadDimV, c.HeadDim, ErrNotImplemented)
 	}
 	return nil
 }
@@ -28,11 +28,11 @@ func expertsFit(c *Config, s *jlm.Source) error {
 		switch {
 		case in && (t.Role == jlm.RoleExpGateBias || t.Role == jlm.RoleExpUpBias):
 			return fmt.Errorf("convert: %v weights its experts at their input over a biased bank (%s): %w",
-				c.Arch, t.Name, ErrNotImplemented)
+				c.Name, t.Name, ErrNotImplemented)
 		case t.Role != jlm.RoleExpUpBank || t.NDim < 1 || t.Dims[0] == uint64(c.NEmbd):
 		case t.Dims[0] > uint64(c.NEmbd) || in:
 			return fmt.Errorf("convert: %v's routed experts are %d wide on a residual of %d (weighted at their input %v): %w",
-				c.Arch, t.Dims[0], c.NEmbd, in, ErrNotImplemented)
+				c.Name, t.Dims[0], c.NEmbd, in, ErrNotImplemented)
 		}
 	}
 	return nil

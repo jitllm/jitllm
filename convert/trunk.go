@@ -12,15 +12,13 @@ import (
 // readoutTrunk is a readout whose head's blocks block_count counts after the
 // trunk's (decision.block_count of them), every per-layer key written for
 // all of them: the trunk is read through a view of the file cut to its
-// blocks (trunkView), as the backbone its architecture names, then stated as
-// the graph Arch names, NonCausal where its attention is not causal, Context
-// its context; the head's blocks convert after it. Require is what the file
+// blocks (trunkView), as the backbone its architecture names, then stated
+// NonCausal where its attention is not causal, Context its context; the head's blocks convert after it. Require is what the file
 // must state for the trunk to be that graph, Context an expression, both
 // over the file's keys (src).
 type readoutTrunk struct {
 	Require   []mjRequire `json:"require"`
 	Context   string      `json:"context"`
-	Arch      string      `json:"arch"`
 	NonCausal bool        `json:"non_causal"`
 }
 
@@ -91,25 +89,10 @@ func (t *readoutTrunk) config(name string, f *meta.File) (*Config, error) {
 		return nil, fmt.Errorf("convert: %s: the trunk's context is not a count", by)
 	}
 	c.NCtx = uint32(ctx.AsInt())
-	arch, ok := archNamed(t.Arch)
-	if !ok {
-		return nil, fmt.Errorf("convert: %s: the trunk's graph %q is no graph the container names", by, t.Arch)
-	}
-	c.Arch = arch
 	if t.NonCausal {
 		c.Flags |= jlm.FlagNonCausal
 	}
 	return c, nil
-}
-
-// archNamed is the graph named name.
-func archNamed(name string) (Arch, bool) {
-	for a := Arch(1); a != 0; a++ {
-		if a.name() == name {
-			return a, true
-		}
-	}
-	return 0, false
 }
 
 // trunkView is f with block_count and every per-layer array cut to the first

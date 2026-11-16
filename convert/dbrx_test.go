@@ -24,7 +24,7 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchDBRX || c.ClampKQV != 8 || !c.Flags.Has(jlm.FlagLayerNorm) ||
+	if c.Name != "dbrx" || c.ClampKQV != 8 || !c.Flags.Has(jlm.FlagLayerNorm) ||
 		!c.Flags.Has(jlm.FlagRopeNeox) || c.Flags.Has(jlm.FlagParallel) || c.NExpert != 4 {
 		t.Fatalf("dbrx config %+v", c)
 	}

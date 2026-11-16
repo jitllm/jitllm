@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// BitNet b1.58 (ArchBitNet). Its seven projections are ternary, and every
+// BitNet b1.58. Its seven projections are ternary, and every
 // source form of them reaches the container as a ternary type -- TQ2_0's
 // 2-bit codes, with the scale an f16 (TypeTQ2) or, where no f16 holds it, an
 // f32 (TypeTQ2F) -- through one of the conversions here, each exact:

@@ -44,8 +44,8 @@ func TestMixtralThroughTheLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchLlama || c.NExpert != 4 || c.NExpertUsed != 2 || c.NFFNExp != 16 || c.Flags.Has(jlm.FlagNoExpertNorm) {
-		t.Errorf("arch %v, %d experts, %d used, %d wide, flags %v", c.Arch, c.NExpert, c.NExpertUsed, c.NFFNExp, c.Flags)
+	if c.Name != "llama" || c.NExpert != 4 || c.NExpertUsed != 2 || c.NFFNExp != 16 || c.Flags.Has(jlm.FlagNoExpertNorm) {
+		t.Errorf("arch %v, %d experts, %d used, %d wide, flags %v", c.Name, c.NExpert, c.NExpertUsed, c.NFFNExp, c.Flags)
 	}
 	if c.SWAWindow != 0 {
 		t.Errorf("a null window states one of %d", c.SWAWindow)

@@ -18,9 +18,9 @@ import (
 )
 
 // TestConverterFamilyCodeOnlyShrinks counts, in each function of convert/,
-// what decides on a family by its name: a reference to an architecture
-// constant, and a string literal naming a class, a GGUF architecture or a
-// projector the converter lists. The converter is becoming model.json files
+// what decides on a family by its name: an identifier spelled as an
+// architecture constant was (archConstant), and a string literal naming a
+// class, a GGUF architecture or a projector the converter lists. The converter is becoming model.json files
 // composed of generic primitives (docs/design/model-json.md), so a count may
 // only fall: testdata/convertfamily.txt holds each function's count, and a
 // function above its line, or one with a count and no line, fails. A fall is
@@ -34,12 +34,11 @@ func TestConverterFamilyCodeOnlyShrinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fam := familyNames(t, root)
-	if len(fam.arch) < 40 {
-		t.Fatalf("read %d architecture constants: the gate read nothing", len(fam.arch))
-	}
 	lits := familyLiterals(t)
-	got, files := convertFamilyCounts(t, root, fam.arch, lits)
+	if len(lits) < 40 {
+		t.Fatalf("read %d family names: the gate read nothing", len(lits))
+	}
+	got, files := convertFamilyCounts(t, root, lits)
 	if files < 60 {
 		t.Fatalf("read %d files under convert/: the gate read nothing", files)
 	}
@@ -79,7 +78,7 @@ func pick(a Arch) bool { return a == ArchLlama || a == ArchQwen3 }
 
 func plain(n int) int { return n + 1 }
 `
-	counts := familyCountsIn(t, "viol.go", viol, fam.arch, lits)
+	counts := familyCountsIn(t, "viol.go", viol, lits)
 	if counts["viol.go:hfArchTable"] != 1 || counts["viol.go:pick"] != 2 || counts["viol.go:plain"] != 0 {
 		t.Errorf("the counter read the violation as %v; want a class literal, two constants and nothing", counts)
 	}
@@ -104,7 +103,7 @@ func familyLiterals(t *testing.T) map[string]bool {
 
 // convertFamilyCounts walks convert/ (its testdata and model.json files
 // aside) and counts each function's family references.
-func convertFamilyCounts(t *testing.T, root string, arch, lits map[string]bool) (map[string]int, int) {
+func convertFamilyCounts(t *testing.T, root string, lits map[string]bool) (map[string]int, int) {
 	out := map[string]int{}
 	files := 0
 	err := filepath.Walk(filepath.Join(root, "convert"), func(p string, fi os.FileInfo, err error) error {
@@ -123,7 +122,7 @@ func convertFamilyCounts(t *testing.T, root string, arch, lits map[string]bool) 
 		}
 		rel, _ := filepath.Rel(root, p)
 		files++
-		for k, n := range familyCountsIn(t, filepath.ToSlash(rel), string(src), arch, lits) {
+		for k, n := range familyCountsIn(t, filepath.ToSlash(rel), string(src), lits) {
 			out[k] += n
 		}
 		return nil
@@ -137,7 +136,7 @@ func convertFamilyCounts(t *testing.T, root string, arch, lits map[string]bool) 
 // familyCountsIn counts, per top-level function of one file (a method as
 // Recv.Name), the architecture constants it refers to and the family names
 // it spells as string literals. A function with none is not listed.
-func familyCountsIn(t *testing.T, rel, src string, arch, lits map[string]bool) map[string]int {
+func familyCountsIn(t *testing.T, rel, src string, lits map[string]bool) map[string]int {
 	f, err := parser.ParseFile(token.NewFileSet(), rel, src, 0)
 	if err != nil {
 		t.Fatalf("%s: %v", rel, err)
@@ -162,7 +161,7 @@ func familyCountsIn(t *testing.T, rel, src string, arch, lits map[string]bool) m
 		ast.Inspect(fd.Body, func(x ast.Node) bool {
 			switch v := x.(type) {
 			case *ast.Ident:
-				if arch[v.Name] {
+				if archConstant(v.Name) {
 					n++
 				}
 			case *ast.BasicLit:

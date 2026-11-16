@@ -110,7 +110,7 @@
     "out": "cut(cat(ids(bos), stated, asked), ctx)",
     "confidence": "pmax"
    },
-   "trunk": {"require": [{"that": "src['attention.causal'] is defined and not src['attention.causal']", "else": "an lfm2-d1-omni trunk is an encoder, and this file does not state attention.causal false"}], "context": "src['decision.max_length'] | default(16384)", "arch": "lfm2enc", "non_causal": true}
+   "trunk": {"require": [{"that": "src['attention.causal'] is defined and not src['attention.causal']", "else": "an lfm2-d1-omni trunk is an encoder, and this file does not state attention.causal false"}], "context": "src['decision.max_length'] | default(16384)", "non_causal": true}
   },
   "kev": {
    "flags": ["marker_pointer"],

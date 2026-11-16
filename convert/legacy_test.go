@@ -19,17 +19,17 @@ func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		arch Arch
+		arch uint16
 		cfg  *jlm.Config
 		bad  bool
 	}{
-		{"modernbert without activations", ArchModernBERT, &jlm.Config{}, true},
-		{"modernbert with them", ArchModernBERT, &jlm.Config{Acts: []jlm.Expr{{}}}, false},
-		{"phimoe without a routed weight", ArchPhiMoE, &jlm.Config{NExpert: 16}, true},
-		{"phimoe with one", ArchPhiMoE, routed.Config, false},
-		{"llama with neither", ArchLlama, &jlm.Config{}, false},
+		{"modernbert without activations", 150, &jlm.Config{}, true},
+		{"modernbert with them", 150, &jlm.Config{Acts: []jlm.Expr{{}}}, false},
+		{"phimoe without a routed weight", 40, &jlm.Config{NExpert: 16}, true},
+		{"phimoe with one", 40, routed.Config, false},
+		{"llama with neither", 1, &jlm.Config{}, false},
 	} {
-		if err := LegacyStated(uint16(c.arch), c.cfg); (err != nil) != c.bad {
+		if err := LegacyStated(c.arch, c.cfg); (err != nil) != c.bad {
 			t.Errorf("%s: %v, want refused %v", c.name, err, c.bad)
 		}
 	}
@@ -37,11 +37,11 @@ func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
 	// migration, the last place that reads it: Qwen3-VL's split interleaved,
 	// and nothing for an architecture whose split is contiguous.
 	for _, c := range []struct {
-		arch        Arch
+		arch        uint16
 		interleaved bool
-	}{{ArchQwen3VL, true}, {ArchQwen2VL, false}} {
+	}{{200, true}, {10, false}} {
 		cfg := &jlm.Config{Revision: 2, NRot: 64, RopeSections: [4]uint32{8, 12, 12, 0}}
-		if err := LegacyStated(uint16(c.arch), cfg); err != nil {
+		if err := LegacyStated(c.arch, cfg); err != nil {
 			t.Fatal(err)
 		}
 		il := len(cfg.RopeTable) == 32 && cfg.RopeTable[1].Axis == 1
@@ -58,7 +58,7 @@ func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
 func TestLegacyCodesStateWhatTheRevisionStated(t *testing.T) {
 	sliding := []bool{true, false, true, false}
 	for _, c := range []struct {
-		arch        Arch
+		arch        uint16
 		win         uint32
 		rope        string
 		quant       jlm.ActQuant
@@ -66,23 +66,23 @@ func TestLegacyCodesStateWhatTheRevisionStated(t *testing.T) {
 		globalFirst bool
 		bidir       []bool
 	}{
-		{arch: ArchQwen3VL, rope: "interleaved"},
-		{arch: ArchQwen3VLMoE, rope: "interleaved"},
-		{arch: ArchQwen3Next, rope: "interleaved"},
-		{arch: ArchQwen4Exp, rope: "interleaved"},
-		{arch: ArchHunyuanVL, rope: "xd"},
-		{arch: ArchBitNet, quant: jlm.ActQuantRowInt8},
-		{arch: ArchOLMo3, win: 512, scale: 1},
-		{arch: ArchModernBERT, win: 512, globalFirst: true},
-		{arch: ArchModernBERT},
-		{arch: ArchGemma4, win: 512, bidir: sliding},
-		{arch: ArchGemma4},
-		{arch: ArchLlama, win: 512},
-		{arch: ArchQwen2VL},
+		{arch: 200, rope: "interleaved"},
+		{arch: 201, rope: "interleaved"},
+		{arch: 9, rope: "interleaved"},
+		{arch: 51, rope: "interleaved"},
+		{arch: 204, rope: "xd"},
+		{arch: 56, quant: jlm.ActQuantRowInt8},
+		{arch: 57, win: 512, scale: 1},
+		{arch: 150, win: 512, globalFirst: true},
+		{arch: 150},
+		{arch: 45, win: 512, bidir: sliding},
+		{arch: 45},
+		{arch: 1, win: 512},
+		{arch: 10},
 	} {
 		cfg := &jlm.Config{NLayer: 4, SWAWindow: c.win, SWAPeriod: 2, Acts: []jlm.Expr{{}}, NRot: 64,
 			RopeSections: [4]uint32{8, 12, 12, 0}}
-		if err := LegacyStated(uint16(c.arch), cfg); err != nil {
+		if err := LegacyStated(c.arch, cfg); err != nil {
 			t.Fatalf("%v: %v", c.arch, err)
 		}
 		rope := map[bool]string{true: "interleaved"}[len(cfg.RopeTable) == 32 && cfg.RopeTable[1].Axis == 1]

@@ -28,8 +28,8 @@ func TestPhi3ThroughTheLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchPhi3 || c.SWAWindow != 4 || c.SWAPeriod != allLocal(2) || !c.Flags.Has(jlm.FlagRopeNeox) {
-		t.Errorf("arch %v, window %d every %d, flags %v", c.Arch, c.SWAWindow, c.SWAPeriod, c.Flags)
+	if c.Name != "phi3" || c.SWAWindow != 4 || c.SWAPeriod != allLocal(2) || !c.Flags.Has(jlm.FlagRopeNeox) {
+		t.Errorf("arch %v, window %d every %d, flags %v", c.Name, c.SWAWindow, c.SWAPeriod, c.Flags)
 	}
 	qkv, gu := iota32(16), iota32(12)
 	for _, tc := range []struct {

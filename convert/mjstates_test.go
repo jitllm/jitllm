@@ -309,7 +309,7 @@ func TestTheLibraryStatesTheRopeSections(t *testing.T) {
 			if tc.secs != nil {
 				keys["rope.dimension_sections"] = meta.MakeInt32s(tc.secs)
 			}
-			c := &Config{Arch: ArchQwen3Next, Config: &jlm.Config{NRot: 64}}
+			c := &Config{Name: "qwen3next", Config: &jlm.Config{NRot: 64}}
 			err := stateContainer(layerFile(arch, keys, nil), c)
 			if tc.fail != (err != nil) || !tc.fail && c.RopeSections != tc.want {
 				t.Errorf("%s %v: sections %v, %v; want %v, refused %v", arch, tc.secs, c.RopeSections, err, tc.want, tc.fail)

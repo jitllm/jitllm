@@ -99,15 +99,15 @@ func render(d lines) ([]byte, error) {
 	// Group both lists by the graph each name converts to. The vision tower's
 	// own name (clip) is not a text architecture; it goes with the projectors.
 	type graph struct {
-		arch    convert.Arch
+		name    string
 		gguf    []string
 		classes []string
 	}
-	graphs := map[convert.Arch]*graph{}
-	at := func(a convert.Arch) *graph {
+	graphs := map[string]*graph{}
+	at := func(a string) *graph {
 		g := graphs[a]
 		if g == nil {
-			g = &graph{arch: a}
+			g = &graph{name: a}
 			graphs[a] = g
 		}
 		return g
@@ -115,8 +115,8 @@ func render(d lines) ([]byte, error) {
 	var towers []string
 	textNames := 0
 	for _, n := range names {
-		a, _ := convert.ArchitectureGraph(n)
-		if a == convert.ArchCLIP {
+		a, ok := convert.GraphOf(n)
+		if !ok {
 			towers = append(towers, n)
 			continue
 		}
@@ -124,7 +124,7 @@ func render(d lines) ([]byte, error) {
 		at(a).gguf = append(at(a).gguf, n)
 	}
 	for _, c := range classes {
-		a, _ := convert.HFClassGraph(c)
+		a, _ := convert.GraphOf(c)
 		at(a).classes = append(at(a).classes, c)
 	}
 	order := make([]*graph, 0, len(graphs))
@@ -141,7 +141,7 @@ func render(d lines) ([]byte, error) {
 			}
 		}
 	}
-	sort.Slice(order, func(i, j int) bool { return order[i].arch.String() < order[j].arch.String() })
+	sort.Slice(order, func(i, j int) bool { return order[i].name < order[j].name })
 
 	encoders, err := convert.Encoders()
 	if err != nil {
@@ -182,7 +182,7 @@ func render(d lines) ([]byte, error) {
 		textNames, ggufGraphs)
 	p("- **%d** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **%d** graphs, **%d** of them reached only from safetensors\n",
 		len(classes), hfGraphs, hfOnly)
-	p("- **%d** graphs in all (`convert.Arch`)\n", len(graphs))
+	p("- **%d** graphs in all (`convert.GraphOf`, each a library file)\n", len(graphs))
 	p("- **%d** vision projectors (`clip.projector_type`, `convert.Projectors`)\n", len(projectors))
 	p("- **%d** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)\n", len(audio))
 	p("- **%d** embedding encoders, and pooling on any decoder\n", len(encoders))
@@ -219,7 +219,7 @@ func render(d lines) ([]byte, error) {
 		if hc == "" {
 			hc = "--"
 		}
-		p("| %s | %s | %s | %s |\n", code(g.arch.String()), gg, hc, strings.Join(models, "; "))
+		p("| %s | %s | %s | %s |\n", code(g.name), gg, hc, strings.Join(models, "; "))
 	}
 
 	p("\n## Hugging Face classes\n\n")
@@ -227,8 +227,8 @@ func render(d lines) ([]byte, error) {
 	p("classes; any other is refused, and `model_type` is not a fallback.\n\n")
 	p("| Class | Graph | Models |\n|---|---|---|\n")
 	for _, c := range classes {
-		a, _ := convert.HFClassGraph(c)
-		p("| %s | %s | %s |\n", code(c), code(a.String()), d.hf[c])
+		a, _ := convert.GraphOf(c)
+		p("| %s | %s | %s |\n", code(c), code(a), d.hf[c])
 	}
 
 	p("\n## Vision projectors\n\n")

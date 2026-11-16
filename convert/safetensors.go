@@ -941,7 +941,6 @@ func (c *hfConfig) act() string {
 // testdata/golden/hf that model.TestSafetensorsMatchTransformers compares
 // against transformers.
 type hfArch struct {
-	arch Arch
 	// name is the GGUF architecture the class converts as, whose library
 	// file states its graph and container, or a Go-table class's own name
 	// (classGraph).
@@ -1076,18 +1075,6 @@ func HFClasses() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// HFClassGraph is the graph a Hugging Face class converts to, and whether the
-// class is in the list. As on the GGUF side, the config can refine it; this is
-// the class's own entry.
-func HFClassGraph(class string) (Arch, bool) {
-	if lib, err := modelLibrary(); err == nil {
-		if mj, ok := lib[class]; ok {
-			return classArch(mj.Config.Arch), true
-		}
-	}
-	return ArchNone, false
 }
 
 // identify turns a HuggingFace tensor name into the triple a container stores.

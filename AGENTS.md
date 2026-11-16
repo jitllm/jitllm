@@ -402,19 +402,16 @@ Further rules for every entry:
   every kernel is gated against the oracle. `quant.PackedTypes`
   (`format/quant/types.go`) is the canonical list of packed types a gate sweeps;
   a hand-written copy anywhere else is a bug waiting.
-- **The architecture is the converter's alone, and goes** (the user's D1):
-  what a family's reference does is data in its library file, and
-  `convert.Arch` (`convert/arch.go`) is read only by the readers that have not
-  moved yet; it is deleted with the last of them. Nothing past the converter --
-  not the container, not `model/`, `engine/`, the devices or the composer --
-  holds one (`srcgate.TestNoFamilyCode`). A container written before v31
-  carries its old code as an opaque number, which the migration reads from a
-  table of numbers (`jlm.Stating`, `convert.LegacyStated`). Codes were allocated
-  by group: the dense llama family from the top of the code space down, the
-  flagships counting up from 44, the state-space families from 100, the vision
-  families from the top down, the encoders after BERT from 150, the
-  vision-language families' text models up from 200; they must not move, since a
-  pre-v31 container's code is read by number.
+- **The architecture is the converter's alone, and is a name** (the user's
+  D1): what a family's reference does is data in its library file; the
+  converter names a source's architecture only by the name the source states
+  (`convert.Config.Name`, for messages) and a graph by the library file that
+  states it (`convert.GraphOf`). There is no architecture type. Nothing past
+  the converter -- not the container, not `model/`, `engine/`, the devices or
+  the composer -- holds one (`srcgate.TestNoFamilyCode`). A container written
+  before v31 carries its old code as an opaque number, which the migration
+  reads from a table of numbers (`jlm.Stating`, `convert.LegacyStated`); the
+  numbers must not move, since a pre-v31 container's code is read by number.
 
 ### The architectures and projectors
 

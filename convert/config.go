@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -14,175 +15,46 @@ import (
 
 // This file is the only place the source format's key vocabulary lives. A
 // container carries a typed, complete jlm.Config written once here, so the
-// reader never parses another project's key names. The architecture switch
-// below is this engine's knowledge of what each graph does, mostly read off a
-// reference implementation's source; an unimplemented architecture fails here,
-// at conversion, rather than at load.
+// reader never parses another project's key names. What each architecture
+// states is the library's (convert/models); an architecture it does not name
+// fails here, at conversion, rather than at load.
 
-func archOf() map[string]Arch {
-	return map[string]Arch{
-		"llama":     ArchLlama, // llama2 and llama3 are this arch too
-		"qwen2":     ArchQwen2,
-		"qwen3":     ArchQwen3,
-		"qwen3moe":  ArchQwen3MoE,
-		"olmoe":     ArchOLMoE,
-		"gemma":     ArchGemma,
-		"phi3":      ArchPhi3, // phi4 uses this arch string too
-		"clip":      ArchCLIP,
-		"qwen3next": ArchQwen3Next,
-		// Qwen3.5/3.6 are qwen3next's block re-cut, and every cut is in the file:
-		// beta and alpha arrive as two tensors (fused back by fuseBetaAlpha), the
-		// value heads are tiled (jlm.FlagDeltaKeyTiled), qwen35's FFN is dense, and
-		// the interleaved M-RoPE is exactly NEOX for a text prompt (convert/models/qwen3_5.json).
-		"qwen35":    ArchQwen3Next,
-		"qwen35moe": ArchQwen3Next,
-		// Clef-Flash: Qwen3.5-9B's text model under another name, with a joint
-		// schema head after it that the decision readout reads (decisionOf,
-		// jlm.DecisionClef).
-		"clef":    ArchQwen3Next,
-		"qwen2vl": ArchQwen2VL,
-		"gemma2":  ArchGemma2,
-		"gemma3":  ArchGemma3,
-		"gpt-oss": ArchGPTOSS,
-		// DeepSeek-V2/V3/R1, Kimi-K2 and Moonlight-16B-A3B. Not GLM: see
-		// ArchDeepseek2 for which GLM is this graph and which is not.
-		"deepseek2": ArchDeepseek2,
-		// The BERT family of embedding models: all-minilm, mxbai-embed-large,
-		// bge-large and the bert-sized snowflake-arctic-embed tags declare "bert";
-		// nomic-embed-text declares "nomic-bert". See ArchBERT.
-		"bert":       ArchBERT,
-		"nomic-bert": ArchNomicBERT,
-		// ModernBERT, and the decision encoders built on it (Laya). See
-		// ArchModernBERT.
-		"modern-bert": ArchModernBERT,
-		// Llama 4 Scout (16 experts) and Maverick (128), text only. See
-		// ArchLlama4 for the five things that make it not llama.
-		"llama4": ArchLlama4,
-		// IBM Granite 3.x/4.0, dense and mixture: llama's block with four scaling
-		// constants. See ArchGranite. (granitehybrid, the Mamba-2 hybrid, is a
-		// different graph and is not here.)
-		"granite":    ArchGranite,
-		"granitemoe": ArchGranite,
-		// The classic-transformer blocks (C6): LayerNorm with biases, ungated
-		// FFNs, parallel residuals. See ArchPhi2.
-		"phi2":      ArchPhi2,
-		"starcoder": ArchStarcoder,
-		// Cohere: Command-R, Aya and Aya Expanse declare "command-r"; Command-R7B
-		// and Command-A declare "cohere2". See ArchCommandR.
-		"command-r":  ArchCommandR,
-		"cohere2":    ArchCommandR,
-		"stablelm":   ArchStableLM,
-		"starcoder2": ArchStarcoder2,
-		"falcon":     ArchFalcon,
-		"nemotron":   ArchNemotron,
-		// Databricks' DBRX: the C6 kit's bias-free LayerNorm on a mixture, with
-		// q, k and v clamped. See ArchDBRX.
-		"dbrx": ArchDBRX,
-		// GLM-4.5, GLM-4.6 and GLM-4.5-Air: DeepSeek-V3's router on GQA attention.
-		// See ArchGLM4MoE.
-		"glm4moe": ArchGLM4MoE,
-		// Qwen1.5-MoE and Qwen2-57B-A14B. See ArchQwen2MoE.
-		"qwen2moe": ArchQwen2MoE,
-		// ERNIE 4.5: the dense models are llama's graph exactly (interleaved
-		// rotary, tied head, biases only as tensors), as llama3 is; the mixtures
-		// are their own. See ArchErnie45MoE.
-		"ernie4_5":     ArchLlama,
-		"ernie4_5-moe": ArchErnie45MoE,
-		// The dense llama-family group: each is llama's block with switches the
-		// graph already runs. See convert/dense.go and ArchSmolLM3.
-		"smollm3":  ArchSmolLM3,
-		"arcee":    ArchArcee,
-		"seed_oss": ArchSeedOSS,
-		"olmo2":    ArchOLMo2, // OLMo 3 declares olmo2 too
-		"exaone4":  ArchExaone4,
-		"mistral3": ArchMistral3,
-		// Tencent's Hunyuan, mixture and dense: one graph, q/k norm after the
-		// rotary. See ArchHunyuan.
-		"hunyuan-moe":   ArchHunyuan,
-		"hunyuan-dense": ArchHunyuan,
-		// MiniMax-M2/M2.1/M2.5: OLMoE's whole-projection q/k norm on GQA with
-		// partial NEOX rotary, and DeepSeek-V3's sigmoid router without a shared
-		// expert. See ArchMiniMaxM2.
-		"minimax-m2": ArchMiniMaxM2,
-		// Gemma 4 (text): gemma3's block with its global layers at another
-		// attention geometry. See ArchGemma4.
-		"gemma4": ArchGemma4,
-		// DeepSeek V3.2: deepseek2's graph with DeepSeek Sparse Attention's
-		// lightning indexer. See ArchDeepseek32.
-		"deepseek32": ArchDeepseek32,
-		// Gemma 3n (text): gemma3's attention with Gemma 4's E-model pieces,
-		// inside AltUp's parallel residual streams. See ArchGemma3n.
-		"gemma3n": ArchGemma3n,
-		// The state-space hybrids: Mamba-2 blocks (jlm.LayerSSD), alone or beside
-		// attention. See convert/ssm.go and ArchMamba2.
-		"mamba2":        ArchMamba2,
-		"granitehybrid": ArchGraniteHybrid,
-		// Nemotron-H and Nemotron Nano 2: one mixer a source layer, merged into
-		// blocks at conversion (convert/nemotronh.go).
-		"nemotron_h": ArchNemotronH,
-		// Nemotron 3 (Nano): the same blocks with the MLP a mixture of ungated
-		// experts. See mergeMixers.
-		"nemotron_h_moe": ArchNemotronH,
-		// Mamba-1: plain Mamba and FalconMamba (one arch, the latter's dt/B/C
-		// norms written as ones), and Jamba beside attention. See convert/mamba1.go.
-		"mamba": ArchMamba,
-		"jamba": ArchJamba,
-		// Falcon-H1: attention and Mamba-2 side by side in every block.
-		"falcon-h1": ArchFalconH1,
-		// LFM2: gated short convolutions beside attention (convert/lfm2.go).
-		"lfm2": ArchLFM2,
-		// LFM2's mixture (LFM2-8B-A1B, LFM2-24B-A2B): the same blocks with a
-		// sigmoid top-k after a dense lead, read off the keys as for any mixture.
-		"lfm2moe": ArchLFM2,
-		// MiniMax-M3 (text): MiniMax-M2's attention with DeepSeek-V3's mixture
-		// and MiniMax Sparse Attention. See ArchMiniMaxM3.
-		"minimax-m3": ArchMiniMaxM3,
-		// The modern text group: Ling 2.0, dots.llm1, Phi-3.5-MoE and Apertus.
-		// See convert/moefamily2.go, convert/apertus.go and ArchBailingMoE2.
-		"bailingmoe2": ArchBailingMoE2,
-		"dots1":       ArchDots1,
-		"phimoe":      ArchPhiMoE,
-		"apertus":     ArchApertus,
-		// BitNet b1.58 2B-4T as bitnet.cpp's converter names it (convert/bitnet.go,
-		// ArchBitNet). llama.cpp's own "bitnet" is 1bitLLM's reproduction, a
-		// SiLU gate, and its converter cannot write transformers' BitNetForCausalLM
-		// at all (it maps none of its inner-norm names); it is not this graph.
-		"bitnet-b1.58": ArchBitNet,
-		// DeepSeek V4 (text): hyper-connected residual streams, single-key MQA
-		// over a sliding window and a compressed history. See ArchDeepseek4.
-		"deepseek4": ArchDeepseek4,
+// Config is a model's config as the converter builds it: the container's
+// (jlm.Config), and Name the architecture its source declares (a GGUF's
+// general.architecture, a class's container), for messages alone -- the
+// container states the graph, and nothing past the converter names an
+// architecture.
+type Config struct {
+	*jlm.Config
+	Name string
+	// SwiGLULimits is each block's SwiGLU clamp under Flag2SwiGLUClamp, the
+	// file's; nil for a container restated from its flag (Activation).
+	SwiGLULimits []float32
+	// Stated is what the library states for the source (stateContainer);
+	// nil for a Config the library has not stated, which Activation,
+	// RouterScore, RouterWeight and StateRevision refuse rather than read as
+	// stating nothing (Unstated).
+	Stated *Statement
+}
 
-		// Qwen3-VL's text models: qwen3 and qwen3moe under an interleaved M-RoPE.
-		// See ArchQwen3VL.
-		"qwen3vl":    ArchQwen3VL,
-		"qwen3vlmoe": ArchQwen3VLMoE,
-		// GLM-4-0414 and the text model of GLM-4.1V / 4.6V-Flash. See ArchGLM4.
-		// GLM-4.5V's and 4.6V's is glm4moe with M-RoPE sections, which configOf
-		// carries as ArchGLM4VMoE.
-		"glm4": ArchGLM4,
-		// HunyuanVL's text model (HunyuanOCR): hunyuan-dense's block under
-		// XD-RoPE. See ArchHunyuanVL.
-		"hunyuan_vl": ArchHunyuanVL,
-		// Kimi-K3 (text): Kimi-Linear's KDA + MLA hybrid with residual attention,
-		// a latent mixture and the situ activation. See ArchKimiK3.
-		"kimi-k3": ArchKimiK3,
-		// Qwen3.8-Flash-Next (text): qwen3next's hybrid inside low-rank gated
-		// hyper-connections, with QSA block selection and an n-gram embedding.
-		// See ArchQwen4Exp.
-		"qwen4exp": ArchQwen4Exp,
-	}
+// Unstated is jc as a Config no library file states anything for.
+func Unstated(jc *jlm.Config) *Config { return &Config{Config: jc, Stated: &Statement{}} }
+
+// unstated is the refusal of a Config the library has not stated, by what
+// read it.
+func unstated(what string) error {
+	return fmt.Errorf("convert: %s of a config the library has not stated (stateContainer, or Unstated for a source no file states)", what)
 }
 
 // Supported reports whether the converter implements a GGUF architecture
-// name -- the list above, which is the list (RULE 7).
+// name: the library's (Architectures), which is the list (RULE 7).
 func Supported(arch string) bool {
-	_, ok := archOf()[arch]
-	return ok
+	names, err := Architectures()
+	return err == nil && slices.Contains(names, arch)
 }
 
 // Architectures is every GGUF architecture name the library's files name
-// (convert/models), and the vision tower's (towerArch), sorted
-// (TestArchitecturesAreTheLibrarys).
+// (convert/models), and the vision tower's (towerArch), sorted.
 //
 // It exists so the list can be checked against, not just consulted:
 // library.TestEveryArchitectureIsObtainable reads it to confirm everything the
@@ -204,13 +76,27 @@ func Architectures() ([]string, error) {
 	return out, nil
 }
 
-// ArchitectureGraph is the graph a GGUF architecture name converts to, and
-// whether the name is in the list. Several names share one graph. The file can
-// refine it further (glm4moe with M-RoPE sections is ArchGLM4VMoE); this is
-// the name's own entry.
-func ArchitectureGraph(name string) (Arch, bool) {
-	a, ok := archOf()[name]
-	return a, ok
+// GraphOf is the library file whose graph a GGUF architecture name or a
+// Hugging Face class converts to, by its name in convert/models, and whether
+// the name is one the library states a graph for. Several names share one
+// graph, which each block's facts refine.
+func GraphOf(name string) (string, bool) {
+	files, err := libraryFiles()
+	if err != nil {
+		return "", false
+	}
+	arch := name
+	for _, mj := range files {
+		if slices.Contains(mj.Classes, name) {
+			arch = mj.Config.Arch
+		}
+	}
+	for _, mj := range files {
+		if _, own := mj.Container[arch]; (own || slices.Contains(mj.GGUF, arch)) && mj.Graph != nil {
+			return strings.TrimSuffix(path.Base(mj.name), ".json"), true
+		}
+	}
+	return "", false
 }
 
 func configOf(f *meta.File) (*Config, error) { return configOfAs(f, false) }
@@ -238,8 +124,7 @@ func configOfAs(f *meta.File, class bool) (*Config, error) {
 
 // localAxes refuses rotary sections under a second rotary, the sliding
 // layers' own base or a block's own width: a table over several position
-// axes on the local layers, which no architecture in archOf or hfArchTable
-// states.
+// axes on the local layers, which no statement of the library states.
 func localAxes(c *Config) error {
 	second := c.RopeBaseSWA != 0
 	for b := range c.Geoms {
@@ -249,7 +134,7 @@ func localAxes(c *Config) error {
 		return nil
 	}
 	return fmt.Errorf("convert: %s: rotary sections %v on the sliding layers' own rotary: %w",
-		c.Arch, c.RopeSections, ErrNotImplemented)
+		c.Name, c.RopeSections, ErrNotImplemented)
 }
 
 // configOfFile is configOf for every file but the ones read through a view
@@ -259,9 +144,9 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 	if name == towerArch {
 		return nil, fmt.Errorf("convert: %q is a vision tower, not a language model", name)
 	}
-	arch, ok := archOf()[name]
+	ok := Supported(name)
 	if st, _, err := ggufStates(name); !ok && class && err == nil && st != nil {
-		arch, ok = archNamed(name)
+		ok = true
 	}
 	if !ok {
 		names, err := Architectures()
@@ -275,7 +160,7 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	c := &Config{Arch: arch, Config: &jlm.Config{
+	c := &Config{Name: name, Config: &jlm.Config{
 		NLayer:     uint32(f.UintKey("block_count", 0)),
 		NEmbd:      uint32(f.UintKey("embedding_length", 0)),
 		NHead:      nhead,

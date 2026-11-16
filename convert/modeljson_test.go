@@ -172,11 +172,11 @@ func TestModelLibraryParses(t *testing.T) {
 		if !slices.Contains(classes, c) {
 			t.Errorf("%s is in the library and not in HFClasses", c)
 		}
-		if g, ok := HFClassGraph(c); !ok || g == ArchNone {
-			t.Errorf("%s: HFClassGraph %v %v", c, g, ok)
+		if g, ok := GraphOf(c); !ok || g == "" {
+			t.Errorf("%s: GraphOf %q %v", c, g, ok)
 		}
 	}
-	if g, _ := HFClassGraph("Qwen3_5ForConditionalGeneration"); g != ArchQwen3Next {
+	if g, _ := GraphOf("Qwen3_5ForConditionalGeneration"); g != "qwen3_5" {
 		t.Errorf("Qwen3_5ForConditionalGeneration converts to %v", g)
 	}
 }
@@ -195,7 +195,6 @@ func TestModelJSONRefuses(t *testing.T) {
 	for _, c := range []struct{ name, from, to, err string }{
 		{"unknown field", `"classes"`, `"klasses": [], "classes"`, "unknown field"},
 		{"no class", `["X"]`, `[]`, "names no class"},
-		{"unknown graph", `"qwen3next"`, `"nonesuch"`, "not one configOf builds"},
 		{"unknown gate", `"activation": "'silu'"`, `"activation": "'silu'", "gating": "sparsemixer"`, "gating \"sparsemixer\""},
 		{"no vocab", `"vocab": "vocab_size",`, ``, "no vocab"},
 		{"unknown role", `"attn_q.weight"`, `"attn_quux.weight"`, "not a tensor name"},
@@ -284,7 +283,7 @@ func TestModelJSONHandsConfigOfTheTensorTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Arch != ArchQwen2MoE || cfg.NExpert != 8 || cfg.NExpertUsed != 2 || cfg.NFFNExp != 32 ||
+	if cfg.Name != "qwen2moe" || cfg.NExpert != 8 || cfg.NExpertUsed != 2 || cfg.NFFNExp != 32 ||
 		cfg.NFFNShExp != 48 || !cfg.Flags.Has(jlm.FlagNoExpertNorm) || !cfg.Flags.Has(jlm.FlagRopeNeox) ||
 		cfg.Flags.Has(jlm.FlagExpertSigmoid) {
 		t.Errorf("mixture %d of %d experts %d wide, shared %d, flags %v", cfg.NExpertUsed, cfg.NExpert,
@@ -399,7 +398,7 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagExpertSigmoid
-	if cfg.Arch != ArchDots1 || cfg.Flags&want != want || cfg.Flags.Has(jlm.FlagNoExpertNorm) || cfg.ExpertScale != 2.5 ||
+	if cfg.Name != "dots1" || cfg.Flags&want != want || cfg.Flags.Has(jlm.FlagNoExpertNorm) || cfg.ExpertScale != 2.5 ||
 		cfg.NDenseLead != 1 || cfg.NExpert != 8 || cfg.NExpertUsed != 2 || cfg.NFFNExp != 32 || cfg.NFFNShExp != 64 ||
 		cfg.NExpertGroup != 1 || cfg.NExpertGroupUsed != 1 {
 		t.Errorf("flags %v scale %v lead %d, %d of %d experts %d wide, shared %d, groups %d/%d", cfg.Flags,
@@ -536,7 +535,7 @@ func TestGlm4MoeThroughTheLibrary(t *testing.T) {
 			t.Fatalf("%s: %v", r.name, err)
 		}
 		want := jlm.FlagRopeNeox | jlm.FlagExpertSigmoid
-		if cfg.Arch != ArchGLM4MoE || cfg.NLayer != 3 || cfg.NMTP != r.mtp || cfg.NRot != 8 || cfg.HeadDim != 16 ||
+		if cfg.Name != "glm4moe" || cfg.NLayer != 3 || cfg.NMTP != r.mtp || cfg.NRot != 8 || cfg.HeadDim != 16 ||
 			cfg.Flags&want != want || cfg.Flags.Has(jlm.FlagQKNorm) != r.qk || cfg.NDenseLead != 1 ||
 			cfg.ExpertScale != 2.5 || cfg.NFFNShExp != 32 || cfg.Flags.Has(jlm.FlagNoExpertNorm) {
 			t.Errorf("%s: %d blocks and %d predicting, rotary %d of %d, lead %d, scale %v, shared %d, flags %v",
@@ -612,8 +611,8 @@ func TestQwen35ConfigThroughTheLibrary(t *testing.T) {
 	want := jlm.SSMConfig{ConvKernel: 4, Groups: 2, Inner: 128, StateSize: 32, NHeadV: 4}
 	kinds := []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerLinearAttn, jlm.LayerFullAttn, jlm.LayerLinearAttn}
 	switch {
-	case c.Arch != ArchQwen3Next:
-		t.Errorf("arch %v", c.Arch)
+	case c.Name != "qwen3next":
+		t.Errorf("arch %v", c.Name)
 	case c.NLayer != 4 || c.NEmbd != 64 || c.NFFN != 96 || c.NHead != 4 || c.NKVHead != 2 || c.HeadDim != 32:
 		t.Errorf("geometry %+v", c.Config)
 	case c.NRot != 8 || c.RopeSections != [4]uint32{2, 1, 1, 0} || c.RopeBase != 1e7 || c.NCtx != 512:

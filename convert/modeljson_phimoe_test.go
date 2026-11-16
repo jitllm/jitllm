@@ -35,10 +35,10 @@ func TestPhiMoEThroughTheLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagNoExpertNorm
-	if cfg.Arch != ArchPhiMoE || cfg.Flags&want != want || cfg.NExpert != 8 || cfg.NExpertUsed != 2 ||
+	if cfg.Name != "phimoe" || cfg.Flags&want != want || cfg.NExpert != 8 || cfg.NExpertUsed != 2 ||
 		cfg.YarnOrigCtx != 512 || cfg.AttnFactor != 1.25 || cfg.SWAWindow != 0 || len(c.extra) != 2 {
 		t.Errorf("arch %v flags %v, %d of %d experts, original context %d, magnitude %v, window %d, %d tensors",
-			cfg.Arch, cfg.Flags, cfg.NExpertUsed, cfg.NExpert, cfg.YarnOrigCtx, cfg.AttnFactor, cfg.SWAWindow, len(c.extra))
+			cfg.Name, cfg.Flags, cfg.NExpertUsed, cfg.NExpert, cfg.YarnOrigCtx, cfg.AttnFactor, cfg.SWAWindow, len(c.extra))
 	}
 	if cfg, err = mj.config(hfConfigOf(t, strings.Replace(js, `"sliding_window": null`, `"sliding_window": 1024`, 1)), names); err != nil ||
 		cfg.SWAWindow != 1024 || cfg.SWAPeriod == 0 {

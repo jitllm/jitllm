@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// The flagship architectures (ArchMiniMaxM2 and the group around it).
+// The flagship architectures (MiniMax-M2 and the group around it).
 // docs/design/model-coverage.md section 9 is the survey they were chosen
 // from, with what each needs and what it costs.
 

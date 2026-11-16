@@ -222,7 +222,7 @@ func TestStatedActivationsAreTheReferences(t *testing.T) {
 				copy(g[len(g)-4:], []float64{1.5, 2.5, 3.5, 4.5})
 			}
 			inner := *c.cfg.Config
-			cfg := &Config{Arch: c.cfg.Arch, Stated: c.cfg.Stated, Config: &inner}
+			cfg := &Config{Name: c.cfg.Name, Stated: c.cfg.Stated, Config: &inner}
 			cfg.NLayer = 2
 			s := &jlm.Source{Config: cfg.Config}
 			for li := range int32(2) {

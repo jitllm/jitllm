@@ -2,7 +2,6 @@ package convert
 
 import (
 	"slices"
-	"sort"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -26,24 +25,6 @@ func TestUnstatedConfigsAreRefused(t *testing.T) {
 	}
 	if err := StateRevision(Unstated(jc())); err != nil {
 		t.Errorf("a config stated as stating nothing: %v", err)
-	}
-}
-
-// TestArchitecturesAreTheLibrarys holds the list the library's files name
-// to every name the converter reads a graph for: a name a file adds that no
-// reader reads, or a reader's name no file names, fails.
-func TestArchitecturesAreTheLibrarys(t *testing.T) {
-	got, err := Architectures()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want []string
-	for n := range archOf() {
-		want = append(want, n)
-	}
-	sort.Strings(want)
-	if len(got) < 40 || !slices.Equal(got, want) {
-		t.Fatalf("the library names %v\nthe readers %v", got, want)
 	}
 }
 

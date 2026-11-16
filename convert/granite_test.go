@@ -55,8 +55,8 @@ func TestGraniteCarriesItsFourScales(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchGranite {
-		t.Errorf("arch %v, want granite", c.Arch)
+	if c.Name != "granite" {
+		t.Errorf("arch %v, want granite", c.Name)
 	}
 	if c.NKVHead != 2 {
 		t.Errorf("head_count_kv array read as %d, want 2", c.NKVHead)
@@ -73,7 +73,7 @@ func TestGraniteCarriesItsFourScales(t *testing.T) {
 	k["expert_used_count"] = meta.MakeUint(2)
 	k["expert_feed_forward_length"] = meta.MakeUint(32)
 	delete(k, "expert_shared_feed_forward_length")
-	if c, err = configOf(headerOnly("granitemoe", k)); err != nil || c.Arch != ArchGranite || c.NExpert != 8 {
+	if c, err = configOf(headerOnly("granitemoe", k)); err != nil || c.Name != "granitemoe" || c.NExpert != 8 {
 		t.Errorf("granitemoe: %v %+v", err, c)
 	}
 

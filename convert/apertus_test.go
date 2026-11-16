@@ -25,8 +25,8 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchApertus || !c.Flags.Has(jlm.FlagQKNorm) || !c.Flags.Has(jlm.FlagRopeNeox) {
-		t.Fatalf("arch %v flags %v", c.Arch, c.Flags)
+	if c.Name != "apertus" || !c.Flags.Has(jlm.FlagQKNorm) || !c.Flags.Has(jlm.FlagRopeNeox) {
+		t.Fatalf("arch %v flags %v", c.Name, c.Flags)
 	}
 	s := &jlm.Source{Config: c.Config}
 	if err := statedGathers(c, s, f, "blk."); err != nil {

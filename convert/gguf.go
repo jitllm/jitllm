@@ -214,7 +214,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				return nil, fmt.Errorf("convert: %v: %w", v.Projector, err)
 			}
 		}
-		c = &Config{Arch: ArchCLIP, Stated: st, Config: &jlm.Config{
+		c = &Config{Name: towerArch, Stated: st, Config: &jlm.Config{
 			NLayer: v.NLayer, NEmbd: v.NEmbd, NHead: v.NHead,
 			NKVHead: v.NHead, HeadDim: v.NEmbd / max32(v.NHead, 1), NFFN: v.NFFN,
 			RMSEps: v.Eps, EmbdScale: 1, AttnFactor: 1, Flags: v.Flags,

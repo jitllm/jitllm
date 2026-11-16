@@ -177,7 +177,7 @@ func TestDenseHFClassDefaults(t *testing.T) {
 				c.YarnOrigCtx == 8192 && c.AttnFactor > 1.2 && c.AttnFactor < 1.21 && c.RopeBaseSWA == 5e5)
 		}},
 		{"Olmo2ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *Config) string {
-			return denseOK(c.Arch == ArchOLMo2 && c.NKVHead == 2 && c.Flags.Has(jlm.FlagQKNormWide))
+			return denseOK(c.Name == "olmo2" && c.NKVHead == 2 && c.Flags.Has(jlm.FlagQKNormWide))
 		}},
 		{"Olmo3ForCausalLM", `, "sliding_window": null`, head, func(c *Config) string {
 			return denseOK(c.SWAWindow == 0 && c.SWAPeriod == 0)

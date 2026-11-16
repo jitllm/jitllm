@@ -23,8 +23,8 @@ func TestOLMoEThroughTheLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchOLMoE || !c.Flags.Has(jlm.FlagQKNormWide) || !c.Flags.Has(jlm.FlagNoExpertNorm) {
-		t.Errorf("arch %v, flags %v", c.Arch, c.Flags)
+	if c.Name != "olmoe" || !c.Flags.Has(jlm.FlagQKNormWide) || !c.Flags.Has(jlm.FlagNoExpertNorm) {
+		t.Errorf("arch %v, flags %v", c.Name, c.Flags)
 	}
 	c, err = mj.config(hfConfigOf(t, strings.Replace(js, `"norm_topk_prob": false`, `"norm_topk_prob": true`, 1)), names)
 	if err != nil || c.Flags.Has(jlm.FlagNoExpertNorm) {

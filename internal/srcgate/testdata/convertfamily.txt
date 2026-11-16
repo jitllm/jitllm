@@ -2,14 +2,6 @@
 # family's name (architecture constants, class/architecture/projector literals),
 # read at 514456eea and lowered as the work landed. A count may only fall; lower a
 # line when the work that removes it lands.
-59 convert/arch.go:coreArchName
-14 convert/arch.go:denseArchName
-2 convert/arch.go:encoderArchName
-16 convert/arch.go:flagshipArchName
-8 convert/arch.go:moe2ArchName
-15 convert/arch.go:ssmArchName
-9 convert/arch.go:visionArchName
-140 convert/config.go:archOf
 1 convert/gguf.go:sourceOf
 3 convert/vocab.go:VocabOf
 1 convert/vocab.go:wordPiece

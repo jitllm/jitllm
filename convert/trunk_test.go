@@ -13,7 +13,7 @@ import (
 // LFM2 blocks made an encoder, its FFN width the trunk's (the head's 4096 is
 // not it), its layer kinds read off the trunk's head counts alone, and the
 // head's two blocks after it. The same file with attention.causal true is
-// refused: it is not the graph ArchLFM2Enc runs.
+// refused: it is not an encoder.
 func TestD1OmniConfigIsTheTrunks(t *testing.T) {
 	src := testmodels.Path("d1-omni/d1-omni-600M-F16.gguf")
 	if _, err := os.Stat(src); err != nil {
@@ -27,10 +27,10 @@ func TestD1OmniConfigIsTheTrunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != ArchLFM2Enc || !c.Flags.Has(jlm.FlagNonCausal) || c.NLayer != 16 || c.DecisionBlocks != 2 ||
+	if !c.Flags.Has(jlm.FlagNonCausal) || c.NLayer != 16 || c.DecisionBlocks != 2 ||
 		c.NFFN != 4608 || c.NKVHead != 8 || c.Decision != jlm.DecisionD1Omni || c.DecisionHeads != 16 {
-		t.Fatalf("arch %v flags %v layers %d+%d ffn %d kv heads %d readout %v head heads %d",
-			c.Arch, c.Flags, c.NLayer, c.DecisionBlocks, c.NFFN, c.NKVHead, c.Decision, c.DecisionHeads)
+		t.Fatalf("flags %v layers %d+%d ffn %d kv heads %d readout %v head heads %d",
+			c.Flags, c.NLayer, c.DecisionBlocks, c.NFFN, c.NKVHead, c.Decision, c.DecisionHeads)
 	}
 	attn := 0
 	for _, k := range c.LayerKinds {

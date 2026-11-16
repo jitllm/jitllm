@@ -12,6 +12,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -45,8 +46,8 @@ func familyGeneric(s string) bool {
 // format/jlm declares no architecture (no type, constant, name table or field
 // named for one), and no file, type, function, method, field, variable or
 // constant under familyDirs is named for a family. The names are the
-// architecture constants' own (ArchQwen4Exp is qwen4exp, its stem qwen) and
-// familyShort. A string is read where it is branched on: compared, a switch
+// library's GGUF architectures' (qwen4exp, its stem qwen; kimi-k3 is kimik3,
+// its stem kimi) and familyShort. A string is read where it is branched on: compared, a switch
 // case, or matched by the strings package. The violations -- the converter
 // imported in a model, an architecture read and asked there, an architecture
 // declared in format/jlm, a family's field, a family's file, a branch on a
@@ -57,9 +58,9 @@ func TestNoFamilyCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fam := familyNames(t, root)
+	fam := familyNames(t)
 	if len(fam.full) < 40 {
-		t.Fatalf("read %d architecture constants: the gate read nothing", len(fam.full))
+		t.Fatalf("read %d architecture names: the gate read nothing", len(fam.full))
 	}
 	files := 0
 	for _, d := range familyDirs() {
@@ -172,55 +173,45 @@ type Config struct{ Arch uint16 }
 }
 
 type families struct {
-	// arch is every architecture constant's name (ArchQwen4Exp); full their
-	// lowercased names (qwen4exp) and stems their leading letters (qwen).
-	arch        map[string]bool
+	// full are the families' names, lowercased letters and digits (qwen4exp,
+	// kimik3), and stems their leading letters (qwen, kimi).
 	full, stems []string
 }
 
-// familyNames reads the architecture constants from the converter.
-func familyNames(t *testing.T, root string) families {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, filepath.Join(root, "convert"), func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+// familyNames reads the families' names from the converter's list, every
+// GGUF architecture the library states (convert.Architectures): a name's
+// stem is its first part's leading letters.
+func familyNames(t *testing.T) families {
+	names, err := convert.Architectures()
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := families{arch: map[string]bool{}}
+	var f families
 	seen := map[string]bool{}
-	for _, p := range pkgs {
-		for _, file := range p.Files {
-			for _, d := range file.Decls {
-				gd, ok := d.(*ast.GenDecl)
-				if !ok || gd.Tok != token.CONST {
-					continue
-				}
-				for _, sp := range gd.Specs {
-					vs := sp.(*ast.ValueSpec)
-					for _, n := range vs.Names {
-						name := n.Name
-						if !strings.HasPrefix(name, "Arch") || name == "ArchNone" || len(name) < 6 || !unicode.IsUpper(rune(name[4])) {
-							continue
-						}
-						f.arch[name] = true
-						low := strings.ToLower(name[4:])
-						f.full = append(f.full, low)
-						stem := low
-						if i := strings.IndexFunc(low, unicode.IsDigit); i > 0 {
-							stem = low[:i]
-						}
-						if len(stem) >= 3 && !familyGeneric(stem) && !seen[stem] {
-							seen[stem] = true
-							f.stems = append(f.stems, stem)
-						}
-					}
-				}
+	for _, n := range names {
+		f.full = append(f.full, strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return unicode.ToLower(r)
 			}
+			return -1
+		}, n))
+		stem := strings.ToLower(strings.FieldsFunc(n, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })[0])
+		if i := strings.IndexFunc(stem, unicode.IsDigit); i > 0 {
+			stem = stem[:i]
+		}
+		if len(stem) >= 3 && !familyGeneric(stem) && !seen[stem] {
+			seen[stem] = true
+			f.stems = append(f.stems, stem)
 		}
 	}
 	sort.Strings(f.stems)
 	return f
+}
+
+// archConstant is whether name is spelled as an architecture constant was
+// (ArchQwen4Exp): Arch, then a word.
+func archConstant(name string) bool {
+	return strings.HasPrefix(name, "Arch") && name != "ArchNone" && len(name) >= 6 && unicode.IsUpper(rune(name[4]))
 }
 
 // words splits an identifier into its lowercased words: at each upper-case
@@ -403,7 +394,7 @@ func (f families) inSource(rel string, src []byte) []string {
 				out = append(out, at(x.Pos())+": imports the converter: the architecture is its alone")
 			}
 		case *ast.SelectorExpr:
-			if id, ok := x.X.(*ast.Ident); ok && id.Name == "convert" && (x.Sel.Name == "Arch" || f.arch[x.Sel.Name]) {
+			if id, ok := x.X.(*ast.Ident); ok && id.Name == "convert" && (x.Sel.Name == "Arch" || archConstant(x.Sel.Name)) {
 				out = append(out, at(x.Pos())+": reads "+x.Sel.Name+": the container states what the architecture means")
 			}
 		case *ast.CallExpr:

@@ -7,9 +7,9 @@ a GGUF architecture, Hugging Face class or vision projector that is not here is 
 by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the code part; rerun
 `go run ./scripts/genmodels docs/models.md`.
 
-- **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **60** graphs
-- **32** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **25** graphs, **1** of them reached only from safetensors
-- **61** graphs in all (`convert.Arch`)
+- **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **30** graphs
+- **32** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **21** graphs, **0** of them reached only from safetensors
+- **30** graphs in all (`convert.GraphOf`, each a library file)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
 - **3** embedding encoders, and pooling on any decoder
@@ -25,65 +25,34 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 |---|---|---|---|
 | `apertus` | `apertus` | `ApertusForCausalLM` | Apertus 8B, 70B |
 | `arcee` | `arcee` | `ArceeForCausalLM` | AFM-4.5B |
-| `bailingmoe2` | `bailingmoe2` | -- | Ling 2.0 and Ring 2.0 |
-| `bert` | `bert` | -- | all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings) |
-| `bitnet` | `bitnet-b1.58` | `BitNetForCausalLM` | BitNet b1.58 2B-4T (bitnet.cpp's I2_S, F16 and F32 conversions) |
-| `command-r` | `cohere2`, `command-r` | -- | `cohere2`: Command R7B, Command A; `command-r`: Command-R, Aya, Aya Expanse |
-| `dbrx` | `dbrx` | -- | DBRX |
-| `deepseek2` | `deepseek2` | `DeepseekV2ForCausalLM`, `DeepseekV3ForCausalLM`, `Glm4MoeLiteForCausalLM` | DeepSeek-V2, V2-Lite, Coder-V2, V3, R1; Kimi-K2; Moonlight; Kimi-VL's text model |
-| `deepseek32` | `deepseek32` | -- | DeepSeek V3.2 |
-| `deepseek4` | `deepseek4` | -- | DeepSeek V4 |
-| `dots1` | `dots1` | `Dots1ForCausalLM` | dots.llm1 |
-| `ernie4_5-moe` | `ernie4_5-moe` | `Ernie4_5_MoeForCausalLM` | ERNIE 4.5 mixtures (21B-A3B, 300B-A47B) |
+| `classic` | `bert`, `cohere2`, `command-r`, `dbrx`, `falcon`, `modern-bert`, `nemotron`, `nomic-bert`, `phi2`, `phimoe`, `stablelm`, `starcoder`, `starcoder2` | `PhiMoEForCausalLM`, `PhimoeForCausalLM` | `bert`: all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings); `cohere2`: Command R7B, Command A; `command-r`: Command-R, Aya, Aya Expanse; `dbrx`: DBRX; `falcon`: Falcon 7B, 40B, 180B; `modern-bert`: Laya (decision model, /v1/systemone); `nemotron`: Nemotron-4 Minitron, Nemotron-Mini; `nomic-bert`: nomic-embed-text (embeddings); `phi2`: Phi-2; `phimoe`: Phi-3.5-MoE, Phi-mini-MoE; `stablelm`: StableLM 2, StableLM 3B; `starcoder`: StarCoder, StarCoderBase, SantaCoder; `starcoder2`: StarCoder2 |
+| `compressed` | `deepseek4` | -- | DeepSeek V4 |
+| `dots1` | `bailingmoe2`, `dots1` | `Dots1ForCausalLM` | `bailingmoe2`: Ling 2.0 and Ring 2.0; `dots1`: dots.llm1 |
+| `ernie4_5` | `ernie4_5` | -- | ERNIE 4.5 dense models |
+| `ernie4_5_moe` | `ernie4_5-moe` | `Ernie4_5_MoeForCausalLM` | ERNIE 4.5 mixtures (21B-A3B, 300B-A47B) |
 | `exaone4` | `exaone4` | `Exaone4ForCausalLM` | EXAONE 4.0 |
-| `falcon` | `falcon` | -- | Falcon 7B, 40B, 180B |
-| `falcon-h1` | `falcon-h1` | -- | Falcon-H1 |
 | `gemma` | `gemma` | `GemmaForCausalLM` | Gemma 1 |
-| `gemma2` | `gemma2` | -- | Gemma 2 |
-| `gemma3` | `gemma3` | -- | Gemma 3; EmbeddingGemma (pooled) |
 | `gemma3n` | `gemma3n` | -- | Gemma 3n E2B, E4B |
-| `gemma4` | `gemma4` | -- | Gemma 4 |
-| `glm4` | `glm4` | -- | GLM-4-0414; the text model of GLM-4.1V and GLM-4.6V-Flash |
 | `glm4moe` | `glm4moe` | `Glm4MoeForCausalLM` | GLM-4.5, GLM-4.6, GLM-4.5-Air; with M-RoPE sections the text model of GLM-4.5V and GLM-4.6V (the glm4vmoe graph) |
-| `gptoss` | `gpt-oss` | -- | gpt-oss 20B, 120B |
-| `granite` | `granite`, `granitemoe` | -- | `granite`: Granite 3.x and 4.0 dense; `granitemoe`: Granite 3.x mixtures |
-| `granitehybrid` | `granitehybrid` | -- | Granite 4.0 hybrids (Mamba-2 beside attention) |
-| `hunyuan` | `hunyuan-dense`, `hunyuan-moe` | `HunYuanDenseV1ForCausalLM`, `HunYuanMoEV1ForCausalLM` | `hunyuan-dense`: Hunyuan dense (0.5B to 7B); `hunyuan-moe`: Hunyuan-A13B |
-| `hunyuan_vl` | `hunyuan_vl` | -- | HunyuanOCR's text model (XD-RoPE) |
-| `jamba` | `jamba` | -- | Jamba (Mamba-1 beside attention) |
-| `kimi-k3` | `kimi-k3` | `KimiK3ForConditionalGeneration` | Kimi-K3 |
-| `kimilinear` | -- | `KimiLinearForCausalLM` | Kimi Linear (Kimi Delta Attention beside MLA; safetensors only) |
-| `lfm2` | `lfm2`, `lfm2moe` | -- | `lfm2`: LFM2; `lfm2moe`: LFM2-8B-A1B, LFM2-24B-A2B |
-| `llama` | `ernie4_5`, `llama` | `Ernie4_5ForCausalLM`, `LlamaForCausalLM`, `MixtralForCausalLM` | `ernie4_5`: ERNIE 4.5 dense models; `llama`: Llama 2, 3, 3.1, 3.2, 3.3; Mistral 7B; Mixtral; SmolLM2; TinyLlama; the text model of SmolVLM, LLaVA and Janus-Pro |
-| `llama4` | `llama4` | -- | Llama 4 Scout, Maverick |
-| `mamba` | `mamba` | -- | Mamba, FalconMamba |
-| `mamba2` | `mamba2` | -- | Mamba-2, Mamba-Codestral |
-| `minimax-m2` | `minimax-m2` | -- | MiniMax-M2, M2.1, M2.5 |
-| `minimax-m3` | `minimax-m3` | -- | MiniMax-M3 |
-| `mistral3` | `mistral3` | `Ministral3ForCausalLM` | Ministral 3 |
-| `modern-bert` | `modern-bert` | -- | Laya (decision model, /v1/systemone) |
-| `nemotron` | `nemotron` | -- | Nemotron-4 Minitron, Nemotron-Mini |
-| `nemotron_h` | `nemotron_h`, `nemotron_h_moe` | -- | `nemotron_h`: Nemotron-H, Nemotron Nano 2; `nemotron_h_moe`: Nemotron 3 Nano |
-| `nomic-bert` | `nomic-bert` | -- | nomic-embed-text (embeddings) |
+| `hybrid` | `falcon-h1`, `granitehybrid`, `mamba2`, `nemotron_h`, `nemotron_h_moe` | -- | `falcon-h1`: Falcon-H1; `granitehybrid`: Granite 4.0 hybrids (Mamba-2 beside attention); `mamba2`: Mamba-2, Mamba-Codestral; `nemotron_h`: Nemotron-H, Nemotron Nano 2; `nemotron_h_moe`: Nemotron 3 Nano |
+| `latent` | `deepseek2`, `deepseek32` | `DeepseekV2ForCausalLM`, `DeepseekV3ForCausalLM`, `Glm4MoeLiteForCausalLM` | `deepseek2`: DeepSeek-V2, V2-Lite, Coder-V2, V3, R1; Kimi-K2; Moonlight; Kimi-VL's text model; `deepseek32`: DeepSeek V3.2 |
+| `latent_delta` | `kimi-k3` | `KimiK3ForConditionalGeneration`, `KimiLinearForCausalLM` | Kimi-K3 |
+| `mixtral` | `bitnet-b1.58`, `gpt-oss`, `granite`, `granitemoe`, `hunyuan-dense`, `hunyuan-moe`, `hunyuan_vl`, `llama`, `llama4`, `minimax-m2`, `minimax-m3`, `mistral3` | `BitNetForCausalLM`, `Ernie4_5ForCausalLM`, `HunYuanDenseV1ForCausalLM`, `HunYuanMoEV1ForCausalLM`, `LlamaForCausalLM`, `Ministral3ForCausalLM`, `MixtralForCausalLM` | `bitnet-b1.58`: BitNet b1.58 2B-4T (bitnet.cpp's I2_S, F16 and F32 conversions); `gpt-oss`: gpt-oss 20B, 120B; `granite`: Granite 3.x and 4.0 dense; `granitemoe`: Granite 3.x mixtures; `hunyuan-dense`: Hunyuan dense (0.5B to 7B); `hunyuan-moe`: Hunyuan-A13B; `hunyuan_vl`: HunyuanOCR's text model (XD-RoPE); `llama`: Llama 2, 3, 3.1, 3.2, 3.3; Mistral 7B; Mixtral; SmolLM2; TinyLlama; the text model of SmolVLM, LLaVA and Janus-Pro; `llama4`: Llama 4 Scout, Maverick; `minimax-m2`: MiniMax-M2, M2.1, M2.5; `minimax-m3`: MiniMax-M3; `mistral3`: Ministral 3 |
 | `olmo2` | `olmo2` | `Olmo2ForCausalLM`, `Olmo3ForCausalLM` | OLMo 2; OLMo 3 (its sliding window makes it the olmo3 graph) |
 | `olmoe` | `olmoe` | `OlmoeForCausalLM` | OLMoE |
-| `phi2` | `phi2` | -- | Phi-2 |
 | `phi3` | `phi3` | `Phi3ForCausalLM` | Phi-3, Phi-3.5, Phi-4, Phi-4-mini |
-| `phimoe` | `phimoe` | `PhiMoEForCausalLM`, `PhimoeForCausalLM` | Phi-3.5-MoE, Phi-mini-MoE |
-| `qwen2` | `qwen2` | `Qwen2ForCausalLM` | Qwen2, Qwen2.5, QwQ, DeepSeek-R1-Distill-Qwen |
+| `prepost` | `gemma2`, `glm4` | -- | `gemma2`: Gemma 2; `glm4`: GLM-4-0414; the text model of GLM-4.1V and GLM-4.6V-Flash |
+| `prepost_qknorm` | `gemma3` | -- | Gemma 3; EmbeddingGemma (pooled) |
+| `prepost_qkvnorm` | `gemma4` | -- | Gemma 4 |
+| `qwen2` | `qwen2`, `qwen2vl` | `Qwen2ForCausalLM` | `qwen2`: Qwen2, Qwen2.5, QwQ, DeepSeek-R1-Distill-Qwen; `qwen2vl`: the text model of Qwen2-VL and Qwen2.5-VL |
 | `qwen2moe` | `qwen2moe` | `Qwen2MoeForCausalLM` | Qwen1.5-MoE, Qwen2-57B-A14B |
-| `qwen2vl` | `qwen2vl` | -- | the text model of Qwen2-VL and Qwen2.5-VL |
-| `qwen3` | `qwen3` | `Qwen3ForCausalLM` | Qwen3 dense; Qwen3-Embedding (pooled) |
-| `qwen3moe` | `qwen3moe` | `Qwen3MoeForCausalLM` | Qwen3 30B-A3B, 235B-A22B |
-| `qwen3next` | `clef`, `qwen35`, `qwen35moe`, `qwen3next` | `Qwen3_5ForConditionalGeneration` | `clef`: Clef-Flash (decision model, /v1/systemone); `qwen35`: Qwen3.5 dense; `qwen35moe`: Qwen3.5 and Qwen3.6 mixtures; `qwen3next`: Qwen3-Next 80B-A3B |
-| `qwen3vl` | `qwen3vl` | -- | Qwen3-VL dense text models |
-| `qwen3vlmoe` | `qwen3vlmoe` | -- | Qwen3-VL mixtures |
-| `qwen4exp` | `qwen4exp` | -- | Qwen3.8-Flash-Next (text) |
+| `qwen3` | `qwen3`, `qwen3vl` | `Qwen3ForCausalLM` | `qwen3`: Qwen3 dense; Qwen3-Embedding (pooled); `qwen3vl`: Qwen3-VL dense text models |
+| `qwen3_5` | `clef`, `qwen35`, `qwen35moe`, `qwen3next`, `qwen4exp` | `Qwen3_5ForConditionalGeneration` | `clef`: Clef-Flash (decision model, /v1/systemone); `qwen35`: Qwen3.5 dense; `qwen35moe`: Qwen3.5 and Qwen3.6 mixtures; `qwen3next`: Qwen3-Next 80B-A3B; `qwen4exp`: Qwen3.8-Flash-Next (text) |
+| `qwen3moe` | `qwen3moe`, `qwen3vlmoe` | `Qwen3MoeForCausalLM` | `qwen3moe`: Qwen3 30B-A3B, 235B-A22B; `qwen3vlmoe`: Qwen3-VL mixtures |
+| `scan` | `jamba`, `mamba` | -- | `jamba`: Jamba (Mamba-1 beside attention); `mamba`: Mamba, FalconMamba |
 | `seed_oss` | `seed_oss` | `SeedOssForCausalLM` | Seed-OSS 36B |
+| `shortconv` | `lfm2`, `lfm2moe` | -- | `lfm2`: LFM2; `lfm2moe`: LFM2-8B-A1B, LFM2-24B-A2B |
 | `smollm3` | `smollm3` | `SmolLM3ForCausalLM` | SmolLM3 |
-| `stablelm` | `stablelm` | -- | StableLM 2, StableLM 3B |
-| `starcoder` | `starcoder` | -- | StarCoder, StarCoderBase, SantaCoder |
-| `starcoder2` | `starcoder2` | -- | StarCoder2 |
 
 ## Hugging Face classes
 
@@ -94,34 +63,34 @@ classes; any other is refused, and `model_type` is not a fallback.
 |---|---|---|
 | `ApertusForCausalLM` | `apertus` | Apertus |
 | `ArceeForCausalLM` | `arcee` | AFM-4.5B |
-| `BitNetForCausalLM` | `bitnet` | BitNet b1.58 2B-4T: the release, and its bf16 master weights |
-| `DeepseekV2ForCausalLM` | `deepseek2` | DeepSeek-V2, V2-Lite, Coder-V2 |
-| `DeepseekV3ForCausalLM` | `deepseek2` | DeepSeek-V3, R1, Kimi-K2, Moonlight |
+| `BitNetForCausalLM` | `mixtral` | BitNet b1.58 2B-4T: the release, and its bf16 master weights |
+| `DeepseekV2ForCausalLM` | `latent` | DeepSeek-V2, V2-Lite, Coder-V2 |
+| `DeepseekV3ForCausalLM` | `latent` | DeepSeek-V3, R1, Kimi-K2, Moonlight |
 | `Dots1ForCausalLM` | `dots1` | dots.llm1 |
-| `Ernie4_5ForCausalLM` | `llama` | ERNIE 4.5 dense models |
-| `Ernie4_5_MoeForCausalLM` | `ernie4_5-moe` | ERNIE 4.5 mixtures |
+| `Ernie4_5ForCausalLM` | `mixtral` | ERNIE 4.5 dense models |
+| `Ernie4_5_MoeForCausalLM` | `ernie4_5_moe` | ERNIE 4.5 mixtures |
 | `Exaone4ForCausalLM` | `exaone4` | EXAONE 4.0 |
 | `GemmaForCausalLM` | `gemma` | Gemma 1 |
 | `Glm4MoeForCausalLM` | `glm4moe` | GLM-4.5, GLM-4.6, GLM-4.5-Air |
-| `Glm4MoeLiteForCausalLM` | `deepseek2` | GLM-4.7-Flash |
-| `HunYuanDenseV1ForCausalLM` | `hunyuan` | Hunyuan dense |
-| `HunYuanMoEV1ForCausalLM` | `hunyuan` | Hunyuan-A13B |
-| `KimiK3ForConditionalGeneration` | `kimi-k3` | Kimi-K3's text model, its experts compressed-tensors MXFP4 |
-| `KimiLinearForCausalLM` | `kimilinear` | Kimi Linear (Kimi Delta Attention beside MLA; safetensors only) |
-| `LlamaForCausalLM` | `llama` | Llama 2 and 3, Mistral 7B, SmolLM2, TinyLlama |
-| `Ministral3ForCausalLM` | `mistral3` | Ministral 3's text model |
-| `MixtralForCausalLM` | `llama` | Mixtral 8x7B, 8x22B |
+| `Glm4MoeLiteForCausalLM` | `latent` | GLM-4.7-Flash |
+| `HunYuanDenseV1ForCausalLM` | `mixtral` | Hunyuan dense |
+| `HunYuanMoEV1ForCausalLM` | `mixtral` | Hunyuan-A13B |
+| `KimiK3ForConditionalGeneration` | `latent_delta` | Kimi-K3's text model, its experts compressed-tensors MXFP4 |
+| `KimiLinearForCausalLM` | `latent_delta` | Kimi Linear (Kimi Delta Attention beside MLA; safetensors only) |
+| `LlamaForCausalLM` | `mixtral` | Llama 2 and 3, Mistral 7B, SmolLM2, TinyLlama |
+| `Ministral3ForCausalLM` | `mixtral` | Ministral 3's text model |
+| `MixtralForCausalLM` | `mixtral` | Mixtral 8x7B, 8x22B |
 | `Olmo2ForCausalLM` | `olmo2` | OLMo 2 |
 | `Olmo3ForCausalLM` | `olmo2` | OLMo 3 (its sliding window makes it the olmo3 graph) |
 | `OlmoeForCausalLM` | `olmoe` | OLMoE |
 | `Phi3ForCausalLM` | `phi3` | Phi-3, Phi-3.5, Phi-4 |
-| `PhiMoEForCausalLM` | `phimoe` | Phi-3.5-MoE and its siblings, under their remote code's class name |
-| `PhimoeForCausalLM` | `phimoe` | Phi-3.5-MoE and its siblings, under transformers' class name |
+| `PhiMoEForCausalLM` | `classic` | Phi-3.5-MoE and its siblings, under their remote code's class name |
+| `PhimoeForCausalLM` | `classic` | Phi-3.5-MoE and its siblings, under transformers' class name |
 | `Qwen2ForCausalLM` | `qwen2` | Qwen2, Qwen2.5, QwQ |
 | `Qwen2MoeForCausalLM` | `qwen2moe` | Qwen1.5-MoE, Qwen2-57B-A14B |
 | `Qwen3ForCausalLM` | `qwen3` | Qwen3 dense |
 | `Qwen3MoeForCausalLM` | `qwen3moe` | Qwen3 mixtures |
-| `Qwen3_5ForConditionalGeneration` | `qwen3next` | Qwen3.5 dense and Qwen3.8's text model, by convert/models/qwen3_5.json |
+| `Qwen3_5ForConditionalGeneration` | `qwen3_5` | Qwen3.5 dense and Qwen3.8's text model, by convert/models/qwen3_5.json |
 | `SeedOssForCausalLM` | `seed_oss` | Seed-OSS |
 | `SmolLM3ForCausalLM` | `smollm3` | SmolLM3 |
 

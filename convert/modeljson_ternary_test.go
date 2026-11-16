@@ -25,8 +25,8 @@ func TestBitNetThroughTheLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Arch != ArchBitNet || cfg.NKVHead != 2 || cfg.RopeBase != 500000 {
-		t.Errorf("arch %v, %d kv heads, rope base %v", cfg.Arch, cfg.NKVHead, cfg.RopeBase)
+	if cfg.Name != "bitnet-b1.58" || cfg.NKVHead != 2 || cfg.RopeBase != 500000 {
+		t.Errorf("arch %v, %d kv heads, rope base %v", cfg.Name, cfg.NKVHead, cfg.RopeBase)
 	}
 	for _, r := range []struct{ name, from, to, err string }{
 		{"no quantization", `"quantization_config": {"quant_method": "bitnet", "linear_class": "autobitlinear", "quantization_mode": "offline"}`, `"x": 1`, "quantization_config"},

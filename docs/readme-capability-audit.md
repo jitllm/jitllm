@@ -35,12 +35,12 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 
 | Claim | Code | Test |
 |---|---|---|
-| 65 GGUF text architecture names, 57 graphs | `convert/config.go:archOf` (66 keys including `clip`; 58 distinct `jlm.Arch` values including `ArchCLIP`, so 57 text graphs; `configOf` also gives glm4moe with M-RoPE sections `ArchGLM4VMoE` and windowed olmo2 `ArchOLMo3`, codes over graphs already counted), `convert.Architectures` | `convert/library/arch_test.go:TestEveryArchitectureIsObtainable` |
+| 65 GGUF text architecture names, 57 graphs | the library's `gguf` lists (`convert/models/*.json`, `convert.Architectures`; a graph is its library file, `convert.GraphOf`) | `convert/library/arch_test.go:TestEveryArchitectureIsObtainable` |
 | An architecture not on the list is refused at conversion | `convert/config.go:configOf` (`ErrNotImplemented`) | `convert/notimpl_test.go` |
 | Mixtral converts as `llama` | `convert/config.go` (mixture read from the file, not the arch) | `convert/mixtralbanks_test.go` |
 | 29 Hugging Face class names | `convert/models/*.json`'s `classes` (`convert.HFClasses`; `PhimoeForCausalLM` is an alias of `PhiMoEForCausalLM`) | `engine/hfgold_test.go:TestSafetensorsMatchTransformers`, `convert/hfdense_test.go:TestDenseSafetensorsMatchesItsGGUF`, `convert/hfmoefamily_test.go:TestMixtureFamiliesConvertAlikeFromEitherInput` |
 | Per-architecture correctness against llama.cpp | `engine/model` graphs | `engine/llamacpp_test.go:TestGreedyMatchesLlamaCpp` |
-| `hunyuan_vl`: HunyuanOCR's text model, hunyuan-dense's block under XD-RoPE | `convert/config.go:archOf`; `convert/arch.go` (`ArchHunyuanVL`), `convert/geometryfits.go` (`xdRope`) | `engine/model/hunyuanvl_test.go:TestHunyuanVLTextMatchesTransformers`, `TestHunyuanVLKeepsTheFivePrinciples` |
+| `hunyuan_vl`: HunyuanOCR's text model, hunyuan-dense's block under XD-RoPE | `convert/models` (`hunyuan_vl`), `convert/geometryfits.go` (`xdRope`) | `engine/model/hunyuanvl_test.go:TestHunyuanVLTextMatchesTransformers`, `TestHunyuanVLKeepsTheFivePrinciples` |
 | Kimi-K3 held to its own reference code on the trained Kimi-K3-0.40B | `convert/models/latent_delta.json`; `engine/model` Kimi-K3 graph | `engine/kimik3real_test.go:TestKimiK3RealMatchesReference` (F32, F16, Q8_0, Q4_K_M, MXFP4 GGUFs against `scripts/k3gold.py`); a mixed-quantization GGUF converts: `convert/kimik3_test.go:TestK3JoinsAMixedQuantization` |
 | Embedding models (`bert`, `nomic-bert`, Qwen3-Embedding, EmbeddingGemma) | `engine/model/encoder.go`, `engine/embedstate.go`, `model/embed.go:NewEmbedder`; `cmd/jitllm/embed.go` | `engine/embed_test.go:TestEmbeddingsMatchReference`, `TestEmbeddingGateDiscriminates` |
 | Weight formats F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4 | `format/quant/types.go` (`PackedTypes`, `Dequantable`) | `internal/oracle/packed_test.go:TestPackedPayloadIsNativeWidth` |

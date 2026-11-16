@@ -66,19 +66,19 @@
     },
     {
       "name": "bailingmoe2",
-      "graph": "bailingmoe2"
+      "graph": "dots1"
     },
     {
       "name": "bert",
-      "graph": "bert"
+      "graph": "classic"
     },
     {
       "name": "bitnet-b1.58",
-      "graph": "bitnet"
+      "graph": "mixtral"
     },
     {
       "name": "clef",
-      "graph": "qwen3next"
+      "graph": "qwen3_5"
     },
     {
       "name": "clip",
@@ -86,27 +86,27 @@
     },
     {
       "name": "cohere2",
-      "graph": "command-r"
+      "graph": "classic"
     },
     {
       "name": "command-r",
-      "graph": "command-r"
+      "graph": "classic"
     },
     {
       "name": "dbrx",
-      "graph": "dbrx"
+      "graph": "classic"
     },
     {
       "name": "deepseek2",
-      "graph": "deepseek2"
+      "graph": "latent"
     },
     {
       "name": "deepseek32",
-      "graph": "deepseek32"
+      "graph": "latent"
     },
     {
       "name": "deepseek4",
-      "graph": "deepseek4"
+      "graph": "compressed"
     },
     {
       "name": "dots1",
@@ -114,11 +114,11 @@
     },
     {
       "name": "ernie4_5",
-      "graph": "llama"
+      "graph": "ernie4_5"
     },
     {
       "name": "ernie4_5-moe",
-      "graph": "ernie4_5-moe"
+      "graph": "ernie4_5_moe"
     },
     {
       "name": "exaone4",
@@ -126,11 +126,11 @@
     },
     {
       "name": "falcon",
-      "graph": "falcon"
+      "graph": "classic"
     },
     {
       "name": "falcon-h1",
-      "graph": "falcon-h1"
+      "graph": "hybrid"
     },
     {
       "name": "gemma",
@@ -138,11 +138,11 @@
     },
     {
       "name": "gemma2",
-      "graph": "gemma2"
+      "graph": "prepost"
     },
     {
       "name": "gemma3",
-      "graph": "gemma3"
+      "graph": "prepost_qknorm"
     },
     {
       "name": "gemma3n",
@@ -150,11 +150,11 @@
     },
     {
       "name": "gemma4",
-      "graph": "gemma4"
+      "graph": "prepost_qkvnorm"
     },
     {
       "name": "glm4",
-      "graph": "glm4"
+      "graph": "prepost"
     },
     {
       "name": "glm4moe",
@@ -162,95 +162,95 @@
     },
     {
       "name": "gpt-oss",
-      "graph": "gptoss"
+      "graph": "mixtral"
     },
     {
       "name": "granite",
-      "graph": "granite"
+      "graph": "mixtral"
     },
     {
       "name": "granitehybrid",
-      "graph": "granitehybrid"
+      "graph": "hybrid"
     },
     {
       "name": "granitemoe",
-      "graph": "granite"
+      "graph": "mixtral"
     },
     {
       "name": "hunyuan-dense",
-      "graph": "hunyuan"
+      "graph": "mixtral"
     },
     {
       "name": "hunyuan-moe",
-      "graph": "hunyuan"
+      "graph": "mixtral"
     },
     {
       "name": "hunyuan_vl",
-      "graph": "hunyuan_vl"
+      "graph": "mixtral"
     },
     {
       "name": "jamba",
-      "graph": "jamba"
+      "graph": "scan"
     },
     {
       "name": "kimi-k3",
-      "graph": "kimi-k3"
+      "graph": "latent_delta"
     },
     {
       "name": "lfm2",
-      "graph": "lfm2"
+      "graph": "shortconv"
     },
     {
       "name": "lfm2moe",
-      "graph": "lfm2"
+      "graph": "shortconv"
     },
     {
       "name": "llama",
-      "graph": "llama"
+      "graph": "mixtral"
     },
     {
       "name": "llama4",
-      "graph": "llama4"
+      "graph": "mixtral"
     },
     {
       "name": "mamba",
-      "graph": "mamba"
+      "graph": "scan"
     },
     {
       "name": "mamba2",
-      "graph": "mamba2"
+      "graph": "hybrid"
     },
     {
       "name": "minimax-m2",
-      "graph": "minimax-m2"
+      "graph": "mixtral"
     },
     {
       "name": "minimax-m3",
-      "graph": "minimax-m3"
+      "graph": "mixtral"
     },
     {
       "name": "mistral3",
-      "graph": "mistral3"
+      "graph": "mixtral"
     },
     {
       "name": "modern-bert",
-      "graph": "modern-bert"
+      "graph": "classic"
     },
     {
       "name": "nemotron",
-      "graph": "nemotron"
+      "graph": "classic"
     },
     {
       "name": "nemotron_h",
-      "graph": "nemotron_h"
+      "graph": "hybrid"
     },
     {
       "name": "nemotron_h_moe",
-      "graph": "nemotron_h"
+      "graph": "hybrid"
     },
     {
       "name": "nomic-bert",
-      "graph": "nomic-bert"
+      "graph": "classic"
     },
     {
       "name": "olmo2",
@@ -262,7 +262,7 @@
     },
     {
       "name": "phi2",
-      "graph": "phi2"
+      "graph": "classic"
     },
     {
       "name": "phi3",
@@ -270,7 +270,7 @@
     },
     {
       "name": "phimoe",
-      "graph": "phimoe"
+      "graph": "classic"
     },
     {
       "name": "qwen2",
@@ -282,7 +282,7 @@
     },
     {
       "name": "qwen2vl",
-      "graph": "qwen2vl"
+      "graph": "qwen2"
     },
     {
       "name": "qwen3",
@@ -290,11 +290,11 @@
     },
     {
       "name": "qwen35",
-      "graph": "qwen3next"
+      "graph": "qwen3_5"
     },
     {
       "name": "qwen35moe",
-      "graph": "qwen3next"
+      "graph": "qwen3_5"
     },
     {
       "name": "qwen3moe",
@@ -302,19 +302,19 @@
     },
     {
       "name": "qwen3next",
-      "graph": "qwen3next"
+      "graph": "qwen3_5"
     },
     {
       "name": "qwen3vl",
-      "graph": "qwen3vl"
+      "graph": "qwen3"
     },
     {
       "name": "qwen3vlmoe",
-      "graph": "qwen3vlmoe"
+      "graph": "qwen3moe"
     },
     {
       "name": "qwen4exp",
-      "graph": "qwen4exp"
+      "graph": "qwen3_5"
     },
     {
       "name": "seed_oss",
@@ -326,15 +326,15 @@
     },
     {
       "name": "stablelm",
-      "graph": "stablelm"
+      "graph": "classic"
     },
     {
       "name": "starcoder",
-      "graph": "starcoder"
+      "graph": "classic"
     },
     {
       "name": "starcoder2",
-      "graph": "starcoder2"
+      "graph": "classic"
     }
   ],
   "safetensors_classes": [
@@ -348,15 +348,15 @@
     },
     {
       "name": "BitNetForCausalLM",
-      "graph": "bitnet"
+      "graph": "mixtral"
     },
     {
       "name": "DeepseekV2ForCausalLM",
-      "graph": "deepseek2"
+      "graph": "latent"
     },
     {
       "name": "DeepseekV3ForCausalLM",
-      "graph": "deepseek2"
+      "graph": "latent"
     },
     {
       "name": "Dots1ForCausalLM",
@@ -364,11 +364,11 @@
     },
     {
       "name": "Ernie4_5ForCausalLM",
-      "graph": "llama"
+      "graph": "mixtral"
     },
     {
       "name": "Ernie4_5_MoeForCausalLM",
-      "graph": "ernie4_5-moe"
+      "graph": "ernie4_5_moe"
     },
     {
       "name": "Exaone4ForCausalLM",
@@ -384,35 +384,35 @@
     },
     {
       "name": "Glm4MoeLiteForCausalLM",
-      "graph": "deepseek2"
+      "graph": "latent"
     },
     {
       "name": "HunYuanDenseV1ForCausalLM",
-      "graph": "hunyuan"
+      "graph": "mixtral"
     },
     {
       "name": "HunYuanMoEV1ForCausalLM",
-      "graph": "hunyuan"
+      "graph": "mixtral"
     },
     {
       "name": "KimiK3ForConditionalGeneration",
-      "graph": "kimi-k3"
+      "graph": "latent_delta"
     },
     {
       "name": "KimiLinearForCausalLM",
-      "graph": "kimilinear"
+      "graph": "latent_delta"
     },
     {
       "name": "LlamaForCausalLM",
-      "graph": "llama"
+      "graph": "mixtral"
     },
     {
       "name": "Ministral3ForCausalLM",
-      "graph": "mistral3"
+      "graph": "mixtral"
     },
     {
       "name": "MixtralForCausalLM",
-      "graph": "llama"
+      "graph": "mixtral"
     },
     {
       "name": "Olmo2ForCausalLM",
@@ -432,11 +432,11 @@
     },
     {
       "name": "PhiMoEForCausalLM",
-      "graph": "phimoe"
+      "graph": "classic"
     },
     {
       "name": "PhimoeForCausalLM",
-      "graph": "phimoe"
+      "graph": "classic"
     },
     {
       "name": "Qwen2ForCausalLM",
@@ -456,7 +456,7 @@
     },
     {
       "name": "Qwen3_5ForConditionalGeneration",
-      "graph": "qwen3next"
+      "graph": "qwen3_5"
     },
     {
       "name": "SeedOssForCausalLM",
