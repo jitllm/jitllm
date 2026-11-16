@@ -69,7 +69,7 @@ func TestTernaryStatementsAreCheckedWithTheFile(t *testing.T) {
 	  "activation": "'relu2'"}, "tensors": {"block_prefix": "model.layers.", "block": {"a.weight": "attn_q.weight"},
 	  "ternary": {"roles": ["attn_q.weight"], "scale": "_scale", "latent": %s, "reciprocal": %s}}}`
 	parse := func(latent, reciprocal string) (*modelJSON, error) {
-		return parseModelJSON([]byte(strings.Replace(strings.Replace(base, "%s", latent, 1), "%s", reciprocal, 1)), "test")
+		return parseModelJSON([]byte(strings.Replace(strings.Replace(base, "%s", latent, 1), "%s", reciprocal, 1)), "test", testNames(t))
 	}
 	for _, tc := range []struct{ name, latent, reciprocal, err string }{
 		{"a latent that does not parse", `"1 +"`, `"true"`, "ternary latent"},

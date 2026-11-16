@@ -4,59 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/convert/meta"
-	"github.com/jitllm/jitllm/format/jlm"
 )
-
-func qwen4expRoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	// Qwen3.8-Flash-Next's hyper-connections, per block and at the head.
-	case "hc_attn_norm.weight":
-		return jlm.RoleHCAttnNorm, true
-	case "hc_attn_down.weight":
-		return jlm.RoleHCAttnDown, true
-	case "hc_attn_up.weight":
-		return jlm.RoleHCAttnUp, true
-	case "hc_attn_inject.weight":
-		return jlm.RoleHCAttnInject, true
-	case "hc_ffn_norm.weight":
-		return jlm.RoleHCFFNNorm, true
-	case "hc_ffn_down.weight":
-		return jlm.RoleHCFFNDown, true
-	case "hc_ffn_up.weight":
-		return jlm.RoleHCFFNUp, true
-	case "hc_ffn_inject.weight":
-		return jlm.RoleHCFFNInject, true
-	case "output_hc_norm.weight":
-		return jlm.RoleHCHeadNorm, true
-	case "output_hc_down.weight":
-		return jlm.RoleHCHeadDown, true
-	case "output_hc_up.weight":
-		return jlm.RoleHCHeadUp, true
-	// The prediction block's own head mixer: the trunk's roles, at the
-	// block's index rather than the dense one.
-	case "nextn.hc_head_norm.weight":
-		return jlm.RoleHCHeadNorm, true
-	case "nextn.hc_head_down.weight":
-		return jlm.RoleHCHeadDown, true
-	case "nextn.hc_head_up.weight":
-		return jlm.RoleHCHeadUp, true
-	// Its n-gram block. The table itself is per_layer_token_embd, Gemma's
-	// name, retargeted (retarget) to RoleNGramTable.
-	case "ple_key.weight":
-		return jlm.RoleNGramKey, true
-	case "ple_value.weight":
-		return jlm.RoleNGramValue, true
-	case "ple_norm_key.weight":
-		return jlm.RoleNGramNormKey, true
-	case "ple_norm_query.weight":
-		return jlm.RoleNGramNormQuery, true
-	case "ple_norm_conv.weight":
-		return jlm.RoleNGramNormConv, true
-	case "ple_conv1d.weight":
-		return jlm.RoleNGramConv, true
-	}
-	return 0, false
-}
 
 // stateQSA states QSA (query-sparse attention) on the attention blocks from
 // the ratio each block compresses by, rs (llama.cpp's qwen4exp.cpp and

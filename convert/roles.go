@@ -1,6 +1,8 @@
 package convert
 
 import (
+	"embed"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -10,347 +12,71 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// roleOf is the source format's tensor-name vocabulary, and the only place it
-// appears: a container identifies a tensor by (Role, Block, Index), so this
-// table is read once per conversion. An unrecognised name is a refusal, not a
-// skip, because a tensor dropped at conversion is a model that loads and is
-// wrong.
-func roleOf(name string) (jlm.Role, bool) {
-	if r, ok := coreRoleOf(name); ok {
+//go:embed tensornames.json
+var tensorNamesFS embed.FS
+
+// tensorNames is the source format's tensor-name vocabulary
+// (tensornames.json), each name's role resolved. A container identifies a
+// tensor by (Role, Block, Index), so a conversion reads it once. An
+// unrecognised name is a refusal, not a skip, because a tensor dropped at
+// conversion is a model that loads and is wrong.
+type tensorNames map[string]jlm.Role
+
+// readTensorNames reads tensornames.json, refusing a role the container does
+// not name.
+func readTensorNames() (tensorNames, error) {
+	b, err := tensorNamesFS.ReadFile("tensornames.json")
+	if err != nil {
+		return nil, err
+	}
+	var named map[string]string
+	if err := json.Unmarshal(b, &named); err != nil {
+		return nil, fmt.Errorf("convert: tensornames.json: %w", err)
+	}
+	roles := rolesByName()
+	v := make(tensorNames, len(named))
+	for n, rn := range named {
+		r, ok := roles[rn]
+		if !ok {
+			return nil, fmt.Errorf("convert: tensornames.json: %q is role %q, which the container does not know", n, rn)
+		}
+		v[n] = r
+	}
+	return v, nil
+}
+
+// roleOf is name's role: the vocabulary's, a fused input projection's, or a
+// decision head's.
+func (v tensorNames) roleOf(name string) (jlm.Role, bool) {
+	if r, ok := v[name]; ok {
 		return r, true
 	}
-	for _, group := range roleGroups() {
-		if r, ok := group(name); ok {
+	// A fused input projection is split at conversion (unfuseScan,
+	// unfuseShortConv); its role is reserved and never stored.
+	if name == "ssm_in.weight" || name == "shortconv.in_proj.weight" {
+		return jlm.RoleSSMInProj, true
+	}
+	return decisionRoleOf(name)
+}
+
+// decisionRoleOf is a decision head's tensor, named as its role is
+// (format/jlm/decisionroles.go), with ".weight" on all but the biases and
+// the scales.
+func decisionRoleOf(name string) (jlm.Role, bool) {
+	for r := jlm.RoleDecHiddenNorm; r <= jlm.RoleDecFFNDownBias; r++ {
+		if !r.Valid() {
+			continue
+		}
+		n := r.String()
+		if strings.HasSuffix(n, ".bias") || r == jlm.RoleDecScales {
+			if name == n {
+				return r, true
+			}
+			continue
+		}
+		if len(name) == len(n)+len(".weight") && strings.HasPrefix(name, n) && strings.HasSuffix(name, ".weight") {
 			return r, true
 		}
-	}
-	return 0, false
-}
-
-// roleGroups are the tables beside the core one, one per family of
-// architectures. A name in two of them would be read as the first's role;
-// TestRoleNamesAreDisjoint holds them apart.
-func roleGroups() []func(string) (jlm.Role, bool) {
-	return []func(string) (jlm.Role, bool){
-		clefRoleOf, deepseek4RoleOf, flagshipRoleOf, gemma3nRoleOf, gemma3nvRoleOf,
-		kimiK3RoleOf, qwen4expRoleOf, visionFamRoleOf,
-	}
-}
-
-func coreRoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	case "token_embd.weight":
-		return jlm.RoleTokenEmbd, true
-	case "output.weight":
-		return jlm.RoleOutput, true
-	case "output_norm.weight":
-		return jlm.RoleOutputNorm, true
-	case "output_norm.bias":
-		return jlm.RoleOutputNormBias, true
-	case "output.bias":
-		return jlm.RoleOutputBias, true
-	case "rope_factors_long.weight":
-		return jlm.RoleRopeFactorsLong, true
-	case "rope_factors_short.weight":
-		return jlm.RoleRopeFactorsShort, true
-	case "rope_freqs.weight":
-		return jlm.RoleRopeFreqs, true
-	case "ffn_xielu":
-		return jlm.RoleXIELU, true
-	case "token_types.weight":
-		return jlm.RoleTokenTypes, true
-	case "position_embd.weight":
-		return jlm.RolePosEmbd, true
-	case "token_embd_norm.weight":
-		return jlm.RoleTokenEmbdNorm, true
-	case "token_embd_norm.bias":
-		return jlm.RoleTokenEmbdNormBias, true
-	case "cls.norm.weight":
-		return jlm.RoleScorerNorm, true
-	case "cls.norm.bias":
-		return jlm.RoleScorerNormBias, true
-	case "cls.weight":
-		return jlm.RoleScorer, true
-	case "cls.bias":
-		return jlm.RoleScorerBias, true
-	case "cls.output.weight":
-		return jlm.RoleScorerOut, true
-	case "cls.output.bias":
-		return jlm.RoleScorerOutBias, true
-	case "decision.scorer.weight":
-		return jlm.RoleScorer, true
-	case "decision.scorer.bias":
-		return jlm.RoleScorerBias, true
-	case "decision.scorer_out.weight":
-		return jlm.RoleScorerOut, true
-	case "decision.scorer_out.bias":
-		return jlm.RoleScorerOutBias, true
-	case "dense_2.weight":
-		return jlm.RoleEmbdDense1, true
-	case "dense_3.weight":
-		return jlm.RoleEmbdDense2, true
-	case "dense.0.weight":
-		return jlm.RoleEmbdDense1, true
-	case "dense.1.weight":
-		return jlm.RoleEmbdDense2, true
-	case "attn_norm.weight":
-		return jlm.RoleAttnNorm, true
-	case "attn_q.weight":
-		return jlm.RoleAttnQ, true
-	case "attn_k.weight":
-		return jlm.RoleAttnK, true
-	case "attn_v.weight":
-		return jlm.RoleAttnV, true
-	case "attn_output.weight":
-		return jlm.RoleAttnOut, true
-	case "attn_qkv.weight":
-		return jlm.RoleAttnQKV, true
-	case "attn_qkv.bias":
-		return jlm.RoleAttnQKVBias, true
-	case "attn_norm.bias":
-		return jlm.RoleAttnNormBias, true
-	case "attn_norm_2.weight":
-		return jlm.RoleAttnNorm2, true
-	case "attn_norm_2.bias":
-		return jlm.RoleAttnNorm2Bias, true
-	case "ffn_norm.bias":
-		return jlm.RoleFFNNormBias, true
-	case "attn_q.bias":
-		return jlm.RoleAttnQBias, true
-	case "attn_k.bias":
-		return jlm.RoleAttnKBias, true
-	case "attn_v.bias":
-		return jlm.RoleAttnVBias, true
-	case "attn_output.bias":
-		return jlm.RoleAttnOutBias, true
-	case "attn_q_norm.weight":
-		return jlm.RoleAttnQNorm, true
-	case "attn_k_norm.weight":
-		return jlm.RoleAttnKNorm, true
-	case "attn_gate.weight":
-		return jlm.RoleAttnGate, true
-	case "attn_sinks.weight":
-		return jlm.RoleAttnSinks, true
-	case "post_attention_norm.weight":
-		return jlm.RolePostAttnNorm, true
-	case "post_ffw_norm.weight":
-		return jlm.RolePostFFNNorm, true
-	case "ffn_norm.weight":
-		return jlm.RoleFFNNorm, true
-	case "ffn_gate.weight":
-		return jlm.RoleFFNGate, true
-	case "ffn_up.weight":
-		return jlm.RoleFFNUp, true
-	case "ffn_down.weight":
-		return jlm.RoleFFNDown, true
-	case "attn_sub_norm.weight":
-		return jlm.RoleAttnSubNorm, true
-	case "ffn_sub_norm.weight":
-		return jlm.RoleFFNSubNorm, true
-	case "attn_output_norm.weight":
-		return jlm.RoleAttnOutNorm, true
-	case "attn_output_norm.bias":
-		return jlm.RoleAttnOutNormBias, true
-	case "layer_output_norm.weight":
-		return jlm.RoleLayerOutNorm, true
-	case "layer_output_norm.bias":
-		return jlm.RoleLayerOutNormBias, true
-	case "ffn_up.bias":
-		return jlm.RoleFFNUpBias, true
-	case "ffn_down.bias":
-		return jlm.RoleFFNDownBias, true
-	case "ffn_gate_inp.weight":
-		return jlm.RoleRouter, true
-	case "ffn_gate_inp.bias":
-		return jlm.RoleRouterBias, true
-	case "exp_probs_b.bias":
-		return jlm.RoleExpProbsB, true
-	case "ffn_gate_exps.bias":
-		return jlm.RoleExpGateBias, true
-	case "ffn_up_exps.bias":
-		return jlm.RoleExpUpBias, true
-	case "ffn_down_exps.bias":
-		return jlm.RoleExpDownBias, true
-	case "ffn_gate_exps.weight":
-		return jlm.RoleExpGateBank, true
-	case "ffn_up_exps.weight":
-		return jlm.RoleExpUpBank, true
-	case "ffn_down_exps.weight":
-		return jlm.RoleExpDownBank, true
-	case "attn_q_a.weight":
-		return jlm.RoleAttnQA, true
-	case "attn_q_a_norm.weight":
-		return jlm.RoleAttnQANorm, true
-	case "attn_q_b.weight":
-		return jlm.RoleAttnQB, true
-	case "attn_kv_a_mqa.weight":
-		return jlm.RoleAttnKVA, true
-	case "attn_kv_a_norm.weight":
-		return jlm.RoleAttnKVANorm, true
-	case "attn_kv_b.weight":
-		return jlm.RoleAttnKVB, true
-	case "attn_k_b.weight":
-		return jlm.RoleAttnKB, true
-	case "attn_v_b.weight":
-		return jlm.RoleAttnVB, true
-	case "nextn.eh_proj.weight":
-		return jlm.RoleNextnEHProj, true
-	case "nextn.enorm.weight":
-		return jlm.RoleNextnENorm, true
-	case "nextn.hnorm.weight":
-		return jlm.RoleNextnHNorm, true
-	case "nextn.shared_head_norm.weight":
-		return jlm.RoleNextnHeadNorm, true
-	case "nextn.shared_head_head.weight":
-		return jlm.RoleNextnHead, true
-	case "nextn.embed_tokens.weight":
-		return jlm.RoleNextnEmbd, true
-	case "ffn_gate_inp_shexp.weight":
-		return jlm.RoleShRouter, true
-	case "ffn_gate_shexp.weight":
-		return jlm.RoleShExpGate, true
-	case "ffn_up_shexp.weight":
-		return jlm.RoleShExpUp, true
-	case "ffn_down_shexp.weight":
-		return jlm.RoleShExpDown, true
-	case "ssm_ba.weight":
-		return jlm.RoleSSMBA, true
-	case "ssm_conv1d.weight":
-		return jlm.RoleSSMConv1d, true
-	case "ssm_a":
-		return jlm.RoleSSMA, true
-	case "ssm_dt.bias":
-		return jlm.RoleSSMDtBias, true
-	case "ssm_norm.weight":
-		return jlm.RoleSSMNorm, true
-	case "ssm_out.weight":
-		return jlm.RoleSSMOut, true
-	case "ssm_in.weight":
-		return jlm.RoleSSMInProj, true
-	case "ssm_d":
-		return jlm.RoleSSMD, true
-	case "ssm_conv1d.bias":
-		return jlm.RoleSSMConvBias, true
-	case "ssm_x.weight":
-		return jlm.RoleSSMXDt, true
-	case "ssm_dt.weight":
-		return jlm.RoleSSMDtProj, true
-	case "ssm_dt_norm.weight":
-		return jlm.RoleSSMDtNorm, true
-	case "ssm_b_norm.weight":
-		return jlm.RoleSSMBNorm, true
-	case "ssm_c_norm.weight":
-		return jlm.RoleSSMCNorm, true
-	case "ffn_norm":
-		return jlm.RoleFFNNorm, true
-	case "shortconv.in_proj.weight":
-		return jlm.RoleSSMInProj, true
-	case "shortconv.conv.weight":
-		return jlm.RoleSSMConv1d, true
-	case "shortconv.out_proj.weight":
-		return jlm.RoleSSMOut, true
-	case "v.patch_embd.weight":
-		return jlm.RoleVPatchEmbd, true
-	case "v.patch_embd.bias":
-		return jlm.RoleVPatchBias, true
-	case "v.position_embd.weight":
-		return jlm.RoleVPosEmbd, true
-	case "v.post_ln.weight":
-		return jlm.RoleVPostNorm, true
-	case "v.post_ln.bias":
-		return jlm.RoleVPostNormBias, true
-	case "mm.model.fc.weight":
-		return jlm.RoleVProj, true
-	case "mm.model.fc.bias":
-		return jlm.RoleVProjBias, true
-	case "mm.input_projection.weight":
-		return jlm.RoleVProj, true
-	case "mm.soft_emb_norm.weight":
-		return jlm.RoleVProjNorm, true
-	case "v.class_embd":
-		return jlm.RoleVClassEmbd, true
-	case "v.pre_ln.weight":
-		return jlm.RoleVPreNorm, true
-	case "v.pre_ln.bias":
-		return jlm.RoleVPreNormBias, true
-	case "mm.0.weight":
-		return jlm.RoleVProj, true
-	case "mm.0.bias":
-		return jlm.RoleVProjBias, true
-	case "mm.2.weight":
-		return jlm.RoleVProj2, true
-	case "mm.2.bias":
-		return jlm.RoleVProj2Bias, true
-	case "v.ln1.weight":
-		return jlm.RoleVAttnNorm, true
-	case "v.ln1.bias":
-		return jlm.RoleVAttnNormBias, true
-	case "v.ln2.weight":
-		return jlm.RoleVFFNNorm, true
-	case "v.ln2.bias":
-		return jlm.RoleVFFNNormBias, true
-	case "v.attn_q.weight":
-		return jlm.RoleVAttnQ, true
-	case "v.attn_k.weight":
-		return jlm.RoleVAttnK, true
-	case "v.attn_v.weight":
-		return jlm.RoleVAttnV, true
-	case "v.attn_out.weight":
-		return jlm.RoleVAttnOut, true
-	case "v.attn_q.bias":
-		return jlm.RoleVAttnQBias, true
-	case "v.attn_k.bias":
-		return jlm.RoleVAttnKBias, true
-	case "v.attn_v.bias":
-		return jlm.RoleVAttnVBias, true
-	case "v.attn_out.bias":
-		return jlm.RoleVAttnOutBias, true
-	case "v.ffn_up.weight":
-		return jlm.RoleVFC1, true
-	case "v.ffn_up.bias":
-		return jlm.RoleVFC1Bias, true
-	case "v.ffn_down.weight":
-		return jlm.RoleVFC2, true
-	case "v.ffn_down.bias":
-		return jlm.RoleVFC2Bias, true
-	case "v.ffn_gate.weight":
-		return jlm.RoleVFFNGate, true
-	case "v.ffn_gate.bias":
-		return jlm.RoleVFFNGateBias, true
-	case "resampler.query":
-		return jlm.RoleVRsQuery, true
-	case "resampler.kv.weight":
-		return jlm.RoleVRsKV, true
-	case "resampler.ln_q.weight":
-		return jlm.RoleVRsLnQ, true
-	case "resampler.ln_q.bias":
-		return jlm.RoleVRsLnQBias, true
-	case "resampler.ln_kv.weight":
-		return jlm.RoleVRsLnKV, true
-	case "resampler.ln_kv.bias":
-		return jlm.RoleVRsLnKVBias, true
-	case "resampler.attn.q.weight":
-		return jlm.RoleVRsQ, true
-	case "resampler.attn.q.bias":
-		return jlm.RoleVRsQBias, true
-	case "resampler.attn.k.weight":
-		return jlm.RoleVRsK, true
-	case "resampler.attn.k.bias":
-		return jlm.RoleVRsKBias, true
-	case "resampler.attn.v.weight":
-		return jlm.RoleVRsV, true
-	case "resampler.attn.v.bias":
-		return jlm.RoleVRsVBias, true
-	case "resampler.attn.out.weight":
-		return jlm.RoleVRsOut, true
-	case "resampler.attn.out.bias":
-		return jlm.RoleVRsOutBias, true
-	case "resampler.ln_post.weight":
-		return jlm.RoleVRsLnPost, true
-	case "resampler.ln_post.bias":
-		return jlm.RoleVRsLnPostBias, true
-	case "resampler.proj.weight":
-		return jlm.RoleVRsProj, true
 	}
 	return 0, false
 }
@@ -405,12 +131,12 @@ func rolesByName() map[string]jlm.Role {
 
 // identify turns a source tensor name into the triple a container stores.
 // Index is -1 unless the name carries one.
-func identify(name string) (role jlm.Role, block int32, index int32, err error) {
+func (v tensorNames) identify(name string) (role jlm.Role, block int32, index int32, err error) {
 	block, index = jlm.DenseBlock, -1
 	rest := name
 	// "v." marks the vision tower; its blocks are "v.blk.N.".
 	vision := strings.HasPrefix(rest, "v.")
-	// A decision head's blocks are "dec.blk.N." (Clef's): model-level tensors
+	// A decision head's blocks are "dec.blk.N.": model-level tensors
 	// with the head block in Index, so they never meet a backbone block.
 	if r, ok := strings.CutPrefix(rest, "dec.blk."); ok {
 		i := strings.IndexByte(r, '.')
@@ -418,7 +144,7 @@ func identify(name string) (role jlm.Role, block int32, index int32, err error) 
 		if i <= 0 || e != nil || n < 0 {
 			return 0, 0, 0, fmt.Errorf("convert: %q: no head block index", name)
 		}
-		if role, ok := roleOf("dec." + r[i+1:]); ok {
+		if role, ok := v.roleOf("dec." + r[i+1:]); ok {
 			if role < jlm.RoleDecSelfNorm || role > jlm.RoleDecFFNDownBias || n >= 64 {
 				return 0, 0, 0, fmt.Errorf("convert: %q: no head block role", name)
 			}
@@ -444,7 +170,7 @@ func identify(name string) (role jlm.Role, block int32, index int32, err error) 
 			break
 		}
 	}
-	if r, ok := roleOf(rest); ok {
+	if r, ok := v.roleOf(rest); ok {
 		return r, block, index, nil
 	}
 	// The second temporal plane of Qwen2-VL's conv3d patch embedding, which the

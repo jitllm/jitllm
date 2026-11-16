@@ -15,24 +15,6 @@ import (
 // the code space (format/jlm/visionfam.go): the names their towers' tensors
 // carry, and the transforms they need, each exact.
 
-func visionFamRoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	case "v.attn_post_norm.weight":
-		return jlm.RoleVPostAttnNorm, true
-	case "v.ffn_post_norm.weight":
-		return jlm.RoleVPostFFNNorm, true
-	case "v.attn_q_norm.weight":
-		return jlm.RoleVAttnQNorm, true
-	case "v.attn_k_norm.weight":
-		return jlm.RoleVAttnKNorm, true
-	case "v.std_bias":
-		return jlm.RoleVStdBias, true
-	case "v.std_scale":
-		return jlm.RoleVStdScale, true
-	}
-	return 0, false
-}
-
 // clampSlot is where a clipped linear's bounds go in a block's RoleVClamp
 // vector: its matrix's place, times four.
 func clampSlot(name string) (int, bool) {

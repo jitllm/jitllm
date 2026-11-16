@@ -187,7 +187,7 @@ func TestModelJSONRefuses(t *testing.T) {
 	const ok = `{"classes": ["X"], "config": {"arch": "qwen3next", "vocab": "vocab_size",
 		"head": {"tensor": "lm_head.weight"}, "activation": "'silu'"}, "tensors": {"block_prefix": "model.layers.",
 		"block": {"a.weight": "attn_q.weight"}}}`
-	if mj, err := parseModelJSON([]byte(ok), "ok"); err != nil {
+	if mj, err := parseModelJSON([]byte(ok), "ok", testNames(t)); err != nil {
 		t.Fatalf("the control does not parse: %v", err)
 	} else if _, err := mj.hfArch(); err != nil {
 		t.Fatalf("the control does not lower: %v", err)
@@ -215,7 +215,7 @@ func TestModelJSONRefuses(t *testing.T) {
 		if src == ok {
 			t.Fatalf("%s: the mutation changed nothing", c.name)
 		}
-		mj, err := parseModelJSON([]byte(src), c.name)
+		mj, err := parseModelJSON([]byte(src), c.name, testNames(t))
 		if err == nil {
 			_, err = mj.hfArch()
 		}
@@ -1040,7 +1040,7 @@ func TestModelJSONStatements(t *testing.T) {
 		if src == string(b) {
 			t.Fatalf("%s: the mutation changed nothing", r.name)
 		}
-		if _, err := parseModelJSON([]byte(src), r.name); err == nil || !strings.Contains(err.Error(), r.err) {
+		if _, err := parseModelJSON([]byte(src), r.name, testNames(t)); err == nil || !strings.Contains(err.Error(), r.err) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
 		}
 	}

@@ -13,63 +13,6 @@ import (
 // docs/design/model-coverage.md section 9 is the survey they were chosen
 // from, with what each needs and what it costs.
 
-func flagshipRoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	// Gemma 4's per-block output scalar (layer_scalar), [1].
-	case "layer_output_scale.weight":
-		return jlm.RoleLayerOutScale, true
-	// Gemma 4's mixture block (jlm.Flag2DenseMoE).
-	case "pre_ffw_norm_2.weight":
-		return jlm.RoleFFNNorm2, true
-	case "post_ffw_norm_1.weight":
-		return jlm.RolePostFFNNorm1, true
-	case "post_ffw_norm_2.weight":
-		return jlm.RolePostFFNNorm2, true
-	case "ffn_gate_inp.scale":
-		return jlm.RoleRouterNorm, true
-	case "ffn_down_exps.scale":
-		return jlm.RoleExpScale, true
-	// The gate and up banks in one tensor, gate first (llama.cpp's
-	// build_moe_ffn views the first n_ff rows of each expert as the gate);
-	// unfuse splits it into the two banks.
-	case "ffn_gate_up_exps.weight":
-		return jlm.RoleExpUpBank, true
-	// Gemma 4's per-layer embeddings (E2B/E4B).
-	case "per_layer_token_embd.weight":
-		return jlm.RolePLETokEmbd, true
-	case "per_layer_model_proj.weight":
-		return jlm.RolePLEModelProj, true
-	case "per_layer_proj_norm.weight":
-		return jlm.RolePLEProjNorm, true
-	case "inp_gate.weight":
-		return jlm.RolePLEGate, true
-	case "proj.weight":
-		return jlm.RolePLEProj, true
-	case "post_norm.weight":
-		return jlm.RolePLEPostNorm, true
-	// DeepSeek V3.2's lightning indexer.
-	case "indexer.attn_q_b.weight":
-		return jlm.RoleIdxQB, true
-	case "indexer.attn_k.weight":
-		return jlm.RoleIdxK, true
-	case "indexer.k_norm.weight":
-		return jlm.RoleIdxKNorm, true
-	case "indexer.k_norm.bias":
-		return jlm.RoleIdxKNormB, true
-	case "indexer.proj.weight":
-		return jlm.RoleIdxProj, true
-	// MiniMax-M3's indexer: the query from the block input, and the key under
-	// the names its own tensor table uses.
-	case "indexer.q_proj.weight":
-		return jlm.RoleIdxQ, true
-	case "indexer.q_norm.weight":
-		return jlm.RoleIdxQNorm, true
-	case "indexer.k_proj.weight":
-		return jlm.RoleIdxK, true
-	}
-	return 0, false
-}
-
 // Gemma 4 is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
 // text only: gemma3's block with two attention geometries (the global layers'
 // HeadDim, NKVHead and NRot, the sliding layers' their own, each block's

@@ -261,7 +261,7 @@ func states() map[string]graph.State {
 // check refuses a graph naming a step this converter does not take, an op
 // of the wrong arity, a value read before an op names it, an expression
 // that does not parse or an op with no output it needs.
-func (g *mjGraph) check() error {
+func (g *mjGraph) check(names tensorNames) error {
 	if len(g.Block) == 0 {
 		return fmt.Errorf("a graph states no block")
 	}
@@ -273,7 +273,7 @@ func (g *mjGraph) check() error {
 			return fmt.Errorf("use %d: %w", i, err)
 		}
 	}
-	if err := g.checkOps(g.Block, map[string]bool{}, nil); err != nil {
+	if err := g.checkOps(g.Block, map[string]bool{}, nil, names); err != nil {
 		return err
 	}
 	if last := g.Block[len(g.Block)-1].Op; last != "out" && last != "out_streams" {
@@ -284,10 +284,10 @@ func (g *mjGraph) check() error {
 
 // checkOps checks ops in turn (check), named the values earlier ops name and
 // runs the each runs they are inside.
-func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string) error {
+func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string, names tensorNames) error {
 	for i, o := range ops {
 		if o.Op == "each" {
-			if err := g.checkEach(o, named, runs); err != nil {
+			if err := g.checkEach(o, named, runs, names); err != nil {
 				return fmt.Errorf("op %d (each): %w", i, err)
 			}
 			continue
@@ -359,7 +359,7 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 			ws = append(ws, b.W)
 		}
 		for _, w := range ws {
-			if _, ok := blockRole(strings.TrimSuffix(w, "?")); !ok {
+			if _, ok := names.blockRole(strings.TrimSuffix(w, "?")); !ok {
 				return fmt.Errorf("op %d (%s): %q is not a tensor name the container knows", i, o.Op, w)
 			}
 		}
@@ -435,7 +435,7 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 
 // checkEach checks an each: a count, a run name no fact or enclosing run
 // has, and steps that end in an op naming the run's value.
-func (g *mjGraph) checkEach(o mjBlockOp, named map[string]bool, runs []string) error {
+func (g *mjGraph) checkEach(o mjBlockOp, named map[string]bool, runs []string, names tensorNames) error {
 	if _, fact := (&blockFacts{c: &jlm.Config{}}).vars()[o.As]; o.As == "" || fact || slices.Contains(runs, o.As) {
 		return fmt.Errorf("its runs are named %q, which is empty, a fact or an enclosing run", o.As)
 	}
@@ -450,7 +450,7 @@ func (g *mjGraph) checkEach(o mjBlockOp, named map[string]bool, runs []string) e
 	if last := o.Steps[len(o.Steps)-1]; last.Out == "" || last.Op == "each" {
 		return fmt.Errorf("its last step names no value")
 	}
-	if err := g.checkOps(o.Steps, named, append(slices.Clone(runs), o.As)); err != nil {
+	if err := g.checkOps(o.Steps, named, append(slices.Clone(runs), o.As), names); err != nil {
 		return err
 	}
 	named[o.Out] = true
@@ -574,11 +574,11 @@ func (g *mjGraph) flag(src string, vars map[string]jinja.Value) (bool, error) {
 // blockRole is the role a graph's weight names, in the tensor names a
 // model.json's tensors map onto: attn_q for attn_q.weight, attn_q.bias for
 // itself.
-func blockRole(name string) (jlm.Role, bool) {
-	if r, ok := roleOf(name + ".weight"); ok {
+func (v tensorNames) blockRole(name string) (jlm.Role, bool) {
+	if r, ok := v.roleOf(name + ".weight"); ok {
 		return r, true
 	}
-	if r, ok := roleOf(name); ok {
+	if r, ok := v.roleOf(name); ok {
 		return r, true
 	}
 	// A tensor the converter makes, by splitting or folding, has the
@@ -599,6 +599,10 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) err
 	if c.HeadBlocks() != 0 && c.NMTP != 0 {
 		return fmt.Errorf("convert: %d head blocks beside %d prediction blocks, which both follow the trunk", c.HeadBlocks(), c.NMTP)
 	}
+	names, err := readTensorNames()
+	if err != nil {
+		return err
+	}
 	used, err := usedGraphs(g)
 	if err != nil {
 		return err
@@ -607,7 +611,7 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) err
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
 	for li := range n {
-		bg, err := blockGraphOf(c.Config, s, li, g, used, src)
+		bg, err := blockGraphOf(c.Config, s, li, g, used, src, names)
 		if err != nil {
 			return fmt.Errorf("convert: block %d's stated graph: %w", li, err)
 		}
@@ -652,8 +656,8 @@ func usedGraphs(g *mjGraph) ([]*mjGraph, error) {
 
 // blockGraphOf is block li's graph as g states it, or as the first of used
 // (g.Use's graphs) whose condition holds for it.
-func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGraph, src jinja.Value) (*graph.Graph, error) {
-	bf := blockFactsOf(c, s, li)
+func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGraph, src jinja.Value, names tensorNames) (*graph.Graph, error) {
+	bf := blockFactsOf(c, s, li, names)
 	bf.src = src
 	for i, u := range g.Use {
 		on, err := g.flag(u.If, bf.vars())
@@ -699,7 +703,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		}
 		var w []jlm.Role
 		for _, name := range o.W {
-			r, _ := blockRole(strings.TrimSuffix(name, "?"))
+			r, _ := names.blockRole(strings.TrimSuffix(name, "?"))
 			if _, ok := bf.facts.Inventory[r]; !ok && strings.HasSuffix(name, "?") {
 				continue
 			}
@@ -910,7 +914,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if err != nil {
 				return nil, err
 			}
-			bias, _ := blockRole(strings.TrimSuffix(o.Bind[0].W, "?"))
+			bias, _ := names.blockRole(strings.TrimSuffix(o.Bind[0].W, "?"))
 			if y, err = historyPool(b, reads[0], a, bias, int(width)); err != nil {
 				return nil, fmt.Errorf("op %d (history_pool): %w", i, err)
 			}
@@ -1457,7 +1461,7 @@ func scanAxes(v jinja.Value) (graph.ScanAxis, error) {
 func bindings(o mjBlockOp, bf *blockFacts, num func(string) (float64, error)) ([]graph.Binding, error) {
 	var ws []graph.Binding
 	for _, bd := range o.Bind {
-		r, _ := blockRole(strings.TrimSuffix(bd.W, "?"))
+		r, _ := bf.names.blockRole(strings.TrimSuffix(bd.W, "?"))
 		sh, held := bf.facts.Inventory[r]
 		if !held && strings.HasSuffix(bd.W, "?") {
 			continue
@@ -1614,11 +1618,13 @@ type blockFacts struct {
 	// src is the source's own keys (a GGUF's architecture keys, a
 	// config.json's), which a recipe reads where the model states a value.
 	src jinja.Value
+	// names is the tensor-name vocabulary a recipe's weights are read in.
+	names tensorNames
 }
 
-func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
+func blockFactsOf(c *jlm.Config, s *jlm.Source, li int, names tensorNames) *blockFacts {
 	bf := &blockFacts{c: c, li: li, facts: graph.Facts{Inventory: map[jlm.Role]graph.Shape{}}, dense: map[jlm.Role]bool{},
-		headDim: int(c.HeadDimAt(li)), eps: float64(c.RMSEps)}
+		headDim: int(c.HeadDimAt(li)), eps: float64(c.RMSEps), names: names}
 	if s.Vision != nil && s.Vision.Tower != nil {
 		bf.taps = len(s.Vision.Tower.Taps)
 	}
@@ -1688,7 +1694,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		if len(args) != 1 || !args[0].IsString() {
 			return 0, graph.Shape{}, false, fmt.Errorf("%s takes one tensor name", name)
 		}
-		r, ok := blockRole(args[0].AsString())
+		r, ok := bf.names.blockRole(args[0].AsString())
 		if !ok {
 			return 0, graph.Shape{}, false, fmt.Errorf("%s(%q): not a tensor name the container knows", name, args[0].AsString())
 		}

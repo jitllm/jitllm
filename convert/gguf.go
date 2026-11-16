@@ -188,6 +188,10 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 const towerArch = "clip"
 
 func sourceOf(f *meta.File) (*jlm.Source, error) {
+	vocab, err := readTensorNames()
+	if err != nil {
+		return nil, err
+	}
 	s := &jlm.Source{}
 	var c *Config
 	var names *towerVocab
@@ -199,7 +203,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err != nil {
 			return nil, err
 		}
-		if names, err = towerVocabOf(v); err != nil {
+		if names, err = towerVocabOf(v, vocab); err != nil {
 			return nil, err
 		}
 		// A tower still needs a Config, because a container always has one; its
@@ -318,7 +322,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// DeepSeek V4's token-id tables are I32, which is not a weight type
 		// here: carried as F32 ids (hashExpertTable).
 		if !tower && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
-			_, block, _, err := identify(t.Name)
+			_, block, _, err := vocab.identify(t.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -367,7 +371,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if tower {
 			role, block, index, err = names.roleOf(t.Name)
 		} else {
-			role, block, index, err = identify(t.Name)
+			role, block, index, err = vocab.identify(t.Name)
 		}
 		if err != nil {
 			return nil, err

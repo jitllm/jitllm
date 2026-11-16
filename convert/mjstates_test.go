@@ -77,7 +77,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "gemma3", keys: with(with(gemma, "attention.sliding_window", meta.MakeUint(512)),
 			"attention.sliding_window_pattern", meta.MakeUint(4)),
 			flags: qk | jlm.FlagGELU, scale: float32(math.Sqrt(2048)), win: 512, period: 4, ropeSWA: 10000},
-		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
+		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": meta.MakeUint(96), "attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
 			win: 128, period: 5, ropeSWA: 10000},
 		{arch: "gpt-oss", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128)},
 			flags: neox | jlm.FlagSwiGLUOAI | jlm.FlagYarnExact, win: 128, period: 2},
@@ -141,7 +141,8 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "deepseek2", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.value_length": u(80),
 			"attention.q_lora_rank": u(96)}, kv: 64, q: 96},
 		{arch: "kimi-k3", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "activation.situ_beta": meta.MakeFloat(3),
-			"activation.situ_linear_beta": meta.MakeFloat(5)}, kv: 64},
+			"activation.situ_linear_beta": meta.MakeFloat(5), "attention.head_count": u(4), "kda.head_dim": u(16), "ssm.conv_kernel": u(4),
+			"block_count": u(2), "attention.head_count_kv": meta.MakeInt32s([]int32{0, 4})}, kv: 64},
 		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
 		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
 			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)}, q: 96, heads: 4, w: 32, k: 8},
@@ -153,8 +154,9 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		for k, v := range tc.keys {
 			kv[tc.arch+"."+k] = v
 		}
-		c := &Config{Config: &jlm.Config{}}
-		if err := stateContainer(meta.New(tc.arch+".gguf", kv, nil), c); err != nil {
+		f := meta.New(tc.arch+".gguf", kv, nil)
+		c := &Config{Config: &jlm.Config{NLayer: uint32(f.UintKey("block_count", 0))}}
+		if err := stateContainer(f, c); err != nil {
 			t.Fatalf("%s: %v", tc.arch, err)
 		}
 		if c.KVLoraRank != tc.kv || c.QLoraRank != tc.q || c.IdxHeads != tc.heads || c.IdxHeadDim != tc.w || c.IdxTopK != tc.k {
@@ -211,7 +213,9 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		}
 	}
 	k3 := map[string]meta.Value{"attention.kv_lora_rank": u(64), "activation.situ_beta": meta.MakeFloat(3),
-		"activation.situ_linear_beta": meta.MakeFloat(5), "attn_res.block_size": u(2), "expert_latent_length": u(16)}
+		"activation.situ_linear_beta": meta.MakeFloat(5), "attn_res.block_size": u(2), "expert_latent_length": u(16),
+		"attention.head_count": u(4), "kda.head_dim": u(16), "ssm.conv_kernel": u(4), "block_count": u(2),
+		"attention.head_count_kv": meta.MakeInt32s([]int32{0, 4})}
 	for _, tc := range []struct {
 		want string
 		keys map[string]meta.Value
@@ -223,7 +227,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		for k, v := range tc.keys {
 			kv["kimi-k3."+k] = v
 		}
-		err := stateContainer(meta.New("kimi-k3.gguf", kv, nil), &Config{Config: &jlm.Config{}})
+		err := stateContainer(meta.New("kimi-k3.gguf", kv, nil), &Config{Config: &jlm.Config{NLayer: 2}})
 		if err == nil || !strings.Contains(err.Error(), tc.want) || errors.Is(err, ErrNotImplemented) {
 			t.Errorf("kimi-k3 with %v: %v, want a malformed-file error naming %q", tc.keys, err, tc.want)
 		}
@@ -233,7 +237,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		for k, v := range k3 {
 			kv["kimi-k3."+k] = v
 		}
-		c := &Config{Config: &jlm.Config{NEmbd: width}}
+		c := &Config{Config: &jlm.Config{NEmbd: width, NLayer: 2}}
 		if err := stateContainer(meta.New("kimi-k3.gguf", kv, nil), c); err != nil {
 			t.Fatalf("kimi-k3: %v", err)
 		}
@@ -345,7 +349,7 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"pre_tokenizer": "o200k-ish"}`, "pre-tokenizer \"o200k-ish\" is not one"},
 		{`"x": {"rope_layout": "pairs"}`, "rotary layout \"pairs\" is not one"},
 	} {
-		_, err := parseModelJSON([]byte(file(tc.states)), "test")
+		_, err := parseModelJSON([]byte(file(tc.states)), "test", testNames(t))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want an error naming %q", tc.states, err, tc.want)
 		}
@@ -464,7 +468,7 @@ func TestTheLibraryStatesWhatAFileMustSay(t *testing.T) {
 		`{"attn_temp": {"scale": "1"}}`:  "states its scale and its floor",
 		`{"learned_positions": "names"}`: "is not the keys",
 	} {
-		if _, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {"x": `+states+`}}`), "test"); err == nil ||
+		if _, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {"x": `+states+`}}`), "test", testNames(t)); err == nil ||
 			!strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want it refused naming %q", states, err, want)
 		}

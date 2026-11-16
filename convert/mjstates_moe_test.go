@@ -185,7 +185,7 @@ func TestRouterStatementsAreChecked(t *testing.T) {
 		{`"x": {"rope_sections": "sections"}`, "is not the keys"},
 		{`"x": {"attn_temp": {"scale": "0.1"}}`, "its scale and its floor"},
 	} {
-		_, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {`+tc.states+`}}`), "test")
+		_, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {`+tc.states+`}}`), "test", testNames(t))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want an error naming %q", tc.states, err, tc.want)
 		}

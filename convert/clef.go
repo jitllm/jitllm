@@ -3,7 +3,6 @@ package convert
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -52,24 +51,3 @@ func StatesMediaPrefix(kind jlm.DecisionKind) bool { return kind == jlm.Decision
 // StatesJointHead reports whether a decision kind's container states a joint
 // head (jlm.JointHead).
 func StatesJointHead(kind jlm.DecisionKind) bool { return kind == jlm.DecisionClef }
-
-// Clef's head tensors are named as their roles are (format/jlm/decisionroles.go),
-// with ".weight" on all but the biases and the scalars.
-func clefRoleOf(name string) (jlm.Role, bool) {
-	for r := jlm.RoleDecHiddenNorm; r <= jlm.RoleDecFFNDownBias; r++ {
-		if !r.Valid() {
-			continue
-		}
-		n := r.String()
-		if strings.HasSuffix(n, ".bias") || r == jlm.RoleDecScales {
-			if name == n {
-				return r, true
-			}
-			continue
-		}
-		if len(name) == len(n)+len(".weight") && strings.HasPrefix(name, n) && strings.HasSuffix(name, ".weight") {
-			return r, true
-		}
-	}
-	return 0, false
-}

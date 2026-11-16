@@ -29,6 +29,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 	if len(paths) == 0 {
 		testmodels.Missing(t, "%s", "MODEL MISSING: no *.gguf in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
+	vocab := testNames(t)
 	seenRole := map[jlm.Role]int{}
 	unplaced := map[string]string{} // name -> first model that has it
 	files, tensors := 0, 0
@@ -61,7 +62,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 		}
 		var names *towerVocab
 		if vis != nil {
-			if names, err = towerVocabOf(vis); err != nil {
+			if names, err = towerVocabOf(vis, vocab); err != nil {
 				t.Fatalf("%s: %v", filepath.Base(p), err)
 			}
 		}
@@ -91,7 +92,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 			case vis != nil:
 				role, _, _, err = names.roleOf(n)
 			default:
-				role, _, _, err = identify(n)
+				role, _, _, err = vocab.identify(n)
 			}
 			if err != nil {
 				// A tensor-level ErrNotImplemented is a scope decision too, even

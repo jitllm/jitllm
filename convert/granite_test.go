@@ -77,11 +77,11 @@ func TestGraniteCarriesItsFourScales(t *testing.T) {
 		t.Errorf("granitemoe: %v %+v", err, c)
 	}
 
-	// A head count that differs by layer is a geometry the container cannot
-	// say, and no logit_scale is not a Granite.
+	// A head count that differs by layer is each block's geometry, and no
+	// logit_scale is not a Granite.
 	k["attention.head_count_kv"] = meta.MakeInt32s([]int32{2, 2, 4, 2})
-	if _, err := configOf(headerOnly("granite", k)); !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("a per-layer head_count_kv converted: %v", err)
+	if c, err := configOf(headerOnly("granite", k)); err != nil || len(c.Geoms) != 4 || c.Geoms[0].NKVHead != 2 || c.Geoms[2].NKVHead != 4 {
+		t.Errorf("a per-layer head_count_kv: %v %+v", err, c)
 	}
 	k["attention.head_count_kv"] = meta.MakeUint(2)
 	delete(k, "logit_scale")

@@ -97,7 +97,7 @@ func TestModelJSONTargetsRefuse(t *testing.T) {
 		{"a target with no primitives", `["attn_q.weight", ` + cut + `]`, "no primitives"},
 		{"an unknown role", `[{"role": "nope.weight", "do": [{"slice": [0, 0, 1]}]}, ` + cut + `]`, "not a tensor name"},
 	} {
-		mj, err := parseModelJSON([]byte(strings.Replace(base, "%s", tc.targets, 1)), "test")
+		mj, err := parseModelJSON([]byte(strings.Replace(base, "%s", tc.targets, 1)), "test", testNames(t))
 		if err == nil {
 			_, err = mj.hfArch()
 		}

@@ -51,6 +51,7 @@ type modelJSON struct {
 	// the file names (mjStates).
 	Container map[string]*mjStates `json:"container"`
 	name      string               // for messages
+	names     tensorNames          // the tensor names its roles are read in
 }
 
 type mjConfig struct {
@@ -344,10 +345,10 @@ type mjGather struct {
 	Do   mjPipe      `json:"do"`
 }
 
-func parseModelJSON(b []byte, name string) (*modelJSON, error) {
+func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error) {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
-	mj := &modelJSON{name: name}
+	mj := &modelJSON{name: name, names: names}
 	if err := d.Decode(mj); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
@@ -365,7 +366,7 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		if mj.Config.Arch != "" || len(mj.Tensors.Block) != 0 || len(mj.Tensors.Model) != 0 {
 			return nil, fmt.Errorf("convert: %s names no class and states one's config or tensors", name)
 		}
-		if err := mj.Graph.check(); err != nil {
+		if err := mj.Graph.check(names); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 		return mj, nil
@@ -433,7 +434,7 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		}
 	}
 	if g := mj.Graph; g != nil {
-		if err := g.check(); err != nil {
+		if err := g.check(names); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
@@ -449,6 +450,10 @@ func libraryFiles() ([]*modelJSON, error) {
 	if err != nil {
 		return nil, err
 	}
+	names, err := readTensorNames()
+	if err != nil {
+		return nil, err
+	}
 	var out []*modelJSON
 	for _, e := range ents {
 		p := path.Join("models", e.Name())
@@ -456,7 +461,7 @@ func libraryFiles() ([]*modelJSON, error) {
 		if err != nil {
 			return nil, err
 		}
-		mj, err := parseModelJSON(b, "convert/"+p)
+		mj, err := parseModelJSON(b, "convert/"+p, names)
 		if err != nil {
 			return nil, err
 		}
@@ -557,13 +562,17 @@ func WithModelJSON(path string) Option {
 // directory's, the library's, or the Go table's.
 func hfArchFor(dir hfDir, c *hfConfig, caller string) (*hfArch, error) {
 	var mj *modelJSON
+	names, err := readTensorNames()
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case caller != "":
 		b, err := os.ReadFile(caller)
 		if err != nil {
 			return nil, fmt.Errorf("convert: the model.json asked for: %w", err)
 		}
-		if mj, err = parseModelJSON(b, caller); err != nil {
+		if mj, err = parseModelJSON(b, caller, names); err != nil {
 			return nil, err
 		}
 	case dir.has("model.json"):
@@ -571,7 +580,7 @@ func hfArchFor(dir hfDir, c *hfConfig, caller string) (*hfArch, error) {
 		if err != nil {
 			return nil, err
 		}
-		if mj, err = parseModelJSON(b, dir.path("model.json")); err != nil {
+		if mj, err = parseModelJSON(b, dir.path("model.json"), names); err != nil {
 			return nil, err
 		}
 	default:
@@ -625,7 +634,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	if e := mj.Tensors.Experts; e != nil {
 		a.expertPrefix, a.expert = e.Prefix, map[string]jlm.Role{}
 		for n, r := range e.Names {
-			role, ok := roleOf(r)
+			role, ok := mj.names.roleOf(r)
 			if !ok {
 				return nil, fmt.Errorf("convert: %s: expert matrix %s's bank %q is not a tensor name the container knows", mj.name, n, r)
 			}
@@ -635,7 +644,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	st := &mjState{src: map[string]mjVal{}}
 	pipes := map[string]mjPipe{}
 	add := func(dst map[string]jlm.Role, name string, t mjTensor) error {
-		r, ok := roleOf(t.Role)
+		r, ok := mj.names.roleOf(t.Role)
 		if !ok {
 			return fmt.Errorf("convert: %s: %s's role %q is not a tensor name the container knows", mj.name, name, t.Role)
 		}
@@ -656,7 +665,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		}
 		roles := make([]jlm.Role, len(ts))
 		for i, t := range ts {
-			r, ok := roleOf(t.Role)
+			r, ok := mj.names.roleOf(t.Role)
 			if !ok {
 				return fmt.Errorf("convert: %s: %s's role %q is not a tensor name the container knows", mj.name, name, t.Role)
 			}
@@ -752,7 +761,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	if len(mj.Tensors.Gather) > 0 {
 		gs := make([]hfGatherStep, len(mj.Tensors.Gather))
 		for i, g := range mj.Tensors.Gather {
-			r, ok := roleOf(g.Role)
+			r, ok := mj.names.roleOf(g.Role)
 			if !ok {
 				return nil, fmt.Errorf("convert: %s: gathered role %q is not a tensor name the container knows", mj.name, g.Role)
 			}
@@ -775,7 +784,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	ternaryRoles := map[jlm.Role]bool{}
 	if tern != nil {
 		for _, n := range tern.Roles {
-			r, ok := roleOf(n)
+			r, ok := mj.names.roleOf(n)
 			if !ok {
 				return nil, fmt.Errorf("convert: %s: ternary role %q is not a tensor name the container knows", mj.name, n)
 			}
@@ -1430,7 +1439,7 @@ func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
 		if !ok {
 			continue
 		}
-		switch r, _ := roleOf(role); {
+		switch r, _ := mj.names.roleOf(role); {
 		case expert:
 			experts[blk] = true
 		case r == jlm.RoleRouter:
@@ -1445,7 +1454,7 @@ func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
 	named := false
 	for _, ms := range mj.Tensors.Block {
 		for _, m := range ms {
-			if r, _ := roleOf(m.Role); r == jlm.RoleFFNGate || r == jlm.RoleFFNUp || r == jlm.RoleFFNDown {
+			if r, _ := mj.names.roleOf(m.Role); r == jlm.RoleFFNGate || r == jlm.RoleFFNUp || r == jlm.RoleFFNDown {
 				named = true
 			}
 		}

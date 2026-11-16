@@ -10,34 +10,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-func gemma3nRoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	case "altup_proj.weight":
-		return jlm.RoleStreamExpand, true
-	// altup_unembd_proj is one {n, n, AltUp-1} tensor in the file; altUpTensors
-	// cuts it into one matrix per stream.
-	case "altup_unembd_proj.weight":
-		return jlm.RoleStreamCollapse1, true
-	case "altup_router.weight":
-		return jlm.RoleStreamRouter, true
-	case "altup_router_norm.weight":
-		return jlm.RoleStreamRouterNorm, true
-	case "altup_predict_coef.weight":
-		return jlm.RoleStreamPredictCoef, true
-	case "altup_correct_coef.weight":
-		return jlm.RoleStreamCorrectCoef, true
-	case "altup_correct_scale.weight":
-		return jlm.RoleStreamCorrectScale, true
-	case "laurel_l.weight":
-		return jlm.RoleLowRankIn, true
-	case "laurel_r.weight":
-		return jlm.RoleLowRankOut, true
-	case "laurel_post_norm.weight":
-		return jlm.RoleLowRankNorm, true
-	}
-	return 0, false
-}
-
 // Gemma 3n is llama.cpp's gemma3n.cpp and transformers' Gemma3nForCausalLM,
 // text only, as gemma3n.json's statement states it:
 //

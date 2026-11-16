@@ -1132,18 +1132,21 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 // hfArchTable maps the class name in config.json's "architectures" onto an
 // entry. See hfArch.
 func hfArchTable() map[string]*hfArch {
-	return map[string]*hfArch{
+	t := map[string]*hfArch{
 		"KimiLinearForCausalLM": kimiLinearHF(),
 		// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
 		// release (convert/hfkimik3.go, convert/hfmxfp4.go).
 		"KimiK3ForConditionalGeneration": kimiK3HF(),
 	}
+	for n, a := range t {
+		a.name = n
+	}
+	return t
 }
 
 func hfArchOf(c *hfConfig) (*hfArch, error) {
 	for _, n := range c.Architectures {
 		if a, ok := hfArchTable()[n]; ok {
-			a.name = n
 			return a, nil
 		}
 	}

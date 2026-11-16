@@ -40,7 +40,8 @@ func TestTheLibraryStatesTheRecurrentLayers(t *testing.T) {
 			flags: jlm.FlagRopeNeox, ssm: ssd, kinds: []jlm.LayerKind{jlm.LayerSSDAttn, jlm.LayerSSD}},
 		{arch: "granitehybrid", keys: with2(with2(ssmKeys, "ssm.group_count", nil), "logit_scale", meta.MakeFloat(4)), tensors: [][]string{{"ssm_conv1d.weight"}, {"attn_q.weight"}},
 			ssm: jlm.SSMConfig{ConvKernel: 4, Groups: 1, Inner: 64, StateSize: 16, NHeadV: 8}, kinds: []jlm.LayerKind{jlm.LayerSSD, full}},
-		{arch: "nemotron_h", keys: ssmKeys, ssm: ssd},
+		{arch: "nemotron_h", keys: with2(ssmKeys, "block_count", meta.MakeUint(1)), tensors: [][]string{{"ssm_conv1d.weight"}},
+			flags: jlm.FlagNoPosEnc | jlm.FlagReLU2, ssm: ssd, kinds: []jlm.LayerKind{jlm.LayerSSD}},
 		{arch: "mamba", keys: ssmKeys, tensors: [][]string{{"ssm_conv1d.weight"}},
 			flags: jlm.FlagNoPosEnc, ssm: jlm.SSMConfig{ConvKernel: 4, Groups: 1, Inner: 64, StateSize: 16, NHeadV: 64},
 			kinds: []jlm.LayerKind{jlm.LayerScan}},
@@ -97,7 +98,7 @@ func TestTheLibraryStatesTheRecurrentLayers(t *testing.T) {
 		{`"x": {"layers": [{"kind": "ssd"}]}`, "layer kind"},
 		{`"x": {"recurrent": {"conv_kernel": "taps"}}`, "is not the keys"},
 	} {
-		if _, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {`+tc.states+`}}`), "test"); err == nil ||
+		if _, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {`+tc.states+`}}`), "test", testNames(t)); err == nil ||
 			!strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want an error naming %q", tc.states, err, tc.want)
 		}

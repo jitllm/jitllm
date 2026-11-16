@@ -25,7 +25,7 @@ func TestEachRunsItsSteps(t *testing.T) {
 		if err := json.Unmarshal([]byte(src), &g); err != nil {
 			return nil, err
 		}
-		return &g, g.check()
+		return &g, g.check(testNames(t))
 	}
 	g, err := parse(ok)
 	if err != nil {

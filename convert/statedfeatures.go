@@ -11,59 +11,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-func deepseek4RoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	// DeepSeek V4's attention: one key that is also the value, a grouped
-	// output projection in two halves, sinks (gpt-oss's role) and the
-	// compressors.
-	case "attn_kv.weight":
-		return jlm.RoleAttnK, true
-	case "attn_output_a.weight":
-		return jlm.RoleAttnOutA, true
-	case "attn_output_b.weight":
-		return jlm.RoleAttnOut, true
-	case "attn_compressor_kv.weight":
-		return jlm.RoleCompKV, true
-	case "attn_compressor_gate.weight":
-		return jlm.RoleCompGate, true
-	case "attn_compressor_ape.weight":
-		return jlm.RoleCompAPE, true
-	case "attn_compressor_norm.weight":
-		return jlm.RoleCompNorm, true
-	case "indexer_compressor_kv.weight":
-		return jlm.RoleIdxCompKV, true
-	case "indexer_compressor_gate.weight":
-		return jlm.RoleIdxCompGate, true
-	case "indexer_compressor_ape.weight":
-		return jlm.RoleIdxCompAPE, true
-	case "indexer_compressor_norm.weight":
-		return jlm.RoleIdxCompNorm, true
-	// The hyper-connections, per block and at the head.
-	case "hc_attn_fn.weight":
-		return jlm.RoleHCAttnFn, true
-	case "hc_attn_base.weight":
-		return jlm.RoleHCAttnBase, true
-	case "hc_attn_scale.weight":
-		return jlm.RoleHCAttnScale, true
-	case "hc_ffn_fn.weight":
-		return jlm.RoleHCFFNFn, true
-	case "hc_ffn_base.weight":
-		return jlm.RoleHCFFNBase, true
-	case "hc_ffn_scale.weight":
-		return jlm.RoleHCFFNScale, true
-	case "output_hc_fn.weight":
-		return jlm.RoleHCHeadFn, true
-	case "output_hc_base.weight":
-		return jlm.RoleHCHeadBase, true
-	case "output_hc_scale.weight":
-		return jlm.RoleHCHeadScale, true
-	// A hash-routed block's token-id table (I32 in the file; hashExpertTable).
-	case "ffn_gate_tid2eid.weight":
-		return jlm.RoleHashExperts, true
-	}
-	return 0, false
-}
-
 // swigluLimitDefault is transformers' default swiglu_limit, the published
 // config's: the clamp of a file that states none, and of a container
 // written when no other clamp converted, restated from its flag.

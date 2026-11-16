@@ -11,44 +11,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-func kimiK3RoleOf(name string) (jlm.Role, bool) {
-	switch name {
-	// The residual attention's score vectors and the latent mixture's
-	// projections and norm.
-	case "attn_res_score.weight":
-		return jlm.RoleAttnResScore, true
-	case "ffn_res_score.weight":
-		return jlm.RoleFFNResScore, true
-	case "output_res_score.weight":
-		return jlm.RoleOutputResScore, true
-	case "ffn_routed_down.weight":
-		return jlm.RoleFFNRoutedDown, true
-	case "ffn_routed_up.weight":
-		return jlm.RoleFFNRoutedUp, true
-	case "ffn_routed_norm.weight":
-		return jlm.RoleFFNRoutedNorm, true
-	// Kimi Delta Attention as llama.cpp's kimi-k3 writes it: three causal
-	// convolutions (joined into one filter bank by kdaTensors), the
-	// forget gate's two halves, beta alone (no alpha stream beside it), and
-	// the full-rank output gate, which is the linear block's z projection.
-	case "ssm_conv1d_q.weight":
-		return jlm.RoleSSMConv1d, true
-	case "ssm_conv1d_k.weight":
-		return jlm.RoleSSMConv1d, true
-	case "ssm_conv1d_v.weight":
-		return jlm.RoleSSMConv1d, true
-	case "ssm_f_a.weight":
-		return jlm.RoleSSMFA, true
-	case "ssm_f_b.weight":
-		return jlm.RoleSSMFB, true
-	case "ssm_beta.weight":
-		return jlm.RoleSSMBA, true
-	case "ssm_g.weight":
-		return jlm.RoleAttnGate, true
-	}
-	return 0, false
-}
-
 // k3LatentNormEps is the epsilon of the MLA latent norms (q_a_layernorm,
 // kv_a_layernorm): Moonshot's KimiMLAAttention builds both as
 // KimiRMSNorm(rank) at its default 1e-6, and transformers' KimiLinearAttention

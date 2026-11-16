@@ -42,10 +42,11 @@ type towerVocab struct {
 	unread map[string]string
 	p      towerProjector
 	roles  map[string]jlm.Role
+	text   tensorNames
 }
 
-// towerVocabOf is v's projector's tower names.
-func towerVocabOf(v *jlm.Vision) (*towerVocab, error) {
+// towerVocabOf is v's projector's tower names, over the text vocabulary.
+func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
 	b, err := towerTensorsFS.ReadFile("towertensors.json")
 	if err != nil {
 		return nil, err
@@ -54,7 +55,7 @@ func towerVocabOf(v *jlm.Vision) (*towerVocab, error) {
 	if err := json.Unmarshal(b, &t); err != nil {
 		return nil, fmt.Errorf("convert: towertensors.json: %w", err)
 	}
-	n := &towerVocab{unread: t.Unread, p: t.Projectors[v.Projector.String()], roles: map[string]jlm.Role{}}
+	n := &towerVocab{unread: t.Unread, p: t.Projectors[v.Projector.String()], roles: map[string]jlm.Role{}, text: text}
 	if len(n.p.Roles) == 0 {
 		return n, nil
 	}
@@ -80,12 +81,12 @@ func (n *towerVocab) roleOf(name string) (jlm.Role, int32, int32, error) {
 	for _, rn := range n.p.Renames {
 		switch {
 		case rn.Prefix != "" && strings.HasPrefix(name, rn.Prefix):
-			return identify(rn.To + strings.TrimPrefix(name, rn.Prefix))
+			return n.text.identify(rn.To + strings.TrimPrefix(name, rn.Prefix))
 		case rn.Infix != "" && strings.Contains(name, rn.Infix):
-			return identify(strings.Replace(name, rn.Infix, rn.To, 1))
+			return n.text.identify(strings.Replace(name, rn.Infix, rn.To, 1))
 		}
 	}
-	return identify(name)
+	return n.text.identify(name)
 }
 
 // unreadName reports a tower file's tensor that no graph here reads: the
