@@ -53,7 +53,7 @@ type mjStates struct {
 	Layers []mjStatesLayer `json:"layers"`
 	// ResidualScale is the factor each block's attention and FFN output is
 	// scaled by (0 for none), and MoEStep the mixture blocks' interleave
-	// (jlm.Config.MoEStep), each a number.
+	// (jlm.Config.MoEStep, none for none), each a number.
 	ResidualScale string `json:"residual_scale"`
 	MoEStep       string `json:"moe_step"`
 	// AttnTemp scales the queries by position (jlm.Config.AttnTempScale).
@@ -796,14 +796,20 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 	}
 	if st.MoEStep != "" {
-		x, err := number("moe_step", st.MoEStep)
+		v, err := value("moe_step", st.MoEStep)
 		if err != nil {
 			return err
 		}
-		if x < 1 || x != float32(uint32(x)) {
+		x, err := number("moe_step", st.MoEStep)
+		switch {
+		case v.IsNone():
+		case err != nil:
+			return err
+		case x < 1 || x != float32(uint32(x)):
 			return fmt.Errorf("convert: %s: %s: moe_step is %g, not a step", by, arch, x)
+		default:
+			c.MoEStep = uint32(x)
 		}
-		c.MoEStep = uint32(x)
 	}
 	if err := st.Router.apply(f, c); err != nil {
 		return fmt.Errorf("convert: %s: %w", arch, err)
