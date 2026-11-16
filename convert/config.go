@@ -259,8 +259,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 	// placeholder head as wide as the embedding keeps every attention-shaped
 	// derivation finite, and no layer reads it (countsHeld refuses one that
 	// does).
-	_, headless := f.Key("attention.head_count")
-	if headless = headless && c.NHead == 0; headless {
+	if _, stated := f.Key("attention.head_count"); stated && c.NHead == 0 {
 		c.NHead = 1
 	}
 	if c.NLayer == 0 || c.NEmbd == 0 || c.NHead == 0 {
@@ -611,7 +610,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 	if err := selectiveNormsFit(f, c); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	if err := countsHeld(c, perKV, headless); err != nil {
+	if err := countsHeld(c, f); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 
