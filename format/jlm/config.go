@@ -1071,16 +1071,12 @@ type RopePair struct{ Axis, Freq int }
 // RopePairs is the text rotary's table as the container states it
 // (RopeTable), none for a rotary of one position. A container with rotary
 // sections that states no table was written before the converter stated
-// it, and is refused.
+// it: refused, for the upgrade that states it (convert.StateStored).
 func (c *Config) RopePairs() ([]RopePair, error) {
 	if c.RopeSections == [4]uint32{} || len(c.RopeTable) != 0 {
 		return c.RopeTable, nil
 	}
-	if c.Revision < 3 {
-		return nil, &UpgradeError{What: "rotary layout"}
-	}
-	return nil, fmt.Errorf("jlm: the container states rotary sections %v and not the table they lay out, "+
-		"which this build reads: convert the model again", c.RopeSections)
+	return nil, &UpgradeError{What: "rotary table"}
 }
 
 // PictureRope is how a picture's grid rows place themselves on the text

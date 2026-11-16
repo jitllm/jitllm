@@ -1164,12 +1164,8 @@ type Model struct {
 	// holdFree is the recycled sheet holds (sheetOf).
 	holdMu   sync.Mutex
 	holdFree []*sheetHold
-	// xdKNormFirst is a gate's violation: k normed before XD-RoPE's
-	// rotary, as every other q/k-normed model does. The rotation does not
-	// keep a head's RMS, so HunyuanVL's post-rotary norm is load-bearing.
-	xdKNormFirst bool
-	Cfg          *Config
-	Vocab        *tok.Vocab
+	Cfg      *Config
+	Vocab    *tok.Vocab
 
 	// chatTemplates are the chat templates compiled, by source: a request
 	// renders its model's template, not compiles it (chat.go).
@@ -1327,12 +1323,6 @@ func Open(path string, options ...Option) (*Model, error) {
 	if c := m.Container.Config(); c.Revision < 2 && m.storesAny(jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "activation quantization"}
-	}
-	// Rotary sections are laid out as the flags a container written before
-	// revision 3 does not state.
-	if c := m.Container.Config(); c.Revision < 3 && c.RopeSections != [4]uint32{} {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "rotary layout"}
 	}
 	return m, nil
 }

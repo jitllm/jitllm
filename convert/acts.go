@@ -152,12 +152,16 @@ func StateActivations(c *Config, s *jlm.Source) error {
 // no layers (jlm.Restate).
 func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
 	c := &Config{Config: jc}
+	roped, err := stateStoredRopeTable(jc)
+	if err != nil {
+		return false, err
+	}
 	streams := (c.AttnResBlock == 0 && c.HCLowRank == 0 || c.Streams.N > 1) && (c.NGramBlock == 0 || StatesPre(c.Config))
 	rev := c.Revision >= jlm.SourceRevision
 	sel := c.IdxHeads == 0 || c.Selection != nil
 	if len(c.Acts) != 0 && (c.NExpert == 0 || len(c.RouterScore.Terms) != 0) && streams && rev && sel ||
 		c.NLayer == 0 {
-		return false, nil
+		return roped, nil
 	}
 	if !streams {
 		StateStreams(c.Config, func(r jlm.Role, li int32) bool {

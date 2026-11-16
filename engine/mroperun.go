@@ -102,6 +102,17 @@ func pictureMark(pr *jlm.PictureRope, at, start, ord int, g model.ImageGrid) (m 
 	return m
 }
 
+// laysFramesApart reports whether some axis of pr turns by a grid's frame:
+// its frames' stride, or its rows counted in whole frames.
+func laysFramesApart(pr *jlm.PictureRope) bool {
+	for _, x := range pr.Axes {
+		if x.Mul == jlm.PicStride || x.Div == jlm.PicCells {
+			return true
+		}
+	}
+	return false
+}
+
 // markTop is the highest rotary position a bounded mark's rows take on any
 // axis, its ends' cache positions among them.
 func markTop(m [graph.MarkWords]uint32) int {
@@ -192,6 +203,9 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 				i, g.Frame, g.T, g.H, g.W, frame, open.T, open.H, open.W)
 		case open.T == 0 && g.Frame != 0:
 			return 0, fmt.Errorf("model: span %d starts a grid at frame %d", i, g.Frame)
+		case open.T == 0 && g.T > 1 && !laysFramesApart(pr):
+			return 0, fmt.Errorf("model: span %d is a video of %d frames and the container's picture layout "+
+				"turns no axis by a frame", i, g.T)
 		case open.T == 0:
 			m := pictureMark(pr, p, r, ord, g)
 			s.rmarks.Add(slot, m)

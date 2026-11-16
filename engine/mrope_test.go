@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -254,6 +255,15 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 	}
 	if slices.Equal(moved, rows) {
 		t.Fatal("VIOLATION: the text after the picture resumes alike whichever layout the container states")
+	}
+	// A video of the picture's grid is laid out where some axis turns by a
+	// frame, and refused by name where none does.
+	v := g.grid()
+	v.T, v.Stride = 2, 1
+	vs := []model.Span{{Tokens: g.Pre}, {Embd: make([]float32, v.Rows()*m.Cfg.NEmbd), Grid: v}, {Tokens: g.Post}}
+	_, err = st.spanRope(0, 0, vs)
+	if framed := laysFramesApart(pr); framed != (err == nil) || err != nil && !strings.Contains(err.Error(), "turns no axis by a frame") {
+		t.Fatalf("a video under a layout that lays frames apart %v: %v", framed, err)
 	}
 	t.Logf("%d prompt rows, image grid %v, rope delta %d", len(rows), g.Image.Grid, g.Delta)
 }
