@@ -259,8 +259,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 	// placeholder head as wide as the embedding keeps every attention-shaped
 	// derivation finite, and no layer reads it (countsHeld refuses one that
 	// does).
-	_, headless := f.Key("attention.head_count")
-	if headless = headless && c.NHead == 0; headless {
+	if _, stated := f.Key("attention.head_count"); stated && c.NHead == 0 {
 		c.NHead = 1
 	}
 	if c.NLayer == 0 || c.NEmbd == 0 || c.NHead == 0 {
@@ -351,18 +350,9 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchGemma2, ArchGemma3:
 		gemmaAttnScale(c)
-	case ArchQwen3Next, ArchQwen4Exp:
-		// The sections select nothing for a text prompt and are stored for
-		// image rows, read as every M-RoPE's are; a text-only file states none.
-		if _, ok := f.Key("rope.dimension_sections"); ok {
-			if err := mropeSectionsOf(f, name, c); err != nil {
-				return nil, err
-			}
-		}
-		if arch == ArchQwen4Exp {
-			if err := qwen4expConfig(f, c); err != nil {
-				return nil, fmt.Errorf("convert: %s: %w", name, err)
-			}
+	case ArchQwen4Exp:
+		if err := qwen4expConfig(f, c); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchQwen2VL, ArchQwen3VL, ArchQwen3VLMoE:
 		// qwen2's, qwen3's and qwen3moe's blocks under a multimodal rope: the
@@ -547,7 +537,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 	if err := selectiveNormsFit(f, c); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	if err := countsHeld(c, perKV, headless); err != nil {
+	if err := countsHeld(c, f); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 
@@ -859,6 +849,12 @@ func mropeSectionsOf(f *meta.File, name string, c *Config) error {
 	if err != nil {
 		return fmt.Errorf("convert: %s: rope.dimension_sections: %w", name, err)
 	}
+	return ropeSectionsFit(name, secs, c)
+}
+
+// ropeSectionsFit sets the M-RoPE sections secs in c, refusing a split that
+// does not cover a head's rotary pairs (mropeSectionsOf).
+func ropeSectionsFit(name string, secs []int32, c *Config) error {
 	if len(secs) > len(c.RopeSections) {
 		return fmt.Errorf("convert: %s: %d rope sections, this format defines %d",
 			name, len(secs), len(c.RopeSections))

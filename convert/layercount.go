@@ -50,17 +50,61 @@ func uniformCount(f *meta.File, key string, def uint32) (uint32, error) {
 }
 
 // countsHeld refuses a per-layer kv head count no block's geometry holds, and
-// a file stating no heads whose layers attend.
-func countsHeld(c *Config, perKV []int32, headless bool) error {
-	for i, v := range perKV {
-		if g := c.GeomAt(i); v != 0 && i < int(c.NLayer) && g.NKVHead != uint32(v) {
-			return fmt.Errorf("attention.head_count_kv differs by layer (%d at layer %d, %d in its geometry): %w",
-				v, i, g.NKVHead, ErrNotImplemented)
+// a zero head or kv head count on a layer that attends: a zero marks a layer a
+// count does not apply to, for every model, and a head count of zero written
+// as one number gives every layer zero. Where the converter merged the
+// source's layers into fewer blocks, a count over the source's layers is
+// matched in order: its n-th nonzero entry to the n-th block that attends.
+func countsHeld(c *Config, f *meta.File) error {
+	attends := func(b int) bool { return b >= len(c.LayerKinds) || c.LayerKinds[b].Attends() }
+	for _, key := range []string{"attention.head_count", "attention.head_count_kv"} {
+		kv, ok := f.Key(key)
+		if !ok {
+			continue
 		}
-	}
-	for i := 0; headless && i < int(c.NLayer); i++ {
-		if i >= len(c.LayerKinds) || c.LayerKinds[i].Attends() {
-			return fmt.Errorf("attention.head_count is zero and layer %d attends", i)
+		var vs []int32
+		if v, one := kv.Uint(); one {
+			if v != 0 || key != "attention.head_count" {
+				continue
+			}
+			vs = make([]int32, c.NLayer)
+		} else if p, err := kv.Int32s(); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		} else {
+			vs = p
+		}
+		var blocks []int
+		if src := int(f.UintKey("block_count", 0)); src != int(c.NLayer) && len(vs) == src {
+			for b := range int(c.NLayer) {
+				if attends(b) {
+					blocks = append(blocks, b)
+				}
+			}
+			var held []int32
+			for _, v := range vs {
+				if v != 0 {
+					held = append(held, v)
+				}
+			}
+			if len(held) != len(blocks) {
+				return fmt.Errorf("%s states heads on %d source layers, and %d blocks attend", key, len(held), len(blocks))
+			}
+			vs = held
+		} else {
+			vs = vs[:min(len(vs), int(c.NLayer))]
+			for b := range vs {
+				blocks = append(blocks, b)
+			}
+		}
+		for i, v := range vs {
+			b := blocks[i]
+			if v == 0 && attends(b) {
+				return fmt.Errorf("%s is zero at layer %d, which attends", key, b)
+			}
+			if g := c.GeomAt(b); v != 0 && key == "attention.head_count_kv" && g.NKVHead != uint32(v) {
+				return fmt.Errorf("%s differs by layer (%d at layer %d, %d in its geometry): %w",
+					key, v, b, g.NKVHead, ErrNotImplemented)
+			}
 		}
 	}
 	return nil

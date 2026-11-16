@@ -42,6 +42,9 @@ type mjStates struct {
 	// Recurrent is the recurrent layers' geometry (jlm.SSMConfig), each a
 	// count.
 	Recurrent *mjStatesRecurrent `json:"recurrent"`
+	// RopeSections is the M-RoPE split of a head's rotary pairs between a
+	// position's axes, a list of counts (empty for none).
+	RopeSections string `json:"rope_sections"`
 	// Layers is each layer's kind, read off the tensors it carries
 	// (stateLayers).
 	Layers []mjStatesLayer `json:"layers"`
@@ -195,7 +198,7 @@ func (mj *modelJSON) checkStates() error {
 		}
 		st := mj.Container[arch]
 		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv,
-			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope}
+			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope, st.RopeSections}
 		if tp := st.AttnTemp; tp != nil {
 			if tp.Scale == "" || tp.Floor == "" || tp.Offset == "" {
 				return fmt.Errorf("convert: %s: %s: a temperature states its scale, floor and offset", mj.name, arch)
@@ -523,6 +526,28 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		if err := indexerFits(c); err != nil {
 			return fmt.Errorf("convert: %s: %s: %w", by, arch, err)
+		}
+	}
+	if st.RopeSections != "" {
+		v, err := value("rope_sections", st.RopeSections)
+		if err != nil {
+			return err
+		}
+		if !v.IsList() {
+			return fmt.Errorf("convert: %s: %s: rope_sections is %v, not a list", by, arch, v)
+		}
+		secs := make([]int32, v.AsList().Len())
+		for i := range secs {
+			x := v.AsList().Get(i)
+			if !x.IsInt() || x.AsInt() < 0 || x.AsInt() > math.MaxInt32 {
+				return fmt.Errorf("convert: %s: %s: rope section %d is %v, not a count", by, arch, i, x)
+			}
+			secs[i] = int32(x.AsInt())
+		}
+		if len(secs) > 0 {
+			if err := ropeSectionsFit(arch, secs, c); err != nil {
+				return err
+			}
 		}
 	}
 	if r := st.Recurrent; r != nil {

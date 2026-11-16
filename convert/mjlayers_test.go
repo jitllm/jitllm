@@ -133,20 +133,54 @@ func TestOneRuleReadsALayerCount(t *testing.T) {
 	if _, err := uniformCount(f(meta.MakeInt32s([]int32{2, 4})), "n", 0); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("a count that differs by layer: %v", err)
 	}
+	heads := func(key string, v meta.Value) *meta.File {
+		return layerFile("x", map[string]meta.Value{key: v}, nil)
+	}
+	kv := heads("attention.head_count_kv", meta.MakeInt32s([]int32{4, 2}))
 	c := &Config{Config: &jlm.Config{NLayer: 2, NKVHead: 4}}
-	if err := countsHeld(c, []int32{4, 2}, false); !errors.Is(err, ErrNotImplemented) {
+	if err := countsHeld(c, kv); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("kv heads no geometry holds: %v", err)
 	}
 	c.Geoms = []jlm.Geom{{NKVHead: 4}, {NKVHead: 2}}
-	if err := countsHeld(c, []int32{4, 2}, false); err != nil {
+	if err := countsHeld(c, kv); err != nil {
 		t.Errorf("kv heads the geometries hold: %v", err)
 	}
+	c = &Config{Config: &jlm.Config{NLayer: 3, NKVHead: 8}}
+	for _, key := range []string{"attention.head_count", "attention.head_count_kv"} {
+		gap := heads(key, meta.MakeInt32s([]int32{8, 0, 8}))
+		c.LayerKinds = nil
+		if err := countsHeld(c, gap); err == nil {
+			t.Errorf("%s: a zero on a layer that attends, no kinds stated", key)
+		}
+		c.LayerKinds = []jlm.LayerKind{jlm.LayerFullAttn, jlm.LayerFullAttn, jlm.LayerFullAttn}
+		if err := countsHeld(c, gap); err == nil {
+			t.Errorf("%s: a zero on a layer stated to attend", key)
+		}
+		c.LayerKinds[1] = jlm.LayerSSD
+		if err := countsHeld(c, gap); err != nil {
+			t.Errorf("%s: a zero on the layer that does not attend: %v", key, err)
+		}
+	}
+	c = &Config{Config: &jlm.Config{NLayer: 3, NKVHead: 8}}
+	c.LayerKinds = []jlm.LayerKind{jlm.LayerSSD, jlm.LayerFullAttn, jlm.LayerSSD}
+	for _, tc := range []struct {
+		kv []int32
+		ok bool
+	}{{[]int32{0, 0, 8, 0, 0}, true}, {[]int32{8, 0, 8, 0, 0}, false}, {[]int32{0, 0, 0, 0, 0}, false}} {
+		merged := layerFile("x", map[string]meta.Value{"block_count": meta.MakeUint(5),
+			"attention.head_count_kv": meta.MakeInt32s(tc.kv)}, nil)
+		if err := countsHeld(c, merged); (err == nil) != tc.ok {
+			t.Errorf("five source layers merged into three blocks, kv heads %v: %v", tc.kv, err)
+		}
+	}
+	none := heads("attention.head_count", meta.MakeUint(0))
+	c = &Config{Config: &jlm.Config{NLayer: 2, NKVHead: 1}}
 	c.LayerKinds = []jlm.LayerKind{jlm.LayerScan, jlm.LayerFullAttn}
-	if err := countsHeld(c, nil, true); err == nil {
+	if err := countsHeld(c, none); err == nil {
 		t.Error("no heads on a model whose layer 1 attends")
 	}
 	c.LayerKinds[1] = jlm.LayerSSD
-	if err := countsHeld(c, nil, true); err != nil {
+	if err := countsHeld(c, none); err != nil {
 		t.Errorf("no heads on a model no layer of which attends: %v", err)
 	}
 }
