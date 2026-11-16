@@ -166,6 +166,7 @@ func towerFFNByShape(s *jlm.Source) error {
 		}
 		upK, upRows := p.up.Dims[0], p.up.Dims[1]
 		downK, downRows := p.down.Dims[0], p.down.Dims[1]
+		pad := (d + q8Elems - 1) / q8Elems * q8Elems
 		switch {
 		case upK == d && downRows == d && upRows == downK:
 			// As named, or as wide as the tower and so as named.
@@ -177,6 +178,10 @@ func towerFFNByShape(s *jlm.Source) error {
 			if p.downB != nil {
 				p.downB.Role = jlm.RoleVFC1Bias
 			}
+		case (upK == pad || downK == pad) && pad != d:
+			return fmt.Errorf("convert: the tower is %d wide, not a whole number of %d-element blocks: its matrices "+
+				"are stored %d inputs wide (quantizeTower), its blocks bind them at the tower's width, and no device "+
+				"reads a padded row yet: %w", d, q8Elems, pad, ErrNotImplemented)
 		default:
 			return fmt.Errorf("convert: the tower's block %d has MLP matrices of %dx%d and %dx%d over a width of %d: "+
 				"neither expands it", b, upK, upRows, downK, downRows, d)

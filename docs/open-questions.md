@@ -160,6 +160,16 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
 
 ## Smaller open items
 
+- **A tower whose width is not a whole number of Q8 blocks does not run.** quantizeTower
+  pads a matrix's k with zero columns to the next block, and the old engine read it at
+  the tower's width and padded each activation row (model.unpadK, State.padRows, gone
+  with it); a stated tower block binds its matrices at the tower's width, and no tier
+  has an op that widens a row with zeros before a matvec reading a padded weight. The
+  converter refuses such a tower by its width (towerFFNByShape), where it used to
+  refuse it as an MLP no width fits. tinyopenjev-for-testing's 144-wide tower is the
+  case on the boxes (engine's notTowers). The work: that op, lowered on every device,
+  and the census then pairs the tower.
+
 - Q4_K/Q5_K are not Tok-invariant on SPIR-V — ~40% of elements differ at 6.1e-05,
   spirv only, ptx and msl exact. Bounded at NMSE 1e-8, **undiagnosed**; it is the
   min term's fold.

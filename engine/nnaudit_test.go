@@ -960,10 +960,10 @@ func keyConfigs() map[string]string {
 	return map[string]string{"EXAONE-4.0-1.2B-Q4_K_M.gguf": "testdata/configs/EXAONE-4.0-1.2B/config.json"}
 }
 
-// notTowers are text GGUFs whose mmproj-<file> beside them is no tower: the
-// converter refuses it as input. tinyopenjev-for-testing's is a loader test
-// file whose block MLP reads 160 wide and writes 144 (fc1 160x288, fc2
-// 288x144), which no residual width fits.
+// notTowers are text GGUFs whose mmproj-<file> beside them the converter
+// refuses. tinyopenjev-for-testing's tower is 144 wide, not a whole number of
+// Q8 blocks: its matrices would be stored 160 inputs wide and no device reads
+// a padded row yet (docs/open-questions.md), so towerFFNByShape refuses it.
 func notTowers() map[string]bool {
 	return map[string]bool{"openjev/tinyopenjev-for-testing-Q8_0.gguf": true}
 }
