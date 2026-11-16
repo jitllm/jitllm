@@ -34,9 +34,6 @@ const (
 	// collapse reads them (a mix the same over any order of its streams sees
 	// a stream read twice).
 	cpuFaultStreams
-	// cpuFaultEntryRows gathers each patch row of the tower's entry from the
-	// patch after its own.
-	cpuFaultEntryRows
 	// cpuFaultKeysFirst runs a bidirectional run of several calls' first
 	// pass over none of its codes: each call's rows read only the keys of
 	// the calls before them and their own.
@@ -49,7 +46,4 @@ const (
 	cpuFaultPicks
 	// cpuFaultWeight drops each row's first pick's weight (weightsOf).
 	cpuFaultWeight
-	// cpuFaultFilterT binds a convolutional block's depthwise filters with
-	// their taps' rows and columns swapped.
-	cpuFaultFilterT
 )

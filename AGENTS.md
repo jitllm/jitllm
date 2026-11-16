@@ -349,9 +349,10 @@ an addition is chosen from and priced against.
 1. **A converter entry** that reads the file and states in the container what
    the reference hardcodes against the name (a container field, or an arch code
    of its own so an older reader refuses the container rather than running it
-   wrong). An absent key takes the CLASS's default (`hfClassDefaults`), never the
-   tree's; a key spelled two ways that disagree is refused, because there is no
-   way to know which the weights were trained under.
+   wrong). An absent key takes the CLASS's default (the `??` default its
+   library file states, `convert.TestDenseHFClassDefaults`), never the tree's;
+   a key spelled two ways that disagree is refused, because there is no way to
+   know which the weights were trained under.
 2. **A fixture from the family's own transformers class, with every parameter
    AND every buffer randomised**, written to GGUF by llama.cpp's own
    `convert_hf_to_gguf.py` where llama.cpp has the family, and a golden from

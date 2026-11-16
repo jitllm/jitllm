@@ -54,7 +54,6 @@ type modelOpts struct {
 	// WithPrefillForwardRows.
 	forwardRows    int
 	forwardRowsSet bool
-	hybridSpinSet  bool
 	// noStreamTrial keeps an auto-streamed placement without measuring it
 	// against the host; see WithStreamTrial.
 	noStreamTrial bool
@@ -81,12 +80,6 @@ type modelOpts struct {
 	elemPool bool
 	// towerGPULayers caps how many tower blocks are offered; negative is all.
 	towerGPULayers int
-	// towerCLSLast puts a class token at the END of the tower's sequence, with
-	// the position table added in row order -- llama.cpp's layout, which pairs
-	// the class token's position row with patch 0. It exists only so a test
-	// can hold the tower node by node to llama-mtmd-debug; the engine follows
-	// the reference's layout (class first).
-	towerCLSLast bool
 	// growDebug traces -gpu-grow's per-token adoption decisions.
 	growDebug bool
 

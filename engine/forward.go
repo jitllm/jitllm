@@ -386,8 +386,6 @@ type Instance struct {
 	// stepb is the model's step scratch holder while this instance leads a
 	// host step (borrowStep).
 	stepb *stepBuf
-	// rowCausal is a ragged step's rows in position order (rowsRouted).
-	rowCausal []int
 	// blockRoutes[li] is the route block li runs on (a session's routes, route.go),
 	// slotNone for a block the instance does not place: the truth for
 	// execution, where gpuLayers is the truth for the seam. Placement is a set

@@ -214,13 +214,6 @@ func streamedMatches(t *testing.T, run func(func(*gpu.Config)) ([][]float32, gpu
 	}
 }
 
-// noPin reports whether an arm's configuration turns page-locked transfers off.
-func noPin(cfg func(*gpu.Config)) bool {
-	var c gpu.Config
-	cfg(&c)
-	return c.StreamNoPin
-}
-
 // pinsHost reports whether the gate's device can page-lock host memory, which
 // is CUDA's alone (backend.HostPinner).
 func pinsHost(t *testing.T) bool {

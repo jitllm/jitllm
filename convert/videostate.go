@@ -10,7 +10,6 @@ import "github.com/jitllm/jitllm/format/jlm"
 // sizes builds an expression of a video's sizes term by term.
 type sizes struct{ jlm.ExprBuilder }
 
-func (e *sizes) op(i int) jlm.Arg               { return jlm.Operand(uint32(i)) }
 func (e *sizes) add(a, b jlm.Arg) jlm.Arg       { return e.Fn(jlm.FnAdd, a, b) }
 func (e *sizes) sub(a, b jlm.Arg) jlm.Arg       { return e.Fn(jlm.FnSub, a, b) }
 func (e *sizes) mul(a, b jlm.Arg) jlm.Arg       { return e.Fn(jlm.FnMul, a, b) }
@@ -21,7 +20,6 @@ func (e *sizes) less(a, b jlm.Arg) jlm.Arg      { return e.Fn(jlm.FnLess, a, b) 
 func (e *sizes) where(c, a, b jlm.Arg) jlm.Arg  { return e.Fn(jlm.FnWhere, c, a, b) }
 func (e *sizes) fn(f jlm.Fn, a jlm.Arg) jlm.Arg { return e.Fn(f, a) }
 func (e *sizes) expr() jlm.Expr                 { return jlm.Expr{Terms: e.T} }
-func constant(v float32) jlm.Expr               { var e sizes; e.add(num(v), num(0)); return e.expr() }
 func idsPiece(ids []int32) jlm.VideoPiece       { return jlm.VideoPiece{Kind: jlm.PieceIDs, IDs: ids} }
 func textPiece(s string) jlm.VideoPiece         { return jlm.VideoPiece{Kind: jlm.PieceText, Text: s} }
 func spanPiece() jlm.VideoPiece                 { return jlm.VideoPiece{Kind: jlm.PieceSpan} }

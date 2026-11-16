@@ -874,12 +874,6 @@ type hfConfig struct {
 	shapes map[string][]uint64
 }
 
-// absent reports whether config.json does not carry key at all.
-func (c *hfConfig) absent(key string) bool {
-	_, ok := c.keys[key]
-	return !ok
-}
-
 func readHFConfig(dir hfDir) (*hfConfig, error) {
 	p := dir.path("config.json")
 	b, err := dir.read("config.json")
@@ -917,17 +911,6 @@ func readHFConfig(dir hfDir) (*hfConfig, error) {
 		}
 	}
 	return c, nil
-}
-
-// act is the feed-forward activation. hidden_activation (transformers 4) is
-// the corrected key for gemma's mislabelled "gelu" (trained as the tanh
-// approximation); where present it is the answer, even though transformers 5
-// reads hidden_act alone.
-func (c *hfConfig) act() string {
-	if c.HiddenActivation != "" {
-		return c.HiddenActivation
-	}
-	return c.HiddenAct
 }
 
 // ---------------------------------------------------------------------------

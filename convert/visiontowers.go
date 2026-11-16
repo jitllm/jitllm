@@ -5,17 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/format/quant"
 )
-
-// rowBytes is the bytes of k elements of t, or 0 when k is not whole blocks.
-func rowBytes(t quant.Type, k uint64) uint64 {
-	be := t.BlockElems()
-	if be == 0 || k%be != 0 {
-		return 0
-	}
-	return k / be * t.BlockBytes()
-}
 
 // checkDeepstack holds a Qwen3-VL tower's deepstack mergers to the file's own
 // list of tapped blocks (clip.vision.is_deepstack_layers): a merger the list
