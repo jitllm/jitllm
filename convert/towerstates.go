@@ -262,6 +262,18 @@ func towerFns() map[string]func(e *jlm.ExprBuilder, c float32) {
 		"gelu_tanh": func(e *jlm.ExprBuilder, _ float32) { e.GELUTanh(jlm.Operand(0)) },
 		"scale":     func(e *jlm.ExprBuilder, c float32) { e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(c)) },
 		"swiglu":    func(e *jlm.ExprBuilder, _ float32) { e.Fn(jlm.FnMul, e.SiLU(jlm.Operand(0)), jlm.Operand(1)) },
+		"relu":      func(e *jlm.ExprBuilder, _ float32) { e.Fn(jlm.FnMax, jlm.Operand(0), jlm.Num(0)) },
+		"silu":      func(e *jlm.ExprBuilder, _ float32) { e.SiLU(jlm.Operand(0)) },
+		"sq_sum": func(e *jlm.ExprBuilder, _ float32) {
+			e.Fn(jlm.FnAdd, e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Operand(0)), e.Fn(jlm.FnMul, jlm.Operand(1), jlm.Operand(1)))
+		},
+		"log_add": func(e *jlm.ExprBuilder, c float32) { e.Fn(jlm.FnLog, e.Fn(jlm.FnAdd, jlm.Operand(0), jlm.Num(c))) },
+		"add_half": func(e *jlm.ExprBuilder, _ float32) {
+			e.Fn(jlm.FnAdd, jlm.Operand(0), e.Fn(jlm.FnMul, jlm.Operand(1), jlm.Num(0.5)))
+		},
+		"glu": func(e *jlm.ExprBuilder, _ float32) {
+			e.Fn(jlm.FnMul, jlm.Operand(0), e.Fn(jlm.FnSigmoid, jlm.Operand(1)))
+		},
 	}
 }
 
@@ -376,7 +388,7 @@ func (t *mjTower) check() error {
 	}
 	for _, prog := range progs {
 		for _, o := range prog {
-			if _, ok := towerOps()[o.Op]; !ok && o.Op != "untile" {
+			if _, ok := towerOps()[o.Op]; !ok && o.Op != "untile" && o.Op != "clip_mask" {
 				return fmt.Errorf("op %q is not one a tower program runs", o.Op)
 			}
 			if _, ok := towerFns()[o.Fn]; o.Fn != "" && !ok {
@@ -456,12 +468,8 @@ func (t *mjTower) check() error {
 	return nil
 }
 
-// towerFacts is what a tower statement's expressions read: v the tower's
-// geometry, has its tensors outside the blocks by role name, dims their
-// shapes, text the text model's facts a tower reads, filter and prec a
-// resize's filters and arithmetics, and token and tokens a marker's ids.
-func towerFacts(s *jlm.Source) map[string]jinja.Value {
-	v := s.Vision
+// visionGeom is a picture tower's geometry, a statement's v.
+func visionGeom(v *jlm.Vision) jinja.Value {
 	list := func(xs [3]float32) jinja.Value {
 		out := make([]jinja.Value, len(xs))
 		for i, x := range xs {
@@ -481,6 +489,28 @@ func towerFacts(s *jlm.Source) map[string]jinja.Value {
 	geom.AsDict().Set("bicubic", jinja.NewBool(v.Flags.Has(jlm.FlagVisionBicubic)))
 	geom.AsDict().Set("mean", list(v.Mean))
 	geom.AsDict().Set("std", list(v.Std))
+	return geom
+}
+
+// audioGeom is an audio tower's geometry, a statement's v: rows the rows a
+// block is formed for (audioRows).
+func audioGeom(a *jlm.Audio) jinja.Value {
+	geom := jinja.NewDict()
+	for k, x := range map[string]uint32{"layers": a.NLayer, "embd": a.NEmbd, "heads": a.NHead, "ffn": a.NFFN,
+		"conv_kernel": a.ConvKernel, "mel_bins": a.MelBins, "sub_channels": a.SubChannels, "proj_dim": a.ProjDim,
+		"res_width": a.ResWidth, "sample_rate": a.SampleRate, "n_fft": a.NFFT, "window": a.Window, "hop": a.Hop,
+		"max_samples": a.MaxSamples, "rows": uint32(audioRows(a))} {
+		geom.AsDict().Set(k, jinja.NewInt(int64(x)))
+	}
+	geom.AsDict().Set("eps", jinja.NewFloat(float64(a.Eps)))
+	return geom
+}
+
+// towerFacts is what a tower statement's expressions read: v the tower's
+// geometry, has its tensors outside the blocks by role name, dims their
+// shapes, text the text model's facts a tower reads, filter and prec a
+// resize's filters and arithmetics, and token and tokens a marker's ids.
+func towerFacts(s *jlm.Source, geom jinja.Value) map[string]jinja.Value {
 	has, dims := jinja.NewDict(), jinja.NewDict()
 	for i := range s.Tensors {
 		t := &s.Tensors[i]
@@ -569,11 +599,16 @@ func towerFacts(s *jlm.Source) map[string]jinja.Value {
 		"text": text, "filter": filter, "prec": prec, "token": token, "tokens": tokens}
 }
 
-// state is the tower t states for s, refused where s lacks a tensor it
-// requires or its facts fail a requirement.
+// state is the picture tower t states for s, refused where s lacks a tensor
+// it requires or its facts fail a requirement.
 func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
-	proj := s.Vision.Projector
-	facts := towerFacts(s)
+	return t.stateOf(by, s, s.Vision.Projector, visionGeom(s.Vision))
+}
+
+// stateOf is the tower t states over s's tensors, projector proj's, its
+// geometry geom.
+func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jinja.Value) (*jlm.Tower, error) {
+	facts := towerFacts(s, geom)
 	has := facts["has"].AsDict()
 	held := func(n string) bool {
 		v, ok := has.Get(n)
@@ -667,6 +702,24 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 					return p, fmt.Errorf("convert: %s: %v: %w", by, proj, err)
 				}
 			}
+			// A clip mask's grid width, samples a frame and halvings.
+			if o.Op == "clip_mask" {
+				var w, st, h float64
+				for _, f := range []struct {
+					src string
+					to  *float64
+				}{{o.GridW, &w}, {o.Stride, &st}, {o.Span, &h}} {
+					x, err := num(f.src)
+					if err != nil {
+						return p, err
+					}
+					*f.to = x
+				}
+				var err error
+				if op, err = gather.ClipMask(int(w), int(st), int(h)); err != nil {
+					return p, fmt.Errorf("convert: %s: %v: %w", by, proj, err)
+				}
+			}
 			for _, n := range o.In {
 				i, ok := named[n]
 				if !ok {
@@ -688,7 +741,7 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 				src string
 				to  *int32
 			}{{o.Span, &op.Span}, {o.Offset, &op.Offset}, {o.Width, &op.Width}, {o.GridW, &op.GridW}, {o.Stride, &op.Stride}} {
-				if o.Op == "untile" {
+				if o.Op == "untile" || o.Op == "clip_mask" {
 					break
 				}
 				x, err := num(f.src)
@@ -748,7 +801,26 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 	if out.Pre, err = steps(t.Pre); err != nil {
 		return nil, err
 	}
-	if out.Entry, err = prog(t.Entry, 1, held); err != nil {
+	// The entry's input is the picture, where an op reads it: the first op
+	// that runs reads it unless it names its inputs, and any op may name it.
+	// An entry that never does (a clip's frames, read from the call) has none.
+	entryIn, first := 0, true
+	for _, o := range t.Entry {
+		if o.If != "" {
+			on, err := value(o.If)
+			if err != nil {
+				return nil, err
+			}
+			if !on.IsTruthy() {
+				continue
+			}
+		}
+		if first && o.In == nil || slices.Contains(o.In, "in") {
+			entryIn = 1
+		}
+		first = false
+	}
+	if out.Entry, err = prog(t.Entry, entryIn, held); err != nil {
 		return nil, err
 	}
 	if ch := t.Chain; ch != nil {

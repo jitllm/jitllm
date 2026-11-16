@@ -170,8 +170,8 @@ func projResizes() map[string]jlm.Flags {
 // clip.projector_type, and the audio towers (clip.audio.projector_type) that
 // convert.
 type projectorFile struct {
-	Audio      []string               `json:"audio"`
-	Projectors map[string]*projStates `json:"projectors"`
+	Audio      map[string]*audioStates `json:"audio"`
+	Projectors map[string]*projStates  `json:"projectors"`
 }
 
 // projectorLibrary is projectors.json's vision projectors, each entry checked and its
@@ -476,5 +476,164 @@ func AudioProjectors() []string {
 	if err := json.Unmarshal(projectorsJSON, &lib); err != nil {
 		return nil
 	}
-	return lib.Audio
+	return slices.Sorted(maps.Keys(lib.Audio))
+}
+
+// audioStates is an audio tower as the projector library states it: its
+// projector's code, its geometry (each field an expression over the
+// mmproj's keys, src), what the geometry must satisfy, its tensors' names
+// and layouts, what the geometry must satisfy once the tensors have stated
+// their widths, and its tower as its reference runs it.
+type audioStates struct {
+	Code        uint16            `json:"code"`
+	Geometry    map[string]string `json:"geometry"`
+	Require     []mjRequire       `json:"require"`
+	Names       audioNames        `json:"names"`
+	Layout      audioLayout       `json:"layout"`
+	RequireRead []mjRequire       `json:"require_read"`
+	Tower       *mjTower          `json:"tower"`
+}
+
+// audioNames is an audio tower's tensor vocabulary, each name to its
+// container role by name: a block's after BlockPrefix and its index, an
+// indexed layer's after IndexedPrefix (its index, then weight or bias), the
+// dense ones (under DensePrefixes) whole.
+type audioNames struct {
+	BlockPrefix   string            `json:"block_prefix"`
+	Block         map[string]string `json:"block"`
+	IndexedPrefix string            `json:"indexed_prefix"`
+	Indexed       map[string]string `json:"indexed"`
+	DensePrefixes []string          `json:"dense_prefixes"`
+	Dense         map[string]string `json:"dense"`
+}
+
+// audioRoles is an audio vocabulary's roles resolved.
+type audioRoles struct {
+	Block, Indexed, Dense map[string]jlm.Role
+}
+
+// roles is st's names with their roles resolved, refusing a role the
+// container does not name.
+func (st *audioStates) roles(name string) (audioRoles, error) {
+	named := rolesByName()
+	out := audioRoles{Block: map[string]jlm.Role{}, Indexed: map[string]jlm.Role{}, Dense: map[string]jlm.Role{}}
+	for _, t := range []struct {
+		from map[string]string
+		to   map[string]jlm.Role
+	}{{st.Names.Block, out.Block}, {st.Names.Indexed, out.Indexed}, {st.Names.Dense, out.Dense}} {
+		for n, r := range t.from {
+			role, ok := named[r]
+			if !ok {
+				return out, fmt.Errorf("convert: projectors.json: audio %s: %q is role %q, which the container does not know", name, n, r)
+			}
+			t.to[n] = role
+		}
+	}
+	return out, nil
+}
+
+// audioFields is where each geometry field of an audio statement lands.
+func audioFields(a *jlm.Audio) map[string]*uint32 {
+	return map[string]*uint32{"layers": &a.NLayer, "embd": &a.NEmbd, "heads": &a.NHead, "ffn": &a.NFFN,
+		"mel_bins": &a.MelBins, "proj_dim": &a.ProjDim, "sample_rate": &a.SampleRate, "n_fft": &a.NFFT,
+		"window": &a.Window, "hop": &a.Hop, "max_samples": &a.MaxSamples, "conv_kernel": &a.ConvKernel,
+		"sub_channels": &a.SubChannels, "res_width": &a.ResWidth}
+}
+
+// audioEval is expr of audio statement name over vars, the mmproj's keys
+// (src) and, once it is read, the geometry (a).
+func audioEval(name, what, expr string, vars map[string]jinja.Value) (jinja.Value, error) {
+	x, err := jinja.CompileExpr(expr)
+	if err == nil {
+		for _, n := range x.Names() {
+			if n != "src" && n != "a" {
+				return jinja.Undefined(), fmt.Errorf("%q reads %q, which is not the keys (src) or the geometry (a)", expr, n)
+			}
+		}
+	}
+	var v jinja.Value
+	if err == nil {
+		v, err = x.Eval(vars, blockExprSteps)
+	}
+	if err == nil && v.IsUndefined() {
+		err = fmt.Errorf("%q is undefined", expr)
+	}
+	if err != nil {
+		return jinja.Undefined(), fmt.Errorf("convert: projectors.json: audio %s: %s: %w", name, what, err)
+	}
+	return v, nil
+}
+
+// geometry is the audio geometry st states for an mmproj of keys src, held
+// to st.Require.
+func (st *audioStates) geometry(name string, src jinja.Value) (*jlm.Audio, error) {
+	a := &jlm.Audio{Projector: jlm.Projector(st.Code)}
+	fields := audioFields(a)
+	vars := map[string]jinja.Value{"src": src}
+	for _, k := range slices.Sorted(maps.Keys(st.Geometry)) {
+		v, err := audioEval(name, k, st.Geometry[k], vars)
+		if err != nil {
+			return nil, err
+		}
+		var f float64
+		switch {
+		case v.IsInt():
+			f = float64(v.AsInt())
+		case v.IsFloat():
+			f = v.AsFloat()
+		default:
+			return nil, fmt.Errorf("convert: projectors.json: audio %s: %s is not a number", name, k)
+		}
+		if k == "eps" {
+			a.Eps = float32(f)
+			continue
+		}
+		to, ok := fields[k]
+		if !ok {
+			return nil, fmt.Errorf("convert: projectors.json: audio %s: %q is no audio geometry field", name, k)
+		}
+		*to = uint32(f)
+	}
+	if err := st.holds(name, src, a, st.Require); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// holds is nil when geometry a of an mmproj of keys src satisfies every one
+// of reqs.
+func (st *audioStates) holds(name string, src jinja.Value, a *jlm.Audio, reqs []mjRequire) error {
+	geom := jinja.NewDict()
+	for k, x := range audioFields(a) {
+		geom.AsDict().Set(k, jinja.NewInt(int64(*x)))
+	}
+	geom.AsDict().Set("eps", jinja.NewFloat(float64(a.Eps)))
+	vars := map[string]jinja.Value{"src": src, "a": geom}
+	for _, r := range reqs {
+		v, err := audioEval(name, "require", r.That, vars)
+		if err != nil {
+			return err
+		}
+		if !v.IsTruthy() {
+			return fmt.Errorf("convert: clip: the audio encoder %s", r.Else)
+		}
+	}
+	return nil
+}
+
+// libraryAudio is what the projector library states for the audio tower of
+// clip.audio.projector_type name.
+func libraryAudio(name string) (*audioStates, error) {
+	var lib projectorFile
+	if err := json.Unmarshal(projectorsJSON, &lib); err != nil {
+		return nil, fmt.Errorf("convert: projectors.json: %w", err)
+	}
+	a := lib.Audio[name]
+	if a == nil || a.Tower == nil || a.Code == 0 {
+		return nil, fmt.Errorf("convert: projectors.json states no audio tower %q, or no code for it", name)
+	}
+	if err := a.Tower.check(); err != nil {
+		return nil, fmt.Errorf("convert: projectors.json: audio %s: %w", name, err)
+	}
+	return a, nil
 }
