@@ -6338,8 +6338,8 @@ is generated (`TestEveryModelRunsGenerated`).
 
 ### granitehybrid (Granite 4.0-H: 350M, 1B, Micro, Tiny, Small)
 
-Granite's four scales (`graniteConfig`'s, read again by
-`convert.graniteHybridConfig`) over Mamba-2 blocks and attention blocks with no
+Granite's four scales (the dense Granite's container statement in
+`convert/models/mixtral.json`, read again by `convert.graniteHybridConfig`) over Mamba-2 blocks and attention blocks with no
 rotary: llama.cpp's converter writes `rope.scaling.finetuned` false for every
 hybrid but Bamba, which is `FlagNoPosEnc`. The head counts are per layer with
 zeros on the recurrent ones (`attnLayerCount`). The mixture (Tiny, Small) is

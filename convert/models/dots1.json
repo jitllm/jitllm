@@ -2,12 +2,10 @@
   "classes": ["Dots1ForCausalLM"],
   "gguf": ["dots1", "bailingmoe2"],
   "container": {
-    "dots1": {"flags": {"rope_neox": "true", "qk_norm": "true",
-                        "window_past_max_layers": "(src['attention.sliding_window'] | default(0)) != 0"},
-              "router": {"gate": "sigmoid"}, "whole_rotary": true,
-              "requires": ["expert_count", "blk.0.attn_q_norm.weight", "blk.0.attn_k_norm.weight"]},
-    "bailingmoe2": {"flags": {"rope_neox": "true", "qk_norm": "true"}, "router": {"gate": "sigmoid"},
-                    "requires": ["expert_count", "blk.0.attn_q_norm.weight", "blk.0.attn_k_norm.weight"]}
+    "dots1": {"flags": {"rope_neox": "true", "qk_norm": "true"},
+              "window": {"size": "src['attention.sliding_window'] | default(0)", "from": "src['max_window_layers']"},
+              "router": {"gate": "sigmoid"}, "whole_rotary": true},
+    "bailingmoe2": {"flags": {"rope_neox": "true", "qk_norm": "true"}, "router": {"gate": "sigmoid"}}
   },
   "config": {
     "defaults": {"num_key_value_heads": 32, "sliding_window": 4096, "max_window_layers": 62},
@@ -43,6 +41,10 @@
     "gating": "sigmoid"
   },
   "tensors": {
+    "present": [
+      {"tensor": "self_attn.q_norm.weight", "if": "true"},
+      {"tensor": "self_attn.k_norm.weight", "if": "true"}
+    ],
     "block_prefix": "model.layers.",
     "model": {
       "model.embed_tokens.weight": "token_embd.weight",

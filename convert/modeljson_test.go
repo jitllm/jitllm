@@ -290,7 +290,7 @@ func TestModelJSONHandsConfigOfTheTensorTable(t *testing.T) {
 		t.Errorf("mixture %d of %d experts %d wide, shared %d, flags %v", cfg.NExpertUsed, cfg.NExpert,
 			cfg.NFFNExp, cfg.NFFNShExp, cfg.Flags)
 	}
-	if _, err := mj.config(c, names[:4]); err == nil || !strings.Contains(err.Error(), "block 1 has no ffn_gate_inp.weight") {
+	if _, err := mj.config(c, append(names[:4:4], sh)); err == nil || !strings.Contains(err.Error(), "block 1 carries no router") {
 		t.Errorf("a block without its router: %v", err)
 	}
 	_, err = mj.config(hfConfigOf(t, strings.Replace(js, `"num_experts"`, `"scoring_func": "sigmoid", "num_experts"`, 1)), names)
@@ -388,6 +388,10 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 	names = append(names, "model.layers.0.mlp.gate_proj.weight")
 	noQK := append([]string{names[0]}, names[3:]...)
 	noSh := append(append([]string{}, names[:3]...), names[4:]...)
+	for _, n := range []string{"1.self_attn.q_norm.weight", "1.self_attn.k_norm.weight", "2.self_attn.q_norm.weight", "2.self_attn.k_norm.weight"} {
+		names = append(names, "model.layers."+n)
+		noSh = append(noSh, "model.layers."+n)
+	}
 	c := hfConfigOf(t, js)
 	c.shapes = map[string][]uint64{sh: {64, 64}}
 	cfg, err := mj.config(c, names)
@@ -409,7 +413,7 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 	}{
 		{"softmax", `"scoring_func": "sigmoid"`, `"scoring_func": "softmax"`, names, "scoring_func softmax"},
 		{"uneven groups", `"n_group": 1`, `"n_group": 3`, names, "8 experts in 3 groups"},
-		{"no q/k norm", `"n_group": 1`, `"n_group": 1`, noQK, "attn_q_norm"},
+		{"no q/k norm", `"n_group": 1`, `"n_group": 1`, noQK, "q_norm.weight"},
 		{"no expert count", `"n_routed_experts": 8,`, ``, names, "n_routed_experts"},
 		{"shared experts wider than shipped", `"n_shared_experts": 2`, `"n_shared_experts": 3`, names, "shared experts are 64 wide"},
 		{"shared experts that do not ship", `"n_shared_experts": 2`, `"n_shared_experts": 2`, noSh, "shared experts are 0 wide"},
@@ -470,7 +474,8 @@ func TestModelJSONDefaultsAndNulls(t *testing.T) {
 	names := []string{"lm_head.weight", "model.layers.0.self_attn.q_norm.weight", "model.layers.0.self_attn.k_norm.weight", sh}
 	for _, b := range []string{"1", "2"} {
 		p := "model.layers." + b + ".mlp."
-		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight")
+		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight",
+			"model.layers."+b+".self_attn.q_norm.weight", "model.layers."+b+".self_attn.k_norm.weight")
 	}
 	names = append(names, "model.layers.0.mlp.gate_proj.weight")
 	for _, r := range []struct{ name, from, to string }{

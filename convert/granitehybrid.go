@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// graniteHybridConfig is graniteConfig's four scales for Granite 4.0-H, whose
+// graniteHybridConfig is Granite's four scales for Granite 4.0-H, whose
 // attention layers carry no rotary at all: llama.cpp's converter writes
 // rope.scaling.finetuned false for every hybrid but Bamba, and its builder
 // skips the rotation on exactly that switch.

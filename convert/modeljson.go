@@ -191,10 +191,7 @@ func mjFlags() map[string]jlm.Flags {
 // the engine does not run, with what it is: stated true, it is refused.
 func mjFlagsNotImplemented() map[string]string {
 	return map[string]string{
-		"post_norm":              "each sublayer normed after it in place of before",
-		"no_rotary":              "attention with neither a rotary nor a position table",
-		"window_past_max_layers": "a sliding window on the layers past max_window_layers",
-		"all_global":             "every layer attending globally (attention.sliding_window 0) under a NoPE interleave",
+		"post_norm": "each sublayer normed after it in place of before",
 	}
 }
 
