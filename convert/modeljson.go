@@ -867,6 +867,10 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			if g.Model && g.Every {
 				return nil, fmt.Errorf("convert: %s: the gather of %s is the model's and every block's", mj.name, g.Role)
 			}
+			if g.From[0].Fill != nil && !g.Model && !g.Every {
+				return nil, fmt.Errorf("convert: %s: the gather of %s finds its blocks by its first source, and that is a "+
+					"filled operand", mj.name, g.Role)
+			}
 			step := hfGatherStep{role: retarget(r), from: g.From, do: g.Do, every: g.Every, model: g.Model, name: g.Name}
 			for _, x := range []struct {
 				src string

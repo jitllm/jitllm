@@ -252,7 +252,11 @@ schema; `convert/modeljson.go` reads it. Its sections:
   trunk cut a gate|up `ffn_up` into halves, and every class whose loader
   reads `ffn_gate_up_exps` cuts each expert's halves into the two banks.
   `at(x, i)` reads a per-layer key at layer i, a key that is not a list
-  being every layer's, as llama.cpp reads one that may be either.
+  being every layer's, as llama.cpp reads one that may be either. A
+  gather's operand may be `fill`, a value at a `shape` of counts over the
+  keys: FalconMamba's weightless dt, B and C norms (`ssm.dt_b_c_rms`) are
+  its table's gathers of ones, so the engine runs them as Jamba's weighted
+  ones.
   `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
   feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,

@@ -1,7 +1,10 @@
 {
   "gguf": ["mamba", "jamba"],
   "container": {
-    "mamba": {"tensors": {"block": {
+    "mamba": {"tensors": {"gather": [{"role": "ssm_dt_norm.weight", "every": true, "if": "(ssm.dt_b_c_rms ?? false) == true", "from": [{"fill": 1, "shape": ["ssm.time_step_rank"]}]},
+                                    {"role": "ssm_b_norm.weight", "every": true, "if": "(ssm.dt_b_c_rms ?? false) == true", "from": [{"fill": 1, "shape": ["ssm.state_size"]}]},
+                                    {"role": "ssm_c_norm.weight", "every": true, "if": "(ssm.dt_b_c_rms ?? false) == true", "from": [{"fill": 1, "shape": ["ssm.state_size"]}]}],
+                          "block": {
         "ssm_in.weight": [
           {"role": "attn_qkv.weight", "do": [{"reshape": ["2 * ssm.inner_size", -1]}, {"slice": [0, 0, "ssm.inner_size"]}]},
           {"role": "attn_gate.weight", "do": [{"reshape": ["2 * ssm.inner_size", -1]}, {"slice": [0, "ssm.inner_size", "ssm.inner_size"]}]}

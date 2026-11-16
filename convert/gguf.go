@@ -445,9 +445,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	if !tower {
-		if err := scanUnitNorms(c, f, s); err != nil {
-			return nil, err
-		}
 		if err := statedGathers(c, s, f); err != nil {
 			return nil, err
 		}

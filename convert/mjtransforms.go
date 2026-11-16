@@ -835,11 +835,14 @@ type hfGatherStep struct {
 }
 
 // mjOperand is one of a gather's inputs: a source by its block-relative name,
-// or one tensor composed of sources by primitives of its own.
+// one tensor composed of sources by primitives of its own, or Fill's value at
+// Shape, each a count over the keys.
 type mjOperand struct {
-	Name string   `json:"-"`
-	From []string `json:"from"`
-	Do   mjPipe   `json:"do"`
+	Name  string   `json:"-"`
+	From  []string `json:"from"`
+	Do    mjPipe   `json:"do"`
+	Fill  *float64 `json:"fill"`
+	Shape []string `json:"shape"`
 }
 
 func (o *mjOperand) UnmarshalJSON(b []byte) error {
@@ -848,16 +851,57 @@ func (o *mjOperand) UnmarshalJSON(b []byte) error {
 		*o = mjOperand{Name: s}
 		return nil
 	}
+	*o = mjOperand{}
 	type plain mjOperand
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err := d.Decode((*plain)(o)); err != nil {
 		return err
 	}
+	if o.Fill != nil {
+		if len(o.From)+len(o.Do) > 0 || len(o.Shape) == 0 {
+			return fmt.Errorf("an operand filled with a value states its shape and reads no source")
+		}
+		return nil
+	}
+	if len(o.Shape) > 0 {
+		return fmt.Errorf("a shape is a filled operand's")
+	}
 	if len(o.From) == 0 || len(o.Do) == 0 {
 		return fmt.Errorf("an operand composed of sources names them and its primitives")
 	}
 	return nil
+}
+
+// filled is a filled operand's tensor, its shape's counts read off env and
+// bounded, since a key sizes it (RULE 9).
+func (o mjOperand) filled(env exprEnv) (mjVal, error) {
+	v := mjVal{typ: jlm.TypeF32}
+	n := uint64(1)
+	for _, s := range o.Shape {
+		x, err := parseExpr(s)
+		if err != nil {
+			return mjVal{}, err
+		}
+		c, err := evalNum(x, env)
+		if err != nil {
+			return mjVal{}, err
+		}
+		d, err := exprUint(s, c)
+		if err != nil || d == 0 {
+			return mjVal{}, fmt.Errorf("a filled operand's %s is %v, not a count", s, c)
+		}
+		if n *= d; n > 1<<24 {
+			return mjVal{}, fmt.Errorf("a filled operand of shape %v is past %d values", o.Shape, 1<<24)
+		}
+		v.shape = append(v.shape, d)
+	}
+	vals := make([]float32, n)
+	for i := range vals {
+		vals[i] = float32(*o.Fill)
+	}
+	v.data = f32AsBytes(vals)
+	return v, nil
 }
 
 // names are the sources an operand reads, in order.
@@ -957,7 +1001,18 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 				return mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}, nil
 			}
 			src := make([]mjVal, len(g.from))
+			first := g.role.String()
+			if ns := g.from[0].names(); len(ns) > 0 {
+				first = bp + ns[0]
+			}
 			for i, o := range g.from {
+				if o.Fill != nil {
+					var err error
+					if src[i], err = o.filled(env); err != nil {
+						return fmt.Errorf("convert: the gather of %v: operand %d: %w", g.role, i, err)
+					}
+					continue
+				}
 				ins := make([]mjVal, len(o.names()))
 				for j, f := range o.names() {
 					var err error
@@ -976,7 +1031,7 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 			}
 			v, err := g.do.run(env, src)
 			if err != nil {
-				return fmt.Errorf("convert: %s: %w", bp+g.from[0].names()[0], err)
+				return fmt.Errorf("convert: %s: %w", first, err)
 			}
 			name := "blk." + itoa(int(block)) + "." + g.role.String()
 			if g.model {
