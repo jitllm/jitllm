@@ -57,24 +57,24 @@ func deepseek4RoleOf(name string) (jlm.Role, bool) {
 		return jlm.RoleHCHeadBase, true
 	case "output_hc_scale.weight":
 		return jlm.RoleHCHeadScale, true
-	// A hash-routed block's token-id table (I32 in the file; ds4HashTable).
+	// A hash-routed block's token-id table (I32 in the file; hashExpertTable).
 	case "ffn_gate_tid2eid.weight":
 		return jlm.RoleHashExperts, true
 	}
 	return 0, false
 }
 
-// ds4SwiGLULimit is transformers' default swiglu_limit, the published
+// swigluLimitDefault is transformers' default swiglu_limit, the published
 // config's: the clamp of a file that states none, and of a container
 // written when no other clamp converted, restated from its flag.
-const ds4SwiGLULimit = 10
+const swigluLimitDefault = 10
 
 // statedFeaturesFit holds a file to what its statement's features need,
 // once the keys are read: an attention whose key is its value
 // (Flag2KeyValue, DeepSeek V4's) has one kv head and no value width of its
 // own, a SwiGLU clamped per block (Flag2SwiGLUClamp) reads its limits
-// (ds4Clamp), and compressed blocks (compressed_blocks) read their kinds
-// (ds4Kinds).
+// (swigluClamps), and compressed blocks (compressed_blocks) read their kinds
+// (compressionKinds).
 func statedFeaturesFit(f *meta.File, c *Config) error {
 	// A latent attention's key carries a shared rotary part beside the
 	// latent's, which sizes the cached row.
@@ -93,22 +93,22 @@ func statedFeaturesFit(f *meta.File, c *Config) error {
 		}
 	}
 	if c.Flags2.Has(jlm.Flag2SwiGLUClamp) {
-		if err := ds4Clamp(f, c); err != nil {
+		if err := swigluClamps(f, c); err != nil {
 			return err
 		}
 	}
 	if c.Stated.compressedBlocks {
-		return ds4Kinds(f, c)
+		return compressionKinds(f, c)
 	}
 	return nil
 }
 
-// ds4Clamp reads each block's SwiGLU clamp: llama.cpp's converter writes the
+// swigluClamps reads each block's SwiGLU clamp: llama.cpp's converter writes the
 // routed and the shared limit per block from swiglu_limit (one value stands
 // for every block), and a file stating neither has transformers' default. A
 // block states one activation, so one whose routed and shared limits differ
 // is refused.
-func ds4Clamp(f *meta.File, c *Config) error {
+func swigluClamps(f *meta.File, c *Config) error {
 	n := int(c.NLayer)
 	read := func(key string) ([]float32, error) {
 		kv, ok := f.Key(key)
@@ -146,7 +146,7 @@ func ds4Clamp(f *meta.File, c *Config) error {
 	}
 	switch {
 	case routed == nil && shared == nil:
-		routed = slices.Repeat([]float32{ds4SwiGLULimit}, n)
+		routed = slices.Repeat([]float32{swigluLimitDefault}, n)
 	case routed == nil:
 		routed = shared
 	case shared != nil:
@@ -161,13 +161,13 @@ func ds4Clamp(f *meta.File, c *Config) error {
 	return nil
 }
 
-// ds4Kinds reads each block's compression off compress_ratios and the
+// compressionKinds reads each block's compression off compress_ratios and the
 // tensors: a block with the indexer is CSA (its compressor two heads wide,
 // the overlapping windows), one with a compressor alone is HCA, one with
 // neither a sliding window alone, and its ratio must say the same. llama.cpp
 // tells the two kinds apart by the ratio (4 against 128); transformers by the
 // layer type, each type at one rate -- which is what the container carries.
-func ds4Kinds(f *meta.File, c *Config) error {
+func compressionKinds(f *meta.File, c *Config) error {
 	kv, ok := f.Key("attention.compress_ratios")
 	if !ok {
 		return fmt.Errorf("no attention.compress_ratios")
@@ -249,10 +249,10 @@ func groupedOutputTensors(c *Config, s *jlm.Source) error {
 	return nil
 }
 
-// ds4HashTable is a hash-routed block's token-id table, I32 in the file, as
+// hashExpertTable is a hash-routed block's token-id table, I32 in the file, as
 // the F32 the container stores (ids are exact well past any expert count).
 // Every id is checked against the expert count, since it indexes the banks.
-func ds4HashTable(t *meta.Tensor, data []byte, c *Config) ([]byte, error) {
+func hashExpertTable(t *meta.Tensor, data []byte, c *Config) ([]byte, error) {
 	if t.Type != quant.Type(26) {
 		return nil, fmt.Errorf("convert: %s is %s, want I32", t.Name, t.Type)
 	}

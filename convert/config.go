@@ -685,7 +685,7 @@ func ropeScalingOf(f *meta.File, c *Config) error {
 				c.AttnFactor *= float32(explicit)
 				return nil
 			}
-			mistral3Yarn(f, c, float64(factor))
+			yarnMscaleRatio(f, c, float64(factor))
 			return nil
 		}
 		if kv, ok := f.Key("rope.scaling.yarn_log_multiplier"); ok {

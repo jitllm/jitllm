@@ -105,8 +105,8 @@ func TestEveryTensorHasARole(t *testing.T) {
 				}
 				continue
 			}
-			// A state-space in_proj is split at conversion (unfuseSSD, unfuseLFM2,
-			// unfuseMamba1): its role names the source and stays reserved, since
+			// A state-space in_proj is split at conversion (unfuseSSD, unfuseShortConv,
+			// unfuseScan): its role names the source and stays reserved, since
 			// no container carries one.
 			if !role.Valid() && role != jlm.RoleSSMInProj {
 				t.Errorf("%s: %q mapped to %v, which the schema does not name", filepath.Base(p), n, role)
@@ -116,7 +116,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 			// architecture may also carry a weight type this engine has no
 			// kernel for, and the refusal for that belongs to configOf.
 			// DeepSeek V4's token table is I32 ids in the file and F32 in the
-			// container: sourceOf rewrites it (ds4HashTable) rather than
+			// container: sourceOf rewrites it (hashExpertTable) rather than
 			// storing the file's type. A ternary type with no code is
 			// re-packed (ternaryGGUF), so the types it becomes are checked.
 			stored := []quant.Type{f.Tensors[i].Type}

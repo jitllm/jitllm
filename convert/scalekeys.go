@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/convert/meta"
 )
 
-// mistral3Yarn folds mistral3's YaRN magnitude into AttnFactor.
+// yarnMscaleRatio folds mistral3's YaRN magnitude into AttnFactor.
 //
 // Its converter writes mscale_all_dim itself into yarn_log_multiplier, not
 // DeepSeek's 0.1*mscale_all_dim, and llama.cpp's context setup (taking mscale
@@ -16,7 +16,7 @@ import (
 // config carrying both mscale and mscale_all_dim. Ministral 3's are 1 and 1, so
 // the factor is exactly one. Nothing reaches the softmax: mistral3.cpp scales
 // the scores by 1/sqrt(head_dim) or attention.scale, so YarnLogMul stays zero.
-func mistral3Yarn(f *meta.File, c *Config, factor float64) {
+func yarnMscaleRatio(f *meta.File, c *Config, factor float64) {
 	ms := func(k float64) float64 { return 0.1*k*math.Log(factor) + 1 }
 	// With no key, llama.cpp's factor is mscale(factor, 1) alone.
 	div := 1.0

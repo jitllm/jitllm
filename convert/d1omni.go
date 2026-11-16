@@ -3,6 +3,7 @@ package convert
 import (
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -18,11 +19,8 @@ import (
 // is, through a view of the file cut to its blocks, and stated as
 // ArchLFM2Enc; the head's blocks convert after it, as Laya's do.
 
-// d1OmniHead is the head's block count when f is d1-omni.
+// d1OmniHead is the head's block count when f states the d1-omni readout.
 func d1OmniHead(f *meta.File) (uint32, bool) {
-	if f.Arch() != "lfm2" {
-		return 0, false
-	}
 	v, ok := f.Key("decision.type")
 	if !ok {
 		return 0, false
@@ -59,6 +57,13 @@ func trunkView(f *meta.File, n uint32) (*meta.File, error) {
 // d1OmniConfig is configOf for d1-omni: the trunk's lfm2 config, made an
 // encoder, with the head's blocks after it.
 func d1OmniConfig(f *meta.File, head uint32) (*Config, error) {
+	st, _, err := ggufStates(f.Arch())
+	if err != nil {
+		return nil, err
+	}
+	if name := jlm.DecisionD1Omni.String(); st == nil || !slices.Contains(st.Readouts, name) {
+		return nil, fmt.Errorf("convert: a %s readout on %s, whose library statement names no %s readout", name, f.Arch(), name)
+	}
 	total := uint32(f.UintKey("block_count", 0))
 	if head == 0 || head >= total {
 		return nil, fmt.Errorf("convert: d1-omni with %d head blocks in %d", head, total)

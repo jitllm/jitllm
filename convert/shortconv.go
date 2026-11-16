@@ -6,11 +6,11 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// unfuseLFM2 splits a short convolution's in_proj ({n_embd, 3*n_embd}) into
+// unfuseShortConv splits a short convolution's in_proj ({n_embd, 3*n_embd}) into
 // its three outputs, in the order llama.cpp's lfm2 graph views them: B, C,
 // then x. Row ranges of a row-major matrix are byte ranges, so the bytes are
 // the source's.
-func unfuseLFM2(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
+func unfuseShortConv(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	if !blockIs(c, e.Block, jlm.LayerShortConv) || e.Role != jlm.RoleSSMInProj {
 		return nil, false, nil
 	}

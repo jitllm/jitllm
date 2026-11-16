@@ -93,7 +93,7 @@ type mjStates struct {
 	// AltUp is AltUp's parallel residual streams.
 	AltUp *mjStatesAltUp `json:"altup"`
 	// LayersByKVHeads, true, reads each layer's kind off the per-layer kv
-	// head counts, zero on a linear layer (k3Kinds); DeltaDecayBound is the
+	// head counts, zero on a linear layer (kindsByKVHeads); DeltaDecayBound is the
 	// delta rule's decay bound, lb*sigmoid(...) in place of softplus's, a
 	// negative number (none for none); SplitKDA, true, states that the
 	// source's linear blocks store q, k, v and their convolutions apart
@@ -108,7 +108,7 @@ type mjStates struct {
 	// zero rows past its own vocabulary (altUpTensors cuts them).
 	PLEPadded bool `json:"ple_padded"`
 	// CompressedBlocks, true, reads each block's compression off the
-	// tensors and compress_ratios (ds4Kinds).
+	// tensors and compress_ratios (compressionKinds).
 	CompressedBlocks bool `json:"compressed_blocks"`
 	// MergeMixers, true, merges a source of one-mixer layers into blocks
 	// (mergeMixers).
@@ -962,7 +962,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		if c.NKVShared, err = whole("kv_shared", st.KVShared); err != nil {
 			return err
 		}
-		if c.NKVShared >= c.NLayer {
+		if c.NKVShared != 0 && c.NKVShared >= c.NLayer {
 			return fmt.Errorf("convert: %s: %d KV-sharing layers of %d", arch, c.NKVShared, c.NLayer)
 		}
 	}
@@ -1013,7 +1013,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 	}
 	if st.LayersByKVHeads {
-		if c.LayerKinds, err = k3Kinds(f, c.NLayer); err != nil {
+		if c.LayerKinds, err = kindsByKVHeads(f, c.NLayer); err != nil {
 			return fmt.Errorf("convert: %s: %w", arch, err)
 		}
 	}

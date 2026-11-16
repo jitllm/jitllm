@@ -39,8 +39,8 @@ import (
 // file's (mixtral.json's container statement: act_quant row_int8 makes the
 // projections ternary).
 
-// bitnetProjections are the roles a BitNet block runs as BitLinear.
-func bitnetProjections(r jlm.Role) bool {
+// ternaryProjections are the roles a BitNet block runs as BitLinear.
+func ternaryProjections(r jlm.Role) bool {
 	switch r {
 	case jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown:
 		return true
@@ -228,9 +228,9 @@ func repackedTernary(t quant.Type) bool { return t == quant.TQ1_0 || t == quant.
 // ternaryPacked is the types ternaryPack writes.
 func ternaryPacked() []quant.Type { return []quant.Type{quant.TQ2_0, quant.TQ2_F32} }
 
-// bitnetScaleOf reports a GGUF's optional per-tensor projection scale
+// ternaryScaleOf reports a GGUF's optional per-tensor projection scale
 // (llama.cpp's "blk.N.attn_q.scale"): the tensor name it scales.
-func bitnetScaleOf(name string) (string, bool) {
+func ternaryScaleOf(name string) (string, bool) {
 	if !strings.HasPrefix(name, "blk.") || !strings.HasSuffix(name, ".scale") {
 		return "", false
 	}
@@ -252,7 +252,7 @@ func ternaryTensors(c *Config, s *jlm.Source, scales map[string]float32) error {
 	used := 0
 	for i := range s.Tensors {
 		e := &s.Tensors[i]
-		if !bitnetProjections(e.Role) {
+		if !ternaryProjections(e.Role) {
 			continue
 		}
 		n := 1

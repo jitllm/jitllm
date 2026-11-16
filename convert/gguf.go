@@ -316,13 +316,13 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			}
 		}
 		// DeepSeek V4's token-id tables are I32, which is not a weight type
-		// here: carried as F32 ids (ds4HashTable).
+		// here: carried as F32 ids (hashExpertTable).
 		if !tower && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
 			_, block, _, err := identify(t.Name)
 			if err != nil {
 				return nil, err
 			}
-			b, err := ds4HashTable(t, f.Bytes(t), c)
+			b, err := hashExpertTable(t, f.Bytes(t), c)
 			if err != nil {
 				return nil, err
 			}
@@ -334,7 +334,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// A ternary projection's optional per-tensor scale is folded into
 		// its weight's blocks (ternaryTensors).
-		if w, ok := bitnetScaleOf(t.Name); ok && !tower && c.Stated.actQuant == jlm.ActQuantRowInt8 {
+		if w, ok := ternaryScaleOf(t.Name); ok && !tower && c.Stated.actQuant == jlm.ActQuantRowInt8 {
 			e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
 			copy(e.Dims[:], t.Dims)
 			if e.Type, err = typeOf(t.Type); err != nil {
@@ -450,12 +450,12 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			}
 		}
 		if !split {
-			if sub, split, uerr = unfuseLFM2(&e, c); uerr != nil {
+			if sub, split, uerr = unfuseShortConv(&e, c); uerr != nil {
 				return nil, uerr
 			}
 		}
 		if !split {
-			if sub, split, uerr = unfuseMamba1(&e, c); uerr != nil {
+			if sub, split, uerr = unfuseScan(&e, c); uerr != nil {
 				return nil, uerr
 			}
 		}
@@ -483,7 +483,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	if !tower {
-		if err := mamba1UnitNorms(c, f, s); err != nil {
+		if err := scanUnitNorms(c, f, s); err != nil {
 			return nil, err
 		}
 		if err := xieluTensors(c, f, s); err != nil {

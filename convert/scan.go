@@ -22,10 +22,10 @@ import (
 // dt_proj (ssm_dt.weight, RoleSSMDtProj) takes the bottleneck back up to the
 // channels; its rank is read off that tensor, not stated in the config.
 
-// unfuseMamba1 splits in_proj and x_proj into their outputs (see the top of
+// unfuseScan splits in_proj and x_proj into their outputs (see the top of
 // this file). Row ranges of a row-major matrix are byte ranges, so the bytes
 // are the source's.
-func unfuseMamba1(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
+func unfuseScan(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	if !blockIs(c, e.Block, jlm.LayerScan) {
 		return nil, false, nil
 	}
@@ -72,11 +72,11 @@ func unfuseMamba1(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	return out, true, nil
 }
 
-// mamba1UnitNorms writes FalconMamba's weightless dt, B and C RMSNorms
+// scanUnitNorms writes FalconMamba's weightless dt, B and C RMSNorms
 // (ssm.dt_b_c_rms) as weights of ones, one set per Mamba-1 block, so the
 // engine runs them exactly as Jamba's weighted ones; a block carrying its own
 // norms keeps them. rank is each block's dt bottleneck, read off its x_proj.
-func mamba1UnitNorms(c *Config, f *meta.File, s *jlm.Source) error {
+func scanUnitNorms(c *Config, f *meta.File, s *jlm.Source) error {
 	if c == nil {
 		return nil
 	}

@@ -1022,7 +1022,8 @@ func (c *hfConfig) act() string {
 type hfArch struct {
 	arch Arch
 	// name is the GGUF architecture the class converts as, whose library
-	// file states its graph and container (classGraph).
+	// file states its graph and container, or a Go-table class's own name
+	// (classGraph).
 	name string
 	// template is the class's chat template where its release states none:
 	// one that renders its chat in code ships no Jinja.
@@ -1142,6 +1143,7 @@ func hfArchTable() map[string]*hfArch {
 func hfArchOf(c *hfConfig) (*hfArch, error) {
 	for _, n := range c.Architectures {
 		if a, ok := hfArchTable()[n]; ok {
+			a.name = n
 			return a, nil
 		}
 	}
@@ -2084,7 +2086,6 @@ func hardcodesSigmoid(archs []string) bool {
 func kimiLinearHF() *hfArch {
 	return &hfArch{
 		arch:        ArchKimiLinear,
-		name:        "kimilinear",
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{

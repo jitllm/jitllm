@@ -37,7 +37,7 @@ func TestDS4ClampIsTheFiles(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := Unstated(&jlm.Config{NLayer: 3, Flags2: jlm.Flag2SwiGLUClamp})
-			if err := ds4Clamp(file(c.kv), cfg); err != nil {
+			if err := swigluClamps(file(c.kv), cfg); err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(cfg.SwiGLULimits, c.want) {
@@ -71,7 +71,7 @@ func TestDS4ClampIsTheFiles(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := Unstated(&jlm.Config{NLayer: 3})
-			if err := ds4Clamp(file(c.kv), cfg); err == nil || !strings.Contains(err.Error(), c.want) {
+			if err := swigluClamps(file(c.kv), cfg); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want a refusal naming %q", err, c.want)
 			}
 		})

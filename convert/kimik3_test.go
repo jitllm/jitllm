@@ -37,7 +37,7 @@ func TestK3JoinsAMixedQuantization(t *testing.T) {
 		e.Dims[0], e.Dims[1] = k, rows
 		return e
 	}
-	e, err := k3JoinRows([]*jlm.Tensor{part(jlm.TypeF16, f16), part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb)},
+	e, err := kdaJoinRows([]*jlm.Tensor{part(jlm.TypeF16, f16), part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb)},
 		jlm.RoleAttnQKV, k, rows)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestK3JoinsAMixedQuantization(t *testing.T) {
 	}
 
 	// One type stays bytes back to back.
-	e, err = k3JoinRows([]*jlm.Tensor{part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb), part(jlm.TypeQ8, kb)},
+	e, err = kdaJoinRows([]*jlm.Tensor{part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb), part(jlm.TypeQ8, kb)},
 		jlm.RoleAttnQKV, k, rows)
 	if err != nil {
 		t.Fatal(err)

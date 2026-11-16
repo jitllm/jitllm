@@ -88,7 +88,7 @@ func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
 		unary = e.relu
 	case c.Flags2.Has(jlm.Flag2SwiGLUClamp):
 		// DeepSeek V4: silu(min(gate, l)) * clamp(up, -l, l) at the block's l.
-		lim := float32(ds4SwiGLULimit)
+		lim := float32(swigluLimitDefault)
 		if li < len(c.SwiGLULimits) {
 			lim = c.SwiGLULimits[li]
 		}

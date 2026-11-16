@@ -29,7 +29,6 @@ import (
 func kimiK3HF() *hfArch {
 	return &hfArch{
 		arch:        ArchKimiK3,
-		name:        "kimi-k3",
 		template:    kimiK3ChatTemplate,
 		blockPrefix: k3BlockPrefix,
 		model: map[string]jlm.Role{

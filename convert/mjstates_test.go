@@ -47,7 +47,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "qwen3vlmoe", keys: noSections, flags: qk},
 		{arch: "bert", flags: jlm.FlagLayerNorm | jlm.FlagNonCausal | jlm.FlagNoPosEnc | jlm.FlagGELU, eps: 1e-12},
 		{arch: "nomic-bert", flags: jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagNonCausal, eps: 1e-12},
-		{arch: "modern-bert", flags: jlm.FlagNonCausal},
+		{arch: "modern-bert", flags: jlm.FlagNonCausal | jlm.FlagRopeNeox | jlm.FlagLayerNorm, eps: 1e-5},
 		{arch: "olmoe", flags: qk | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm},
 		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2, actq: jlm.ActQuantRowInt8},
 		{arch: "gemma", keys: map[string]meta.Value{"embedding_length": meta.MakeUint(2048)},
@@ -77,7 +77,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "gemma3", keys: with(with(gemma, "attention.sliding_window", meta.MakeUint(512)),
 			"attention.sliding_window_pattern", meta.MakeUint(4)),
 			flags: qk | jlm.FlagGELU, scale: float32(math.Sqrt(2048)), win: 512, period: 4, ropeSWA: 10000},
-		{arch: "deepseek4", keys: map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
+		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
 			win: 128, period: 5, ropeSWA: 10000},
 		{arch: "gpt-oss", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128)},
 			flags: neox | jlm.FlagSwiGLUOAI | jlm.FlagYarnExact, win: 128, period: 2},
@@ -142,8 +142,8 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 			"attention.q_lora_rank": u(96)}, kv: 64, q: 96},
 		{arch: "kimi-k3", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "activation.situ_beta": meta.MakeFloat(3),
 			"activation.situ_linear_beta": meta.MakeFloat(5)}, kv: 64},
-		{arch: "deepseek4", keys: map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
-		{arch: "deepseek4", keys: map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
+		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
+		{arch: "deepseek4", keys: map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
 			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)}, q: 96, heads: 4, w: 32, k: 8},
 		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
 			"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
@@ -164,7 +164,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 	}
 	ds32 := map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
 		"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(64), "attention.indexer.top_k": u(8)}
-	ds4 := map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4),
+	ds4 := map[string]meta.Value{"expert_count": meta.MakeUint(4), "expert_shared_count": meta.MakeUint(1), "attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4),
 		"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(64), "attention.indexer.top_k": u(8)}
 	without := func(m map[string]meta.Value, k string) map[string]meta.Value {
 		n := maps.Clone(m)
@@ -291,7 +291,8 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 func TestTheLibraryStatesTheRopeSections(t *testing.T) {
 	for _, arch := range []string{"qwen3next", "qwen35", "qwen35moe", "qwen4exp", "clef"} {
 		keys := map[string]meta.Value{"ssm.conv_kernel": meta.MakeUint(4), "ssm.group_count": meta.MakeUint(2),
-			"ssm.inner_size": meta.MakeUint(64), "ssm.state_size": meta.MakeUint(16), "ssm.time_step_rank": meta.MakeUint(4)}
+			"ssm.inner_size": meta.MakeUint(64), "ssm.state_size": meta.MakeUint(16), "ssm.time_step_rank": meta.MakeUint(4),
+			"hyper_connection.count": meta.MakeUint(2), "hyper_connection.low_rank": meta.MakeUint(4)}
 		for _, tc := range []struct {
 			secs []int32
 			want [4]uint32

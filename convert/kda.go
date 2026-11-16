@@ -76,11 +76,11 @@ const k3LatentNormEps = 1e-6
 // with the selection bias (llama.cpp's converter asserts it; KimiMoEGate would
 // honour softmax, which no K3 states).
 
-// k3Kinds is each layer's kind off head_count_kv, which llama.cpp's
+// kindsByKVHeads is each layer's kind off head_count_kv, which llama.cpp's
 // converter writes per layer with zero on a KDA layer (its loader's own rule,
 // is_recr = n_head_kv == 0): the layers_by_kv_heads statement. A file with no
 // such layer, or only such layers, is no hybrid and refused.
-func k3Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
+func kindsByKVHeads(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 	kv, ok := f.Key("attention.head_count_kv")
 	if !ok {
 		return nil, fmt.Errorf("no attention.head_count_kv: the layer kinds are read off it")
@@ -149,7 +149,7 @@ func kdaTensors(c *Config, s *jlm.Source) error {
 			x.Role = jlm.RoleSSMOut
 			out = append(out, x)
 		case e.Role == jlm.RoleSSMA:
-			a, err := k3ExpandA(x, c)
+			a, err := kdaExpandA(x, c)
 			if err != nil {
 				return err
 			}
@@ -166,12 +166,12 @@ func kdaTensors(c *Config, s *jlm.Source) error {
 		if p == nil || p.q == nil || p.k == nil || p.v == nil || p.cq == nil || p.ck == nil || p.cv == nil {
 			return fmt.Errorf("convert: KDA block %d lacks one of attn_q/k/v or ssm_conv1d_q/k/v", b)
 		}
-		qkv, err := k3JoinRows([]*jlm.Tensor{p.q, p.k, p.v}, jlm.RoleAttnQKV, uint64(c.NEmbd),
+		qkv, err := kdaJoinRows([]*jlm.Tensor{p.q, p.k, p.v}, jlm.RoleAttnQKV, uint64(c.NEmbd),
 			uint64(c.SSM.Inner))
 		if err != nil {
 			return err
 		}
-		cv, err := k3JoinConv([]*jlm.Tensor{p.cq, p.ck, p.cv}, uint64(c.SSM.ConvKernel), uint64(c.SSM.Inner))
+		cv, err := kdaJoinConv([]*jlm.Tensor{p.cq, p.ck, p.cv}, uint64(c.SSM.ConvKernel), uint64(c.SSM.Inner))
 		if err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func kdaTensors(c *Config, s *jlm.Source) error {
 	return nil
 }
 
-// k3JoinRows stacks matrices of one k by rows, each `rows` rows of k. Of one
+// kdaJoinRows stacks matrices of one k by rows, each `rows` rows of k. Of one
 // type, the bytes go back to back (GGUF's row-major blocks). Of several -- a
 // mixed quantization such as Q4_K_M stores attn_q at Q4_K beside attn_k and
 // attn_v at Q8_0 -- every part is dequantized and the whole re-stored as Q8_0
@@ -189,7 +189,7 @@ func kdaTensors(c *Config, s *jlm.Source) error {
 // Qwen3.5's gates: a Q8_0 part comes back bit for bit (its block's largest
 // code is 127, so the requantization finds the stored scale again), and a
 // narrower part pays Q8_0's bytes and its rounding.
-func k3JoinRows(ts []*jlm.Tensor, role jlm.Role, k, rows uint64) (jlm.Tensor, error) {
+func kdaJoinRows(ts []*jlm.Tensor, role jlm.Role, k, rows uint64) (jlm.Tensor, error) {
 	e := jlm.Tensor{Role: role, Block: ts[0].Block, Index: -1, Type: ts[0].Type, NDim: 2,
 		Name: ts[0].Name + "(joined q|k|v)"}
 	e.Dims[0], e.Dims[1] = k, rows*uint64(len(ts))
@@ -234,10 +234,10 @@ func k3JoinRows(ts []*jlm.Tensor, role jlm.Role, k, rows uint64) (jlm.Tensor, er
 	return e, nil
 }
 
-// k3JoinConv joins three causal convolutions, each {taps, 1, channels} (or
+// kdaJoinConv joins three causal convolutions, each {taps, 1, channels} (or
 // {taps, 1, channels, 1}) of F32 with every channel's taps contiguous, into
 // RoleSSMConv1d's {taps, 3*channels}: the same bytes back to back.
-func k3JoinConv(ts []*jlm.Tensor, taps, ch uint64) (jlm.Tensor, error) {
+func kdaJoinConv(ts []*jlm.Tensor, taps, ch uint64) (jlm.Tensor, error) {
 	e := jlm.Tensor{Role: jlm.RoleSSMConv1d, Block: ts[0].Block, Index: -1, Type: jlm.TypeF32, NDim: 2,
 		Name: ts[0].Name + "(joined q|k|v)"}
 	e.Dims[0], e.Dims[1] = taps, 3*ch
@@ -259,8 +259,8 @@ func k3JoinConv(ts []*jlm.Tensor, taps, ch uint64) (jlm.Tensor, error) {
 	return e, nil
 }
 
-// k3ExpandA repeats each head's decay rate over its head_dim channels.
-func k3ExpandA(e jlm.Tensor, c *Config) (jlm.Tensor, error) {
+// kdaExpandA repeats each head's decay rate over its head_dim channels.
+func kdaExpandA(e jlm.Tensor, c *Config) (jlm.Tensor, error) {
 	heads, kd := int(c.SSM.NHeadV), int(c.SSM.StateSize)
 	b, err := e.Bytes()
 	if err != nil {

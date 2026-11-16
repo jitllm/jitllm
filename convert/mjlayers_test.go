@@ -38,7 +38,7 @@ func TestTheLibraryStatesTheRecurrentLayers(t *testing.T) {
 			flags: jlm.FlagNoPosEnc, ssm: ssd, kinds: []jlm.LayerKind{jlm.LayerSSD, jlm.LayerSSD}},
 		{arch: "falcon-h1", keys: ssmKeys, tensors: [][]string{{"ssm_conv1d.weight", "attn_q.weight"}, {"ssm_conv1d.weight"}},
 			flags: jlm.FlagRopeNeox, ssm: ssd, kinds: []jlm.LayerKind{jlm.LayerSSDAttn, jlm.LayerSSD}},
-		{arch: "granitehybrid", keys: with2(ssmKeys, "ssm.group_count", nil), tensors: [][]string{{"ssm_conv1d.weight"}, {"attn_q.weight"}},
+		{arch: "granitehybrid", keys: with2(with2(ssmKeys, "ssm.group_count", nil), "logit_scale", meta.MakeFloat(4)), tensors: [][]string{{"ssm_conv1d.weight"}, {"attn_q.weight"}},
 			ssm: jlm.SSMConfig{ConvKernel: 4, Groups: 1, Inner: 64, StateSize: 16, NHeadV: 8}, kinds: []jlm.LayerKind{jlm.LayerSSD, full}},
 		{arch: "nemotron_h", keys: ssmKeys, ssm: ssd},
 		{arch: "mamba", keys: ssmKeys, tensors: [][]string{{"ssm_conv1d.weight"}},

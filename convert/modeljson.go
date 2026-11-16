@@ -44,10 +44,9 @@ type modelJSON struct {
 	// (general.architecture) whose files the graph states too.
 	Graph *mjGraph `json:"graph"`
 	GGUF  []string `json:"gguf"`
-	// Archs names the converter's architectures (Arch's names) whose
-	// containers the graph states where no GGUF architecture converts as
-	// one: a Go table class's.
-	Archs []string `json:"archs"`
+	// GoClasses names the Go table's classes (hfArchTable) whose graph the
+	// file states, read by a Go reader rather than the file's config.
+	GoClasses []string `json:"go_classes"`
 	// Container is what the container states for each GGUF architecture
 	// the file names (mjStates).
 	Container map[string]*mjStates `json:"container"`
@@ -355,9 +354,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	if err := mj.checkStates(); err != nil {
 		return nil, err
 	}
-	for _, n := range mj.Archs {
-		if !slices.ContainsFunc(slices.Collect(maps.Values(hfArchTable())), func(a *hfArch) bool { return a.name == n }) {
-			return nil, fmt.Errorf("convert: %s: %q is no Go table class's architecture", name, n)
+	for _, n := range mj.GoClasses {
+		if _, ok := hfArchTable()[n]; !ok {
+			return nil, fmt.Errorf("convert: %s: %q is no Go table class", name, n)
 		}
 	}
 	// A file of no class states a GGUF architecture's graph alone, or a
@@ -438,7 +437,7 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if len(mj.GGUF)+len(mj.Archs) != 0 && mj.Graph == nil {
+	if len(mj.GGUF)+len(mj.GoClasses) != 0 && mj.Graph == nil {
 		return nil, fmt.Errorf("convert: %s names architectures and states no graph for them", name)
 	}
 	return mj, nil
@@ -520,8 +519,8 @@ func modelLibrary() (map[string]*modelJSON, error) {
 }
 
 // ggufGraph is the graph the library states for a GGUF of architecture
-// arch, or for a Go-table class's architecture of that name (archs), nil
-// where no file states one.
+// arch, or for a Go-table class of that name (go_classes), nil where no file
+// states one.
 func ggufGraph(arch string) (*mjGraph, error) {
 	files, err := libraryFiles()
 	if err != nil {
@@ -530,7 +529,7 @@ func ggufGraph(arch string) (*mjGraph, error) {
 	var g *mjGraph
 	var by string
 	for _, mj := range files {
-		if !slices.Contains(mj.GGUF, arch) && !slices.Contains(mj.Archs, arch) {
+		if !slices.Contains(mj.GGUF, arch) && !slices.Contains(mj.GoClasses, arch) {
 			continue
 		}
 		if g != nil {
@@ -543,7 +542,7 @@ func ggufGraph(arch string) (*mjGraph, error) {
 
 // classGraph is the graph the library states for a safetensors class: the
 // one for the GGUF architecture name it converts as (hfArch.name), a Go-table
-// class's by the archs a file lists it under.
+// class's by its class name (go_classes).
 func classGraph(ha *hfArch) (*mjGraph, error) {
 	return ggufGraph(ha.name)
 }

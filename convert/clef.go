@@ -16,8 +16,8 @@ import (
 // backbone is the one whose statement names the readout (readouts: qwen35
 // under another name, the arch "clef").
 func clefOf(f *meta.File, c *Config) error {
-	if !slices.Contains(c.Stated.readouts, "clef") {
-		return fmt.Errorf("a clef readout on %s, whose library statement names no clef readout", f.Arch())
+	if name := jlm.DecisionClef.String(); !slices.Contains(c.Stated.readouts, name) {
+		return fmt.Errorf("a %s readout on %s, whose library statement names no %s readout", name, f.Arch(), name)
 	}
 	c.DecisionRouting = uint32(f.UintKey("decision.routing_block_count", 0))
 	c.DecisionHeads = uint32(f.UintKey("decision.head_count", 0))
