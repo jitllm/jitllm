@@ -337,6 +337,24 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 			}
 			raw = len(dpl.home[s]) == 0 && len(dpl.owned[s]) >= npages && !slices.Contains(dpl.owned[s][:npages], 0)
 		}
+		if !raw && key != li {
+			// An entry history moves as its entries, keys then values each
+			// (historyMigrate), not as positions of rows.
+			ew := dpl.geom.kvRow
+			if dpl.geom.vWords(P) > 0 {
+				ew *= 2
+			}
+			e := make([]float32, pos/max(1, dpl.geom.period)*ew)
+			if err := sv.historyMigrate(sid, li, h, e, pos, false); err != nil {
+				return "", 0, err
+			}
+			if err := dv.historyMigrate(sid, li, h, e, pos, true); err != nil {
+				return "", 0, err
+			}
+			worse(nn.CPU)
+			total += uint64(len(e)) * 4
+			continue
+		}
 		if !raw {
 			kv := dpl.geom.kvRow
 			k, v := make([]float32, n*kv), make([]float32, n*kv)

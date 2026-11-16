@@ -95,6 +95,11 @@ func newEvictGateOf(t *testing.T, name string) *evictGate {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { m.Close() })
+	return evictGateOn(t, m)
+}
+
+// evictGateOn is newEvictGateOf on the opened model m.
+func evictGateOn(t *testing.T, m *model.Model) *evictGate {
 	eg := &evictGate{m: m}
 	eg.prompt = m.Vocab.Encode(strings.Repeat("The clerk counted barrels of salt on the upper floor. ", 3), true)[:24]
 	eg.turn = m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 10), false)[:100]
