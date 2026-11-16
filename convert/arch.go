@@ -68,11 +68,10 @@ const (
 	// (AttnTemp*, offset 0, floor the YaRN original context) and YaRN.
 	ArchMistral3 Arch = 58
 
-	// ArchOLMo3 is AI2's OLMo 3: OLMo 2's block with a sliding window on
-	// three layers in four, whose rotary carries no scaling -- neither YaRN's
-	// frequencies nor its magnitude (AttnFactor), which reach the global
-	// layers only. A code of its own so a reader that would scale the local
-	// layers refuses the container.
+	// ArchOLMo3 is the code a container written before v31 carries for
+	// AI2's OLMo 3, whose windowed layers' rotary carries no scaling
+	// (StateRevision). The converter writes OLMo 3 as olmo2 with its window's
+	// rope_scale stated (convert/models/olmo2.json) and no longer this code.
 	ArchOLMo3 Arch = 57
 )
 

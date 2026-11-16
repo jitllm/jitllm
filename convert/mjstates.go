@@ -37,7 +37,18 @@ type mjStates struct {
 	// Require holds the file to what the reference's graph reads, as the
 	// config's do (mjRequire).
 	Require []mjRequire `json:"require"`
-	exprs   map[string]*jinja.Expr
+	// NoRopeEvery is n where every n-th layer, (il+1) % n == 0, skips the
+	// rotary, a count (0 for none).
+	NoRopeEvery string `json:"no_rope_every"`
+	// ActQuant is how every projection's input is quantized, by name
+	// (mjActQuants): row_int8 is a ternary projection's int8 rows.
+	ActQuant string `json:"act_quant"`
+	exprs    map[string]*jinja.Expr
+}
+
+// mjActQuants are the activation quantizations a statement names.
+func mjActQuants() map[string]jlm.ActQuant {
+	return map[string]jlm.ActQuant{"none": jlm.ActQuantNone, "row_int8": jlm.ActQuantRowInt8}
 }
 
 // mjStatesAttnTemp scales q by 1 + Scale*ln(1 + floor((pos+Offset)/Floor)),
@@ -52,8 +63,7 @@ type mjStatesAttnTemp struct {
 // attends globally, or Pattern's where the file's
 // attention.sliding_window_pattern does not say (swaPatternOf); RopeBase the
 // windowed layers' rotary base and RopeScale its magnitude (0 for the global
-// layers'). A Size of 0 slides nothing, and then a Period names the layers
-// that skip the rotary (no_pe_global) or is 0.
+// layers'). A Size of 0 slides nothing.
 type mjStatesWindow struct {
 	Size      string `json:"size"`
 	Period    string `json:"period"`
@@ -71,7 +81,7 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s states the container of %s, which it names no GGUF architecture", mj.name, arch)
 		}
 		st := mj.Container[arch]
-		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv}
+		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv, st.NoRopeEvery}
 		for i, r := range st.Require {
 			if r.That == "" || r.Else == "" {
 				return fmt.Errorf("convert: %s: %s: require %d states what it holds and why", mj.name, arch, i)
@@ -103,6 +113,9 @@ func (mj *modelJSON) checkStates() error {
 		if _, carried := mjActivationParams()[st.Activation]; carried {
 			return fmt.Errorf("convert: %s: %s: activation %q carries its parameters in the blocks: %w",
 				mj.name, arch, st.Activation, ErrNotImplemented)
+		}
+		if _, ok := mjActQuants()[st.ActQuant]; st.ActQuant != "" && !ok {
+			return fmt.Errorf("convert: %s: %s: act_quant %q is not one the container states", mj.name, arch, st.ActQuant)
 		}
 		if err := st.compile(srcs); err != nil {
 			return fmt.Errorf("convert: %s: %s: %w", mj.name, arch, err)
@@ -222,6 +235,9 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if st.Activation != "" {
 		c.Flags = c.Flags&^mjActivationFlags | mjActivations()[st.Activation]
 	}
+	if st.ActQuant != "" {
+		c.ActQuant = mjActQuants()[st.ActQuant]
+	}
 	if st.NormEps != "" {
 		if c.RMSEps, err = number("norm_eps", st.NormEps); err != nil {
 			return err
@@ -255,29 +271,62 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		return uint32(x), err
 	}
 	if t := st.AttnTemp; t != nil {
-		s, err := number("attn_temp.scale", t.Scale)
-		if err != nil || s == 0 {
+		if err := stateAttnTemp(by, arch, t, number, whole, c); err != nil {
 			return err
 		}
-		floor, err := whole("attn_temp.floor", t.Floor)
-		if err != nil {
-			return err
-		}
-		if floor == 0 {
-			return fmt.Errorf("convert: %s: %s: a q temperature of %g with no floor to divide positions by", by, arch, s)
-		}
-		off := float32(0)
-		if t.Offset != "" {
-			if off, err = number("attn_temp.offset", t.Offset); err != nil {
-				return err
-			}
-		}
-		c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset = s, floor, off
 	}
-	w := st.Window
-	if w == nil {
+	if w := st.Window; w != nil {
+		if err := stateWindow(f, arch, w, number, whole, c); err != nil {
+			return err
+		}
+	}
+	if st.NoRopeEvery == "" {
 		return nil
 	}
+	n, err := whole("no_rope_every", st.NoRopeEvery)
+	switch {
+	case err != nil:
+		return err
+	case n == 0:
+		return nil
+	case n == 1:
+		return fmt.Errorf("convert: %s: every layer skips the rotary: %w", arch, ErrNotImplemented)
+	case c.SWAWindow != 0:
+		return fmt.Errorf("convert: %s: layers skipping the rotary beside a sliding window of %d: %w",
+			arch, c.SWAWindow, ErrNotImplemented)
+	}
+	c.SWAPeriod = n
+	c.Flags |= jlm.FlagNoPEGlobal
+	return nil
+}
+
+// stateAttnTemp states the q temperature t in c.
+func stateAttnTemp(by, arch string, t *mjStatesAttnTemp, number func(what, src string) (float32, error),
+	whole func(what, src string) (uint32, error), c *Config) error {
+	s, err := number("attn_temp.scale", t.Scale)
+	if err != nil || s == 0 {
+		return err
+	}
+	floor, err := whole("attn_temp.floor", t.Floor)
+	if err != nil {
+		return err
+	}
+	if floor == 0 {
+		return fmt.Errorf("convert: %s: %s: a q temperature of %g with no floor to divide positions by", by, arch, s)
+	}
+	off := float32(0)
+	if t.Offset != "" {
+		if off, err = number("attn_temp.offset", t.Offset); err != nil {
+			return err
+		}
+	}
+	c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset = s, floor, off
+	return nil
+}
+
+// stateWindow states the sliding window w of f in c.
+func stateWindow(f *meta.File, arch string, w *mjStatesWindow, number func(what, src string) (float32, error),
+	whole func(what, src string) (uint32, error), c *Config) error {
 	size, err := whole("window.size", w.Size)
 	if err != nil {
 		return err
@@ -287,14 +336,10 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return nil
 		}
 		p, err := whole("window.period", w.Period)
-		switch {
-		case err != nil:
-			return err
-		case p != 0 && !c.Flags.Has(jlm.FlagNoPEGlobal):
-			return fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
+		if err == nil && p != 0 {
+			err = fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
 		}
-		c.SWAPeriod = p
-		return nil
+		return err
 	}
 	c.SWAWindow = size
 	switch {

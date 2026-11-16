@@ -146,8 +146,12 @@ schema; `convert/modeljson.go` reads it. Its sections:
   fixed `period` or a `pattern`, the period where the file's
   `attention.sliding_window_pattern` does not state one, `rope_base`, the
   windowed layers' rotary base, and `rope_scale`, their rotary magnitude. A
-  size of 0 slides nothing; a nonzero period over it names the layers that
-  skip the rotary, and is refused unless `no_pe_global` is stated. It
+  size of 0 slides nothing, and a nonzero period over it is refused.
+  `no_rope_every` is n where every n-th layer skips the rotary (0 for none),
+  refused beside a sliding window and at 1, where no layer rotates.
+  `act_quant` names how every projection's input is quantized (`none`, or
+  `row_int8`: int8 rows by their absolute maximum before a ternary
+  projection, which makes every projection ternary at conversion). It
   replaces `configOfFile`'s case for the architecture; one statement per
   architecture. An expression may read `tensors` too, the names the file
   stores (`'blk.0.ffn_norm.weight' not in tensors`: StableLM's parallel

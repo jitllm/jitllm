@@ -34,6 +34,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		ropeSWA     float32
 		acap, fcap  float32
 		logit       float32
+		actq        jlm.ActQuant
 	}{
 		{arch: "qwen2", flags: neox},
 		{arch: "qwen2vl", flags: neox},
@@ -42,7 +43,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "qwen3moe", flags: qk},
 		{arch: "qwen3vlmoe", flags: qk},
 		{arch: "olmoe", flags: qk | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm},
-		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2},
+		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2, actq: jlm.ActQuantRowInt8},
 		{arch: "gemma", keys: map[string]meta.Value{"embedding_length": meta.MakeUint(2048)},
 			flags: neox | jlm.FlagGELU, scale: float32(math.Sqrt(2048))},
 		{arch: "starcoder2", flags: ln, eps: 1e-5},
@@ -105,6 +106,9 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		if c.LogitScale != tc.logit {
 			t.Errorf("%s: logits divided by %g, want %g", tc.arch, c.LogitScale, tc.logit)
 		}
+		if c.ActQuant != tc.actq {
+			t.Errorf("%s: activation quantization %v, want %v", tc.arch, c.ActQuant, tc.actq)
+		}
 		if c.SWAWindow != tc.win || c.SWAPeriod != tc.period || c.RopeBaseSWA != tc.ropeSWA ||
 			c.AttnSoftcap != tc.acap || c.FinalSoftcap != tc.fcap {
 			t.Errorf("%s: window %d every %d at base %g, caps %g %g; want %d every %d at %g, %g %g", tc.arch,
@@ -145,6 +149,7 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"flags": {"rope_sideways": "true"}}`, "is no graph feature"},
 		{`"x": {"activation": "gelu"}`, "is not one the container states"},
 		{`"x": {"activation": "xielu"}`, "carries its parameters"},
+		{`"x": {"act_quant": "row_int4"}`, "act_quant \"row_int4\" is not one"},
 		{`"x": {"norm_eps": "eps | default(1e-5)"}`, "is not the keys"},
 		{`"x": {"norm_eps": "src[["}`, "jinja expression"},
 		{`"x": {"window": {"period": "2"}}`, "states its size"},
@@ -165,8 +170,15 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{mjStates{NormEps: "'small'"}, "not a number"},
 		{mjStates{EmbdScale: "src['width']"}, "is undefined"},
 		{mjStates{Flags: map[string]string{"post_norm": "true"}}, "not implemented"},
+		{mjStates{NoRopeEvery: "1"}, "every layer skips the rotary"},
+		{mjStates{NoRopeEvery: "4", Window: &mjStatesWindow{Size: "8", Period: "2"}}, "beside a sliding window"},
+		{mjStates{Window: &mjStatesWindow{Size: "0", Period: "4"}}, "a window period over no attention.sliding_window"},
 	} {
-		if err := tc.st.compile([]string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale}); err != nil {
+		srcs := []string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale, tc.st.NoRopeEvery}
+		if w := tc.st.Window; w != nil {
+			srcs = append(srcs, w.Size, w.Period)
+		}
+		if err := tc.st.compile(srcs); err != nil {
 			t.Fatal(err)
 		}
 		err := tc.st.apply("test", f, &Config{Config: &jlm.Config{}})

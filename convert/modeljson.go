@@ -913,6 +913,10 @@ func (mj *modelJSON) env(c *hfConfig) (exprEnv, error) {
 	return env, nil
 }
 
+// absentKeyError is a key whose expression reads what the source does not
+// state, with no default in its file.
+type absentKeyError struct{ error }
+
 // keyValue is the GGUF key k as the file states it (Config.Keys), its
 // expression evaluated by eval over config.json at path.
 func (mj *modelJSON) keyValue(path, k string, eval func(what, src string) (any, error)) (meta.Value, error) {
@@ -934,8 +938,8 @@ func (mj *modelJSON) keyValue(path, k string, eval func(what, src string) (any, 
 	if v == nil {
 		// An absent key takes the CLASS's default, which the model.json
 		// writes with ??; the reader's own default is another class's.
-		return meta.Value{}, fmt.Errorf("convert: %s: %s reads %q, which is absent, and %s states no default",
-			path, k, src, mj.name)
+		return meta.Value{}, absentKeyError{fmt.Errorf("convert: %s: %s reads %q, which is absent, and %s states no default",
+			path, k, src, mj.name)}
 	}
 	switch {
 	case spec.Uint != "":

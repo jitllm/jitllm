@@ -199,11 +199,10 @@ func (o *options) stateAbsentKeys(f *meta.File) error {
 		if _, ok := f.KV[ns+k]; ok {
 			continue
 		}
-		spec := mj.Config.Keys[k]
-		if v, err := eval(k, spec.Uint+spec.Float+spec.Int32s+spec.Bool); err != nil || v == nil {
+		v, err := mj.keyValue(c.path, k, eval)
+		if errors.As(err, new(absentKeyError)) {
 			continue
 		}
-		v, err := mj.keyValue(c.path, k, eval)
 		if err != nil {
 			return err
 		}

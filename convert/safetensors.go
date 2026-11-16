@@ -1169,8 +1169,8 @@ func HFClasses() []string {
 }
 
 // HFClassGraph is the graph a Hugging Face class converts to, and whether the
-// class is in the list. As on the GGUF side, the config can refine it (OLMo 3
-// with a window is ArchOLMo3); this is the class's own entry.
+// class is in the list. As on the GGUF side, the config can refine it; this is
+// the class's own entry.
 func HFClassGraph(class string) (Arch, bool) {
 	if a, ok := hfArchTable()[class]; ok {
 		return a.arch, true

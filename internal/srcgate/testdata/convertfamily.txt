@@ -14,7 +14,6 @@
 8 convert/arch.go:moe2ArchName
 15 convert/arch.go:ssmArchName
 9 convert/arch.go:visionArchName
-1 convert/bitnet.go:bitnetTensors
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
 58 convert/config.go:configOfFile
@@ -32,7 +31,7 @@
 4 convert/geometryfits.go:interleavedMRope
 1 convert/geometryfits.go:xdRope
 2 convert/gguf.go:buildGGUF
-4 convert/gguf.go:sourceOf
+3 convert/gguf.go:sourceOf
 2 convert/granite.go:gemmaAttnScale
 1 convert/hfkimik3.go:kimiK3HF
 1 convert/hfkimik3.go:kimiK3HFConfig
@@ -47,7 +46,7 @@
 4 convert/revision.go:StateRevision
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
-8 convert/safetensors.go:hfArchTable
+2 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
 4 convert/ssm.go:ssdArch

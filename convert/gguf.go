@@ -309,9 +309,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			s.Tensors = append(s.Tensors, e)
 			continue
 		}
-		// BitNet's optional per-tensor projection scale is folded into its
-		// weight's blocks (bitnetTensors).
-		if w, ok := bitnetScaleOf(t.Name); ok && !tower && c.Arch == ArchBitNet {
+		// A ternary projection's optional per-tensor scale is folded into
+		// its weight's blocks (ternaryTensors).
+		if w, ok := bitnetScaleOf(t.Name); ok && !tower && c.ActQuant == jlm.ActQuantRowInt8 {
 			e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
 			copy(e.Dims[:], t.Dims)
 			if e.Type, err = typeOf(t.Type); err != nil {
@@ -467,7 +467,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 	}
-	if err := bitnetTensors(c, s, scales); err != nil {
+	if err := ternaryTensors(c, s, scales); err != nil {
 		return nil, err
 	}
 	if err := ds4Tensors(c, s); err != nil {

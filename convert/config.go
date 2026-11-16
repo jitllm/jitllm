@@ -194,8 +194,8 @@ func Architectures() []string {
 
 // ArchitectureGraph is the graph a GGUF architecture name converts to, and
 // whether the name is in the list. Several names share one graph. The file can
-// refine it further (olmo2 with a sliding window is ArchOLMo3, glm4moe
-// with M-RoPE sections ArchGLM4VMoE); this is the name's own entry.
+// refine it further (glm4moe with M-RoPE sections is ArchGLM4VMoE); this is
+// the name's own entry.
 func ArchitectureGraph(name string) (Arch, bool) {
 	a, ok := archOf()[name]
 	return a, ok

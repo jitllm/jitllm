@@ -4,7 +4,7 @@
   "container": {
     "gpt-oss": {"flags": {"rope_neox": "true", "swiglu_oai": "true", "yarn_exact": "true"},
                 "window": {"size": "src['attention.sliding_window']", "period": "2"}},
-    "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2"},
+    "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2", "act_quant": "row_int8"},
     "mistral3": {"attn_temp": {"scale": "src['attention.temperature_scale'] | default(0)",
                                "floor": "src['rope.scaling.original_context_length'] | default(0)"}}
   },
