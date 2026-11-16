@@ -174,6 +174,66 @@ func TestKVPoolPages(t *testing.T) {
 	}
 }
 
+// TestEvictionForBytesSendsHomeOnlyWhatFreesBytes holds evictForBytes to the
+// room eviction gives back: a page sent home frees its pool's bytes only above
+// the fewest a shrink keeps -- the dummy, the ids still held, one to stream
+// through, the floor. With the other layer at that, nothing goes home and the
+// growth is refused (sending its page there freed an id and no byte, and left
+// the history streaming for nothing); with pages above it, they go and the
+// layer grows.
+func TestEvictionForBytesSendsHomeOnlyWhatFreesBytes(t *testing.T) {
+	dev := &fakeDev{}
+	g, err := New([]Slot{{Dev: dev, Bytes: 1 << 30}}, WithDeviceTune(TuneOff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	d := g.devs[0]
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	const p = 64
+	// The tier's own pool: compaction gives back the room of the pool it holds.
+	kp := newKVPool(p, 0)
+	d.kvp = kp
+	for li := range 2 {
+		if err := d.addKVLayer(kp, li, kvGeom{kvRow: 16}, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l0, l1 := kp.layers[0], kp.layers[1]
+	cur, other := seqID{1, 0}, seqID{2, 0}
+	for _, l := range []*kvLayerPool{l0, l1} {
+		if err := d.allocPages(1, kp, l, cur, 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.shrinkKVLayer(kp, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kp.wrote([]pagedRow{{s: cur, pos: p - 1}})
+	d.limit = d.used
+	if d.evictForBytes(1, kp, l1, 1) || d.KVEvictions != 0 || len(l0.home[cur]) != 0 {
+		t.Fatalf("the other layer at its floor: grew %v, %d page(s) sent home (layer 0's %d)",
+			l1.n > 2, d.KVEvictions, len(l0.home[cur]))
+	}
+
+	d.limit = 1 << 30
+	if err := d.allocPages(1, kp, l0, other, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.shrinkKVLayer(kp, l0); err != nil {
+		t.Fatal(err)
+	}
+	kp.wrote([]pagedRow{{s: other, pos: 3*p - 1}})
+	n1 := l1.n
+	d.limit = d.used + kp.pageBytes(l1) - 1
+	if !d.evictForBytes(1, kp, l1, 1) || l1.n <= n1 || d.KVEvictions == 0 {
+		t.Fatalf("the other layer above its floor: layer 1 at %d pages from %d, %d page(s) sent home, layer 0 at %d (%q)",
+			l1.n, n1, d.KVEvictions, l0.n, d.LastErr)
+	}
+}
+
 // TestKVPoolKeepsPagesAcrossAResize writes distinct words into every owned page
 // of three layer shapes -- f32, packed f16 and MLA -- on every real device,
 // grows each layer past its size and compacts it back after a sequence whose

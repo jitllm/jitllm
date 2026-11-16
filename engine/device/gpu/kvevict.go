@@ -222,7 +222,7 @@ func (g *devTier) evictForBytes(sid uint64, kp *kvPool, l *kvLayerPool, count in
 	var spare uint64
 	for _, key := range keys {
 		if x := kp.layers[key]; x != l {
-			spare += kp.pageBytes(x) * uint64(g.evictableIn(sid, kp, x))
+			spare += kp.shrinkRoom(x, g.evictableIn(sid, kp, x))
 		}
 	}
 	if spare < kp.pageBytes(l)*uint64(short) {
@@ -236,7 +236,10 @@ func (g *devTier) evictForBytes(sid uint64, kp *kvPool, l *kvLayerPool, count in
 			if x == l || from != nil && kp.pageBytes(x) <= kp.pageBytes(from) {
 				continue
 			}
-			if v, ok := g.evictVictim(sid, kp, x); ok && g.evictableIn(sid, kp, x) > 0 {
+			if n := g.evictableIn(sid, kp, x); n == 0 || kp.shrinkRoom(x, n) == 0 {
+				continue
+			}
+			if v, ok := g.evictVictim(sid, kp, x); ok {
 				from, s = x, v
 			}
 		}
@@ -249,6 +252,29 @@ func (g *devTier) evictForBytes(sid uint64, kp *kvPool, l *kvLayerPool, count in
 		}
 	}
 	return true
+}
+
+// shrinkRoom is the bytes a shrink of layer x gives back once evict more of
+// its pages have gone home: its pages above the fewest shrinkKVLayer keeps --
+// the dummy and every id still held, one to stream through, its floor. A
+// page sent home from a pool at that frees an id and no byte.
+func (kp *kvPool) shrinkRoom(x *kvLayerPool, evict int) uint64 {
+	if x.heldNamed() {
+		return 0
+	}
+	live := 1
+	for _, ids := range x.owned {
+		for _, id := range ids {
+			if id != 0 {
+				live++
+			}
+		}
+	}
+	keep := max(live-evict+1, x.floor, 1)
+	if x.n <= keep {
+		return 0
+	}
+	return kp.pageBytes(x) * uint64(x.n-keep)
 }
 
 // streamRoom makes sure every layer the session holds keeps a free id once a
