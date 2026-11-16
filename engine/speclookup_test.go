@@ -304,9 +304,9 @@ func TestSpecLookupOnDevice(t *testing.T) {
 					if m.Cfg.Hybrid() && restored == 0 {
 						t.Fatalf("no verification on %s returned to a kept row: the card's rows rollback never ran", spec)
 					}
-					// A hyper-connected model's verifications project on the
-					// device after the host's collapse (rowsHead).
-					if m.Cfg.ResidStreams() && heads == 0 {
+					// Every block on the device, the verifications project
+					// there too, a residual of several streams among them.
+					if heads == 0 {
 						t.Fatalf("no verification's head ran on %s: the host projected every one", spec)
 					}
 				})

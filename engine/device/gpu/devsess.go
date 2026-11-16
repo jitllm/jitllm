@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -687,7 +688,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 // cap are the model's and stay src's, and dst gets logits of its own to write.
 // Callers hold g.mu inside a scratch window.
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
-	dst.head, dst.mvHead, dst.heads, dst.sampleGraph = src.head, src.mvHead, src.heads, src.sampleGraph
+	dst.head, dst.mvHead, dst.heads, dst.sampleGraph = src.head, src.mvHead, slices.Clone(src.heads), src.sampleGraph
 	dst.sampleWalk, dst.pickGraph, dst.pickHead = src.sampleWalk, src.pickGraph, src.pickHead
 	dst.hVecs, dst.hVecBytes = src.hVecs, src.hVecBytes
 	dst.embedGraph = src.embedGraph

@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -53,6 +54,17 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		}
 		t.Run(dev+"/foldrow", func(t *testing.T) {
 			composedFoldParts(t, m, dev)
+		})
+		t.Run(dev+"/foldrow-streams", func(t *testing.T) {
+			sm, err := model.Open(jlmOf(t, testmodels.Path("synth-gemma3n.gguf")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sm.Close()
+			if sm.Cfg.Streams() < 2 {
+				t.Fatalf("synth-gemma3n carries %d stream: the arm folds no head over several", sm.Cfg.Streams())
+			}
+			composedFoldParts(t, sm, dev)
 		})
 		t.Run(dev+"/nohidden", func(t *testing.T) {
 			want, _ := composedHidden(t, m, nil, dev, 0, composedHiddenRows, false)
