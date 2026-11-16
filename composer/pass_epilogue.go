@@ -18,18 +18,11 @@ func (p Epilogue) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	out := append([]*Kernel(nil), ks...)
 	for i := 0; i+1 < len(out); i++ {
 		w, m := out[i], out[i+1]
-		if !w.Work || m.Work || m.Kind != PrimMap || len(m.Loops) != 0 || m.Part != w.Part || len(w.Stores) == 0 ||
-			w.Few > 0 || w.Many > 0 || lastSteps(w) > 1 {
-			continue
-		}
-		last := w.Stores[len(w.Stores)-1]
-		if last.Barrier || last.Run || last.At != -1 || last.Ax == nil {
+		last, ok := epilogueOf(w, m)
+		if !ok {
 			continue
 		}
 		o := w.Bufs[last.Buf].Operand
-		if !slices.Equal(w.Bufs[last.Buf].Shape, m.Space) || !readsOwn(m, o) || w.reads(o) {
-			continue
-		}
 		f := w.clone()
 		leaf := func(_ int, nd Node) (int, bool) {
 			switch {
@@ -66,6 +59,34 @@ func (p Epilogue) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		out = append(out[:i+1], out[i+2:]...)
 	}
 	return out, nil
+}
+
+// epilogueOf is the store of workgroup kernel w that map m runs on, where m
+// is one the epilogue runs in w.
+func epilogueOf(w, m *Kernel) (Store, bool) {
+	if !w.Work || m.Work || len(w.Stores) == 0 || w.Few > 0 || w.Many > 0 || lastSteps(w) > 1 || !epilogueCandidate(w, m) {
+		return Store{}, false
+	}
+	last := w.Stores[len(w.Stores)-1]
+	if last.Barrier || last.Run || last.At != -1 {
+		return Store{}, false
+	}
+	return last, true
+}
+
+// epilogueCandidate says map m reads what kernel w stores last, at its own
+// coordinates and over w's store's shape: the map the epilogue runs in w
+// once w is a workgroup kernel.
+func epilogueCandidate(w, m *Kernel) bool {
+	if m.Kind != PrimMap || len(m.Loops) != 0 || m.Part != w.Part || len(w.Stores) == 0 {
+		return false
+	}
+	last := w.Stores[len(w.Stores)-1]
+	if last.Ax == nil {
+		return false
+	}
+	o := w.Bufs[last.Buf].Operand
+	return slices.Equal(w.Bufs[last.Buf].Shape, m.Space) && readsOwn(m, o) && !w.reads(o)
 }
 
 // lastSteps is the stores of k after its last barrier: more than one where

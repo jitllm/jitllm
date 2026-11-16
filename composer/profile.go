@@ -52,8 +52,10 @@ func gpuProfile() Profile {
 		WorkRow{Group: 1024, Heads: 32},
 		// After the work forms, so a norm's sum stays one row's work: a map
 		// a reduction reads (a softmax's exponentials, read by its sum and
-		// its weighted sum) runs in it and takes no buffer of its own.
-		Recompute{},
+		// its weighted sum) runs in it and takes no buffer of its own. A map
+		// the epilogue runs in the work before it stays for it (a router's
+		// gather of its picks, the top k's).
+		Recompute{Epilogues: true},
 		Coarsen{Unit: 4},
 		DeadStores{},
 		Parts{Kinds: []PrimKind{PrimMap}},

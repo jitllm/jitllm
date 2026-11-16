@@ -14,6 +14,10 @@ import (
 type Recompute struct {
 	// MapsOnly runs it only in maps, never in a reduction reading it.
 	MapsOnly bool
+	// Epilogues leaves a map the epilogue will run in the reduction before
+	// it (epilogueCandidate): run there, it takes neither a buffer nor a
+	// launch, where run in its readers it is computed in each.
+	Epilogues bool
 }
 
 func (Recompute) Name() string { return "recompute" }
@@ -21,6 +25,9 @@ func (Recompute) Name() string { return "recompute" }
 func (p Recompute) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	out := append([]*Kernel(nil), ks...)
 	for i := 0; i < len(out); i++ {
+		if p.Epilogues && i > 0 && out[i-1].Kind == PrimReduce && epilogueCandidate(out[i-1], out[i]) {
+			continue
+		}
 		readers, ok := recomputed(out, i, p.MapsOnly)
 		if !ok {
 			continue
