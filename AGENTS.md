@@ -324,8 +324,10 @@ balance (fewer instructions, 13.5% slower).
 
 ## RULE 7: the architecture list is a LIST, and adding one is a decision.
 
-`convert.archOf` (`convert/config.go`) is the list of GGUF architectures,
-`hfArchTable` (`convert/safetensors.go`) the list of safetensors classes, and
+The library's files (`convert/models/*.json`) are the list: their `gguf`
+lists are the GGUF architectures (`convert.Architectures`, with the towers'
+`clip`), their `classes` with what is left of `hfArchTable`
+(`convert/safetensors.go`) the safetensors classes (`convert.HFClasses`), and
 `convert.projectorOf` (`convert/config.go`, a case each in `visionOf`) the list
 of projectors. An architecture not in them does not convert (`configOf`:
 "architecture %q is not implemented"); an unknown projector is refused at
@@ -399,12 +401,14 @@ Further rules for every entry:
   every kernel is gated against the oracle. `quant.PackedTypes`
   (`format/quant/types.go`) is the canonical list of packed types a gate sweeps;
   a hand-written copy anywhere else is a bug waiting.
-- **The architecture is the converter's alone** (`convert.Arch`,
-  `convert/arch.go`): it names which reference a source is read against, and
-  nothing past the converter -- not the container, not `model/`, `engine/`, the
-  devices or the composer -- holds one (`srcgate.TestNoFamilyCode`). A container
-  written before v31 carries its old code as an opaque number for the
-  migration's check (`jlm.Stating`, `convert.LegacyStated`). Codes are allocated
+- **The architecture is the converter's alone, and goes** (the user's D1):
+  what a family's reference does is data in its library file, and
+  `convert.Arch` (`convert/arch.go`) is read only by the readers that have not
+  moved yet; it is deleted with the last of them. Nothing past the converter --
+  not the container, not `model/`, `engine/`, the devices or the composer --
+  holds one (`srcgate.TestNoFamilyCode`). A container written before v31
+  carries its old code as an opaque number, which the migration reads from a
+  table of numbers (`jlm.Stating`, `convert.LegacyStated`). Codes were allocated
   by group: the dense llama family from the top of the code space down, the
   flagships counting up from 44, the state-space families from 100, the vision
   families from the top down, the encoders after BERT from 150, the

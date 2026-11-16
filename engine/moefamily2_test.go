@@ -199,8 +199,18 @@ func moe2DevViolations() map[string][]c6Violation {
 // renormalised.
 func llamaCppPhiMoERouter(m *model.Model) func() {
 	undo := cfgMut(m, func(c *model.Config) { c.NoExpertNorm = false })
-	undoR := statedRouter(m, convert.RouterScore(&convert.Config{Config: &jlm.Config{NExpert: 2}}), jlm.Expr{})
+	undoR := statedRouter(m, unstatedScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
 	return func() { undoR(); undo() }
+}
+
+// unstatedScore is the router score the converter states for c, a config
+// no library file states anything for.
+func unstatedScore(c *jlm.Config) jlm.Expr {
+	e, err := convert.RouterScore(convert.Unstated(c))
+	if err != nil {
+		panic(err)
+	}
+	return e
 }
 
 // statedRouter states the router's score and weight to the front end as a
@@ -221,7 +231,7 @@ func statedRouter(m *model.Model, score, weight jlm.Expr) func() {
 // renormalised: sparsemixer with no mask, and both of its experts' shared
 // denominator.
 func unmaskedSoftmax(m *model.Model) func() {
-	return statedRouter(m, convert.RouterScore(&convert.Config{Config: &jlm.Config{NExpert: 2}}), jlm.Expr{})
+	return statedRouter(m, unstatedScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
 }
 
 // mixerEps runs sparsemixer at another jitter_eps.

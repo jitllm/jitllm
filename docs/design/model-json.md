@@ -140,7 +140,17 @@ schema; `convert/modeljson.go` reads it. Its sections:
   `convert/mjstates.go`). Each statement is a Jinja expression over the
   GGUF's keys, as a recipe reads them (`src['attention.layer_norm_epsilon']
   | default(1e-5)`): `flags` (the `mjFlags` names, each true or false),
-  `activation` (an `mjActivations` name), `norm_eps` and `embd_scale`
+  `activation` (an `mjActivations` name, or an `mjNamedActivations` one no
+  flag carries: `gelu`, with erf), `revision` (what `StateRevision` states once the geometry is
+  read: `act_quant` by name, `rope_scale_swa` a number, and
+  `swa_global_first` and `picture_bidir_sliding`, each true or false and
+  applied on a windowed model), `pre_tokenizer` (a pre-tokenizer by name,
+  the one a file naming none of its own, `default`, splits with; its
+  `add_bos` and `ignore_merges` are `convert/pretokenizers.json`'s),
+  `rope_layout` (`interleaved` pair by pair or `xd` over the elements, by
+  name; the rotary table `stateRopeTable` states lays the sections one
+  after another where unstated),
+  `norm_eps` and `embd_scale`
   (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
   `attn_softcap` and `final_softcap`, `rope_base` (the rotary base of the
   layers no window states one for, refused unless positive), and `window`: `size` (0 states no
@@ -183,7 +193,8 @@ schema; `convert/modeljson.go` reads it. Its sections:
   `rope.dimension_sections`; `whole_rotary: true` states that the class
   turns the whole head, and a file whose rotary is narrower contradicts it.
   `router` is what the class's router does whatever the keys say: `gate`
-  (softmax, sigmoid, or sparsemixer, which reads no gating key),
+  (softmax, sigmoid, or sparsemixer, which reads no gating key, ranks
+  the raw logits and weighs each pick by sparsemixer),
   `renormalise` (always or never), `unscaled`, `selects` (the experts it
   picks); a key contradicting it is refused. Every file is held to its
   tensors alike: a router over no `expert_count` is refused

@@ -247,7 +247,11 @@ func assemble(a API) (Manifest, error) {
 		Backends:     mt.Backends,
 		API:          a,
 	}
-	for _, n := range convert.Architectures() {
+	names, err := convert.Architectures()
+	if err != nil {
+		return Manifest{}, err
+	}
+	for _, n := range names {
 		g, _ := convert.ArchitectureGraph(n)
 		m.Architectures = append(m.Architectures, Graph{Name: n, Graph: g.String()})
 	}

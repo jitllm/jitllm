@@ -139,14 +139,14 @@ func xieluNumbers() []float64 {
 	return []float64{0.8, 0.6, 0.5, -1e-6}
 }
 
-func actCases() []actCase {
+func actCases(t *testing.T) []actCase {
 	return []actCase{
-		{"silu", Config{Config: &jlm.Config{}}, true, nil, each(func(g, u float64) float64 { return g * sig(g) * u })},
-		{"gelu tanh, ungated", Config{Config: &jlm.Config{Flags: jlm.FlagGELU}}, false, nil, each(func(g, _ float64) float64 { return geluTanhRef(g) })},
-		{"squared relu", Config{Config: &jlm.Config{Flags: jlm.FlagReLU2}}, true, nil, each(func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u })},
-		{"gelu erf", Config{Arch: ArchModernBERT, Config: &jlm.Config{Flags: jlm.FlagGELU}}, true, nil,
+		{"silu", *Unstated(&jlm.Config{}), true, nil, each(func(g, u float64) float64 { return g * sig(g) * u })},
+		{"gelu tanh, ungated", *Unstated(&jlm.Config{Flags: jlm.FlagGELU}), false, nil, each(func(g, _ float64) float64 { return geluTanhRef(g) })},
+		{"squared relu", *Unstated(&jlm.Config{Flags: jlm.FlagReLU2}), true, nil, each(func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u })},
+		{"gelu erf", *statedBy(t, "modern-bert", &jlm.Config{Flags: jlm.FlagGELU}), true, nil,
 			each(func(g, u float64) float64 { return 0.5 * g * (1 + math.Erf(g/math.Sqrt2)) * u })},
-		{"xielu", Config{Config: &jlm.Config{}}, false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers()},
+		{"xielu", *Unstated(&jlm.Config{}), false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers()},
 			each(func(x, _ float64) float64 {
 				ap, an, b, eps := xieluNumbers()[0], xieluNumbers()[1], xieluNumbers()[2], xieluNumbers()[3]
 				if x > 0 {
@@ -154,7 +154,7 @@ func actCases() []actCase {
 				}
 				return (math.Expm1(math.Min(x, eps))-x)*an + b*x
 			})},
-		{"gaussian top-k", Config{Config: &jlm.Config{Flags: jlm.FlagGELU, NSparse: 1, SparseStd: 1.6448536}}, true, nil,
+		{"gaussian top-k", *Unstated(&jlm.Config{Flags: jlm.FlagGELU, NSparse: 1, SparseStd: 1.6448536}), true, nil,
 			func(g, u []float64) []float64 {
 				mean, v := 0.0, 0.0
 				for _, x := range g {
@@ -171,15 +171,15 @@ func actCases() []actCase {
 				}
 				return out
 			}},
-		{"clamped swiglu", Config{Config: &jlm.Config{Flags2: jlm.Flag2SwiGLUClamp}}, true, nil, each(func(g, u float64) float64 {
+		{"clamped swiglu", *Unstated(&jlm.Config{Flags2: jlm.Flag2SwiGLUClamp}), true, nil, each(func(g, u float64) float64 {
 			x := math.Min(g, 10)
 			return x * sig(x) * math.Max(math.Min(u, 10), -10)
 		})},
-		{"gpt-oss swiglu", Config{Config: &jlm.Config{Flags: jlm.FlagSwiGLUOAI}}, true, nil, each(func(g, u float64) float64 {
+		{"gpt-oss swiglu", *Unstated(&jlm.Config{Flags: jlm.FlagSwiGLUOAI}), true, nil, each(func(g, u float64) float64 {
 			x := math.Min(g, 7)
 			return x * sig(1.702*x) * (math.Max(math.Min(u, 7), -7) + 1)
 		})},
-		{"situ", Config{Config: &jlm.Config{SituBeta: 4, SituLinearBeta: 25}}, true, nil, each(func(g, u float64) float64 {
+		{"situ", *Unstated(&jlm.Config{SituBeta: 4, SituLinearBeta: 25}), true, nil, each(func(g, u float64) float64 {
 			return 4 * math.Tanh(g/4) * sig(g) * 25 * math.Tanh(u/25)
 		})},
 	}
@@ -210,7 +210,7 @@ func agrees(a, b []float64) (float64, bool) {
 // swapped -- is told from it. The gaussian top-k is stated for the sparse
 // layers alone.
 func TestStatedActivationsAreTheReferences(t *testing.T) {
-	for _, c := range actCases() {
+	for _, c := range actCases(t) {
 		t.Run(c.name, func(t *testing.T) {
 			g, u := actRows()
 			if c.cfg.NSparse != 0 {
@@ -222,7 +222,7 @@ func TestStatedActivationsAreTheReferences(t *testing.T) {
 				copy(g[len(g)-4:], []float64{1.5, 2.5, 3.5, 4.5})
 			}
 			inner := *c.cfg.Config
-			cfg := &Config{Arch: c.cfg.Arch, Config: &inner}
+			cfg := &Config{Arch: c.cfg.Arch, Stated: c.cfg.Stated, Config: &inner}
 			cfg.NLayer = 2
 			s := &jlm.Source{Config: cfg.Config}
 			for li := range int32(2) {
@@ -302,16 +302,19 @@ func TestRouterScoreIsTheReferences(t *testing.T) {
 		cfg  Config
 		ref  func([]float64) []float64
 	}{
-		{"softmax", Config{Config: &jlm.Config{NExpert: 6}}, softmax},
-		{"sigmoid", Config{Config: &jlm.Config{NExpert: 6, Flags: jlm.FlagExpertSigmoid}}, func(x []float64) []float64 {
+		{"softmax", *Unstated(&jlm.Config{NExpert: 6}), softmax},
+		{"sigmoid", *Unstated(&jlm.Config{NExpert: 6, Flags: jlm.FlagExpertSigmoid}), func(x []float64) []float64 {
 			return each(func(g, _ float64) float64 { return sig(g) })(x, x)
 		}},
-		{"sqrt softplus", Config{Config: &jlm.Config{NExpert: 6, Flags2: jlm.Flag2ExpertSqrtSoftplus}}, func(x []float64) []float64 {
+		{"sqrt softplus", *Unstated(&jlm.Config{NExpert: 6, Flags2: jlm.Flag2ExpertSqrtSoftplus}), func(x []float64) []float64 {
 			return each(func(g, _ float64) float64 { return math.Sqrt(math.Log1p(math.Exp(g))) })(x, x)
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			e := RouterScore(&c.cfg)
+			e, err := RouterScore(&c.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := e.Valid(); err != nil || e.Reads() != 1 {
 				t.Fatalf("the stated score is not an expression of the logits: %v, %d operands", err, e.Reads())
 			}
@@ -325,11 +328,17 @@ func TestRouterScoreIsTheReferences(t *testing.T) {
 			}
 		})
 	}
-	if e := RouterScore(&Config{Config: &jlm.Config{}}); len(e.Terms) != 0 {
+	if _, err := RouterScore(&Config{Config: &jlm.Config{NExpert: 16}}); err == nil {
+		t.Errorf("an unstated config's router scored")
+	}
+	if e, err := RouterScore(Unstated(&jlm.Config{})); err != nil || len(e.Terms) != 0 {
 		t.Fatalf("a model with no experts states a score of %d terms, want none", len(e.Terms))
 	}
 	// Sparsemixer picks by the raw logits.
-	e := RouterScore(&Config{Arch: ArchPhiMoE, Config: &jlm.Config{NExpert: 16}})
+	e, err := RouterScore(statedBy(t, "phimoe", &jlm.Config{NExpert: 16}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	x := []float64{-1.5, 0.25, 2, -0.75, 1, 0}
 	if got := evalExpr(t, &e, [][]float64{x}, nil); !slices.Equal(got, x) {
 		t.Fatalf("sparsemixer scores %v by the logits %v", got, x)
@@ -343,10 +352,16 @@ func TestRouterScoreIsTheReferences(t *testing.T) {
 // each softmax; and each of the oracle's violations lands away from it.
 // Every other mixture states none.
 func TestRouterWeightIsSparsemixers(t *testing.T) {
-	if e := RouterWeight(&Config{Config: &jlm.Config{NExpert: 16}}); len(e.Terms) != 0 {
+	if _, err := RouterWeight(&Config{Config: &jlm.Config{NExpert: 16}}); err == nil {
+		t.Errorf("an unstated config's routed weight was read")
+	}
+	if e, err := RouterWeight(Unstated(&jlm.Config{NExpert: 16})); err != nil || len(e.Terms) != 0 {
 		t.Fatalf("a softmax mixture states a weight of %d terms, want none", len(e.Terms))
 	}
-	e := RouterWeight(&Config{Arch: ArchPhiMoE, Config: &jlm.Config{NExpert: 16}})
+	e, err := RouterWeight(statedBy(t, "phimoe", &jlm.Config{NExpert: 16}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := e.Valid(); err != nil || e.Reads() != 2 {
 		t.Fatalf("the stated weight is not an expression of the logits and the pick's: %v, %d operands", err, e.Reads())
 	}

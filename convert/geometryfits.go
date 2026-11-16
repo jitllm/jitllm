@@ -2,8 +2,11 @@ package convert
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // geometryFits refuses blocks whose geometry no rotary or history of the
@@ -15,16 +18,16 @@ func geometryFits(c *Config) error {
 	_, slidingRope := slidingRotary(c)
 	for b := range int(c.NLayer) {
 		if r := c.NRotAt(b); r != c.NRot && !(slidingRope && c.Sliding(b)) {
-			return fmt.Errorf("convert: %v's block %d turns %d of its head by the model's %d-wide rotary: %w",
-				c.Arch, b, r, c.NRot, ErrNotImplemented)
+			return fmt.Errorf("convert: block %d turns %d of its head by the model's %d-wide rotary: %w",
+				b, r, c.NRot, ErrNotImplemented)
 		}
 		if !c.KVShared(b) {
 			continue
 		}
 		src := c.KVSource(b)
 		if src < 0 || src >= b || c.KVShared(src) || c.HeadDimAt(src) != c.HeadDimAt(b) || c.NKVHeadAt(src) != c.NKVHeadAt(b) {
-			return fmt.Errorf("convert: %v's block %d shares a history (block %d's) of another shape: %w",
-				c.Arch, b, src, ErrNotImplemented)
+			return fmt.Errorf("convert: block %d shares a history (block %d's) of another shape: %w",
+				b, src, ErrNotImplemented)
 		}
 	}
 	return nil
@@ -46,23 +49,39 @@ func slidingRotary(c *Config) (uint32, bool) {
 	return local, c.RopeBaseSWA != 0 || local != c.NRot
 }
 
-// Encoder reports whether a is an embedding encoder (the BERT family): its
-// blocks non-causal, with no KV cache and no logits. A decoder that pools
-// (FlagPoolMean and its siblings) is not one.
-func Encoder(a Arch) bool {
-	return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT || a == ArchLFM2Enc
-}
-
-// xdRope reports whether a's M-RoPE assigns its axes per element of the
-// rotary rather than per pair (HunyuanVL).
-func xdRope(a Arch) bool { return a == ArchHunyuanVL }
-
-// interleavedMRope reports whether a's M-RoPE sections are interleaved over a
-// head's pairs rather than laid out as contiguous runs (Qwen2-VL's). Qwen3.5
-// (ArchQwen3Next with sections) is Qwen3-VL's split under its own tower;
-// qwen3next itself carries no sections and has no runs.
-func interleavedMRope(a Arch) bool {
-	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next || a == ArchQwen4Exp
+// Encoders is every GGUF architecture the library states non-causal
+// whatever its file says, sorted: an embedding encoder, its blocks
+// non-causal, with no KV cache and no logits. Its non_causal statement is
+// read as conversion reads it, over a file stating no keys; one that reads a
+// key the file must state (attention.causal) depends on its file and is not
+// one, nor is a decoder that pools (FlagPoolMean and its siblings).
+func Encoders() ([]string, error) {
+	files, err := libraryFiles()
+	if err != nil {
+		return nil, err
+	}
+	none := map[string]jinja.Value{"src": jinja.NewDict()}
+	var out []string
+	for _, mj := range files {
+		for _, arch := range slices.Sorted(maps.Keys(mj.Container)) {
+			src, ok := mj.Container[arch].Flags["non_causal"]
+			if !ok {
+				continue
+			}
+			v, err := mj.Container[arch].exprs[src].Eval(none, blockExprSteps)
+			switch {
+			case err != nil:
+				return nil, fmt.Errorf("convert: %s: %s: flag non_causal: %w", mj.name, arch, err)
+			case v.IsUndefined():
+			case !v.IsBool():
+				return nil, fmt.Errorf("convert: %s: %s: flag non_causal is %v, not true or false", mj.name, arch, v)
+			case v.AsBool():
+				out = append(out, arch)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // stateRopeTable states c's rotary sections as the table a row turns by
@@ -78,7 +97,7 @@ func interleavedMRope(a Arch) bool {
 // their positions and take column, row and the picture's ordinal on the
 // other three axes. Sections ropeFits refuses state nothing.
 func stateRopeTable(c *Config) {
-	stateRopeLayout(c.Config, xdRope(c.Arch), interleavedMRope(c.Arch))
+	stateRopeLayout(c.Config, c.Stated.ropeLayout == "xd", c.Stated.ropeLayout == "interleaved")
 }
 
 // stateRopeLayout is stateRopeTable for a rotary laid over the elements
@@ -157,14 +176,17 @@ func stateRopeLayout(c *jlm.Config, xd, il bool) {
 // whole head, never interleaved), and an encoder rotating a block by a
 // rotary of no width.
 func ropeFits(c *Config) error {
+	if c.Stated == nil {
+		return unstated("the rotary's layout")
+	}
 	var pairs uint32
 	for _, n := range c.RopeSections {
 		pairs += n
 	}
-	xd, il := xdRope(c.Arch), interleavedMRope(c.Arch)
+	xd, il := c.Stated.ropeLayout == "xd", c.Stated.ropeLayout == "interleaved"
 	if pairs != 0 && (xd && (il || 2*pairs != c.NRot) || !xd && pairs != c.NRot/2) {
-		return fmt.Errorf("convert: %v's rotary sections %v do not cover its %d rotated dimensions: %w",
-			c.Arch, c.RopeSections, c.NRot, ErrNotImplemented)
+		return fmt.Errorf("convert: rotary sections %v do not cover the %d rotated dimensions: %w",
+			c.RopeSections, c.NRot, ErrNotImplemented)
 	}
 	if !c.Flags.Has(jlm.FlagNonCausal) || c.Flags.Has(jlm.FlagNoPosEnc) {
 		return nil
@@ -179,8 +201,8 @@ func ropeFits(c *Config) error {
 			w = local
 		}
 		if w == 0 {
-			return fmt.Errorf("convert: %v's encoder block %d rotates by a rotary of no width: %w",
-				c.Arch, b, ErrNotImplemented)
+			return fmt.Errorf("convert: encoder block %d rotates by a rotary of no width: %w",
+				b, ErrNotImplemented)
 		}
 	}
 	return nil

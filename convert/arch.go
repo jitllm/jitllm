@@ -1,6 +1,10 @@
 package convert
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Config is a model's config as the converter builds it: the container's
 // (jlm.Config) and the architecture its source declares, which the converter
@@ -12,6 +16,20 @@ type Config struct {
 	// SwiGLULimits is each block's SwiGLU clamp under Flag2SwiGLUClamp, the
 	// file's; nil for a container restated from its flag (Activation).
 	SwiGLULimits []float32
+	// Stated is what the library states for the source (stateContainer);
+	// nil for a Config the library has not stated, which Activation,
+	// RouterScore, RouterWeight and StateRevision refuse rather than read as
+	// stating nothing (Unstated).
+	Stated *Statement
+}
+
+// Unstated is jc as a Config no library file states anything for.
+func Unstated(jc *jlm.Config) *Config { return &Config{Config: jc, Stated: &Statement{}} }
+
+// unstated is the refusal of a Config the library has not stated, by what
+// read it.
+func unstated(what string) error {
+	return fmt.Errorf("convert: %s of a config the library has not stated (stateContainer, or Unstated for a source no file states)", what)
 }
 
 // The architectures the converter reads, its names for the graphs source files declare.

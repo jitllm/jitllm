@@ -20,7 +20,10 @@
                "window": {"size": "(src['attention.sliding_window'] | default(0)) if (src['attention.sliding_window'] | default(0)) < (src['context_length'] | default(2048)) else 0",
                           "pattern": "src['block_count'] + 1"}},
     "falcon": {"flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
-               "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"}
+               "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
+    "bert": {"flags": {"non_causal": "true"}},
+    "nomic-bert": {"flags": {"non_causal": "true"}},
+    "modern-bert": {"flags": {"non_causal": "true"}, "activation": "gelu", "revision": {"swa_global_first": "true"}}
   },
   "graph": {
     "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],

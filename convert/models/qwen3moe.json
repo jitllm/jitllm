@@ -3,7 +3,7 @@
   "gguf": ["qwen3moe", "qwen3vlmoe"],
   "container": {
     "qwen3moe": {"flags": {"rope_neox": "true", "qk_norm": "true"}},
-    "qwen3vlmoe": {"flags": {"rope_neox": "true", "qk_norm": "true"}}
+    "qwen3vlmoe": {"flags": {"rope_neox": "true", "qk_norm": "true"}, "rope_layout": "interleaved"}
   },
   "config": {
     "arch": "qwen3moe",

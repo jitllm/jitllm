@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // mjStates is what the container states for one GGUF architecture a file
@@ -75,6 +76,14 @@ type mjStates struct {
 	AttnResBlock string        `json:"attn_res_block"`
 	ExpertLatent string        `json:"expert_latent"`
 	Situ         *mjStatesSitu `json:"situ"`
+	// Revision is what StateRevision states once the blocks' geometry is
+	// read.
+	Revision *mjStatesRevision `json:"revision"`
+	// PreTokenizer is the pre-tokenizer, by name, of a file that names none
+	// of its own ("default"), and RopeLayout how rotary sections lie over a
+	// head (mjRopeLayouts; one section after another where unstated).
+	PreTokenizer string `json:"pre_tokenizer"`
+	RopeLayout   string `json:"rope_layout"`
 	exprs        map[string]*jinja.Expr
 	tensors      bool
 }
@@ -135,7 +144,9 @@ type mjStatesTemp struct {
 }
 
 // mjRouter is a mixture's router as its class computes it: Gate the
-// function its scores go through (mjGates), Renormalise "always" or
+// function its scores go through (mjGates; sparsemixer ranks the raw logits
+// and weighs each pick by sparsemixer at the jitter PhiMoEJitter, RouterScore
+// and RouterWeight), Renormalise "always" or
 // "never" for the chosen weights, Unscaled for no routed scale, Selects the
 // number of experts it picks (0 for the file's).
 type mjRouter struct {
@@ -171,6 +182,45 @@ type mjStatesOutputGroups struct {
 type mjStatesSitu struct {
 	Beta       string `json:"beta"`
 	LinearBeta string `json:"linear_beta"`
+}
+
+// mjStatesRevision is what StateRevision states, each read off the keys
+// where the statement applies: ActQuant how every projection's input is
+// quantized (mjActQuants), RopeScaleSWA the sliding layers' rotary
+// magnitude (a number, 0 for the model's), SWAGlobalFirst that a windowed
+// model's period starts at its global layer, and PictureBidirSliding that a
+// windowed model's sliding layers are the ones a picture's rows see each
+// other on (each true or false).
+type mjStatesRevision struct {
+	ActQuant            string `json:"act_quant"`
+	RopeScaleSWA        string `json:"rope_scale_swa"`
+	SWAGlobalFirst      string `json:"swa_global_first"`
+	PictureBidirSliding string `json:"picture_bidir_sliding"`
+}
+
+// mjNamedActivations is each activation a container statement may name that
+// no flag carries, which the activations are stated by (Activation): GELU
+// with erf.
+func mjNamedActivations() []string { return []string{"gelu"} }
+
+// mjRopeLayouts is each rotary layout a file may state by name
+// (stateRopeTable): interleaved pair by pair, or over the elements.
+func mjRopeLayouts() []string { return []string{"interleaved", "xd"} }
+
+// mjActQuants is each activation quantization a file may state by name.
+func mjActQuants() map[string]jlm.ActQuant {
+	return map[string]jlm.ActQuant{"row_int8": jlm.ActQuantRowInt8}
+}
+
+// Statement is what the library states for the stages after the config's:
+// StateRevision's, read off the keys, the activation by its name and the
+// router's gate by its.
+type Statement struct {
+	actQuant                            jlm.ActQuant
+	ropeScaleSWA                        float32
+	swaGlobalFirst, pictureBidirSliding bool
+	activation, ropeLayout              string
+	routerGate                          string
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -259,6 +309,18 @@ func (mj *modelJSON) checkStates() error {
 			srcs = append(srcs, x.Beta, x.LinearBeta)
 		}
 		srcs = append(srcs, st.HashLayers, st.AttnResBlock, st.ExpertLatent)
+		if r := st.Revision; r != nil {
+			if _, ok := mjActQuants()[r.ActQuant]; r.ActQuant != "" && !ok {
+				return fmt.Errorf("convert: %s: %s: activation quantization %q is not one the container states", mj.name, arch, r.ActQuant)
+			}
+			srcs = append(srcs, r.RopeScaleSWA, r.SWAGlobalFirst, r.PictureBidirSliding)
+		}
+		if _, ok := pretok.PreOps(st.PreTokenizer); st.PreTokenizer != "" && !ok {
+			return fmt.Errorf("convert: %s: %s: pre-tokenizer %q is not one the tokenizer has", mj.name, arch, st.PreTokenizer)
+		}
+		if st.RopeLayout != "" && !slices.Contains(mjRopeLayouts(), st.RopeLayout) {
+			return fmt.Errorf("convert: %s: %s: rotary layout %q is not one the container states", mj.name, arch, st.RopeLayout)
+		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
 			if _, no := mjFlagsNotImplemented()[k]; !ok && !no {
@@ -266,7 +328,7 @@ func (mj *modelJSON) checkStates() error {
 			}
 			srcs = append(srcs, st.Flags[k])
 		}
-		if _, ok := mjActivations()[st.Activation]; st.Activation != "" && !ok {
+		if _, ok := mjActivations()[st.Activation]; st.Activation != "" && !ok && !slices.Contains(mjNamedActivations(), st.Activation) {
 			return fmt.Errorf("convert: %s: %s: activation %q is not one the container states", mj.name, arch, st.Activation)
 		}
 		if _, carried := mjActivationParams()[st.Activation]; carried {
@@ -326,6 +388,7 @@ func ggufStates(arch string) (*mjStates, string, error) {
 // GGUF architecture to c.
 func stateContainer(f *meta.File, c *Config) error {
 	st, by, err := ggufStates(f.Arch())
+	c.Stated = &Statement{}
 	if err != nil {
 		return err
 	}
@@ -384,6 +447,37 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		return 0, fmt.Errorf("convert: %s: %s: %s is %v, not a number", by, arch, what, v)
 	}
+	boolean := func(what, src string) (bool, error) {
+		v, err := value(what, src)
+		if err == nil && !v.IsBool() {
+			err = fmt.Errorf("convert: %s: %s: %s is %v, not true or false", by, arch, what, v)
+		}
+		return err == nil && v.AsBool(), err
+	}
+	c.Stated = &Statement{activation: st.Activation, ropeLayout: st.RopeLayout}
+	if r := st.Router; r != nil {
+		c.Stated.routerGate = r.Gate
+	}
+	if r := st.Revision; r != nil {
+		c.Stated.actQuant = mjActQuants()[r.ActQuant]
+		if r.RopeScaleSWA != "" {
+			if c.Stated.ropeScaleSWA, err = number("revision.rope_scale_swa", r.RopeScaleSWA); err != nil {
+				return err
+			}
+		}
+		for _, b := range []struct {
+			what, src string
+			to        *bool
+		}{{"revision.swa_global_first", r.SWAGlobalFirst, &c.Stated.swaGlobalFirst},
+			{"revision.picture_bidir_sliding", r.PictureBidirSliding, &c.Stated.pictureBidirSliding}} {
+			if b.src == "" {
+				continue
+			}
+			if *b.to, err = boolean(b.what, b.src); err != nil {
+				return err
+			}
+		}
+	}
 	for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 		v, err := value("flag "+k, st.Flags[k])
 		if err != nil {
@@ -401,8 +495,8 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			c.Flags &^= mjFlags()[k]
 		}
 	}
-	if st.Activation != "" {
-		c.Flags = c.Flags&^mjActivationFlags | mjActivations()[st.Activation]
+	if f, ok := mjActivations()[st.Activation]; ok {
+		c.Flags = c.Flags&^mjActivationFlags | f
 	}
 	if st.NormEps != "" {
 		if c.RMSEps, err = number("norm_eps", st.NormEps); err != nil {
@@ -743,8 +837,10 @@ func (r *mjRouter) apply(f *meta.File, c *Config) error {
 			return fmt.Errorf("expert_weights_scale %g, and the class's router scales nothing: %w", v, ErrNotImplemented)
 		}
 	}
-	if k := f.UintKey("expert_used_count", 0); r.Selects != 0 && k != uint64(r.Selects) {
-		return fmt.Errorf("expert_used_count %d, and the class's router selects %d: %w", k, r.Selects, ErrNotImplemented)
+	if kv, ok := f.Key("expert_used_count"); ok && r.Selects != 0 {
+		if v, _ := kv.Uint(); v != uint64(r.Selects) {
+			return fmt.Errorf("expert_used_count %d, and the class's router selects %d: %w", v, r.Selects, ErrNotImplemented)
+		}
 	}
 	return nil
 }

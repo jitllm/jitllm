@@ -1,5 +1,8 @@
 {
   "gguf": ["gemma4"],
+  "container": {
+    "gemma4": {"revision": {"picture_bidir_sliding": "(src['embedding_length_per_layer_input'] | default(0)) == 0"}}
+  },
   "graph": {
     "block": [
       {"op": "in",         "out": "x", "width": "embd"},

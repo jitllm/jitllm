@@ -180,18 +180,28 @@ func Supported(arch string) bool {
 	return ok
 }
 
-// Architectures is every name in that list, sorted.
+// Architectures is every GGUF architecture name the library's files name
+// (convert/models), and the vision tower's (towerArch), sorted
+// (TestArchitecturesAreTheLibrarys).
 //
 // It exists so the list can be checked against, not just consulted:
 // library.TestEveryArchitectureIsObtainable reads it to confirm everything the
 // converter implements is reachable from the download catalogue.
-func Architectures() []string {
-	out := make([]string, 0, len(archOf()))
-	for name := range archOf() {
-		out = append(out, name)
+func Architectures() ([]string, error) {
+	files, err := libraryFiles()
+	if err != nil {
+		return nil, err
+	}
+	out := []string{towerArch}
+	for _, mj := range files {
+		for _, n := range mj.GGUF {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // ArchitectureGraph is the graph a GGUF architecture name converts to, and
@@ -239,8 +249,12 @@ func configOfFile(f *meta.File) (*Config, error) {
 	name := f.Arch()
 	arch, ok := archOf()[name]
 	if !ok {
+		names, err := Architectures()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("convert: architecture %q is not implemented (%s): %w",
-			name, strings.Join(Architectures(), ", "), ErrNotImplemented)
+			name, strings.Join(names, ", "), ErrNotImplemented)
 	}
 	nhead, err := uniformCount(f, "attention.head_count", 0)
 	if err != nil {
@@ -841,7 +855,7 @@ func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 // short list leaves a tail of each head unrotated, which is fluent and which no
 // self-comparing tier can see.
 //
-// An interleaved split (interleavedMRope) is read as transformers
+// An interleaved split (rope_layout "interleaved") is read as transformers
 // reads it: pair i turns by h when i%3 == 1 and i < 3*sections[1], by w when
 // i%3 == 2 and i < 3*sections[2], and by t otherwise. ggml's IMROPE sends a
 // pair with i%3 == 0 at or past 3*sections[0] to a fourth axis instead; no
@@ -880,7 +894,7 @@ func ropeSectionsFit(name string, secs []int32, c *Config) error {
 			"has %d rotary pairs -- the remainder would be left unrotated",
 			name, secs, sum, c.NRot/2)
 	}
-	if interleavedMRope(c.Arch) {
+	if c.Stated.ropeLayout == "interleaved" {
 		if c.RopeSections[3] != 0 {
 			return fmt.Errorf("convert: %s: an interleaved M-RoPE with a fourth section %d: %w",
 				name, c.RopeSections[3], ErrNotImplemented)

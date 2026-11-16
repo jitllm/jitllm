@@ -1,6 +1,8 @@
 package convert
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -141,12 +143,18 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	if v.PreName == "" {
 		v.PreName = "default"
 	}
-	// Ollama's Llama 4 says "default", which is llama3's split. The model's
-	// own tokenizer.json (RULE 7m) splits with the o200k pattern, which
-	// llama.cpp's converter names "llama4", so a llama4 vocabulary carrying the
-	// fallback name gets that pipeline; a real name is kept.
-	if v.PreName == "default" && f.Arch() == "llama4" {
-		v.PreName = "llama4"
+	// A file naming no pre-tokenizer of its own ("default") splits with the
+	// one the library states for its architecture (Ollama's Llama 4 says
+	// "default", where its tokenizer.json splits with the o200k pattern,
+	// RULE 7m); a real name is kept.
+	if v.PreName == "default" {
+		st, _, err := ggufStates(f.Arch())
+		if err != nil {
+			return nil, err
+		}
+		if st != nil && st.PreTokenizer != "" {
+			v.PreName = st.PreTokenizer
+		}
 	}
 	// A name with no entry is not an error here (the legacy family splitters
 	// cover several), but it is recorded as an empty pipeline, so the reader
@@ -162,19 +170,18 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 		}
 		v.Pre = pre
 	}
-	// AddBOS and IgnoreMerges default from the llama3 family and are stored as
-	// properties of the tokenizer rather than looked up by name at load. The
-	// add_bos_token key overrides the first; it is often absent (Llama-3.2 ships
-	// none and wants its BOS, qwen3 ships an explicit 0), and a wrong BOS is a
-	// fluent divergence a few tokens in.
-	v.AddBOS = llama3Family(v.PreName)
-	v.IgnoreMerges = llama3Family(v.PreName)
-	// Llama 4 is not in that family but shares both booleans: its own
-	// tokenizer.json says ignore_merges: true and prepends <|begin_of_text|>,
-	// where llama.cpp's gpt-4o branch sets ignore_merges false (RULE 7m).
-	if v.PreName == "llama4" {
-		v.AddBOS, v.IgnoreMerges = true, true
+	// AddBOS and IgnoreMerges default from the pre-tokenizer's entry in
+	// pretokenizers.json and are stored as properties of the tokenizer rather
+	// than looked up by name at load. The add_bos_token key overrides the
+	// first; it is often absent (Llama-3.2 ships none and wants its BOS, qwen3
+	// ships an explicit 0), and a wrong BOS is a fluent divergence a few
+	// tokens in.
+	pres, err := preTokenizers()
+	if err != nil {
+		return nil, err
 	}
+	p := pres[v.PreName]
+	v.AddBOS, v.IgnoreMerges = p.AddBOS, p.IgnoreMerges
 	if n, ok := f.KV["tokenizer.ggml.add_bos_token"].Uint(); ok {
 		v.AddBOS = n != 0
 	}
@@ -228,17 +235,31 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 	return out, nil
 }
 
-// llama3Family is the pre-tokenizer group that takes the llama3 regex, and with
-// it add_bos and ignore_merges (llama.cpp's list, name for name). "default" is
-// not in it: llama.cpp gives an absent or "default" name its own pipeline with
-// neither boolean (pretok.LlamaCppDefault()). This source-format heuristic is
-// resolved at conversion; nothing on the load path consults it.
-func llama3Family(pre string) bool {
-	switch pre {
-	case "llama3", "llama-v3", "llama-bpe", "falcon3", "falcon-h1", "pixtral", "midm-2.0", "lfm2", "jina-v5-nano":
-		return true
+// preTokenizersJSON is each pre-tokenizer name's add_bos and ignore_merges
+// where they are not false: llama3's regex group (llama.cpp's list, name for
+// name) and Llama 4, whose own tokenizer.json says ignore_merges: true and
+// prepends <|begin_of_text|>, where llama.cpp's gpt-4o branch sets
+// ignore_merges false (RULE 7m). "default" is not in it: llama.cpp gives an
+// absent or "default" name its own pipeline with neither boolean
+// (pretok.LlamaCppDefault()). It is resolved at conversion; nothing on the
+// load path consults it.
+//
+//go:embed pretokenizers.json
+var preTokenizersJSON []byte
+
+// preTokenizer is a pre-tokenizer name's two booleans.
+type preTokenizer struct {
+	AddBOS       bool `json:"add_bos"`
+	IgnoreMerges bool `json:"ignore_merges"`
+}
+
+// preTokenizers is pretokenizers.json, by name.
+func preTokenizers() (map[string]preTokenizer, error) {
+	var out map[string]preTokenizer
+	if err := json.Unmarshal(preTokenizersJSON, &out); err != nil || len(out) == 0 {
+		return nil, fmt.Errorf("convert: pretokenizers.json: %v, %d names", err, len(out))
 	}
-	return false
+	return out, nil
 }
 
 // wordPiece resolves a WordPiece vocabulary's special ids and its one

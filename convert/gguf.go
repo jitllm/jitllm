@@ -100,10 +100,10 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		return nil, err
 	}
 	if vf != nil {
-		if a := vf.Arch(); a != "clip" {
+		if a := vf.Arch(); a != towerArch {
 			return nil, fmt.Errorf("convert: %s is architecture %q, not a vision tower", mmproj, a)
 		}
-		if f.Arch() == "clip" {
+		if f.Arch() == towerArch {
 			return nil, fmt.Errorf("convert: %s is itself a vision tower; the first "+
 				"argument is the TEXT model", src)
 		}
@@ -180,12 +180,16 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 }
 
 // sourceOf translates a parsed source model into the container's own terms.
+// towerArch is the architecture every vision or audio tower's GGUF (an
+// mmproj) declares, whatever its projector.
+const towerArch = "clip"
+
 func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s := &jlm.Source{}
 	var c *Config
 	var names *towerVocab
 	var proj *projStates
-	tower := f.Arch() == "clip"
+	tower := f.Arch() == towerArch
 	if tower {
 		v, p, err := visionOf(f)
 		proj = p
@@ -198,7 +202,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// A tower still needs a Config, because a container always has one; its
 		// language-model fields are the tower's where they mean the same thing.
 		s.Vision = v
-		c = &Config{Arch: ArchCLIP, Config: &jlm.Config{
+		c = &Config{Arch: ArchCLIP, Stated: &Statement{}, Config: &jlm.Config{
 			NLayer: v.NLayer, NEmbd: v.NEmbd, NHead: v.NHead,
 			NKVHead: v.NHead, HeadDim: v.NEmbd / max32(v.NHead, 1), NFFN: v.NFFN,
 			RMSEps: v.Eps, EmbdScale: 1, AttnFactor: 1, Flags: v.Flags,
@@ -518,8 +522,11 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 	}
-	if err := StateActivations(c, s); err != nil {
-		return nil, err
+	// A tower's own file states its blocks' activations in its tower.
+	if !tower {
+		if err := StateActivations(c, s); err != nil {
+			return nil, err
+		}
 	}
 	StateStreams(c.Config, sourceStores(s))
 	storeRowTables(c.Config, s)
@@ -539,7 +546,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	StateDelta(c.Config, sourceStores(s))
-	StateRevision(c)
+	if err := StateRevision(c); err != nil {
+		return nil, err
+	}
 	if err := StateMarkerPrompt(s, int64(f.UintKey("decision.max_tokens", 0))); err != nil {
 		return nil, err
 	}

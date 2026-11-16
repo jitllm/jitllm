@@ -116,7 +116,7 @@ func actsWith(m *model.Model, k jlm.Flags) jlm.Config {
 		gate := m.Stores(li, jlm.RoleFFNGate) || m.Stores(li, jlm.RoleExpGateBank)
 		gated[li] = gate || !m.Stores(li, jlm.RoleFFNUp) && !m.Stores(li, jlm.RoleExpUpBank)
 	}
-	if err := convert.StateGated(&convert.Config{Config: &s}, gated, xielu); err != nil {
+	if err := convert.StateGated(convert.Unstated(&s), gated, xielu); err != nil {
 		panic(err)
 	}
 	return s

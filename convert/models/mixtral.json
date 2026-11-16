@@ -4,12 +4,12 @@
   "container": {
     "gpt-oss": {"flags": {"rope_neox": "true", "swiglu_oai": "true", "yarn_exact": "true"},
                 "window": {"size": "src['attention.sliding_window']", "period": "2"}},
-    "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2"},
+    "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2", "revision": {"act_quant": "row_int8"}},
     "granite": {"logit_div": "src['logit_scale']", "embd_scale": "src['embedding_scale'] | default(1)",
                 "residual_scale": "src['residual_scale'] | default(0)"},
     "granitemoe": {"logit_div": "src['logit_scale']", "embd_scale": "src['embedding_scale'] | default(1)",
                    "residual_scale": "src['residual_scale'] | default(0)"},
-    "llama4": {"flags": {"swa_chunked": "true", "no_pe_global": "true", "expert_weight_in": "true",
+    "llama4": {"pre_tokenizer": "llama4", "flags": {"swa_chunked": "true", "no_pe_global": "true", "expert_weight_in": "true",
                          "qk_l2_norm": "(src['expert_count'] | default(0)) != 128"},
                "window": {"size": "0 if (src['attention.sliding_window'] | default(1)) == 0 else src['attention.chunk_size'] | default(8192)", "pattern": "4"},
                "attn_temp": {"scale": "src['attention.temperature_scale'] | default(0.1)",
@@ -20,7 +20,7 @@
                    "router": {"gate": "sigmoid", "renormalise": "always"}},
     "hunyuan-dense": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}},
     "hunyuan-moe": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}},
-    "hunyuan_vl": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}, "mrope": "true", "whole_rotary": true,
+    "hunyuan_vl": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}, "mrope": "true", "rope_layout": "xd", "whole_rotary": true,
                    "rope_base": "(src['rope.freq_base'] | default(10000)) * src['rope.scaling.alpha'] ** ((src['rope.dimension_count'] | default(src['attention.key_length'] | default(src['embedding_length'] // src['attention.head_count']))) / ((src['rope.dimension_count'] | default(src['attention.key_length'] | default(src['embedding_length'] // src['attention.head_count']))) - 2)) if (src['rope.scaling.alpha'] | default(0)) > 0 else src['rope.freq_base'] | default(10000)"}
   },
   "config": {

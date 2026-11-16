@@ -7,8 +7,8 @@
 // (scripts/library-gate.sh records it in Verified), and it is pinned to the
 // repository commit that was checked.
 //
-// It is a Go slice, not a data file: the CLI and the desktop app both import
-// it and a change to it is a reviewed change to code. Sizes are what the Hub
+// It is data (models.json, embedded): the CLI and the desktop app both import
+// it and a change to it is a reviewed change to the tree. Sizes are what the Hub
 // reports, so a disk check and a will-it-fit estimate need no request.
 package library
 

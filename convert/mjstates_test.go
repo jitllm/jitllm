@@ -43,6 +43,9 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "qwen3vl", flags: qk},
 		{arch: "qwen3moe", flags: qk},
 		{arch: "qwen3vlmoe", flags: qk},
+		{arch: "bert", flags: jlm.FlagNonCausal},
+		{arch: "nomic-bert", flags: jlm.FlagNonCausal},
+		{arch: "modern-bert", flags: jlm.FlagNonCausal},
 		{arch: "olmoe", flags: qk | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm},
 		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2},
 		{arch: "gemma", keys: map[string]meta.Value{"embedding_length": meta.MakeUint(2048)},
@@ -97,6 +100,13 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 			t.Errorf("%s: window %d every %d at base %g, caps %g %g; want %d every %d at %g, %g %g", tc.arch,
 				c.SWAWindow, c.SWAPeriod, c.RopeBaseSWA, c.AttnSoftcap, c.FinalSoftcap,
 				tc.win, tc.period, tc.ropeSWA, tc.acap, tc.fcap)
+		}
+	}
+	for arch, want := range map[string]string{"qwen3vl": "interleaved", "qwen3vlmoe": "interleaved",
+		"qwen35": "interleaved", "qwen35moe": "interleaved", "qwen3next": "interleaved", "qwen4exp": "interleaved",
+		"clef": "interleaved", "hunyuan_vl": "xd", "qwen2vl": "", "qwen3": ""} {
+		if st, _, err := ggufStates(arch); err != nil || st.RopeLayout != want {
+			t.Errorf("%s: rotary layout %q (%v), want %q", arch, st.RopeLayout, err, want)
 		}
 	}
 	u := meta.MakeUint
@@ -292,7 +302,7 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 	for _, tc := range []struct{ states, want string }{
 		{`"y": {}`, "names no GGUF architecture"},
 		{`"x": {"flags": {"rope_sideways": "true"}}`, "is no graph feature"},
-		{`"x": {"activation": "gelu"}`, "is not one the container states"},
+		{`"x": {"activation": "gelu_fast"}`, "is not one the container states"},
 		{`"x": {"activation": "xielu"}`, "carries its parameters"},
 		{`"x": {"norm_eps": "eps | default(1e-5)"}`, "is not the keys"},
 		{`"x": {"norm_eps": "src[["}`, "jinja expression"},
@@ -307,6 +317,10 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"latent": {"kv": "64"}}`, "states its query rank"},
 		{`"x": {"indexer": {"heads": "4", "top_k": "8"}}`, "states its heads, key_width and top_k"},
 		{`"x": {"indexer": {"heads": "n", "key_width": "32", "top_k": "8"}}`, "is not the keys"},
+		{`"x": {"revision": {"act_quant": "int4"}}`, "activation quantization \"int4\" is not one"},
+		{`"x": {"revision": {"rope_scale_swa": "scale"}}`, "is not the keys"},
+		{`"x": {"pre_tokenizer": "o200k-ish"}`, "pre-tokenizer \"o200k-ish\" is not one"},
+		{`"x": {"rope_layout": "pairs"}`, "rotary layout \"pairs\" is not one"},
 	} {
 		_, err := parseModelJSON([]byte(file(tc.states)), "test")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -326,9 +340,15 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{mjStates{RopeSections: "src['heads']"}, "not a list"},
 		{mjStates{RopeSections: "[4, -1]"}, "not a count"},
 		{mjStates{RopeSections: "[8, 8]"}, "sum to 16"},
+		{mjStates{Revision: &mjStatesRevision{SWAGlobalFirst: "src['heads']"}}, "swa_global_first is 8, not true or false"},
+		{mjStates{Revision: &mjStatesRevision{RopeScaleSWA: "'one'"}}, "rope_scale_swa is"},
+		{mjStates{Revision: &mjStatesRevision{PictureBidirSliding: "src['heads'] + 1"}}, "picture_bidir_sliding is 9"},
 	} {
-		if err := tc.st.compile([]string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale,
-			tc.st.RopeSections}); err != nil {
+		srcs := []string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale, tc.st.RopeSections}
+		if r := tc.st.Revision; r != nil {
+			srcs = append(srcs, r.SWAGlobalFirst, r.RopeScaleSWA, r.PictureBidirSliding)
+		}
+		if err := tc.st.compile(srcs); err != nil {
 			t.Fatal(err)
 		}
 		err := tc.st.apply("test", f, &Config{Config: &jlm.Config{}})
