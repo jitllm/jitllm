@@ -396,6 +396,10 @@ const (
 	// h*Span+j the dot with the table's row the index names at column j, zero
 	// where it names none. A primitive.
 	OpHeadDots
+	// OpPad is In[0] widened with zeros: Out[0]'s first elements In[0]'s,
+	// zero past them -- a row read by a matrix stored wider than it, its k
+	// padded to whole blocks. A primitive.
+	OpPad
 	numOps
 )
 
@@ -499,6 +503,8 @@ func (k OpKind) String() string {
 		return "mean_rows"
 	case OpHeadDots:
 		return "head_dots"
+	case OpPad:
+		return "pad"
 	case OpUniform:
 		return "uniform"
 	case OpPut:

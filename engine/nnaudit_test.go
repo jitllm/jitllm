@@ -913,9 +913,6 @@ func auditList(t *testing.T, towers bool) []auditModel {
 // gates pair it with, else mmproj-<its file> beside it, else none.
 func towerOf(p string) string {
 	rel := filepath.ToSlash(strings.TrimPrefix(p, testmodels.Dir()+string(filepath.Separator)))
-	if notTowers()[rel] {
-		return ""
-	}
 	if rel, ok := towerPairs()[rel]; ok {
 		if q := testmodels.Path(rel); fileExists(q) {
 			return q
@@ -958,14 +955,6 @@ func modelConfigs() map[string]string {
 // states: the same model as llama.cpp's.
 func keyConfigs() map[string]string {
 	return map[string]string{"EXAONE-4.0-1.2B-Q4_K_M.gguf": "testdata/configs/EXAONE-4.0-1.2B/config.json"}
-}
-
-// notTowers are text GGUFs whose mmproj-<file> beside them the converter
-// refuses. tinyopenjev-for-testing's tower is 144 wide, not a whole number of
-// Q8 blocks: its matrices would be stored 160 inputs wide and no device reads
-// a padded row yet (docs/open-questions.md), so towerFFNByShape refuses it.
-func notTowers() map[string]bool {
-	return map[string]bool{"openjev/tinyopenjev-for-testing-Q8_0.gguf": true}
 }
 
 // auditPicture is the picture a towered model encodes in the census: the

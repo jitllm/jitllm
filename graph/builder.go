@@ -56,6 +56,13 @@ func (s *Builder) MatVec(x ValueID, role jlm.Role, rows int, bias ...jlm.Role) V
 	return y
 }
 
+// Pad is x widened with zeros to width elements.
+func (s *Builder) Pad(x ValueID, width int) ValueID {
+	y := s.value("pad", width)
+	s.G.op(Op{Kind: OpPad, In: []ValueID{x}, Out: []ValueID{y}})
+	return y
+}
+
 // Norm is RMSNorm of x with role's scale.
 func (s *Builder) Norm(x ValueID, role jlm.Role, eps float64) ValueID {
 	y := s.value(role.String(), s.width(x))

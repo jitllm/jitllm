@@ -134,9 +134,9 @@ func quantizeTower(ts []jlm.Tensor) error {
 			return fmt.Errorf("convert: %s: %w", t.Name, err)
 		}
 		// A k that is not a whole number of blocks is padded with zero columns
-		// to the next one, which add nothing to a product, for a program that
-		// binds the matrix at its stored width; a tower whose own width needs
-		// it is refused (towerFFNByShape), as no device reads a padded row.
+		// to the next one, which add nothing to a product: a program binds the
+		// matrix at its stored width and reads a narrower row widened with
+		// zeros (graph.OpPad).
 		if kp := (k + q8Elems - 1) / q8Elems * q8Elems; kp != k {
 			padded := make([]float32, kp*rows)
 			for r := 0; r < rows; r++ {

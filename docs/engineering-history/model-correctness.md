@@ -10908,3 +10908,37 @@ class, and the situ statement refuses a pair that is not the one the kernels bak
   so a conversion finds none and the class states this one; a tool turn raises rather than rendering untranscribed.
   Held to the renderer's own text by TestKimiK3ChatTemplateMatchesItsRenderer.
 
+## A tower whose width is not a whole number of Q8 blocks
+
+What stood in docs/open-questions.md: quantizeTower pads a matrix's k with
+zero columns to the next block, and the old engine read it at the tower's
+width and padded each activation row (model.unpadK, State.padRows, gone with
+it); a stated tower block bound its matrices at the tower's width, no tier had
+an op that widens a row with zeros before a matvec reading a padded weight,
+and the converter refused such a tower by its width (towerFFNByShape).
+tinyopenjev-for-testing's 144-wide tower (a qwen3vl_merger, two blocks of two
+heads of 72) was the case on the boxes, kept out of the census by notTowers.
+
+What was built: a graph primitive, OpPad, the row widened with zeros to a
+width, decomposed into one map (each element its input's below the input's
+width, zero past it), so every device lowers it as it lowers any map; the
+tower block widens a row before each matrix stored wider than it
+(f.Inventory's K), and the entry's and the head's programs before each linear
+whose stored k exceeds the value's width. towerFFNByShape reads a padded k as
+the tower's width. The pad is exact by construction: the padded columns are
+zero and the widened elements are zero.
+
+What the gates measured: TestComposedCPUPad and TestComposedGPUPad widen rows
+of 1, 7, 20, 31, 32, 33 and 144 elements on the CPU, PTX and SPIR-V, the CPU
+arm through a matrix whose padded columns are not zero (a pad whose tail
+repeats the row's last element fails it; a tail of ones fails both).
+TestTinyOpenJevTowerMatchesLlamaCpp holds the tower's projector output on
+llama-mtmd-debug's 512x512 checkerboard (built on box 41 from b10825's
+source, the boxes having no build of it) to llama.cpp's dump: relative RMS
+0.028 over 36 sampled values, the sum 0.43% off, against SmolVLM's 5% bound;
+the shipping normalisation reads 0.98. TestTinyOpenJevTowerRunsOnTheCard
+places both blocks, then one, on each card against the CPU device's rows:
+NMSE 1.1e-05 and 9.3e-06 on CUDA (a V100) and Metal (the M4), 2.1e-07 and
+1.8e-07 on Vulkan. The M4's arm64 CPU reads llama.cpp's dump at the same
+0.028. The census's two runners, picked to tinyopenjev, run the paired tower
+on the CPU device and on a card.

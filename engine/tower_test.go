@@ -854,3 +854,71 @@ func TestInternVLTowerSeesThePicture(t *testing.T) {
 		t.Errorf("the wide picture's description names %d of its colours: %q", colours(got), got)
 	}
 }
+
+// TestTinyOpenJevTowerRunsOnTheCard places tinyopenjev-for-testing's
+// 144-wide tower, whose blocks read their rows widened with zeros by
+// matrices stored 160 inputs wide, on each device: both blocks there, then
+// a half seam (the first block on the card, the second on the CPU device);
+// each time the picture's rows sit within the reduction-order band of the
+// CPU device's (an NMSE of 1e-3).
+func TestTinyOpenJevTowerRunsOnTheCard(t *testing.T) {
+	text := testmodels.Path(filepath.Join("openjev", "tinyopenjev-for-testing-Q8_0.gguf"))
+	mm := testmodels.Path(filepath.Join("openjev", "mmproj-tinyopenjev-for-testing-Q8_0.gguf"))
+	if !sourcePresent(text, mm) {
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+	}
+	m, err := model.Open(jlmOfPair(t, text, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if w := m.Container.Vision().NEmbd; w%32 == 0 {
+		t.Fatalf("the tower is %d wide, a whole number of blocks: this gate places no padded row", w)
+	}
+	img := auditPicture(t)
+	host := testInstance(t, m, 2048)
+	want, err := host.EncodePicture(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = slices.Clone(want)
+	host.Close()
+	n := len(m.Tower.Blocks)
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || g == nil {
+				noDevice(t, dev, err)
+			}
+			defer g.Close()
+			for _, on := range []int{n, n / 2} {
+				s := testInstance(t, m, 2048)
+				s.SetDeviceFallback(false)
+				if err := s.tower.s.SetDeviceLayers(g, on); err != nil {
+					t.Fatal(err)
+				}
+				if got := s.tower.s.GPULayers(); got != on {
+					t.Fatalf("%d of the tower's %d blocks placed on %s, want %d: %s", got, n, dev, on, g.Err())
+				}
+				got, err := s.EncodePicture(img)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var num, den float64
+				for i := range want {
+					if math.IsNaN(float64(got[i])) || math.IsInf(float64(got[i]), 0) {
+						t.Fatalf("%d blocks on %s: value %d is %v", on, dev, i, got[i])
+					}
+					d := float64(got[i] - want[i])
+					num, den = num+d*d, den+float64(want[i])*float64(want[i])
+				}
+				s.Close()
+				if e := num / den; math.IsNaN(e) || e > 1e-3 {
+					t.Fatalf("%d of %d blocks on %s: the picture's rows sit at NMSE %.3e from the CPU device's", on, n, dev, e)
+				}
+				t.Logf("%s: %d of %d tower blocks on the card, the picture's %d values at NMSE %.3e from the CPU device's",
+					dev, on, n, len(want), num/den)
+			}
+		})
+	}
+}

@@ -136,7 +136,13 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			if err != nil {
 				return nil, err
 			}
-			out = b.MatVec(ins[0], op.Bind[0], s.Rows, op.Bind[1:]...)
+			// A matrix stored wider than the row, its k padded to whole
+			// blocks, reads the row widened with zeros.
+			x := ins[0]
+			if width(x) < s.K {
+				x = b.Pad(x, s.K)
+			}
+			out = b.MatVec(x, op.Bind[0], s.Rows, op.Bind[1:]...)
 		case jlm.TOpPosTable:
 			s, err := shape(op.Bind[0])
 			if err != nil {

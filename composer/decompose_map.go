@@ -437,6 +437,22 @@ func decomposeTile(o graph.Op, c *Context) ([]Prim, error) {
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 
+// decomposePad is the row widened with zeros: element i of the output its
+// input's element i below the input's width, zero past it.
+func decomposePad(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || c.width(o.Out[0]) < c.width(o.In[0]) {
+		return nil, fmt.Errorf("a pad of %d operands into %d", len(o.In), c.width(o.Out[0]))
+	}
+	in, sh := c.rows(o.In[0]), c.rows(o.Out[0])
+	U := ir.U32
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	inside := x.op(OpLess, ir.Pred, e, x.u(uint32(in[1])))
+	v := x.at(0, in, r, x.sel(U, inside, e, x.u(0)))
+	x.sel(ir.F32, inside, v, x.f(0))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
 // decomposeConcat is its inputs end to end: each input's elements at its
 // offset, one store a input; joined head by head, each input's head at its
 // offset within the output's head.

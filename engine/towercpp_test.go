@@ -145,3 +145,119 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 		t.Errorf("VIOLATION: the normalised checkerboard reads %.4f and %.2f%%, inside the bound: the gate cannot see the input", vr, vd*100)
 	}
 }
+
+// TestTinyOpenJevTowerMatchesLlamaCpp checks tinyopenjev-for-testing's tower
+// -- 144 wide, not a whole number of Q8 blocks, so each of its blocks reads
+// its rows widened with zeros by matrices stored 160 inputs wide -- against
+// llama.cpp's graph dump of its projector output on a checkerboard:
+//
+//	llama-mtmd-debug -m tinyopenjev-for-testing-Q8_0.gguf \
+//	  --mmproj mmproj-tinyopenjev-for-testing-Q8_0.gguf --image cb -n 512 -p encode
+//
+// The debug tool builds the 512x512 picture as raw samples, 1 and 0 on every
+// channel, and normalises nothing, so the container is converted with its
+// normalisation restated to the identity, as TestSmolVLMTowerMatchesLlamaCpp
+// does. The dump prints three leading and three trailing values of rows 0,
+// 1, 2, 253, 254 and 255 of the merger's 256 and the whole tensor's sum. The
+// bar is SmolVLM's; the shipping normalisation is the violation.
+func TestTinyOpenJevTowerMatchesLlamaCpp(t *testing.T) {
+	rows := [6]int{0, 1, 2, 253, 254, 255}
+	vals := [6][6]float64{
+		{-0.0350, -0.0414, 0.0519, -0.0061, 0.0113, 0.0431},
+		{-0.0458, -0.0532, 0.0408, -0.0251, 0.0027, 0.0594},
+		{-0.0515, -0.0464, 0.0554, -0.0441, -0.0041, 0.0568},
+		{0.0510, -0.0092, 0.0505, -0.0405, -0.0399, 0.0505},
+		{0.0513, -0.0191, 0.0343, -0.0390, -0.0464, 0.0618},
+		{0.0472, -0.0433, 0.0400, -0.0444, -0.0420, 0.0539},
+	}
+	const sum = 121.839928
+	text := testmodels.Path(filepath.Join("openjev", "tinyopenjev-for-testing-Q8_0.gguf"))
+	mm := testmodels.Path(filepath.Join("openjev", "mmproj-tinyopenjev-for-testing-Q8_0.gguf"))
+	if !sourcePresent(text, mm) {
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+	}
+	found := false
+	identity := convert.WithPictureStep(func(s *jlm.PreStep) {
+		if s.Kind == jlm.PreNormalize {
+			s.Floats = []float32{0, 0, 0, 1, 1, 1}
+			found = true
+		}
+	})
+	raw := filepath.Join(t.TempDir(), "tinyopenjev-raw"+jlm.Ext)
+	if _, err := convert.FromGGUFs(text, mm, raw, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, identity); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("tinyopenjev's processor states no normalisation to restate")
+	}
+	rel := func(path string) (float64, float64) {
+		t.Helper()
+		m, err := model.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		if w := m.Container.Vision().NEmbd; w%32 == 0 {
+			t.Fatalf("the tower is %d wide, a whole number of blocks: this gate reads no padded row", w)
+		}
+		const side = 512
+		cb := image.NewNRGBA(image.Rect(0, 0, side, side))
+		for y := range side {
+			for x := range side {
+				l := uint8(0)
+				if (x+y)%2 == 0 {
+					l = 255
+				}
+				i := cb.PixOffset(x, y)
+				cb.Pix[i], cb.Pix[i+1], cb.Pix[i+2], cb.Pix[i+3] = l, l, l, 255
+			}
+		}
+		s := testInstance(t, m, 64)
+		defer s.Close()
+		px, _ := towerPixelsAt(t, s, cb, 0)
+		levels := map[float32]int{}
+		for _, p := range px {
+			levels[p]++
+		}
+		if len(levels) != 2 || 2*levels[px[0]] != len(px) {
+			t.Fatalf("the picture's samples take %d levels (%v): it was resized, and is not llama.cpp's", len(levels), levels)
+		}
+		out, err := s.EncodePicture(cb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pd := m.Cfg.NEmbd
+		if len(out) != 256*pd {
+			t.Fatalf("the picture is %d values, llama.cpp's 256 rows of %d", len(out), pd)
+		}
+		var sse, sy2, total float64
+		for i, row := range rows {
+			for j := range 6 {
+				col := j
+				if j >= 3 {
+					col = pd - 6 + j
+				}
+				got, want := float64(out[row*pd+col]), vals[i][j]
+				sse += (got - want) * (got - want)
+				sy2 += want * want
+			}
+		}
+		for _, x := range out {
+			total += float64(x)
+		}
+		if math.IsNaN(sse) || math.IsNaN(total) {
+			t.Fatalf("a non-finite output: sse %g, sum %g", sse, total)
+		}
+		return math.Sqrt(sse / sy2), math.Abs(total-sum) / math.Abs(sum)
+	}
+	r, d := rel(raw)
+	t.Logf("against llama-mtmd-debug: relative RMS %.4f over 36 sampled values, the sum %.2f%% off", r, d*100)
+	if r > 0.05 || d > 0.05 {
+		t.Errorf("the projector output differs from llama.cpp's: relative RMS %.4f, the sum %.2f%% off (bound 5%%)", r, d*100)
+	}
+	vr, vd := rel(jlmOfPair(t, text, mm))
+	t.Logf("violation, tinyopenjev's own normalisation: relative RMS %.4f, the sum %.2f%% off", vr, vd*100)
+	if vr <= 0.05 && vd <= 0.05 {
+		t.Errorf("VIOLATION: the normalised checkerboard reads %.4f and %.2f%%, inside the bound: the gate cannot see the input", vr, vd*100)
+	}
+}

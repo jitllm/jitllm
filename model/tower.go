@@ -1018,7 +1018,13 @@ func towerBlock(li, i int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.G
 	// mv is the matrix r over x, in wide to out wide, both clamped by
 	// matrix m's bounds.
 	mv := func(x graph.ValueID, r jlm.Role, in, out, m int, bias ...jlm.Role) graph.ValueID {
-		return clamp(b.MatVec(clamp(x, in, 4*m), r, out, bias...), out, 4*m+2)
+		x = clamp(x, in, 4*m)
+		// A matrix stored wider than the row, its k padded to whole blocks
+		// (quantizeTower), reads the row widened with zeros.
+		if k := f.Inventory[r].K; k > in {
+			x = b.Pad(x, k)
+		}
+		return clamp(b.MatVec(x, r, out, bias...), out, 4*m+2)
 	}
 	x := b.In("x", d)
 	n := norm(x, jlm.RoleVAttnNorm, jlm.RoleVAttnNormBias)
