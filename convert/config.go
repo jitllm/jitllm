@@ -575,13 +575,9 @@ func configOfFile(f *meta.File) (*Config, error) {
 		// An absent expert_weights_norm is not one answer for every arch: llama.cpp's
 		// qwen3moe builder passes true as a literal, its deepseek2 builder reads the
 		// key with a default of false, and DeepSeek-V2-Lite's config.json says
-		// norm_topk_prob: false. Renormalising it generates fluent nonsense from the
-		// first token. See docs/engineering-history/model-correctness.md.
-		if arch == ArchDeepseek2 || arch == ArchDeepseek32 {
-			if _, ok := f.Key("expert_weights_norm"); !ok {
-				c.Flags |= jlm.FlagNoExpertNorm
-			}
-		}
+		// norm_topk_prob: false, so latent.json states no_expert_norm where the
+		// key is absent. Renormalising it generates fluent nonsense from the first
+		// token. See docs/engineering-history/model-correctness.md.
 		// 1 is softmax, 2 is sigmoid; anything else is refused rather than
 		// approximated, because a wrong gate is a fluent model with another mixture.
 		if kv, ok := f.Key("expert_gating_func"); ok {
@@ -590,36 +586,23 @@ func configOfFile(f *meta.File) (*Config, error) {
 			case 2:
 				c.Flags |= jlm.FlagExpertSigmoid
 			case 4:
-				// sqrt(softplus): DeepSeek V4's alone (deepseek4Config).
-				if arch != ArchDeepseek4 {
-					return nil, fmt.Errorf("convert: %s: expert_gating_func 4 (sqrt-softplus) outside "+
-						"deepseek4: %w", name, ErrNotImplemented)
+				// sqrt(softplus), where the graph states that router (DeepSeek V4's).
+				if !c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus) {
+					return nil, fmt.Errorf("convert: %s: expert_gating_func 4 (sqrt-softplus) where the "+
+						"graph states no sqrt-softplus router: %w", name, ErrNotImplemented)
 				}
 			default:
 				return nil, fmt.Errorf("convert: %s: expert_gating_func %d is not implemented: %w",
 					name, v, ErrNotImplemented)
 			}
 		}
-		// DeepseekV32TopkRouter hardcodes the sigmoid and its config carries no
-		// scoring_func, so llama.cpp's converter writes no gating key for a
-		// checkpoint that leaves it out; a key saying softmax contradicts the
-		// class and is refused.
-		if arch == ArchDeepseek32 {
-			if kv, ok := f.Key("expert_gating_func"); ok {
-				if v, _ := kv.Uint(); v != 2 {
-					return nil, fmt.Errorf("convert: %s: expert_gating_func %d, and "+
-						"DeepseekV32TopkRouter is sigmoid: %w", name, v, ErrNotImplemented)
-				}
-			}
-			c.Flags |= jlm.FlagExpertSigmoid
-		}
 		// Grouped selection. Both keys or neither; one alone cannot be acted on.
 		c.NExpertGroup = uint32(f.UintKey("expert_group_count", 0))
 		c.NExpertGroupUsed = uint32(f.UintKey("expert_group_used_count", 0))
-		// llama.cpp's kimi-k3 converter writes topk_group (1) as the used
-		// count and no group count beside it: one group, all of it used, which
-		// is the ungrouped selection.
-		if arch == ArchKimiK3 && c.NExpertGroup == 0 && c.NExpertGroupUsed == 1 {
+		// One group, all of it used, is the ungrouped selection: llama.cpp's
+		// kimi-k3 converter writes topk_group (1) as the used count and no group
+		// count beside it.
+		if c.NExpertGroup == 0 && c.NExpertGroupUsed == 1 {
 			c.NExpertGroupUsed = 0
 		}
 		if (c.NExpertGroup == 0) != (c.NExpertGroupUsed == 0) {
