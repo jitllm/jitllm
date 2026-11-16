@@ -285,6 +285,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 		Part:     sl.part,
 		Formats:  sl.formats,
 		Paged:    sl.paged,
+		Tables:   sl.tableRoles(),
 		Apart:    sl.apart,
 		Step:     composer.Step{Rows: rows, Page: max(sl.page, composedPageMin), Keys: max(sl.keys, 1), ActWindow: int(g.actWin.Load()), Seqs: sl.seqs, Marks: sl.marks, Context: sl.context},
 		Rotaries: sl.rotaries,
@@ -474,7 +475,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 			return nil, err
 		}
 	}
-	if err := f.rowHalves(gr, vals, rows); err != nil {
+	if err := f.rowHalves(gr, sl.tableRoles(), vals, rows); err != nil {
 		f.close()
 		return nil, err
 	}
@@ -2522,7 +2523,25 @@ func (g *devTier) unserved(li int) string {
 // the other; a pool of one shared half is stepped in place, through the
 // composer's own descriptor (bs.cRows).
 func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
-	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil)
+	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
+		slotsArePools(l.graph, p.Recurrent.StateLen)
+}
+
+// slotsArePools says every op of graph gr over the recurrent state that
+// states its slot (its Span, floats a sequence) states the pool's, n: the
+// composer steps a slot of max(rule, Span) floats (composer.slotLen), so a
+// slot stated otherwise reads another sequence's row.
+func slotsArePools(gr *graph.Graph, n int) bool {
+	if gr == nil {
+		return true
+	}
+	for _, o := range gr.Ops {
+		if o.Attr.Span != 0 && slices.ContainsFunc(o.Reads, func(r graph.StateRef) bool { return r.State == graph.StateRecState }) &&
+			o.Attr.Span != n {
+			return false
+		}
+	}
+	return true
 }
 
 // bindRec binds linear block l's step in sv to session sid's half of its

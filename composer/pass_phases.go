@@ -2,7 +2,6 @@ package composer
 
 import (
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Phases runs consecutive kernels that each launch one workgroup of the
@@ -207,7 +206,7 @@ func atTheEdge(k *Kernel, made map[Operand]bool) (reads, writes bool) {
 // readsRowTable reports whether k reads a weight stored as a row table.
 func (k *Kernel) readsRowTable() bool {
 	for _, b := range k.Bufs {
-		if b.Operand.Kind == OperandWeight && jlm.RowTableRole(b.Operand.Role) {
+		if b.Operand.Kind == OperandWeight && b.Operand.Rows {
 			return true
 		}
 	}

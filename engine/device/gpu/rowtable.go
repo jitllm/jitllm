@@ -32,6 +32,15 @@ type rowTable struct {
 	ids    []uint32
 }
 
+// tableRoles is the roles of the row tables part sl gathers from.
+func (sl *composedPart) tableRoles() []jlm.Role {
+	rs := make([]jlm.Role, len(sl.rowTabs))
+	for i, t := range sl.rowTabs {
+		rs[i] = t.role
+	}
+	return rs
+}
+
 // rowTableOf is the table of role r in ts, nil for none.
 func rowTableOf(ts []*rowTable, r jlm.Role) *rowTable {
 	for _, t := range ts {
@@ -63,11 +72,11 @@ type tableGather struct {
 	cols []int
 }
 
-// rowTableGathers is every row table a block's gathers read, an error for a
-// column gathered from two first rows or by none.
-func rowTableGathers(gr *graph.Graph) ([]tableGather, error) {
+// rowTableGathers is every row table of tables a block's gathers read, an
+// error for a column gathered from two first rows or by none.
+func rowTableGathers(gr *graph.Graph, tables []jlm.Role) ([]tableGather, error) {
 	var gs []tableGather
-	for _, t := range gr.TableRows() {
+	for _, t := range gr.TableRows(tables) {
 		cols, err := tableCols(gr, t)
 		if err != nil {
 			return nil, err
@@ -121,7 +130,7 @@ func (g *devTier) openRowTable(l *layer, p *nn.LayerPlan, fr *jlm.Frames) error 
 	if len(l.rowTabs) > 0 || l.graph == nil || p.Spec == nil || len(p.Spec.Tables) == 0 {
 		return nil
 	}
-	gs, err := rowTableGathers(l.graph)
+	gs, err := rowTableGathers(l.graph, nn.RowTableRoles(p.Spec.Tables))
 	if err != nil || len(gs) == 0 {
 		return err
 	}
@@ -216,8 +225,8 @@ type partRowSel struct {
 // rowHalves finds where a form gathering row tables' rows is cut
 // (partForm.rowSplit): at its first code that reads a table, each table's
 // rows written by a code before it.
-func (f *partForm) rowHalves(gr *graph.Graph, vals map[graph.ValueID]int, rows int) error {
-	gs, err := rowTableGathers(gr)
+func (f *partForm) rowHalves(gr *graph.Graph, tables []jlm.Role, vals map[graph.ValueID]int, rows int) error {
+	gs, err := rowTableGathers(gr, tables)
 	if err != nil || len(gs) == 0 {
 		return err
 	}

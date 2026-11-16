@@ -375,7 +375,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *model.Model, g *c6Golden, vs [
 func gathersStated(m *model.Model) bool {
 	for li := range m.Cfg.NLayer {
 		gr := m.Composing().BlockGraph(li)
-		if gr != nil && m.Uncovered(li) == model.Covered && len(gr.TableRows()) > 0 {
+		if gr != nil && m.Uncovered(li) == model.Covered && len(gr.TableRows([]jlm.Role{jlm.RoleNGramTable})) > 0 {
 			return true
 		}
 	}

@@ -72,6 +72,8 @@ type Operand struct {
 	// weight's Instance is the first stored row it binds (graph.Binding.From).
 	Table    Table
 	Instance int
+	// Rows is a weight held as a row table (Request.Tables).
+	Rows bool
 }
 
 // Expr is one node of a primitive's scalar function: an operation on earlier

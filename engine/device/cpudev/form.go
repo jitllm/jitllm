@@ -262,12 +262,12 @@ func stepsState(gr *graph.Graph) bool {
 
 // BuildForm maps codes onto h and plans each call word's source: the
 // graph's input and output the residual, or with apart each an io place of
-// its own. A whole form is run at its rows and no fewer (a convolutional
+// its own; the gathers from row tables of tables read rows a call at a time. A whole form is run at its rows and no fewer (a convolutional
 // block's, over its grid), so its kernels need not be held to a call's rows.
-func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
+func BuildForm(h *cpu.Target, gr *graph.Graph, tables []jlm.Role, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
 	f := &Form{Consts: map[int][]uint32{}, Rows: rows, Sel: -1, WSel: -1, Rec: stepsState(gr),
 		Places: len(gr.In) + len(gr.Out)}
-	selV, wsV, rowVs := selOf(gr), weightsOf(gr), gr.TableRows()
+	selV, wsV, rowVs := selOf(gr), weightsOf(gr), gr.TableRows(tables)
 	for _, t := range rowVs {
 		f.RowSels = append(f.RowSels, RowSel{Role: t.Role, Own: -1, N: gr.Values[t.Rows].Width})
 	}
