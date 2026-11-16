@@ -211,7 +211,6 @@
       {"op": "matvec", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
       {"op": "add", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
       {"op": "layer_norm", "if": "layer_norm and stored('attn_out_norm')", "in": "h", "w": ["attn_out_norm", "attn_out_norm.bias?"], "out": "h"},
-      {"op": "norm", "if": "not layer_norm and stored('attn_out_norm')", "in": "h", "w": "attn_out_norm", "out": "h"},
       {"op": "layer_norm", "if": "not parallel and layer_norm and stored('ffn_norm')", "in": "h", "w": ["ffn_norm", "ffn_norm.bias?"], "out": "m"},
       {"op": "norm", "if": "not parallel and not layer_norm and stored('ffn_norm')", "in": "h", "w": "ffn_norm", "out": "m"},
       {"op": "let", "if": "not parallel and not stored('ffn_norm')", "in": "h", "out": "m"},

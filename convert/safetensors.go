@@ -90,7 +90,7 @@ func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, f
 	for _, fn := range opts {
 		fn(&o)
 	}
-	s, err := hfSourceWith(hfDir{meta, name}, open, o.modelJSON)
+	s, err := hfSourceWith(hfDir{meta, name}, open, o.modelJSON, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +138,7 @@ type options struct {
 	pictureStep  func(*jlm.PreStep) // WithPictureStep, GGUF only
 	longestEdge  int32              // the processor config's size.longest_edge, 0 for none
 	modelJSON    string             // WithModelJSON, safetensors only
+	taken        map[string]bool    // the features a conversion takes (FeaturesOf)
 }
 
 // WithPictureStep edits each picture step the tower's stater writes, before
@@ -298,11 +299,12 @@ func (d hfDir) String() string                { return d.name }
 
 // hfSourceOf translates a HuggingFace directory into the container's own terms.
 func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
-	return hfSourceWith(dir, shards, "")
+	return hfSourceWith(dir, shards, "", nil)
 }
 
-// hfSourceWith is hfSourceOf by the caller's model.json, where there is one.
-func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm.Source, error) {
+// hfSourceWith is hfSourceOf by the caller's model.json, where there is one,
+// each feature its blocks take added to taken where that is not nil.
+func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken map[string]bool) (*jlm.Source, error) {
 	hc, err := readHFConfig(dir)
 	if err != nil {
 		return nil, err
@@ -593,7 +595,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 		return nil, err
 	}
 	if g != nil {
-		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc)); err != nil {
+		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc), taken); err != nil {
 			return nil, err
 		}
 	}

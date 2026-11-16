@@ -369,8 +369,10 @@ an addition is chosen from and priced against.
    seam that leaves blocks on the CPU -- a gate asserting every block placed
    on a card runs no CPU attention and cannot see a CPU-side bug.
 5. **The five principles' gates**, with the model added to each gate's list.
-   The census's list is checked: `engine.TestTheCensusCoversEveryGraph` fails
-   until a model it runs reads the new graph or carries the new projector.
+   The census's list is checked: `engine.TestTheCensusCoversEveryFeature` fails
+   until a model it runs takes every feature the new statement states (each
+   op of its graph by what it computes, each container field) and carries the
+   new projector.
 6. **A real checkpoint against llama.cpp**, teacher-forced
    (`TestGreedyMatchesLlamaCpp`; `JITLLM_GREEDY_MODEL` names one over its size
    limit), wherever one fits a box.

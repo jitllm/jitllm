@@ -600,8 +600,9 @@ func (v tensorNames) blockRole(name string) (jlm.Role, bool) {
 
 // StateBlockGraphs states every block's graph in c from g, held to the
 // tensors s stores for it: the trunk's, the head blocks' and the
-// prediction blocks'.
-func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) error {
+// prediction blocks'. Each feature a block takes is added to taken where it
+// is not nil (FeaturesOf).
+func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, taken map[string]bool) error {
 	if c.HeadBlocks() != 0 && c.NMTP != 0 {
 		return fmt.Errorf("convert: %d head blocks beside %d prediction blocks, which both follow the trunk", c.HeadBlocks(), c.NMTP)
 	}
@@ -617,7 +618,7 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) err
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
 	for li := range n {
-		bg, err := blockGraphOf(c.Config, s, li, g, used, src, names)
+		bg, err := blockGraphOf(c.Config, s, li, g, used, src, names, taken)
 		if err != nil {
 			return fmt.Errorf("convert: block %d's stated graph: %w", li, err)
 		}
@@ -661,8 +662,10 @@ func usedGraphs(g *mjGraph) ([]*mjGraph, error) {
 }
 
 // blockGraphOf is block li's graph as g states it, or as the first of used
-// (g.Use's graphs) whose condition holds for it.
-func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGraph, src jinja.Value, names tensorNames) (*graph.Graph, error) {
+// (g.Use's graphs) whose condition holds for it, each feature it takes added
+// to taken where that is not nil.
+func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGraph, src jinja.Value, names tensorNames,
+	taken map[string]bool) (*graph.Graph, error) {
 	bf := blockFactsOf(c, s, li, names)
 	bf.src = src
 	for i, u := range g.Use {
@@ -674,6 +677,9 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			g = used[i]
 			break
 		}
+	}
+	if taken != nil && g.Streams != nil {
+		taken[streamsFeature] = true
 	}
 	b := graph.NewBlock(li)
 	vals := map[string]graph.ValueID{}
@@ -698,6 +704,13 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if !on {
 				continue
 			}
+		}
+		if taken != nil {
+			f, err := opFeature(o)
+			if err != nil {
+				return nil, err
+			}
+			taken[f] = true
 		}
 		in := make([]graph.ValueID, len(o.In))
 		for k, v := range o.In {

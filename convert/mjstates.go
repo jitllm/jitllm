@@ -1229,6 +1229,9 @@ func stateAttnTemp(by, arch string, tp *mjStatesTemp, number func(what, src stri
 			return err
 		}
 	}
+	if off < 0 || off != float32(uint32(off)) {
+		return fmt.Errorf("convert: %s: %s: attn_temp.offset %g is not a whole count of positions: %w", by, arch, off, ErrNotImplemented)
+	}
 	c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset = s, uint32(floor), off
 	return nil
 }

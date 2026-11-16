@@ -236,21 +236,11 @@
       {"op": "emit",       "if": "rope_at and qk_l2", "kind": "head_norm", "in": "k", "attr": {"Eps": "eps", "HeadDim": "head_dim"}, "outs": [{"name": "k.l2", "width": "kv_heads * head_dim"}], "out": "k"},
       {"op": "head_norm",  "if": "qk_norm and qk_norm_post", "in": "q", "w": "attn_q_norm", "out": "q"},
       {"op": "head_norm",  "if": "qk_norm and qk_norm_post and not rope_keeps_rms and rope_at", "in": "k", "w": "attn_k_norm", "out": "k"},
-      {"op": "emit",       "if": "temp_scale != 0 and not (nope_global and rope_at) and temp_offset >= 0 and temp_offset == temp_offset|int", "kind": "position", "attr": {"Offset": "temp_offset|int", "Span": "temp_floor"}, "outs": [{"name": "pos", "width": "1"}], "out": "pos"},
-      {"op": "expr",       "if": "temp_scale != 0 and not (nope_global and rope_at) and temp_offset >= 0 and temp_offset == temp_offset|int", "name": "temp", "in": "pos", "width": "1", "terms": [
+      {"op": "emit",       "if": "temp_scale != 0 and not (nope_global and rope_at)", "kind": "position", "attr": {"Offset": "temp_offset|int", "Span": "temp_floor"}, "outs": [{"name": "pos", "width": "1"}], "out": "pos"},
+      {"op": "expr",       "if": "temp_scale != 0 and not (nope_global and rope_at)", "name": "temp", "in": "pos", "width": "1", "terms": [
         {"fn": "add", "args": [{"in": 0}, {"const": "1"}]},
         {"fn": "log", "args": [{"term": 0}]},
         {"fn": "fma", "args": [{"term": 1}, {"const": "temp_scale"}, {"const": "1"}]}], "out": "t"},
-      {"op": "emit",       "if": "temp_scale != 0 and not (nope_global and rope_at) and not (temp_offset >= 0 and temp_offset == temp_offset|int)", "kind": "position", "outs": [{"name": "pos", "width": "1"}], "out": "pos"},
-      {"op": "expr",       "if": "temp_scale != 0 and not (nope_global and rope_at) and not (temp_offset >= 0 and temp_offset == temp_offset|int)", "name": "temp", "in": "pos", "width": "1", "terms": [
-        {"fn": "add", "args": [{"in": 0}, {"const": "temp_offset"}]},
-        {"fn": "div", "args": [{"term": 0}, {"const": "temp_floor"}]},
-        {"fn": "round", "args": [{"term": 1}]},
-        {"fn": "less", "args": [{"term": 1}, {"term": 2}]},
-        {"fn": "sub", "args": [{"term": 2}, {"term": 3}]},
-        {"fn": "add", "args": [{"term": 4}, {"const": "1"}]},
-        {"fn": "log", "args": [{"term": 5}]},
-        {"fn": "fma", "args": [{"term": 6}, {"const": "temp_scale"}, {"const": "1"}]}], "out": "t"},
       {"op": "emit",       "if": "temp_scale != 0 and not (nope_global and rope_at)", "kind": "map", "in": ["q", "t"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "q.temp", "width": "heads * head_dim"}], "out": "q"},
       {"op": "indexer", "if": "selects", "in": ["n", "n"], "out": "ix"},
       {"op": "emit", "if": "selects", "kind": "concat", "in": ["k", "ix.key"], "outs": [{"name": "k.row", "width": "kv_heads * head_dim + key_width"}], "out": "k"},

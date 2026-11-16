@@ -1,9 +1,6 @@
 package engine
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
@@ -11,95 +8,64 @@ import (
 	"github.com/jitllm/jitllm/convert/gguf"
 )
 
-// TestTheCensusCoversEveryGraph holds the census's models to the converter's
-// lists, which docs/models.md is generated from: every graph a GGUF
-// architecture name or a Hugging Face class converts to, and every vision
-// projector, is read by at least one model the census runs, so a green census
-// is every entry of the page opening and running. A graph or projector no
-// model reads fails by name; with no models every entry is a gap.
-func TestTheCensusCoversEveryGraph(t *testing.T) {
-	graphs, projectors := censusGaps(t, auditModels(t))
-	for _, g := range graphs {
-		t.Errorf("no census model reads graph %s", g)
+// TestTheCensusCoversEveryFeature holds the census's models to what the
+// library states: every feature (convert.Features -- each graph's op by what
+// it computes, a graph's residual streams, each field a container statement
+// sets) is taken by a model the census runs (convert.FeaturesOf), and every
+// vision projector is carried by one, so a green census is every statement
+// the converter can write opening and running. A feature or projector no
+// model takes fails by name; with no models every one is a gap.
+func TestTheCensusCoversEveryFeature(t *testing.T) {
+	features, projectors := censusGaps(t, auditModels(t))
+	for _, f := range features {
+		by, err := convert.StatedBy(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("no census model takes %s (stated by %v)", f, by)
 	}
 	for _, p := range projectors {
 		t.Errorf("no census model carries projector %s", p)
 	}
-	want, wantProj := censusWants(t)
-	t.Logf("%d graphs and %d projectors in the converter's lists; %d and %d without a census model",
-		len(want), len(wantProj), len(graphs), len(projectors))
-	g0, p0 := censusGaps(t, nil)
-	if len(g0) != len(want) || len(p0) != len(wantProj) {
-		t.Fatalf("VIOLATION: no models left %d graph and %d projector gaps, want %d and %d",
-			len(g0), len(p0), len(want), len(wantProj))
-	}
-}
-
-// censusWants is the graphs the converter's two lists convert to, each with
-// the first name that reaches it, and the projectors it reads.
-func censusWants(t *testing.T) (map[convert.Arch]string, map[string]bool) {
-	t.Helper()
-	names, err := convert.Architectures()
+	want, err := convert.Features()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[convert.Arch]string{}
-	for _, a := range names {
-		// A projector's own container: its towers are the projectors below.
-		if a == "clip" {
-			continue
-		}
-		if g, ok := convert.ArchitectureGraph(a); ok {
-			if _, in := want[g]; !in {
-				want[g] = a
-			}
-		}
+	wantProj := convert.Projectors()
+	t.Logf("%d features and %d projectors in the library; %d and %d without a census model",
+		len(want), len(wantProj), len(features), len(projectors))
+	f0, p0 := censusGaps(t, nil)
+	if len(f0) != len(want) || len(p0) != len(wantProj) {
+		t.Fatalf("VIOLATION: no models left %d feature and %d projector gaps, want %d and %d",
+			len(f0), len(p0), len(want), len(wantProj))
 	}
-	for _, c := range convert.HFClasses() {
-		if g, ok := convert.HFClassGraph(c); ok {
-			if _, in := want[g]; !in {
-				want[g] = c
-			}
-		}
-	}
-	proj := map[string]bool{}
-	for _, p := range convert.Projectors() {
-		proj[p] = true
-	}
-	return want, proj
 }
 
-// censusGaps is the graphs and projectors of censusWants that none of ms
-// reads: a GGUF's general.architecture, a safetensors directory's class, a
-// catalog model's projector.
-func censusGaps(t *testing.T, ms []auditModel) (graphs, projectors []string) {
+// censusGaps is the library's features and projectors none of ms takes:
+// what converting each would state (convert.FeaturesOf), and a catalog
+// model's projector.
+func censusGaps(t *testing.T, ms []auditModel) (features, projectors []string) {
 	t.Helper()
-	want, proj := censusWants(t)
-	have := map[convert.Arch]bool{}
+	want, err := convert.Features()
+	if err != nil {
+		t.Fatal(err)
+	}
+	taken := map[string]bool{}
 	carried := map[string]bool{}
 	for _, m := range ms {
-		if m.hf {
-			b, err := os.ReadFile(filepath.Join(m.path, "config.json"))
-			if err != nil {
-				t.Errorf("%s: %v", m.name, err)
-				continue
-			}
-			var cfg struct {
-				Architectures []string `json:"architectures"`
-			}
-			if err := json.Unmarshal(b, &cfg); err != nil {
-				t.Errorf("%s: config.json: %v", m.name, err)
-				continue
-			}
-			for _, c := range cfg.Architectures {
-				if g, ok := convert.HFClassGraph(c); ok {
-					have[g] = true
-				}
-			}
+		var opts []convert.Option
+		if c := ModelConfigForTest(m.path); c != "" {
+			opts = append(opts, convert.WithModelConfig(c))
+		}
+		fs, err := convert.FeaturesOf(m.path, m.mmproj, opts...)
+		if err != nil {
+			// A file the converter refuses takes nothing; the gates that run
+			// every model hold it to its refusal.
+			t.Logf("%s takes no feature: %v", m.name, err)
 			continue
 		}
-		if g, ok := convert.ArchitectureGraph(ggufKey(t, m.path, "general.architecture")); ok {
-			have[g] = true
+		for _, f := range fs {
+			taken[f] = true
 		}
 		if m.mmproj != "" {
 			pt := ggufProjector(t, m.mmproj)
@@ -109,19 +75,18 @@ func censusGaps(t *testing.T, ms []auditModel) (graphs, projectors []string) {
 			carried[pt] = true
 		}
 	}
-	for g, name := range want {
-		if !have[g] {
-			graphs = append(graphs, g.String()+" ("+name+")")
+	for _, f := range want {
+		if !taken[f] {
+			features = append(features, f)
 		}
 	}
-	for p := range proj {
+	for _, p := range convert.Projectors() {
 		if !carried[p] {
 			projectors = append(projectors, p)
 		}
 	}
-	sort.Strings(graphs)
 	sort.Strings(projectors)
-	return graphs, projectors
+	return features, projectors
 }
 
 // ggufKey is a GGUF's string key k, "" where the file or the key is absent.

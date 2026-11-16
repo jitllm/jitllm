@@ -373,6 +373,7 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{mjStates{NoRopeEvery: "1"}, "every layer skips the rotary"},
 		{mjStates{NoRopeEvery: "4", Window: &mjStatesWindow{Size: "8", Period: "2"}}, "beside a sliding window"},
 		{mjStates{Window: &mjStatesWindow{Size: "0", Period: "4"}}, "a window period over a window of 0"},
+		{mjStates{AttnTemp: &mjStatesTemp{Scale: "0.1", Floor: "8", Offset: "0.5"}}, "not a whole count of positions"},
 	} {
 		srcs := []string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale, tc.st.NoRopeEvery,
 			tc.st.RopeSections}
@@ -381,6 +382,9 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		}
 		if w := tc.st.Window; w != nil {
 			srcs = append(srcs, w.Size, w.Period)
+		}
+		if a := tc.st.AttnTemp; a != nil {
+			srcs = append(srcs, a.Scale, a.Floor, a.Offset)
 		}
 		if err := tc.st.compile(srcs); err != nil {
 			t.Fatal(err)

@@ -65,7 +65,6 @@
       {"op": "matvec", "if": "kind != 'shortconv'", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
       {"op": "add", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
       {"op": "layer_norm", "if": "layer_norm and stored('attn_out_norm')", "in": "h", "w": ["attn_out_norm", "attn_out_norm.bias?"], "out": "h"},
-      {"op": "norm", "if": "not layer_norm and stored('attn_out_norm')", "in": "h", "w": "attn_out_norm", "out": "h"},
       {"op": "norm", "in": "h", "w": "ffn_norm", "out": "m"},
       {"op": "matvec", "if": "not moe", "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
       {"op": "matvec", "if": "not moe", "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
