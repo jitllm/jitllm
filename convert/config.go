@@ -364,10 +364,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := kimiK3Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchModernBERT:
-		if err := modernBERTConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	}
 
 	// A head narrower than embedding/heads is stated only by key_length; a

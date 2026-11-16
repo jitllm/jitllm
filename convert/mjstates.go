@@ -77,6 +77,9 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// HeadBlocks is how many trailing blocks are a decision head, a count
+	// (stateHeadBlocks; 0 for none).
+	HeadBlocks string `json:"head_blocks"`
 	// YarnMagnitude is where a YaRN's magnitude reaches, by name
 	// (mjYarnMagnitudes; cos and sin and the softmax both where unstated).
 	YarnMagnitude string `json:"yarn_magnitude"`
@@ -375,7 +378,7 @@ func (mj *modelJSON) checkStates() error {
 		if _, ok := mjDeltaGates()[st.DeltaGate]; st.DeltaGate != "" && !ok {
 			return fmt.Errorf("convert: %s: %s: delta gate %q is not one the container states", mj.name, arch, st.DeltaGate)
 		}
-		srcs = append(srcs, st.QSARatios)
+		srcs = append(srcs, st.QSARatios, st.HeadBlocks)
 		if st.YarnMagnitude != "" && !slices.Contains(mjYarnMagnitudes(), st.YarnMagnitude) {
 			return fmt.Errorf("convert: %s: %s: yarn magnitude %q is not one the container states", mj.name, arch, st.YarnMagnitude)
 		}
@@ -462,9 +465,16 @@ func stateContainer(f *meta.File, c *Config) error {
 }
 
 // statedTensorsAgree refuses a file storing a router over no expert_count,
-// a gate on an FFN the library states ungated, and one storing no position
-// table where the library states the input rows add one.
+// a gate on an FFN the library states ungated, one storing no position
+// table where the library states the input rows add one, and one whose
+// hidden_activation names another activation than the stated one.
 func statedTensorsAgree(f *meta.File, c *Config) error {
+	if kv, ok := f.Key("hidden_activation"); ok {
+		if s, _ := kv.String(); s != c.Stated.activation {
+			return fmt.Errorf("convert: %s: hidden_activation %q, and the library states %q: %w", f.Arch(), s,
+				c.Stated.activation, ErrNotImplemented)
+		}
+	}
 	if _, ok := f.Get("position_embd.weight"); !ok && c.Stated.learnedPositions {
 		return fmt.Errorf("convert: %s: no position_embd.weight, which the graph adds to the input rows", f.Arch())
 	}
@@ -527,6 +537,20 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		return err == nil && v.AsBool(), err
 	}
 	c.Stated = &Statement{activation: st.Activation, ropeLayout: st.RopeLayout, yarnMagnitude: st.YarnMagnitude}
+	if st.HeadBlocks != "" {
+		x, err := number("head_blocks", st.HeadBlocks)
+		if err != nil {
+			return err
+		}
+		if x < 0 || x != float32(uint32(x)) {
+			return fmt.Errorf("convert: %s: %s: head_blocks is %g, not a count", by, arch, x)
+		}
+		if x != 0 {
+			if err := stateHeadBlocks(f, c, uint32(x)); err != nil {
+				return fmt.Errorf("convert: %s: %w", arch, err)
+			}
+		}
+	}
 	for _, b := range []struct {
 		what, src string
 		to        *bool

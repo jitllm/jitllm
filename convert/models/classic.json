@@ -37,7 +37,12 @@
              "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-12)"},
     "nomic-bert": {"flags": {"layer_norm": "true", "non_causal": "true", "rope_neox": "true"},
                    "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-12)"},
-    "modern-bert": {"flags": {"non_causal": "true"}, "activation": "gelu", "revision": {"swa_global_first": "true"}}
+    "modern-bert": {"flags": {"non_causal": "true", "rope_neox": "true", "layer_norm": "true"}, "activation": "gelu",
+                    "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
+                    "head_blocks": "src['decision.block_count'] | default(0)",
+                    "window": {"size": "src['attention.sliding_window'] | default(0)", "pattern": "3",
+                               "rope_base": "src['rope.freq_base_swa'] | default(src['rope.freq_base'] | default(10000))"},
+                    "revision": {"swa_global_first": "true"}}
   },
   "graph": {
     "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],

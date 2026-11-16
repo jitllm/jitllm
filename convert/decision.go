@@ -159,25 +159,13 @@ func decisionOf(f *meta.File, c *Config) error {
 	return nil
 }
 
-// modernBERTConfig is ModernBERT's encoder, and the decision head llama.cpp
-// appends to it as trailing blocks (conversion/bert.py,
-// ModernBertDecisionModel): block_count counts both, decision.block_count the
-// head, and feed_forward_length is per block because the head's MLP is 4x
-// wide. From here on NLayer is the encoder; the head is blocks NLayer.. and
+// stateHeadBlocks splits a decision head llama.cpp appends to an encoder as
+// trailing blocks off c (the head_blocks statement; conversion/bert.py,
+// ModernBertDecisionModel): block_count counts both, head the head, and
+// feed_forward_length may be per block because the head's MLP is wider.
+// From here on NLayer is the encoder; the head is blocks NLayer.. and
 // Config.DecisionBlocks says how many.
-func modernBERTConfig(f *meta.File, c *Config) error {
-	// Its norms are LayerNorms without a bias; its activation, GELU with erf,
-	// the encoder's stated expression (Activation).
-	c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-5))
-	c.Flags |= jlm.FlagNonCausal | jlm.FlagRopeNeox | jlm.FlagLayerNorm
-	if v, ok := f.Key("hidden_activation"); ok {
-		// IBM's Granite Embedding R2 runs the same graph under SiLU; nothing
-		// here has a fixture for it.
-		if s, _ := v.String(); s != "gelu" {
-			return fmt.Errorf("hidden_activation %q is not implemented: %w", s, ErrNotImplemented)
-		}
-	}
-	head := uint32(f.UintKey("decision.block_count", 0))
+func stateHeadBlocks(f *meta.File, c *Config, head uint32) error {
 	if head >= c.NLayer {
 		return fmt.Errorf("decision.block_count %d in a %d-block file", head, c.NLayer)
 	}
@@ -188,31 +176,20 @@ func modernBERTConfig(f *meta.File, c *Config) error {
 	}
 	if v, ok := ffn.Uint(); ok {
 		c.NFFN = uint32(v)
-	} else {
-		vs, err := ffn.Int32s()
-		if err != nil {
-			return fmt.Errorf("feed_forward_length: %w", err)
-		}
-		if uint32(len(vs)) != c.NLayer+head {
-			return fmt.Errorf("feed_forward_length has %d entries for %d blocks", len(vs), c.NLayer+head)
-		}
-		for i := uint32(0); i < c.NLayer; i++ {
-			if vs[i] != vs[0] || vs[i] <= 0 {
-				return fmt.Errorf("feed_forward_length differs between encoder blocks: %w", ErrNotImplemented)
-			}
-		}
-		c.NFFN = uint32(vs[0])
+		return nil
 	}
-	// Every SWAPeriod-th layer from the first attends to everything; the
-	// others within a symmetric window. An absent window is every layer
-	// global.
-	c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
-	if c.SWAWindow != 0 {
-		if err := swaPatternOf(f, c, 3); err != nil {
-			return err
-		}
-		c.Flags2 |= jlm.Flag2SWAGlobalFirst
+	vs, err := ffn.Int32s()
+	if err != nil {
+		return fmt.Errorf("feed_forward_length: %w", err)
 	}
-	c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", float64(c.RopeBase)))
+	if uint32(len(vs)) != c.NLayer+head {
+		return fmt.Errorf("feed_forward_length has %d entries for %d blocks", len(vs), c.NLayer+head)
+	}
+	for i := uint32(0); i < c.NLayer; i++ {
+		if vs[i] != vs[0] || vs[i] <= 0 {
+			return fmt.Errorf("feed_forward_length differs between encoder blocks: %w", ErrNotImplemented)
+		}
+	}
+	c.NFFN = uint32(vs[0])
 	return nil
 }
