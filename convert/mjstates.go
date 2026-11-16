@@ -77,6 +77,9 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// CompressedBlocks, true, reads each block's compression off the
+	// tensors and compress_ratios (ds4Kinds).
+	CompressedBlocks bool `json:"compressed_blocks"`
 	// MergeMixers, true, merges a source of one-mixer layers into blocks
 	// (mergeMixers).
 	MergeMixers bool `json:"merge_mixers"`
@@ -201,7 +204,7 @@ type mjRouter struct {
 // mjGates is each gate a router states by name, with the expert_gating_func
 // value that names it (-1 for none: the class reads no gating key).
 func mjGates() map[string]int64 {
-	return map[string]int64{"softmax": 1, "sigmoid": 2, "sparsemixer": -1}
+	return map[string]int64{"softmax": 1, "sigmoid": 2, "sqrt_softplus": 4, "sparsemixer": -1}
 }
 
 // mjStatesStreams is Count residual streams, each block's mix normalised by
@@ -278,6 +281,7 @@ type Statement struct {
 	routerGate                          string
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
+	compressedBlocks                    bool
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -397,7 +401,8 @@ func (mj *modelJSON) checkStates() error {
 		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
-			if _, no := mjFlagsNotImplemented()[k]; !ok && !no {
+			_, ok2 := mjFlags2()[k]
+			if _, no := mjFlagsNotImplemented()[k]; !ok && !ok2 && !no {
 				return fmt.Errorf("convert: %s: %s: flag %q is no graph feature", mj.name, arch, k)
 			}
 			srcs = append(srcs, st.Flags[k])
@@ -575,6 +580,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if r := st.Router; r != nil {
 		c.Stated.routerGate, c.Stated.routerUngrouped = r.Gate, r.Ungrouped
 	}
+	c.Stated.compressedBlocks = st.CompressedBlocks
 	if st.MergeMixers {
 		c.Stated.mergeMixers = true
 		if err := mergeMixers(f, c); err != nil {
@@ -614,8 +620,10 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return fmt.Errorf("convert: %s: %s (%s): %w", arch, k, why, ErrNotImplemented)
 		case v.AsBool():
 			c.Flags |= mjFlags()[k]
+			c.Flags2 |= mjFlags2()[k]
 		default:
 			c.Flags &^= mjFlags()[k]
+			c.Flags2 &^= mjFlags2()[k]
 		}
 	}
 	if f, ok := mjActivations()[st.Activation]; ok {
@@ -1026,8 +1034,11 @@ func (r *mjRouter) apply(f *meta.File, c *Config) error {
 				return fmt.Errorf("expert_gating_func %d, and the class's router is %s: %w", v, r.Gate, ErrNotImplemented)
 			}
 		}
-		if r.Gate == "sigmoid" {
+		switch r.Gate {
+		case "sigmoid":
 			c.Flags |= jlm.FlagExpertSigmoid
+		case "sqrt_softplus":
+			c.Flags2 |= jlm.Flag2ExpertSqrtSoftplus
 		}
 	}
 	if kv, ok := f.Key("expert_weights_norm"); ok && r.Renormalise != "" {

@@ -493,7 +493,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := ternaryTensors(c, s, scales); err != nil {
 		return nil, err
 	}
-	if err := ds4Tensors(c, s); err != nil {
+	if err := groupedOutputTensors(c, s); err != nil {
 		return nil, err
 	}
 	if err := kimiK3Tensors(c, s); err != nil {

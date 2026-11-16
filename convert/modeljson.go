@@ -187,6 +187,18 @@ func mjFlags() map[string]jlm.Flags {
 	}
 }
 
+// mjFlags2 is each graph feature a file may state by name, as the container's
+// second flag word states it.
+func mjFlags2() map[string]jlm.Flags2 {
+	return map[string]jlm.Flags2{
+		"swiglu_clamp":  jlm.Flag2SwiGLUClamp,
+		"rope_tail":     jlm.Flag2RopeTail,
+		"key_value":     jlm.Flag2KeyValue,
+		"q_unit_norm":   jlm.Flag2QUnitNorm,
+		"out_unrotated": jlm.Flag2OutUnrotated,
+	}
+}
+
 // mjFlagsNotImplemented is each graph feature a file may state by name that
 // the engine does not run, with what it is: stated true, it is refused.
 func mjFlagsNotImplemented() map[string]string {

@@ -344,10 +344,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := gemma3nConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchDeepseek4:
-		if err := deepseek4Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchKimiK3:
 		if err := kimiK3Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -389,6 +385,9 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if _, ok := f.Get("blk.0.attn_q_norm.weight"); ok {
 			return nil, fmt.Errorf("convert: %s: a per-head q/k LayerNorm: %w", name, ErrNotImplemented)
 		}
+	}
+	if err := statedFeaturesFit(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	// A rotary narrower than the head turns its leading pairs and passes the
 	// rest through, whatever the architecture.

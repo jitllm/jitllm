@@ -202,7 +202,11 @@ schema; `convert/modeljson.go` reads it. Its sections:
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
   (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `merge_mixers: true` merges a source of one-mixer layers (Nemotron-H's
+  (`sparseBlocksFit`). `compressed_blocks: true` reads each block's compression (CSA, HCA or
+  none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
+  feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,
+  whose per-block limits are read, `key_value`, held to one kv head and no
+  value width, `rope_tail`, `q_unit_norm`, `out_unrotated`). `merge_mixers: true` merges a source of one-mixer layers (Nemotron-H's
   Mamba-2, attention and MLP layers) into blocks of a mixer and an FFN
   (`mergeMixers`). `router` is what the class's router does whatever the keys say: `gate`
   (softmax, sigmoid, or sparsemixer, which reads no gating key, ranks

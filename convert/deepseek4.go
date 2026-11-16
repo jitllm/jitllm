@@ -69,63 +69,32 @@ func deepseek4RoleOf(name string) (jlm.Role, bool) {
 // written when no other clamp converted, restated from its flag.
 const ds4SwiGLULimit = 10
 
-// deepseek4Config is llama.cpp's deepseek4.cpp and transformers'
-// DeepseekV4ForCausalLM, text only: the hyper-connection streams (HCMult,
-// HCIters, HCEps), a q LoRA, one kv head that is also the value, the rotary on
-// each head's last NRot dimensions in adjacent pairs at two bases (YaRN on the
-// compressed blocks), a window and sinks on every block, compressed blocks
-// (CompKinds, CompRateCSA, CompRateHCA) with the indexer, a grouped low-rank
-// output, the sqrt(softplus) mixture with hash-routed lead blocks, and a
-// SwiGLU clamped at each block's stated limit (ds4Clamp). The q LoRA's rank,
-// the indexer, the window, the compressed blocks' rotary base, the streams,
-// the output groups and the hash-routed blocks are compressed.json's
-// container statement.
-//
-// Refused: any gate but sqrt-softplus, the renormalisation off, a block
-// whose routed and shared clamps differ, and a window that does not cover the HCA rate and two CSA windows
-// (the pending compressor inputs live in the window's cached rows).
-//
-// The reference-to-container table and the reasons in full:
-// docs/engineering-history/model-correctness.md,
-// "convert/deepseek4.go: deepseek4Config".
-func deepseek4Config(f *meta.File, c *Config) error {
-	c.Flags2 |= jlm.Flag2SwiGLUClamp | jlm.Flag2ExpertSqrtSoftplus | jlm.Flag2RopeTail | jlm.Flag2KeyValue |
-		jlm.Flag2QUnitNorm | jlm.Flag2OutUnrotated
-	if c.NKVHead != 1 {
-		return fmt.Errorf("%d kv heads: DeepSeek V4's attention is one shared key and value: %w",
-			c.NKVHead, ErrNotImplemented)
-	}
-	if c.HeadDimV != 0 {
-		return fmt.Errorf("value width %d beside key width %d: DeepSeek V4's value is its key: %w",
-			c.HeadDimV, c.HeadDim, ErrNotImplemented)
-	}
-	if err := partialRotary(c); err != nil {
-		return err
-	}
-	if c.QLoraRank == 0 || c.SWAWindow == 0 {
-		return fmt.Errorf("q_lora_rank %d, sliding_window %d: DeepSeek V4 has both", c.QLoraRank, c.SWAWindow)
-	}
-	if err := ds4Clamp(f, c); err != nil {
-		return err
-	}
-	if kv, ok := f.Key("expert_gating_func"); ok {
-		if v, _ := kv.Uint(); v != 4 {
-			return fmt.Errorf("expert_gating_func %d, and DeepSeek V4's router is sqrt-softplus: %w",
-				v, ErrNotImplemented)
+// statedFeaturesFit holds a file to what its statement's features need,
+// once the keys are read: an attention whose key is its value
+// (Flag2KeyValue, DeepSeek V4's) has one kv head and no value width of its
+// own, a SwiGLU clamped per block (Flag2SwiGLUClamp) reads its limits
+// (ds4Clamp), and compressed blocks (compressed_blocks) read their kinds
+// (ds4Kinds).
+func statedFeaturesFit(f *meta.File, c *Config) error {
+	if c.Flags2.Has(jlm.Flag2KeyValue) {
+		if c.NKVHead != 1 {
+			return fmt.Errorf("%d kv heads, and an attention whose key is its value is one shared key "+
+				"and value: %w", c.NKVHead, ErrNotImplemented)
+		}
+		if c.HeadDimV != 0 {
+			return fmt.Errorf("value width %d beside key width %d, and the value is the key: %w",
+				c.HeadDimV, c.HeadDim, ErrNotImplemented)
 		}
 	}
-	if kv, ok := f.Key("expert_weights_norm"); ok {
-		if v, _ := kv.Uint(); v == 0 {
-			return fmt.Errorf("expert_weights_norm false, and DeepSeek V4's routers always "+
-				"renormalise: %w", ErrNotImplemented)
+	if c.Flags2.Has(jlm.Flag2SwiGLUClamp) {
+		if err := ds4Clamp(f, c); err != nil {
+			return err
 		}
 	}
-	if f.UintKey("expert_count", 0) == 0 || f.UintKey("expert_shared_count", 0) != 1 {
-		return fmt.Errorf("expert_count %d with %d shared experts: DeepSeek V4 is a mixture with "+
-			"one shared expert in every block: %w", f.UintKey("expert_count", 0),
-			f.UintKey("expert_shared_count", 0), ErrNotImplemented)
+	if c.Stated.compressedBlocks {
+		return ds4Kinds(f, c)
 	}
-	return ds4Kinds(f, c)
+	return nil
 }
 
 // ds4Clamp reads each block's SwiGLU clamp: llama.cpp's converter writes the
@@ -246,15 +215,16 @@ func ds4Kinds(f *meta.File, c *Config) error {
 	return nil
 }
 
-// ds4Tensors finishes DeepSeek V4's tensors. The grouped output projection's
-// first half is OGroups matrices of OLoraRank rows over one group's heads,
+// groupedOutputTensors finishes a grouped low-rank output projection
+// (output_groups, DeepSeek V4's): its first half is OGroups matrices of
+// OLoraRank rows over one group's heads,
 // stacked in the file as one {group width, OGroups*OLoraRank} matrix (llama.cpp
 // reshapes it to three dimensions at load); it is carried as the bank it is,
 // {group width, OLoraRank, OGroups}, the same bytes, so the container packs
 // each group as its own sheet and a reader cuts a group the way it cuts an
 // expert.
-func ds4Tensors(c *Config, s *jlm.Source) error {
-	if c.Arch != ArchDeepseek4 {
+func groupedOutputTensors(c *Config, s *jlm.Source) error {
+	if c.OGroups == 0 {
 		return nil
 	}
 	gw := uint64(c.NHead/c.OGroups) * uint64(c.HeadDim)
