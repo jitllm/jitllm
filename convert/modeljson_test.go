@@ -686,6 +686,60 @@ func mjRun(t *testing.T, env exprEnv, do string, vs ...mjVal) (mjVal, error) {
 	return p.run(env, vs)
 }
 
+// TestTrimTakesOnlyZeroPadding holds trim to a release's padding: the kept
+// indices come through, a tail of zeros goes, and a tail holding anything
+// else is refused as another geometry.
+func TestTrimTakesOnlyZeroPadding(t *testing.T) {
+	env := mjEnv(map[string]any{"heads": 2.0})
+	v, err := mjRun(t, env, `[{"trim": [0, "heads"]}]`, mjF32([]uint64{4}, 0.5, -1, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mjFloats(v); !slices.Equal(got, []float32{0.5, -1}) || !slices.Equal(v.shape, []uint64{2}) {
+		t.Fatalf("trimmed to %v %v", v.shape, got)
+	}
+	if _, err := mjRun(t, env, `[{"trim": [0, "heads"]}]`, mjF32([]uint64{4}, 0.5, -1, 0, 2)); err == nil {
+		t.Fatal("a tail that is not zero padding was taken")
+	}
+	if _, err := mjRun(t, env, `[{"trim": [0, 5]}]`, mjF32([]uint64{4}, 0.5, -1, 0, 0)); err == nil {
+		t.Fatal("a trim past the axis was taken")
+	}
+}
+
+// TestLayerListsEvaluate holds each_layer and partitions to one-indexed
+// layer sets as a hybrid's config states them, and to their violations: a
+// layer in both lists, one in neither, one past the model.
+func TestLayerListsEvaluate(t *testing.T) {
+	env := mjEnv(map[string]any{"n": 4.0, "full": []any{2.0, 4.0}, "kda": []any{1.0, 3.0}, "both": []any{1.0, 2.0, 3.0},
+		"past": []any{1.0, 3.0, 5.0}})
+	eval := func(src string) any {
+		t.Helper()
+		x, err := parseExpr(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := evalMJ(x, env)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		return v
+	}
+	if got := eval("each_layer(n, full, 1, 1, 0)"); !slices.Equal(got.([]any), []any{0.0, 1.0, 0.0, 1.0}) {
+		t.Fatalf("each_layer: %v", got)
+	}
+	for src, want := range map[string]bool{
+		"partitions(n, 1, kda, full)":  true,
+		"partitions(n, 1, both, full)": false,
+		"partitions(n, 1, kda, kda)":   false,
+		"partitions(n, 1, past, full)": false,
+		"partitions(n, 1, full, null)": false,
+	} {
+		if got := eval(src); got != want {
+			t.Errorf("%s is %v, want %v", src, got, want)
+		}
+	}
+}
+
 // TestModelJSONPrimitives holds each tensor primitive to its definition, and
 // to a violation: a shape it cannot take is refused, never read as another.
 func TestModelJSONPrimitives(t *testing.T) {

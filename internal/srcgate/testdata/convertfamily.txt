@@ -1,7 +1,7 @@
 # TestConverterFamilyCodeOnlyShrinks: each convert/ function's references to a
 # family's name (architecture constants, class/architecture/projector literals),
-# read at 514456eea. A count may only fall; lower a line when the work that
-# removes it lands.
+# read at 514456eea and lowered as the work landed. A count may only fall; lower a
+# line when the work that removes it lands.
 59 convert/arch.go:coreArchName
 14 convert/arch.go:denseArchName
 2 convert/arch.go:encoderArchName
@@ -9,26 +9,12 @@
 8 convert/arch.go:moe2ArchName
 15 convert/arch.go:ssmArchName
 9 convert/arch.go:visionArchName
-2 convert/clef.go:clefOf
 140 convert/config.go:archOf
-55 convert/config.go:configOfFile
-4 convert/config.go:ropeScalingOf
-1 convert/config.go:visionOf
-1 convert/d1omni.go:d1OmniConfig
-1 convert/d1omni.go:d1OmniHead
-1 convert/deepseek4.go:ds4Tensors
-1 convert/flagship.go:gemma4Tensors
-1 convert/gemma3n.go:gemma3nTensors
-3 convert/gguf.go:sourceOf
-2 convert/granite.go:gemmaAttnScale
-1 convert/hfkimik3.go:kimiK3HF
-1 convert/hfkimik3.go:kimiK3HFConfig
-1 convert/kimik3.go:kimiK3Tensors
+1 convert/gguf.go:sourceOf
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
-2 convert/safetensors.go:hfArchTable
+1 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
-1 convert/tower.go:hunyuanvlTower
 3 convert/vocab.go:VocabOf
 1 convert/vocab.go:wordPiece

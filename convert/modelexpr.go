@@ -3,6 +3,7 @@ package convert
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -12,8 +13,10 @@ import (
 // its top), arithmetic (+ - * /), comparisons (== != < <= > >=, in), logic
 // (&& || !), a ?? b, which is b where a is absent or null, c ? a : b, a ** b,
 // and a key of a parenthesised value, (a ?? b).key. There are no loops, and
-// calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x), so an
-// expression sizes nothing (RULE 9), and its depth is bounded.
+// calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x) and
+// the layer lists' each_layer(n, members, first, inside, outside) and
+// partitions(n, first, a, b), whose counts are bounded, so an expression
+// sizes nothing unchecked (RULE 9), and its depth is bounded.
 //
 // An absent key is null; null in arithmetic or an ordering is an error that
 // names the key, so a default is written, never assumed.
@@ -429,8 +432,13 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 		}
 		return v, nil
 	case "call":
-		if n.str == "uniform" && len(n.args) == 1 {
+		switch {
+		case n.str == "uniform" && len(n.args) == 1:
 			return evalUniform(n.args[0], env)
+		case n.str == "each_layer" && len(n.args) == 5:
+			return evalEachLayer(n.args, env)
+		case n.str == "partitions" && len(n.args) == 4:
+			return evalPartitions(n.args, env)
 		}
 		return nil, fmt.Errorf("%s(): calls are a tensor map's, not a config's", n.str)
 	case "&&", "||":
@@ -512,6 +520,107 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 		return l >= r, nil
 	}
 	return nil, fmt.Errorf("operator %q", n.op)
+}
+
+// evalLayerList is a list of layer positions the config names, an absent one
+// none, each a whole number.
+func evalLayerList(n *exprNode, env exprEnv) ([]float64, error) {
+	v, err := evalMJ(n, env)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s is %s, not a list of layers", exprText(n), exprKind(v))
+	}
+	out := make([]float64, len(list))
+	for i, x := range list {
+		f, ok := x.(float64)
+		if !ok || f != math.Trunc(f) {
+			return nil, fmt.Errorf("%s[%d] is %v, not a layer", exprText(n), i, x)
+		}
+		out[i] = f
+	}
+	return out, nil
+}
+
+// evalLayerCount is a count of layers, bounded so nothing is sized from a
+// file unchecked (RULE 9).
+func evalLayerCount(n *exprNode, env exprEnv) (int, error) {
+	f, err := evalNum(n, env)
+	if err != nil {
+		return 0, err
+	}
+	if f < 0 || f > 1<<16 || f != math.Trunc(f) {
+		return 0, fmt.Errorf("%s is %v, not a count of layers", exprText(n), f)
+	}
+	return int(f), nil
+}
+
+// evalEachLayer is each_layer(n, members, first, inside, outside): n values,
+// the i-th inside where i + first is among members (a list of positions
+// counted from first), outside elsewhere.
+func evalEachLayer(args []*exprNode, env exprEnv) (any, error) {
+	n, err := evalLayerCount(args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	members, err := evalLayerList(args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	first, err := evalNum(args[2], env)
+	if err != nil {
+		return nil, err
+	}
+	in, err := evalMJ(args[3], env)
+	if err != nil {
+		return nil, err
+	}
+	out, err := evalMJ(args[4], env)
+	if err != nil {
+		return nil, err
+	}
+	at := map[float64]bool{}
+	for _, m := range members {
+		at[m-first] = true
+	}
+	res := make([]any, n)
+	for i := range res {
+		res[i] = out
+		if at[float64(i)] {
+			res[i] = in
+		}
+	}
+	return res, nil
+}
+
+// evalPartitions is partitions(n, first, a, b): whether lists a and b name
+// each of n positions, counted from first, exactly once between them.
+func evalPartitions(args []*exprNode, env exprEnv) (any, error) {
+	n, err := evalLayerCount(args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	first, err := evalNum(args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	seen := make([]bool, n)
+	for _, l := range args[2:] {
+		list, err := evalLayerList(l, env)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range list {
+			i := m - first
+			if i < 0 || i >= float64(n) || seen[int(i)] {
+				return false, nil
+			}
+			seen[int(i)] = true
+		}
+	}
+	return !slices.Contains(seen, false), nil
 }
 
 // evalUniform is uniform(x): a value, or the one value every entry of a

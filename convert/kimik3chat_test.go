@@ -66,7 +66,7 @@ func renderKimiK3(tpl *jinja.Template, c kimiK3ChatCase) (string, error) {
 // too, the path a chat request takes. The transcription with one character
 // changed must part from the golden (RULE 10).
 func TestKimiK3ChatTemplateMatchesItsRenderer(t *testing.T) {
-	tpl, err := jinja.Compile(kimiK3ChatTemplate)
+	tpl, err := jinja.Compile(k3Template(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestKimiK3ChatTemplateMatchesItsRenderer(t *testing.T) {
 				return
 			}
 			engine++
-			out, err := model.RenderChatTemplate(kimiK3ChatTemplate, "", "", nil, msgs, nil, c.AddGenerationPrompt)
+			out, err := model.RenderChatTemplate(k3Template(t), "", "", nil, msgs, nil, c.AddGenerationPrompt)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +106,7 @@ func TestKimiK3ChatTemplateMatchesItsRenderer(t *testing.T) {
 	}
 	t.Logf("%d cases match the release's renderer, %d of them through model.RenderChatTemplate", len(cases), engine)
 
-	bad, err := jinja.Compile(strings.Replace(kimiK3ChatTemplate, "<|close|>think<|sep|>", "<|close|>think <|sep|>", 1))
+	bad, err := jinja.Compile(strings.Replace(k3Template(t), "<|close|>think<|sep|>", "<|close|>think <|sep|>", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +133,19 @@ func TestKimiK3ConversionStatesItsChatTemplate(t *testing.T) {
 					"come from) -- this gate proved nothing", err)
 			}
 			s := hfSource(t, dir)
-			if len(s.Vocab.Templates) != 1 || s.Vocab.Templates[0].Body != kimiK3ChatTemplate {
+			if len(s.Vocab.Templates) != 1 || s.Vocab.Templates[0].Body != k3Template(t) {
 				t.Fatalf("the vocabulary states %d chat templates, not the class's transcription", len(s.Vocab.Templates))
 			}
 		})
 	}
+}
+
+// k3Template is the Kimi-K3 class's chat template, the library's file.
+func k3Template(t *testing.T) string {
+	t.Helper()
+	b, err := modelLibraryFS.ReadFile("models/kimi_k3_chat.jinja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

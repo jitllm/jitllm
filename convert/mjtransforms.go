@@ -92,6 +92,9 @@ type mjOp struct {
 	// Repeat is [axis, times]: each index along the axis, times times over
 	// in place (torch's repeat_interleave).
 	Repeat []mjSize `json:"repeat"`
+	// Trim is [axis, keep]: the first keep indices along the axis, the rest
+	// refused unless every byte of it is zero (a release's padding).
+	Trim []mjSize `json:"trim"`
 	// Type is the storage type: "f32" or "f16".
 	Type string `json:"type"`
 }
@@ -119,6 +122,9 @@ func (o mjOp) name() string {
 	if o.Repeat != nil {
 		set = append(set, "repeat")
 	}
+	if o.Trim != nil {
+		set = append(set, "trim")
+	}
 	if o.Type != "" {
 		set = append(set, "type")
 	}
@@ -143,8 +149,8 @@ func (p mjPipe) check() error {
 			if err := mjMapCheck(x); err != nil {
 				return fmt.Errorf("map %q: %w", o.Map, err)
 			}
-		case "slice", "repeat":
-			if want := map[string]int{"slice": 3, "repeat": 2}[n]; len(argsOf(o)) != want {
+		case "slice", "repeat", "trim":
+			if want := map[string]int{"slice": 3, "repeat": 2, "trim": 2}[n]; len(argsOf(o)) != want {
 				return fmt.Errorf("%s takes %d values, not %d", n, want, len(argsOf(o)))
 			}
 		case "type":
@@ -174,6 +180,8 @@ func argsOf(o mjOp) []mjSize {
 		return o.Slice
 	case o.Repeat != nil:
 		return o.Repeat
+	case o.Trim != nil:
+		return o.Trim
 	case o.Concat != nil:
 		return []mjSize{*o.Concat}
 	case o.Stack != nil:
@@ -228,6 +236,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjSlice(vs[0], args[0], args[1], args[2])
 			case "repeat":
 				out, err = mjRepeat(vs[0], args[0], args[1])
+			case "trim":
+				out, err = mjTrim(vs[0], args[0], args[1])
 			case "type":
 				out, err = mjRetype(vs[0], o.Type)
 			}
@@ -417,6 +427,36 @@ func mjStack(vs []mjVal, axis int64) (mjVal, error) {
 		in[i].shape = append(append(append([]uint64(nil), v.shape[:ax]...), 1), v.shape[ax:]...)
 	}
 	return mjConcat(in, int64(ax))
+}
+
+// mjTrim is v's first keep indices along axis, refused where what it drops
+// holds any byte but zero.
+func mjTrim(v mjVal, axis, keep int64) (mjVal, error) {
+	ax, err := mjAxis(axis, len(v.shape))
+	if err != nil {
+		return mjVal{}, err
+	}
+	if keep <= 0 || uint64(keep) > v.shape[ax] {
+		return mjVal{}, fmt.Errorf("trim to %d of an axis of %d", keep, v.shape[ax])
+	}
+	if uint64(keep) == v.shape[ax] {
+		return v, nil
+	}
+	outer, inner, err := mjSpan(v, ax)
+	if err != nil {
+		return mjVal{}, err
+	}
+	if !v.dry() {
+		row := v.shape[ax] * inner
+		for o := uint64(0); o < outer; o++ {
+			for _, b := range v.data[o*row+uint64(keep)*inner : (o+1)*row] {
+				if b != 0 {
+					return mjVal{}, fmt.Errorf("trim to %d of %d: the rest is not zero padding", keep, v.shape[ax])
+				}
+			}
+		}
+	}
+	return mjSlice(v, axis, 0, keep)
 }
 
 func mjRepeat(v mjVal, axis, times int64) (mjVal, error) {
@@ -673,9 +713,12 @@ type mjState struct {
 // hfGatherStep is one model.json gather: the role it makes, its sources by
 // block-relative name, and the primitives that make one tensor of them.
 type hfGatherStep struct {
-	role jlm.Role
-	from []mjOperand
-	do   mjPipe
+	role         jlm.Role
+	from         []mjOperand
+	do           mjPipe
+	cond, count  *exprNode
+	every, model bool
+	name         string
 }
 
 // mjOperand is one of a gather's inputs: a source by its block-relative name,
@@ -742,14 +785,135 @@ func mjActivationCover(act string, c *Config, out []jlm.Tensor) error {
 	return nil
 }
 
-// gatherBlocks runs each step on every block that carries its first source.
-// A source enters as the vector of its values. A source left over -- a second
-// without its first -- is left to identify, which refuses it by name.
+// gatherBlocks runs each step on every block that carries its first source,
+// or, where the step says every, on each of the model's nlayer blocks; a
+// model step once, on sources named whole. Consecutive every steps run block
+// by block, each block's in the statement's order. A step whose condition
+// does not hold runs nowhere. A source enters as the vector of its values. A
+// source left over -- a second without its first, a step that did not run --
+// is left to identify, which refuses it by name.
 func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []string,
-	read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
+	read func(string) ([]float32, error), nlayer int) ([]jlm.Tensor, map[string]bool, error) {
 	var out []jlm.Tensor
 	used := map[string]bool{}
+	have := map[string]bool{}
+	for _, n := range names {
+		have[n] = true
+	}
+	// prep is step g run on sources under bp (the block's prefix, or none for
+	// the model's), false where its condition does not hold.
+	prep := func(g hfGatherStep) (func(bp string, block int32) error, bool, error) {
+		if g.cond != nil {
+			v, err := evalMJ(g.cond, env)
+			if err != nil {
+				return nil, false, fmt.Errorf("convert: the gather of %v: %w", g.role, err)
+			}
+			on, ok := v.(bool)
+			if !ok {
+				return nil, false, fmt.Errorf("convert: the gather of %v: its if is %s, not a boolean", g.role, exprKind(v))
+			}
+			if !on {
+				return nil, false, nil
+			}
+		}
+		count := -1
+		if g.count != nil {
+			v, err := evalMJ(g.count, env)
+			if err != nil {
+				return nil, false, fmt.Errorf("convert: the gather of %v: %w", g.role, err)
+			}
+			n, err := exprUint("count", v)
+			if err != nil {
+				return nil, false, fmt.Errorf("convert: the gather of %v: %w", g.role, err)
+			}
+			count = int(n)
+		}
+		at := func(bp string, block int32) error {
+			source := func(f string) (mjVal, error) {
+				if !have[bp+f] {
+					return mjVal{}, fmt.Errorf("convert: the gather of %v reads %s, which the checkpoint does not carry", g.role, bp+f)
+				}
+				v, err := read(bp + f)
+				if err != nil {
+					return mjVal{}, err
+				}
+				if count >= 0 && len(v) != count {
+					return mjVal{}, fmt.Errorf("convert: %s holds %d values, want %d", bp+f, len(v), count)
+				}
+				used[bp+f] = true
+				return mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}, nil
+			}
+			src := make([]mjVal, len(g.from))
+			for i, o := range g.from {
+				ins := make([]mjVal, len(o.names()))
+				for j, f := range o.names() {
+					var err error
+					if ins[j], err = source(f); err != nil {
+						return err
+					}
+				}
+				if o.Name != "" {
+					src[i] = ins[0]
+					continue
+				}
+				var err error
+				if src[i], err = o.Do.run(env, ins); err != nil {
+					return fmt.Errorf("convert: %s: operand %d: %w", bp+o.names()[0], i, err)
+				}
+			}
+			v, err := g.do.run(env, src)
+			if err != nil {
+				return fmt.Errorf("convert: %s: %w", bp+g.from[0].names()[0], err)
+			}
+			name := "blk." + itoa(int(block)) + "." + g.role.String()
+			if g.model {
+				name = g.role.String()
+			}
+			if g.name != "" {
+				name = strings.ReplaceAll(g.name, "{block}", bp)
+			}
+			e := jlm.Tensor{Role: g.role, Block: block, Index: -1, Name: name, Data: v.data}
+			if err := mjSetShape(&e, v); err != nil {
+				return err
+			}
+			out = append(out, e)
+			return nil
+		}
+		return at, true, nil
+	}
+	var every []func(string, int32) error
+	flush := func() error {
+		for b := range nlayer {
+			for _, at := range every {
+				if err := at(prefix+itoa(b)+".", int32(b)); err != nil {
+					return err
+				}
+			}
+		}
+		every = every[:0]
+		return nil
+	}
 	for _, g := range steps {
+		at, on, err := prep(g)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !on {
+			continue
+		}
+		if g.every {
+			every = append(every, at)
+			continue
+		}
+		if err := flush(); err != nil {
+			return nil, nil, err
+		}
+		if g.model {
+			if err := at("", jlm.DenseBlock); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
 		for _, n := range names {
 			rest, ok := strings.CutPrefix(n, prefix)
 			if !ok {
@@ -759,39 +923,13 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 			if err != nil || tail != g.from[0].names()[0] {
 				continue
 			}
-			bp := prefix + itoa(int(block)) + "."
-			source := func(f string) (mjVal, error) {
-				v, err := read(bp + f)
-				if err != nil {
-					return mjVal{}, err
-				}
-				used[bp+f] = true
-				return mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}, nil
-			}
-			src := make([]mjVal, len(g.from))
-			for i, o := range g.from {
-				ins := make([]mjVal, len(o.names()))
-				for j, f := range o.names() {
-					if ins[j], err = source(f); err != nil {
-						return nil, nil, err
-					}
-				}
-				if o.Name != "" {
-					src[i] = ins[0]
-				} else if src[i], err = o.Do.run(env, ins); err != nil {
-					return nil, nil, fmt.Errorf("convert: %s: operand %d: %w", n, i, err)
-				}
-			}
-			v, err := g.do.run(env, src)
-			if err != nil {
-				return nil, nil, fmt.Errorf("convert: %s: %w", n, err)
-			}
-			e := jlm.Tensor{Role: g.role, Block: block, Index: -1, Name: "blk." + itoa(int(block)) + "." + g.role.String(), Data: v.data}
-			if err := mjSetShape(&e, v); err != nil {
+			if err := at(prefix+itoa(int(block))+".", block); err != nil {
 				return nil, nil, err
 			}
-			out = append(out, e)
 		}
+	}
+	if err := flush(); err != nil {
+		return nil, nil, err
 	}
 	return out, used, nil
 }

@@ -10876,3 +10876,35 @@ theirs, a description its string or its JSON, empty where None or "".
 Its confidence is the largest probability (prompt.answer).
 
 A readout whose head's blocks the file counts after the trunk's is its statement's `trunk` (read by `convert/trunk.go`). **`lfm2-d1-omni`, its trunk**, as the Go it replaced said it: d1-omni (LiquidAI/d1-omni-600M) as llama.cpp's converter writes it (conversion/lfm2.py): an lfm2 file whose attention.causal is false -- the LFM2.5-Encoder trunk -- and whose block_count counts the trunk's blocks and the decision head's after them (decision.block_count of them, Laya's head: LayerNorm blocks with a fused, biased q|k|v and a ReLU MLP). Every per-layer key is written for all of them. The trunk is read as the lfm2 it is, through a view of the file cut to its blocks, and stated as ArchLFM2Enc; the head's blocks convert after it, as Laya's do. The trunk's context is the reference's max_length (D1OmniConfig's default, 16384), not the base model's 128000 the file states: a state is cut to it, and a picture prefix comes off it. The prompt's 896 and 15360 are config.json's image_text_length and audio_text_length, D1OmniConfig's defaults: the GGUF carries neither.
+
+## Kimi-K3's class, as its Go reader said it
+
+`KimiK3ForConditionalGeneration` converts by `convert/models/latent_delta.json`'s class, which reads `text_config` into
+the keys the kimi-k3 statement reads, as llama.cpp's converter (conversion/kimi_k3.py) writes them from the same dict:
+one reader decides what each key means, so the two inputs cannot drift apart. Every absent key takes
+KimiLinearConfig's default; every graph the engine does not run is refused by its key. The checkpoint is Moonshot's:
+the text model is KimiLinearForCausalLM under language_model., and the released weights carry the routed experts as
+compressed-tensors MXFP4 (convert/hfmxfp4.go), which map onto the container's MXFP4 byte for byte. The vision tower
+(vision_tower.*, a MoonViT under mm_projector.'s patchmergerv2) is not converted: its tensors are named and skipped, as
+llama.cpp's converter skips them. The text model is Kimi-Linear's names with K3's additions: the residual attention's
+norm and projection per sublayer (gathered into their product, norm.float() * proj.float(), as llama.cpp's converter
+writes it), the latent mixture's routed_expert_* projections and norm, g_proj (the MLA output gate in a full block,
+the full-rank KDA gate in a linear one), and the situ activation, a config key -- absent situ bounds are None in the
+class, and the situ statement refuses a pair that is not the one the kernels bake, so a zero is that refusal.
+
+- is_kda_layer reads kda_layers (one-indexed); llama.cpp's converter reads full_attn_layers. They must partition the
+  blocks (`partitions`), or the two readers build different models from one file; a full block's head_count_kv is 1,
+  MLA served as MQA, as llama.cpp's converter writes it (`each_layer`).
+- Grouped selection: KimiMoEGate groups only when num_expert_group > 1 and exceeds topk_group. llama.cpp writes
+  topk_group alone, which configOf reads as the ungrouped selection when it is 1.
+- The rotary base is stated as rope_theta and, by transformers 5, inside rope_parameters; two values that disagree
+  are refused. Kimi-K3's attention has no rotary at all (mla_use_nope), so a scaling type is a statement about nothing
+  the graph runs, and anything but the default is refused rather than read.
+- Kimi-K3's release pads A_log to 128 entries for its 96 heads, the padding zero; llama.cpp's converter takes the first
+  n_head. A padding that is not zero is a tensor of another geometry, and refused (`trim`).
+- The chat template (`convert/models/kimi_k3_chat.jinja`) is encoding_k3.build_chat_segments, which
+  tokenization_kimi.py's apply_chat_template calls with thinking on and thinking_effort "max", transcribed for system,
+  user and assistant turns and the generation prompt. The release ships that renderer as Python and no Jinja template,
+  so a conversion finds none and the class states this one; a tool turn raises rather than rendering untranscribed.
+  Held to the renderer's own text by TestKimiK3ChatTemplateMatchesItsRenderer.
+

@@ -242,7 +242,7 @@ func TestK3MXFP4ExpertsMatchTheGGUF(t *testing.T) {
 				w := map[jlm.Role]string{jlm.RoleExpGateBank: "w1", jlm.RoleExpDownBank: "w2", jlm.RoleExpUpBank: "w3"}[k.role]
 				sheet := len(e.Data) / int(e.Dims[2])
 				for x := range int(e.Dims[2]) {
-					base := k3BlockPrefix + itoa(int(k.block)) + ".block_sparse_moe.experts." + itoa(x) + "." + w
+					base := "language_model.model.layers." + itoa(int(k.block)) + ".block_sparse_moe.experts." + itoa(x) + "." + w
 					pt, ok1 := f.Get(base + ".weight_packed")
 					st, ok2 := f.Get(base + ".weight_scale")
 					if !ok1 || !ok2 {
@@ -422,7 +422,7 @@ func TestK3ConfigRefusals(t *testing.T) {
 			if err := jsonUnmarshalKeys([]byte(b), hc); err != nil {
 				t.Fatal(err)
 			}
-			_, err := kimiK3HFConfig(hc, []string{"language_model.lm_head.weight"})
+			_, err := k3ClassConfig(hc, []string{"language_model.lm_head.weight"})
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want a refusal naming %q", err, c.want)
 			}
@@ -451,7 +451,7 @@ func TestK3SituBoundsAreTheFiles(t *testing.T) {
 	if err := jsonUnmarshalKeys([]byte(b), hc); err != nil {
 		t.Fatal(err)
 	}
-	c, err := kimiK3HFConfig(hc, []string{"language_model.lm_head.weight"})
+	c, err := k3ClassConfig(hc, []string{"language_model.lm_head.weight"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,6 +543,19 @@ func TestALogPaddingIsTakenOnlyWhenZero(t *testing.T) {
 	if _, err := kimiExpandALog(e, f32AsBytes([]float32{0.5, -1, 0, 2}), &Config{Config: c}); err == nil {
 		t.Fatal("a tail that is not zero padding was taken")
 	}
+}
+
+// k3ClassConfig is the Kimi-K3 class's config reader, the library's.
+func k3ClassConfig(hc *hfConfig, names []string) (*Config, error) {
+	lib, err := modelLibrary()
+	if err != nil {
+		return nil, err
+	}
+	ha, err := lib["KimiK3ForConditionalGeneration"].hfArch()
+	if err != nil {
+		return nil, err
+	}
+	return ha.config(hc, names)
 }
 
 // jsonUnmarshalKeys parses config.json the way readHFConfig does.

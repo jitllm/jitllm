@@ -67,7 +67,7 @@ func TestModelJSONGatherOperands(t *testing.T) {
 		sort.Strings(ns)
 		return ns
 	}
-	out, used, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read)
+	out, used, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestModelJSONGatherOperands(t *testing.T) {
 		t.Error("a composed operand without its primitives parsed")
 	}
 	delete(vals, "m.1.c")
-	if _, _, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read); err == nil {
+	if _, _, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, 2); err == nil {
 		t.Error("a block without one of its sources gathered")
 	}
 }

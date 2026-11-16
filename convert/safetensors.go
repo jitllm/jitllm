@@ -1134,9 +1134,6 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 func hfArchTable() map[string]*hfArch {
 	t := map[string]*hfArch{
 		"KimiLinearForCausalLM": kimiLinearHF(),
-		// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
-		// release (convert/hfkimik3.go, convert/hfmxfp4.go).
-		"KimiK3ForConditionalGeneration": kimiK3HF(),
 	}
 	for n, a := range t {
 		a.name = n

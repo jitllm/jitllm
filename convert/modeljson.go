@@ -31,11 +31,13 @@ import (
 // (convert/models), and last the Go table (hfArchTable) for the classes not
 // yet moved to the library.
 
-//go:embed models/*.json
+//go:embed models/*.json models/*.jinja
 var modelLibraryFS embed.FS
 
 type modelJSON struct {
-	Classes  []string  `json:"classes"`
+	Classes []string `json:"classes"`
+	// Template is the class's chat template, a file of the library
+	// (convert/models) where the release ships none a conversion finds.
 	Template string    `json:"template"`
 	Config   mjConfig  `json:"config"`
 	Tensors  mjTensors `json:"tensors"`
@@ -150,6 +152,8 @@ func mjActivations() map[string]jlm.Flags {
 		"gelu_pytorch_tanh": jlm.FlagGELU,
 		"relu2":             jlm.FlagReLU2,
 		"xielu":             0,
+		// The situ bounds are keys the architecture's statement reads.
+		"situ": 0,
 	}
 }
 
@@ -215,6 +219,9 @@ type mjKey struct {
 	Float  string `json:"float"`
 	Int32s string `json:"int32s"`
 	Bool   string `json:"bool"`
+	// If, where set, is a boolean expression: the key is written only where
+	// it holds, as a reference that writes the key only when it has one.
+	If string `json:"if"`
 }
 
 // mjLayers reads each block's kind from a list in the config.
@@ -231,9 +238,14 @@ type mjHead struct {
 }
 
 type mjTensors struct {
-	BlockPrefix  string               `json:"block_prefix"`
-	Model        map[string]mjTargets `json:"model"`
-	Block        map[string]mjTargets `json:"block"`
+	BlockPrefix string               `json:"block_prefix"`
+	Model       map[string]mjTargets `json:"model"`
+	Block       map[string]mjTargets `json:"block"`
+	// BlockLinear is what a recurrent block's (Config.LayerKinds) names
+	// are, where they are not Block's; Fuse states each role several sources
+	// are concatenated into, by its name, the sources in row order.
+	BlockLinear  map[string]mjTargets `json:"block_linear"`
+	Fuse         map[string][]string  `json:"fuse"`
 	Gather       []mjGather           `json:"gather"`
 	Ignore       []string             `json:"ignore"`
 	IgnorePrefix []string             `json:"ignore_prefix"`
@@ -317,6 +329,16 @@ func (t *mjTensor) UnmarshalJSON(b []byte) error {
 // row ranges), in the order they are laid out.
 type mjTargets []mjTensor
 
+// transforms reports whether a source takes primitives of its own.
+func (ts mjTargets) transforms() bool {
+	for _, t := range ts {
+		if len(t.Do) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (ts *mjTargets) UnmarshalJSON(b []byte) error {
 	if b = bytes.TrimSpace(b); len(b) == 0 || b[0] != '[' {
 		var t mjTensor
@@ -338,11 +360,20 @@ func (ts *mjTargets) UnmarshalJSON(b []byte) error {
 }
 
 // mjGather builds one tensor a block from several sources, each entering as
-// the vector of its values, by primitives that leave one tensor.
+// the vector of its values, by primitives that leave one tensor. If, where
+// set, is a boolean expression over the config: the gather runs only where
+// it holds. Every has each block carry the sources; Model gathers one tensor
+// of the model from sources named whole. Name is the result's name, {block}
+// its block's prefix; Count, where set, the values each source holds.
 type mjGather struct {
-	Role string      `json:"role"`
-	From []mjOperand `json:"from"`
-	Do   mjPipe      `json:"do"`
+	Role  string      `json:"role"`
+	From  []mjOperand `json:"from"`
+	Do    mjPipe      `json:"do"`
+	If    string      `json:"if"`
+	Every bool        `json:"every"`
+	Model bool        `json:"model"`
+	Name  string      `json:"name"`
+	Count string      `json:"count"`
 }
 
 func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error) {
@@ -456,6 +487,10 @@ func libraryFiles() ([]*modelJSON, error) {
 	}
 	var out []*modelJSON
 	for _, e := range ents {
+		// A class's template is a file of the library beside the statements.
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
 		p := path.Join("models", e.Name())
 		b, err := modelLibraryFS.ReadFile(p)
 		if err != nil {
@@ -606,10 +641,18 @@ func hfArchFor(dir hfDir, c *hfConfig, caller string) (*hfArch, error) {
 
 // hfArch lowers a model.json onto the entry the safetensors path reads.
 func (mj *modelJSON) hfArch() (*hfArch, error) {
+	template := ""
+	if mj.Template != "" {
+		b, err := modelLibraryFS.ReadFile("models/" + mj.Template)
+		if err != nil {
+			return nil, fmt.Errorf("convert: %s: its template %s is no file of the library: %w", mj.name, mj.Template, err)
+		}
+		template = string(b)
+	}
 	a := &hfArch{
 		arch:         archOf()[mj.Config.Arch],
 		name:         mj.Config.Arch,
-		template:     mj.Template,
+		template:     template,
 		graph:        mj.Graph,
 		blockPrefix:  mj.Tensors.BlockPrefix,
 		model:        map[string]jlm.Role{},
@@ -711,6 +754,33 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			return nil, err
 		}
 	}
+	if len(mj.Tensors.BlockLinear) > 0 {
+		a.blockLinear = map[string]jlm.Role{}
+		// One name's primitives serve every block it is read in: a name with
+		// its own in both tables would take whichever was stated last.
+		blockPipes := maps.Clone(pipes)
+		for n, ts := range mj.Tensors.BlockLinear {
+			if _, ok := blockPipes[n]; ok && ts.transforms() {
+				return nil, fmt.Errorf("convert: %s: %s takes primitives of its own in both the block and the recurrent block", mj.name, n)
+			}
+			if err := addAll(a.blockLinear, n, ts); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for r, srcs := range mj.Tensors.Fuse {
+		role, ok := mj.names.roleOf(r)
+		if !ok {
+			return nil, fmt.Errorf("convert: %s: fused role %q is not a tensor name the container knows", mj.name, r)
+		}
+		if len(srcs) < 2 {
+			return nil, fmt.Errorf("convert: %s: %s is fused from %d source(s), not two or more", mj.name, r, len(srcs))
+		}
+		if a.fuseOrder == nil {
+			a.fuseOrder = map[jlm.Role][]string{}
+		}
+		a.fuseOrder[retarget(role)] = srcs
+	}
 	if len(pipes) > 0 {
 		// The result's shape and type are stated before the tensor is laid out,
 		// from its source's; the bytes follow when it is read.
@@ -776,7 +846,24 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 					return nil, fmt.Errorf("convert: %s: the gather of %s: %w", mj.name, g.Role, err)
 				}
 			}
-			gs[i] = hfGatherStep{role: retarget(r), from: g.From, do: g.Do}
+			if g.Model && g.Every {
+				return nil, fmt.Errorf("convert: %s: the gather of %s is the model's and every block's", mj.name, g.Role)
+			}
+			step := hfGatherStep{role: retarget(r), from: g.From, do: g.Do, every: g.Every, model: g.Model, name: g.Name}
+			for _, x := range []struct {
+				src string
+				to  **exprNode
+			}{{g.If, &step.cond}, {g.Count, &step.count}} {
+				if x.src == "" {
+					continue
+				}
+				n, err := parseExpr(x.src)
+				if err != nil {
+					return nil, fmt.Errorf("convert: %s: the gather of %s: %w", mj.name, g.Role, err)
+				}
+				*x.to = n
+			}
+			gs[i] = step
 		}
 		steps = gs
 	}
@@ -795,7 +882,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		st.mu.Lock()
 		env, act := st.env, st.act
 		st.mu.Unlock()
-		out, used, err := gatherBlocks(env, a.blockPrefix, steps, names, read)
+		out, used, err := gatherBlocks(env, a.blockPrefix, steps, names, read, int(c.NLayer))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1140,6 +1227,19 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
+		if cond := mj.Config.Keys[k].If; cond != "" {
+			v, err := eval(k+" if", cond)
+			if err != nil {
+				return nil, err
+			}
+			b, ok := v.(bool)
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: %s: key %s's if is %s, not a boolean", c.path, mj.name, k, exprKind(v))
+			}
+			if !b {
+				continue
+			}
+		}
 		v, err := mj.keyValue(c.path, k, eval)
 		if err != nil {
 			return nil, err
