@@ -67,6 +67,14 @@ func TestEveryTensorHasARole(t *testing.T) {
 			}
 		}
 		renames := towerNames(f, proj)
+		gathered := func(string) bool { return false }
+		if proj != nil {
+			st, err := proj.statement()
+			if err != nil {
+				t.Fatalf("%s: %v", filepath.Base(p), err)
+			}
+			gathered = st.gatherReads
+		}
 		for i := range f.Tensors {
 			n := f.Tensors[i].Name
 			if r, ok := renames[n]; ok {
@@ -79,7 +87,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 			var role jlm.Role
 			var err error
 			switch {
-			case vis != nil && (names.unreadName(n) || towerGathered(n)):
+			case vis != nil && (names.unreadName(n) || gathered(n)):
 				continue
 			case vis != nil:
 				role, _, _, err = names.roleOf(n)

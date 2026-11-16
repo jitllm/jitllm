@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -103,9 +104,10 @@ func keyValue(f *meta.File, k string, block, blocks int) (float32, error) {
 }
 
 // statedGathers runs c's statement's gathers (gatherBlocks) over s's block
-// tensors and the keys it names, every block's result after s's tensors;
-// a gathered tensor is not stored.
-func statedGathers(c *Config, s *jlm.Source, f *meta.File) error {
+// tensors, named past prefix and N, and the keys it names, every block's
+// result after s's tensors; a gathered tensor is not stored, and a tensor of
+// no role (gatherReads) no gather read is refused.
+func statedGathers(c *Config, s *jlm.Source, f *meta.File, prefix string) error {
 	if c == nil || c.Stated == nil || len(c.Stated.gathers) == 0 {
 		return nil
 	}
@@ -120,13 +122,13 @@ func statedGathers(c *Config, s *jlm.Source, f *meta.File) error {
 	keyed := map[string]int{}
 	for b := range n {
 		for _, k := range st.keys {
-			kn := "blk." + itoa(b) + "." + k
+			kn := prefix + itoa(b) + "." + k
 			names, keyed[kn] = append(names, kn), b
 		}
 	}
 	read := func(name string) ([]float32, error) {
 		if b, ok := keyed[name]; ok {
-			_, k, _ := strings.Cut(strings.TrimPrefix(name, "blk."), ".")
+			_, k, _ := strings.Cut(strings.TrimPrefix(name, prefix), ".")
 			x, err := keyValue(f, k, b, n)
 			return []float32{x}, err
 		}
@@ -142,17 +144,37 @@ func statedGathers(c *Config, s *jlm.Source, f *meta.File) error {
 		vals := make([]float32, mjProd(mjTorch(t)))
 		return vals, quant.Dequant32(src, b, vals)
 	}
-	out, used, err := gatherBlocks(ggufEnv(f), "blk.", st.gathers, names, read, n)
+	out, used, err := gatherBlocks(ggufEnv(f), prefix, st.gathers, names, read, n)
 	if err != nil {
 		return err
 	}
+	// A gathered tensor named as a source it consumed takes that source's
+	// place (a fold in place); the rest follow s's tensors by block.
+	slices.SortStableFunc(out, func(a, b jlm.Tensor) int { return cmp.Compare(a.Block, b.Block) })
+	at := map[string]int{}
+	for i := range out {
+		at[out[i].Name] = i
+	}
+	placed := make([]bool, len(out))
 	kept := s.Tensors[:0]
 	for _, t := range s.Tensors {
-		if !used[t.Name] {
+		i, named := at[t.Name]
+		switch {
+		case used[t.Name] && named && !placed[i]:
+			kept, placed[i] = append(kept, out[i]), true
+		case used[t.Name]:
+		case t.Role == jlm.RoleNone:
+			return fmt.Errorf("convert: %s has no role and no gather of its block reads it", t.Name)
+		default:
 			kept = append(kept, t)
 		}
 	}
-	s.Tensors = append(kept, out...)
+	for i := range out {
+		if !placed[i] {
+			kept = append(kept, out[i])
+		}
+	}
+	s.Tensors = kept
 	return nil
 }
 
@@ -350,6 +372,20 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 	}
 	s.Tensors = out
 	return nil
+}
+
+// gatherReads reports whether a tower's tensor of name is one its gathers
+// read: past v.blk.N. for a block's, whole for the model's.
+func (st *Statement) gatherReads(name string) bool {
+	if st.sources[name] {
+		return true
+	}
+	r, ok := strings.CutPrefix(name, "v.blk.")
+	if !ok {
+		return false
+	}
+	_, rest, err := leadingIndex(name, r)
+	return err == nil && st.sources[rest]
 }
 
 // ggufBlockRest is a block tensor's name past its blk.N. prefix, false for a

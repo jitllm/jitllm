@@ -131,6 +131,12 @@ func (n *towerVocab) roleOf(name string) (jlm.Role, int32, int32, error) {
 	return n.text.identify(name)
 }
 
+// named reports whether the vocabulary names a role for a tower file's tensor.
+func (n *towerVocab) named(name string) bool {
+	_, _, _, err := n.roleOf(name)
+	return err == nil
+}
+
 // unreadName reports a tower file's tensor that no graph here reads: the
 // shared list's, and its projector's (an audio encoder shipped in the same
 // file, a row the reference declares and never reads).

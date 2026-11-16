@@ -241,8 +241,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 	}
 	experts := map[bankKey][]*jlm.Tensor{}
-	lscales := map[int32][2][]float32{}
-	clamps := map[int32]*[28]float32{}
 	scales := map[string]float32{}
 	renames := towerNames(f, proj)
 	stored := func(n string) bool { _, ok := f.Get(n); return ok }
@@ -263,45 +261,17 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if tower && names.unreadName(t.Name) {
 			continue
 		}
-		// InternViT's layer scales have no role: they are folded into the
-		// matrices they follow once every tensor is in (foldLayerScales).
-		if tower {
-			// Gemma 4's clipped-linear bounds are scalars with no role: they
-			// are gathered into each block's RoleVClamp vector.
-			if b, at, ok := clampOf(t.Name); ok {
-				e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
-				copy(e.Dims[:], t.Dims)
-				if e.Type, err = typeOf(t.Type); err != nil {
-					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
-				}
-				x, err := vecOf(&e)
-				if err != nil {
-					return nil, err
-				}
-				if len(x) != 1 {
-					return nil, fmt.Errorf("convert: %s is %d values, want one bound", t.Name, len(x))
-				}
-				if clamps[b] == nil {
-					clamps[b] = newClamps()
-				}
-				clamps[b][at] = x[0]
-				continue
+		// A tower's tensor its vocabulary names no role for and its gathers
+		// read (Gemma 4's clipped-linear bounds, InternViT's layer scales)
+		// enters by its name alone.
+		if tower && c.Stated.gatherReads(t.Name) && !names.named(t.Name) {
+			e := jlm.Tensor{Role: jlm.RoleNone, Block: jlm.DenseBlock, Index: -1, NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
+			copy(e.Dims[:], t.Dims)
+			if e.Type, err = typeOf(t.Type); err != nil {
+				return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
 			}
-			if b, w, ok := layerScaleOf(t.Name); ok {
-				e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
-				copy(e.Dims[:], t.Dims)
-				if e.Type, err = typeOf(t.Type); err != nil {
-					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
-				}
-				ls, err := vecOf(&e)
-				if err != nil {
-					return nil, err
-				}
-				pair := lscales[b]
-				pair[w-1] = ls
-				lscales[b] = pair
-				continue
-			}
+			s.Tensors = append(s.Tensors, e)
+			continue
 		}
 		// A ternary projection's optional per-tensor scale is folded into
 		// its weight's blocks (ternaryTensors).
@@ -405,10 +375,12 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := statedTensors(c, s, ggufEnv(f)); err != nil {
 		return nil, err
 	}
-	if !tower {
-		if err := statedGathers(c, s, f); err != nil {
-			return nil, err
-		}
+	prefix := "blk."
+	if tower {
+		prefix = "v.blk."
+	}
+	if err := statedGathers(c, s, f, prefix); err != nil {
+		return nil, err
 	}
 	if err := ternaryTensors(c, s, scales); err != nil {
 		return nil, err
@@ -420,12 +392,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// The tower's two transforms: a 4-D conv kernel whose stride equals its
 		// kernel is a matmul, and a verbatim F16 matrix is re-laid-out into the
 		// engine's packed layout. See convert/vision.go.
-		if err := clampTensors(s, clamps); err != nil {
-			return nil, err
-		}
-		if err := foldLayerScales(s, lscales); err != nil {
-			return nil, err
-		}
 		if err := checkDeepstack(f, s, proj); err != nil {
 			return nil, err
 		}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -86,9 +87,10 @@ func TestPadFFNIsTheSameFunction(t *testing.T) {
 	}
 }
 
-// TestFoldLayerScalesScalesTheRowsTheyFollow checks InternViT's layer scales
-// land on the attention output's rows and on the MLP contraction's -- found by
-// shape, whatever the file calls it -- with their biases, and nowhere else.
+// TestFoldLayerScalesScalesTheRowsTheyFollow checks internvl's gathers land
+// InternViT's layer scales on the attention output's rows and on the MLP
+// contraction's, with their biases, and nowhere else; a block with one scale
+// of two is refused.
 func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	r := rand.New(rand.NewSource(2))
 	const e, f = 32, 64
@@ -96,17 +98,48 @@ func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	up, bup := randVals(r, f*e), randVals(r, f) // the expansion, named FC1
 	dn, bdn := randVals(r, e*f), randVals(r, e) // the contraction, named FC2
 	ls1, ls2 := randVals(r, e), randVals(r, e)
-	s := &jlm.Source{Vision: &jlm.Vision{NLayer: 1, NEmbd: e, NFFN: f}}
-	s.Tensors = []jlm.Tensor{
-		f32Tensor(t, jlm.RoleVAttnOut, 0, wo, e, e), f32Tensor(t, jlm.RoleVAttnOutBias, 0, bo, e),
-		f32Tensor(t, jlm.RoleVFC1, 0, up, e, f), f32Tensor(t, jlm.RoleVFC1Bias, 0, bup, f),
-		f32Tensor(t, jlm.RoleVFC2, 0, dn, f, e), f32Tensor(t, jlm.RoleVFC2Bias, 0, bdn, e),
+	named := func(n string, x jlm.Tensor) jlm.Tensor { x.Name = "v.blk.0." + n; return x }
+	block := func(scales ...jlm.Tensor) []jlm.Tensor {
+		return append([]jlm.Tensor{
+			named("attn_out.weight", f32Tensor(t, jlm.RoleVAttnOut, 0, wo, e, e)), named("attn_out.bias", f32Tensor(t, jlm.RoleVAttnOutBias, 0, bo, e)),
+			named("ffn_up.weight", f32Tensor(t, jlm.RoleVFC1, 0, up, e, f)), named("ffn_up.bias", f32Tensor(t, jlm.RoleVFC1Bias, 0, bup, f)),
+			named("ffn_down.weight", f32Tensor(t, jlm.RoleVFC2, 0, dn, f, e)), named("ffn_down.bias", f32Tensor(t, jlm.RoleVFC2Bias, 0, bdn, e)),
+		}, scales...)
 	}
-	if err := foldLayerScales(s, map[int32][2][]float32{0: {ls1, ls2}}); err != nil {
+	scale := func(n string, v []float32) jlm.Tensor {
+		x := named(n, f32Tensor(t, jlm.RoleNone, jlm.DenseBlock, v, e))
+		x.Block = jlm.DenseBlock
+		return x
+	}
+	gather := func(in []jlm.Tensor) ([]jlm.Tensor, error) {
+		lib, err := projectorLibrary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := lib["internvl"].statement()
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := meta.New("x.gguf", map[string]meta.Value{"general.architecture": meta.MakeString("clip"),
+			"clip.vision.embedding_length": meta.MakeUint(e), "clip.vision.feed_forward_length": meta.MakeUint(f)}, nil)
+		s := &jlm.Source{Tensors: in}
+		err = statedGathers(&Config{Config: &jlm.Config{NLayer: 1}, Stated: st}, s, file, "v.blk.")
+		return s.Tensors, err
+	}
+	out, err := gather(block(scale("ls1.weight", ls1), scale("ls2.weight", ls2)))
+	if err != nil {
 		t.Fatal(err)
 	}
+	byRole := map[jlm.Role]*jlm.Tensor{}
+	for i := range out {
+		byRole[out[i].Role] = &out[i]
+	}
+	roles := []jlm.Role{jlm.RoleVAttnOut, jlm.RoleVAttnOutBias, jlm.RoleVFC1, jlm.RoleVFC1Bias, jlm.RoleVFC2, jlm.RoleVFC2Bias}
+	if len(out) != len(roles) {
+		t.Fatalf("%d tensors after the gathers, want %d: the scales are consumed", len(out), len(roles))
+	}
 	check := func(i int, orig, ls []float32, k int, what string) {
-		v, err := vecOf(&s.Tensors[i])
+		v, err := vecOf(byRole[roles[i]])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +160,7 @@ func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	check(4, dn, ls2, f, "the contraction")
 	check(5, bdn, ls2, 1, "the contraction's bias")
 
-	if err := foldLayerScales(s, map[int32][2][]float32{0: {ls1, nil}}); err == nil {
+	if _, err := gather(block(scale("ls1.weight", ls1))); err == nil {
 		t.Error("a block with one layer scale of two folded")
 	}
 }

@@ -71,8 +71,9 @@ type projStates struct {
 	// Tower is the tower as its reference runs it (mjTower).
 	Tower *mjTower `json:"tower"`
 	// Tensors is the tower's tensor table over its file's names: model
-	// entries, block entries by the name past v.blk.N. (as v.<name>), and
-	// sizes.
+	// entries, block entries by the name past v.blk.N. (as v.<name>), sizes,
+	// and gathers, each run for every block holding its first source (named
+	// past v.blk.N.), or the model's.
 	Tensors *mjTensors `json:"tensors"`
 	exprs   map[string]*jinja.Expr
 }
@@ -115,16 +116,17 @@ func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projState
 }
 
 // statement is the tower's tensor table as the GGUF table's runner reads it:
-// model and block entries and sizes, which is all a tower's table states.
+// model and block entries, sizes and gathers, which is all a tower's table
+// states.
 func (p *projStates) statement() (*Statement, error) {
 	st := &Statement{}
 	t := p.Tensors
 	if t == nil {
 		return st, nil
 	}
-	if len(t.BlockLinear)+len(t.Fuse)+len(t.Joined)+len(t.Gather)+len(t.Drop)+len(t.Keys) > 0 ||
+	if len(t.BlockLinear)+len(t.Fuse)+len(t.Joined)+len(t.Drop)+len(t.Keys) > 0 ||
 		t.BlockPrefix != "" || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil || t.Ternary != nil || t.Present != nil {
-		return nil, fmt.Errorf("tensors: a tower's table states its model and block tensors and sizes")
+		return nil, fmt.Errorf("tensors: a tower's table states its model and block tensors, sizes and gathers")
 	}
 	names, err := readTensorNames()
 	if err != nil {
@@ -143,6 +145,35 @@ func (p *projStates) statement() (*Statement, error) {
 	}
 	if st.sizes, err = statedSizes(t.Sizes); err != nil {
 		return nil, fmt.Errorf("tensors: %w", err)
+	}
+	st.sources = map[string]bool{}
+	for _, g := range t.Gather {
+		r, ok := names.roleOf(g.Role)
+		if !ok {
+			r, ok = rolesByName()[g.Role]
+		}
+		if !ok || g.Every || g.Count != "" || len(g.From) == 0 {
+			return nil, fmt.Errorf("tensors: the gather of %s: a tower's gather is of a role the container knows, "+
+				"from sources, run where its first is", g.Role)
+		}
+		if err := g.Do.check(); err != nil {
+			return nil, fmt.Errorf("tensors: the gather of %s: %w", g.Role, err)
+		}
+		step := hfGatherStep{role: r, from: g.From, do: g.Do, model: g.Model, name: g.Name}
+		if g.If != "" {
+			if step.cond, err = parseExpr(g.If); err != nil {
+				return nil, fmt.Errorf("tensors: the gather of %s: %w", g.Role, err)
+			}
+		}
+		for _, o := range g.From {
+			if err := o.Do.check(); err != nil {
+				return nil, fmt.Errorf("tensors: the gather of %s: %w", g.Role, err)
+			}
+			for _, n := range o.names() {
+				st.sources[n] = true
+			}
+		}
+		st.gathers = append(st.gathers, step)
 	}
 	return st, nil
 }

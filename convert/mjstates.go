@@ -347,9 +347,12 @@ type Statement struct {
 	ternaryScale                        string
 	gathers                             []hfGatherStep
 	keys                                []string
-	linearTensors                       map[string][]statedCut
-	fuse                                map[jlm.Role][]string
-	joined                              map[jlm.Role]mjPipe
+	// sources are the names a tower's gathers read: past v.blk.N. for a
+	// block's, whole for the model's (gatherReads).
+	sources       map[string]bool
+	linearTensors map[string][]statedCut
+	fuse          map[jlm.Role][]string
+	joined        map[jlm.Role]mjPipe
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then

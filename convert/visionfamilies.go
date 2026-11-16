@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strconv"
-	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -14,31 +12,6 @@ import (
 // The per-projector half of the tower converter: what gemma3 and InternVL ship
 // that the shared name table and the shared transforms do not cover. Every
 // transform here is exact, or states the one rounding it adds.
-
-// layerScaleOf parses InternViT's per-block layer scale, "v.blk.N.ls1.weight"
-// (after attention) or "...ls2.weight" (after the MLP). It has no role: the
-// converter folds it into the matrix whose output it scales (foldLayerScales).
-func layerScaleOf(name string) (block int32, which int, ok bool) {
-	rest, found := strings.CutPrefix(name, "v.blk.")
-	if !found {
-		return 0, 0, false
-	}
-	i := strings.IndexByte(rest, '.')
-	if i <= 0 {
-		return 0, 0, false
-	}
-	n, err := strconv.Atoi(rest[:i])
-	if err != nil || n < 0 {
-		return 0, 0, false
-	}
-	switch rest[i+1:] {
-	case "ls1.weight":
-		return int32(n), 1, true
-	case "ls2.weight":
-		return int32(n), 2, true
-	}
-	return 0, 0, false
-}
 
 // floatRows decodes a 2-D tensor to f32, k values per row.
 func floatRows(t *jlm.Tensor) (vals []float32, k, rows int, err error) {
@@ -101,95 +74,6 @@ func setF32(t *jlm.Tensor, v []float32) {
 		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(x))
 	}
 	t.Type, t.Data, t.Load = jlm.TypeF32, b, nil
-}
-
-// foldLayerScales folds InternViT's layer scales into the matrices they
-// follow. ls1 multiplies the attention output and ls2 the MLP output, each per
-// output channel, so diag(ls)(Wx + b) = (diag(ls)W)x + ls*b: row r of the
-// matrix and element r of its bias are scaled by ls[r]. The block the engine
-// and every device tier run is then CLIP's, unchanged.
-//
-// The scale is applied in f32 before quantizeTower rounds the matrix; on a
-// Q8_0 source that only rescales each block's f16 scale, since the codes are
-// a row's shape and the row is scaled as a whole.
-//
-// The MLP's contraction is found by SHAPE (rows == NEmbd, k == NFFN), as
-// buildTower finds it: InternVL's mmproj names it ffn_down, SmolVLM's names
-// the same position ffn_up.
-func foldLayerScales(s *jlm.Source, scales map[int32][2][]float32) error {
-	if len(scales) == 0 {
-		return nil
-	}
-	v := s.Vision
-	type key struct {
-		role  jlm.Role
-		block int32
-	}
-	idx := map[key]int{}
-	for i := range s.Tensors {
-		t := &s.Tensors[i]
-		if t.Block >= 0 {
-			idx[key{t.Role, t.Block}] = i
-		}
-	}
-	scale := func(b int32, mat, bias jlm.Role, ls []float32) error {
-		mi, ok := idx[key{mat, b}]
-		if !ok {
-			return fmt.Errorf("convert: block %d has a layer scale and no %v to fold it into", b, mat)
-		}
-		m := &s.Tensors[mi]
-		vals, k, rows, err := floatRows(m)
-		if err != nil {
-			return err
-		}
-		if rows != len(ls) {
-			return fmt.Errorf("convert: %s has %d rows and its layer scale %d", m.Name, rows, len(ls))
-		}
-		for r := 0; r < rows; r++ {
-			for j := 0; j < k; j++ {
-				vals[r*k+j] *= ls[r]
-			}
-		}
-		setF32Dims(m, vals, uint64(k), uint64(rows))
-		bi, ok := idx[key{bias, b}]
-		if !ok {
-			return nil // an unbiased matrix: nothing more to scale
-		}
-		bt := &s.Tensors[bi]
-		bv, err := vecOf(bt)
-		if err != nil {
-			return err
-		}
-		if len(bv) != len(ls) {
-			return fmt.Errorf("convert: %s is %d floats and its layer scale %d", bt.Name, len(bv), len(ls))
-		}
-		for r := range bv {
-			bv[r] *= ls[r]
-		}
-		setF32Dims(bt, bv, uint64(len(bv)))
-		return nil
-	}
-	for b, pair := range scales {
-		if b < 0 || uint32(b) >= v.NLayer {
-			return fmt.Errorf("convert: a layer scale for block %d of %d", b, v.NLayer)
-		}
-		if pair[0] == nil || pair[1] == nil {
-			return fmt.Errorf("convert: block %d carries one layer scale of two", b)
-		}
-		if err := scale(b, jlm.RoleVAttnOut, jlm.RoleVAttnOutBias, pair[0]); err != nil {
-			return err
-		}
-		// The contraction, by shape.
-		mat, bias := jlm.RoleVFC2, jlm.RoleVFC2Bias
-		if i, ok := idx[key{jlm.RoleVFC1, b}]; ok && s.Tensors[i].NDim == 2 &&
-			uint32(s.Tensors[i].Dims[1]) == v.NEmbd && uint32(s.Tensors[i].Dims[0]) == v.NFFN {
-			mat, bias = jlm.RoleVFC1, jlm.RoleVFC1Bias
-		}
-		if err := scale(b, mat, bias, pair[1]); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // imgBreakRow gives a Pixtral tower its [IMG_BREAK] row when the mmproj does
@@ -303,18 +187,6 @@ func padFFN(s *jlm.Source) error {
 	}
 	v.NFFN = wide
 	return nil
-}
-
-// towerGathered reports a tower file's tensor that has no role of its own
-// because conversion gathers it into another: Gemma 4's clipped-linear
-// bounds (RoleVClamp) and InternViT's layer scales (folded into the matrices
-// they follow).
-func towerGathered(name string) bool {
-	if _, _, ok := clampOf(name); ok {
-		return true
-	}
-	_, _, ok := layerScaleOf(name)
-	return ok
 }
 
 // tokenRow is the text table's row of token id, dequantized as the text

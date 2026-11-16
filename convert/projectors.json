@@ -300,6 +300,11 @@
    "states": "InternViT-300M; a q/k norm in the blocks is the 6B tower's",
    "output": {"tensor": "mm.model.mlp.3.weight", "dim": 1},
    "tiles": {"min": "src['vision.preproc_min_tiles'] | default(1)", "max": "src['vision.preproc_max_tiles'] | default(12)"},
+   "tensors": {"gather": [
+     {"role": "v_attn_out", "from": [{"from": ["ls1.weight"], "do": [{"repeat": [0, "vision.embedding_length"]}]}, "attn_out.weight"], "do": [{"map": "x * y"}, {"reshape": [-1, "vision.embedding_length"]}], "name": "{block}attn_out.weight"},
+     {"role": "v_attn_out.bias", "from": ["attn_out.bias", "ls1.weight"], "do": [{"map": "x * y"}], "name": "{block}attn_out.bias"},
+     {"role": "v_fc2", "from": [{"from": ["ls2.weight"], "do": [{"repeat": [0, "vision.feed_forward_length"]}]}, "ffn_down.weight"], "do": [{"map": "x * y"}, {"reshape": [-1, "vision.feed_forward_length"]}], "name": "{block}ffn_down.weight"},
+     {"role": "v_fc2.bias", "from": ["ffn_down.bias", "ls2.weight"], "do": [{"map": "x * y"}], "name": "{block}ffn_down.bias"}]},
    "tower": {
     "requires": ["v_patch_embd", "v_class_embd", "v_pos_embd", "v_proj_norm", "v_proj", "v_proj2"],
     "require": [
@@ -1003,6 +1008,7 @@
    "std": [0.5, 0.5, 0.5],
    "activation": "gelu",
    "tensors": {"sizes": {"hd": "vision.embedding_length / vision.attention.head_count"},
+     "gather": [{"role": "v.clamp", "from": ["attn_q.input_min", "attn_q.input_max", "attn_q.output_min", "attn_q.output_max", "attn_k.input_min", "attn_k.input_max", "attn_k.output_min", "attn_k.output_max", "attn_v.input_min", "attn_v.input_max", "attn_v.output_min", "attn_v.output_max", "attn_out.input_min", "attn_out.input_max", "attn_out.output_min", "attn_out.output_max", "ffn_gate.input_min", "ffn_gate.input_max", "ffn_gate.output_min", "ffn_gate.output_max", "ffn_up.input_min", "ffn_up.input_max", "ffn_up.output_min", "ffn_up.output_max", "ffn_down.input_min", "ffn_down.input_max", "ffn_down.output_min", "ffn_down.output_max"], "do": [{"concat": 0}, {"shape": [28]}], "name": "{block}clamp"}],
      "model": {"v.std_bias": {"role": "v.std_bias", "do": [{"map": "-x"}]}},
      "block": {
        "v.attn_q.weight": {"role": "v.attn_q.weight", "do": [{"reshape": [-1, 4, "size.hd / 4", "vision.embedding_length"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1, "vision.embedding_length"]}, {"type": "f32"}]},
