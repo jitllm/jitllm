@@ -2,6 +2,7 @@ package convert
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -12,10 +13,11 @@ import (
 // from joint_head_config.json): routing blocks, then joint blocks, the heads
 // they attend with, and the head's LayerNorm epsilon -- torch's default, which
 // the reference never sets and the converter writes as layer_norm_epsilon. The
-// backbone is qwen35 under another name (the arch "clef").
+// backbone is the one whose statement names the readout (readouts: qwen35
+// under another name, the arch "clef").
 func clefOf(f *meta.File, c *Config) error {
-	if c.Arch != ArchQwen3Next || f.Arch() != "clef" {
-		return fmt.Errorf("a clef readout is the clef arch's qwen35 backbone, and this is %s (%v)", f.Arch(), c.Arch)
+	if !slices.Contains(c.Stated.readouts, "clef") {
+		return fmt.Errorf("a clef readout on %s, whose library statement names no clef readout", f.Arch())
 	}
 	c.DecisionRouting = uint32(f.UintKey("decision.routing_block_count", 0))
 	c.DecisionHeads = uint32(f.UintKey("decision.head_count", 0))

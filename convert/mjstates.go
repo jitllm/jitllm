@@ -77,6 +77,9 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// Readouts is the decision readouts, by name, the backbone carries where
+	// a readout asks for its own (clefOf).
+	Readouts []string `json:"readouts"`
 	// PLEPadded, true, states that the source pads the per-layer table with
 	// zero rows past its own vocabulary (altUpTensors cuts them).
 	PLEPadded bool `json:"ple_padded"`
@@ -285,6 +288,7 @@ type Statement struct {
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
 	compressedBlocks, plePadded         bool
+	readouts                            []string
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -583,7 +587,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if r := st.Router; r != nil {
 		c.Stated.routerGate, c.Stated.routerUngrouped = r.Gate, r.Ungrouped
 	}
-	c.Stated.compressedBlocks, c.Stated.plePadded = st.CompressedBlocks, st.PLEPadded
+	c.Stated.compressedBlocks, c.Stated.plePadded, c.Stated.readouts = st.CompressedBlocks, st.PLEPadded, st.Readouts
 	if st.MergeMixers {
 		c.Stated.mergeMixers = true
 		if err := mergeMixers(f, c); err != nil {
