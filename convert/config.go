@@ -247,6 +247,9 @@ func localAxes(c *Config) error {
 // (d1OmniConfig).
 func configOfFile(f *meta.File) (*Config, error) {
 	name := f.Arch()
+	if name == towerArch {
+		return nil, fmt.Errorf("convert: %q is a vision tower, not a language model", name)
+	}
 	arch, ok := archOf()[name]
 	if !ok {
 		names, err := Architectures()
@@ -371,8 +374,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := kimiK3Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchCLIP:
-		return nil, fmt.Errorf("convert: %q is a vision tower, not a language model", name)
 	case ArchModernBERT:
 		if err := modernBERTConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -833,7 +834,7 @@ func ropeSectionsFit(name string, secs []int32, c *Config) error {
 
 // visionOf reads a vision tower's description. A tower is its own container.
 func visionOf(f *meta.File) (*jlm.Vision, *projStates, error) {
-	if f.Arch() != "clip" {
+	if f.Arch() != towerArch {
 		return nil, nil, nil
 	}
 	v := &jlm.Vision{
