@@ -7,6 +7,8 @@
       "rope_base": "src['attention.compress_rope_freq_base']",
       "streams": {"count": "src['hyper_connection.count'] | default(0)", "sinkhorn_iterations": "src['hyper_connection.sinkhorn_iterations'] | default(0)", "eps": "src['hyper_connection.epsilon'] | default(0)"},
       "output_groups": {"groups": "src['attention.output_group_count'] | default(0)", "rank": "src['attention.output_lora_rank'] | default(0)"},
+      "tensors": {"block": {"attn_output_a.weight": {"role": "attn_output_a.weight",
+                  "do": [{"reshape": ["attention.output_group_count", "attention.output_lora_rank", -1]}]}}},
       "hash_layers": "src['hash_layer_count'] | default(0)",
       "latent": {"q": "src['attention.q_lora_rank']"},
       "window": {"size": "src['attention.sliding_window']", "period": "src['block_count'] + 1", "rope_base": "src['rope.freq_base'] | default(10000)"},

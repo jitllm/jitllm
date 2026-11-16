@@ -168,34 +168,6 @@ func compressionKinds(f *meta.File, c *Config) error {
 	return nil
 }
 
-// groupedOutputTensors finishes a grouped low-rank output projection
-// (output_groups, DeepSeek V4's): its first half is OGroups matrices of
-// OLoraRank rows over one group's heads,
-// stacked in the file as one {group width, OGroups*OLoraRank} matrix (llama.cpp
-// reshapes it to three dimensions at load); it is carried as the bank it is,
-// {group width, OLoraRank, OGroups}, the same bytes, so the container packs
-// each group as its own sheet and a reader cuts a group the way it cuts an
-// expert.
-func groupedOutputTensors(c *Config, s *jlm.Source) error {
-	if c.OGroups == 0 {
-		return nil
-	}
-	gw := uint64(c.NHead/c.OGroups) * uint64(c.HeadDim)
-	for i := range s.Tensors {
-		e := &s.Tensors[i]
-		if e.Role != jlm.RoleAttnOutA {
-			continue
-		}
-		if e.NDim != 2 || e.Dims[0] != gw || e.Dims[1] != uint64(c.OGroups)*uint64(c.OLoraRank) {
-			return fmt.Errorf("convert: %s is %v, want {%d, %d}: %d groups of rank %d over %d heads of %d",
-				e.Name, e.Dims[:e.NDim], gw, c.OGroups*c.OLoraRank, c.OGroups, c.OLoraRank, c.NHead, c.HeadDim)
-		}
-		e.NDim = 3
-		e.Dims[1], e.Dims[2] = uint64(c.OLoraRank), uint64(c.OGroups)
-	}
-	return nil
-}
-
 // hashExpertTable is a hash-routed block's token-id table, I32 in the file, as
 // the F32 the container stores (ids are exact well past any expert count).
 // Every id is checked against the expert count, since it indexes the banks.

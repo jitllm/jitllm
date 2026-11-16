@@ -200,3 +200,17 @@ func unfuseThirds(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	}
 	return out, true, nil
 }
+
+// tensorRowBytes is how many bytes one row (Dims[0] elements) of e occupies.
+func tensorRowBytes(e *jlm.Tensor) (uint64, error) {
+	src, ok := sourceType(e.Type)
+	if !ok {
+		return 0, fmt.Errorf("convert: %s is %v, which has no source type", e.Name, e.Type)
+	}
+	be, bb := uint64(src.BlockElems()), uint64(src.BlockBytes())
+	if be == 0 || e.Dims[0]%be != 0 {
+		return 0, fmt.Errorf("convert: %s rows are %d elements, not a multiple of %s's %d",
+			e.Name, e.Dims[0], src, be)
+	}
+	return e.Dims[0] / be * bb, nil
+}

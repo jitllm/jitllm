@@ -446,23 +446,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				return nil, uerr
 			}
 		}
-		// Mamba-2's in_proj likewise, and its convolved channels reordered to
-		// the delta rule's q | k | v. See unfuseSSD.
-		if !split {
-			if sub, split, uerr = unfuseSSD(&e, c); uerr != nil {
-				return nil, uerr
-			}
-		}
-		if !split {
-			if sub, split, uerr = unfuseShortConv(&e, c); uerr != nil {
-				return nil, uerr
-			}
-		}
-		if !split {
-			if sub, split, uerr = unfuseScan(&e, c); uerr != nil {
-				return nil, uerr
-			}
-		}
 		if split {
 			s.Tensors = append(s.Tensors, sub...)
 			continue
@@ -495,9 +478,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 	}
 	if err := ternaryTensors(c, s, scales); err != nil {
-		return nil, err
-	}
-	if err := groupedOutputTensors(c, s); err != nil {
 		return nil, err
 	}
 	// An alpha with no beta was skipped above and never fused: a layer whose

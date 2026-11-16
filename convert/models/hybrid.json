@@ -1,15 +1,90 @@
 {
   "gguf": ["mamba2", "granitehybrid", "nemotron_h", "nemotron_h_moe", "falcon-h1"],
   "container": {
-    "mamba2": {"flags": {"no_pos_enc": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}, {"tensors": ["ssm_conv1d.weight", "attn_q.weight"], "kind": "ssd_attention"}]},
-    "granitehybrid": {"logit_div": "src['logit_scale']", "embd_scale": "src['embedding_scale'] | default(1)",
+    "mamba2": {"tensors": {"block": {
+        "ssm_in.weight": [
+          {"role": "attn_gate.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                              {"slice": [0, 0, "ssm.inner_size"]}]},
+          {"role": "attn_qkv.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                             {"pick": [0, "2 * ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                       "2 * ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", "ssm.inner_size", "ssm.inner_size"]}]},
+          {"role": "ssm_ba.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                           {"slice": [0, "2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size", "ssm.time_step_rank"]}]}
+        ],
+        "ssm_conv1d.weight": {"role": "ssm_conv1d.weight", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                             "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]},
+        "ssm_conv1d.bias": {"role": "ssm_conv1d.bias", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                         "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]}
+      }},
+      "flags": {"no_pos_enc": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}, {"tensors": ["ssm_conv1d.weight", "attn_q.weight"], "kind": "ssd_attention"}]},
+    "granitehybrid": {"tensors": {"block": {
+        "ssm_in.weight": [
+          {"role": "attn_gate.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                              {"slice": [0, 0, "ssm.inner_size"]}]},
+          {"role": "attn_qkv.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                             {"pick": [0, "2 * ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                       "2 * ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", "ssm.inner_size", "ssm.inner_size"]}]},
+          {"role": "ssm_ba.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                           {"slice": [0, "2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size", "ssm.time_step_rank"]}]}
+        ],
+        "ssm_conv1d.weight": {"role": "ssm_conv1d.weight", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                             "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]},
+        "ssm_conv1d.bias": {"role": "ssm_conv1d.bias", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                         "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]}
+      }},
+      "logit_div": "src['logit_scale']", "embd_scale": "src['embedding_scale'] | default(1)",
                       "residual_scale": "src['residual_scale'] | default(0)",
                       "flags": {"no_pos_enc": "not (src['rope.scaling.finetuned'] | default(true))"},
                       "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}, {"tensors": ["ssm_conv1d.weight", "attn_q.weight"], "kind": "ssd_attention"}]},
-    "nemotron_h": {"merge_mixers": true, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}], "flags": {"no_pos_enc": "true"}, "activation": "relu2", "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}},
-    "nemotron_h_moe": {"merge_mixers": true, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}], "flags": {"no_pos_enc": "true"}, "activation": "relu2",
+    "nemotron_h": {"tensors": {"block": {
+        "ssm_in.weight": [
+          {"role": "attn_gate.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                              {"slice": [0, 0, "ssm.inner_size"]}]},
+          {"role": "attn_qkv.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                             {"pick": [0, "2 * ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                       "2 * ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", "ssm.inner_size", "ssm.inner_size"]}]},
+          {"role": "ssm_ba.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                           {"slice": [0, "2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size", "ssm.time_step_rank"]}]}
+        ],
+        "ssm_conv1d.weight": {"role": "ssm_conv1d.weight", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                             "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]},
+        "ssm_conv1d.bias": {"role": "ssm_conv1d.bias", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                         "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]}
+      }},
+      "merge_mixers": true, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}], "flags": {"no_pos_enc": "true"}, "activation": "relu2", "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}},
+    "nemotron_h_moe": {"tensors": {"block": {
+        "ssm_in.weight": [
+          {"role": "attn_gate.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                              {"slice": [0, 0, "ssm.inner_size"]}]},
+          {"role": "attn_qkv.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                             {"pick": [0, "2 * ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                       "2 * ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", "ssm.inner_size", "ssm.inner_size"]}]},
+          {"role": "ssm_ba.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                           {"slice": [0, "2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size", "ssm.time_step_rank"]}]}
+        ],
+        "ssm_conv1d.weight": {"role": "ssm_conv1d.weight", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                             "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]},
+        "ssm_conv1d.bias": {"role": "ssm_conv1d.bias", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                         "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]}
+      }},
+      "merge_mixers": true, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}], "flags": {"no_pos_enc": "true"}, "activation": "relu2",
                        "router": {"gate": "sigmoid", "ungrouped": true}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}},
-    "falcon-h1": {"flags": {"rope_neox": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}, {"tensors": ["ssm_conv1d.weight", "attn_q.weight"], "kind": "ssd_attention"}]}
+    "falcon-h1": {"tensors": {"block": {
+        "ssm_in.weight": [
+          {"role": "attn_gate.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                              {"slice": [0, 0, "ssm.inner_size"]}]},
+          {"role": "attn_qkv.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                             {"pick": [0, "2 * ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                       "2 * ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", "ssm.inner_size", "ssm.inner_size"]}]},
+          {"role": "ssm_ba.weight", "do": [{"reshape": ["2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size + ssm.time_step_rank", -1]},
+                                           {"slice": [0, "2 * ssm.inner_size + 2 * (ssm.group_count ?? 1) * ssm.state_size", "ssm.time_step_rank"]}]}
+        ],
+        "ssm_conv1d.weight": {"role": "ssm_conv1d.weight", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                             "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]},
+        "ssm_conv1d.bias": {"role": "ssm_conv1d.bias", "do": [{"pick": [0, "ssm.inner_size + (ssm.group_count ?? 1) * ssm.state_size", "(ssm.group_count ?? 1) * ssm.state_size",
+                                                                         "ssm.inner_size", "(ssm.group_count ?? 1) * ssm.state_size", 0, "ssm.inner_size"]}]}
+      }},
+      "flags": {"rope_neox": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(1)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "ssd"}, {"tensors": ["ssm_conv1d.weight", "attn_q.weight"], "kind": "ssd_attention"}]}
   },
   "graph": {
     "block": [

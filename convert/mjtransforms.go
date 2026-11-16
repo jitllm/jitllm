@@ -97,6 +97,9 @@ type mjOp struct {
 	Trim []mjSize `json:"trim"`
 	// Type is the storage type: "f32" or "f16".
 	Type string `json:"type"`
+	// Pick is [axis, start, length, start, length, ...]: those ranges of the
+	// axis joined in order.
+	Pick []mjSize `json:"pick"`
 	// TrimZero, true, cuts the slowest axis's trailing indices whose bytes
 	// are all zero, one at least kept: a converter's padding, of any storage
 	// type, sized by the bytes it reads.
@@ -135,6 +138,9 @@ func (o mjOp) name() string {
 	if o.TrimZero {
 		set = append(set, "trim_zero")
 	}
+	if o.Pick != nil {
+		set = append(set, "pick")
+	}
 	if len(set) != 1 {
 		return strings.Join(set, "+")
 	}
@@ -143,6 +149,16 @@ func (o mjOp) name() string {
 
 // mjPipe is a tensor's primitives in order.
 type mjPipe []mjOp
+
+// reshapes says p is reshapes alone, which move no byte.
+func (p mjPipe) reshapes() bool {
+	for _, o := range p {
+		if o.name() != "reshape" {
+			return false
+		}
+	}
+	return true
+}
 
 // check refuses at lowering what no config could make right.
 func (p mjPipe) check() error {
@@ -163,6 +179,10 @@ func (p mjPipe) check() error {
 		case "type":
 			if o.Type != "f32" && o.Type != "f16" {
 				return fmt.Errorf("type %q is not f32 or f16", o.Type)
+			}
+		case "pick":
+			if n := len(o.Pick); n < 3 || n%2 != 1 {
+				return fmt.Errorf("pick takes an axis and pairs of start and length, not %d values", n)
 			}
 		case "reshape", "transpose", "concat", "stack", "trim_zero":
 		default:
@@ -189,6 +209,8 @@ func argsOf(o mjOp) []mjSize {
 		return o.Repeat
 	case o.Trim != nil:
 		return o.Trim
+	case o.Pick != nil:
+		return o.Pick
 	case o.Concat != nil:
 		return []mjSize{*o.Concat}
 	case o.Stack != nil:
@@ -249,6 +271,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjRetype(vs[0], o.Type)
 			case "trim_zero":
 				out, err = mjTrimZero(vs[0])
+			case "pick":
+				out, err = mjPick(vs[0], args)
 			}
 		}
 		if err != nil {
@@ -291,6 +315,9 @@ func mjReshape(v mjVal, sizes []int64) (mjVal, error) {
 	}
 	if mjProd(shape) != v.count() {
 		return mjVal{}, fmt.Errorf("reshape %v of %v: %d elements into %d", sizes, v.shape, v.count(), mjProd(shape))
+	}
+	if _, err := mjElemSize(v.typ); err != nil && len(v.shape) > 0 && shape[len(shape)-1] != v.shape[len(v.shape)-1] {
+		return mjVal{}, fmt.Errorf("reshape %v of a %v tensor %v: its rows are its blocks, and keep their width", sizes, v.typ, v.shape)
 	}
 	v.shape = shape
 	return v, nil
@@ -349,12 +376,19 @@ func mjTranspose(v mjVal, perm []int64) (mjVal, error) {
 }
 
 // mjSpan is the elements before an axis, and the bytes of one index of it.
+// mjSpan is v's slabs along axis ax: how many lie outside it, and the bytes
+// of each index. A packed type's fastest axis is its blocks, so it is spanned
+// only above that axis, a row's bytes read off the data.
 func mjSpan(v mjVal, ax int) (outer, inner uint64, err error) {
-	es, err := mjElemSize(v.typ)
-	if err != nil {
-		return 0, 0, err
+	if es, err := mjElemSize(v.typ); err == nil {
+		return mjProd(v.shape[:ax]), mjProd(v.shape[ax+1:]) * es, nil
 	}
-	return mjProd(v.shape[:ax]), mjProd(v.shape[ax+1:]) * es, nil
+	last := len(v.shape) - 1
+	rows := mjProd(v.shape[:last])
+	if ax >= last || v.dry() || rows == 0 || uint64(len(v.data))%rows != 0 {
+		return 0, 0, fmt.Errorf("a %v tensor %v moves by whole rows of its blocks, not along axis %d", v.typ, v.shape, ax)
+	}
+	return mjProd(v.shape[:ax]), mjProd(v.shape[ax+1:last]) * (uint64(len(v.data)) / rows), nil
 }
 
 func mjSlice(v mjVal, axis, start, n int64) (mjVal, error) {
@@ -365,14 +399,14 @@ func mjSlice(v mjVal, axis, start, n int64) (mjVal, error) {
 	if start < 0 || n <= 0 || uint64(start+n) > v.shape[ax] {
 		return mjVal{}, fmt.Errorf("slice [%d, %d) of an axis of %d", start, start+n, v.shape[ax])
 	}
-	outer, inner, err := mjSpan(v, ax)
-	if err != nil {
-		return mjVal{}, err
-	}
 	out := mjVal{shape: append([]uint64(nil), v.shape...), typ: v.typ}
 	out.shape[ax] = uint64(n)
 	if v.dry() {
 		return out, nil
+	}
+	outer, inner, err := mjSpan(v, ax)
+	if err != nil {
+		return mjVal{}, err
 	}
 	row := v.shape[ax] * inner
 	for o := uint64(0); o < outer; o++ {
@@ -466,6 +500,20 @@ func mjTrim(v mjVal, axis, keep int64) (mjVal, error) {
 		}
 	}
 	return mjSlice(v, axis, 0, keep)
+}
+
+// mjPick is v's ranges along an axis, args[0], each a start and a length
+// after it, joined in order.
+func mjPick(v mjVal, args []int64) (mjVal, error) {
+	var parts []mjVal
+	for i := 1; i+1 < len(args); i += 2 {
+		p, err := mjSlice(v, args[0], args[i], args[i+1])
+		if err != nil {
+			return mjVal{}, err
+		}
+		parts = append(parts, p)
+	}
+	return mjConcat(parts, args[0])
 }
 
 // mjTrimZero is v without the trailing indices of its slowest axis whose

@@ -104,7 +104,7 @@ type mjStates struct {
 	// Tensors is what the GGUF's tensors become past the vocabulary, as a
 	// class's tensor table states it over the GGUF's names: Model the
 	// model-level ones, Block a block's past its blk.N. prefix and BlockLinear
-	// a recurrent block's, each a role or targets cut by the primitives
+	// a linear-attention block's, each a role or targets cut by the primitives
 	// (mjTargets) laid out in its place, and Fuse the roles several are
 	// joined into by rows (statedTensors). The rest of a class's table is
 	// refused here.

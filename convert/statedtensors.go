@@ -42,7 +42,7 @@ func statedCuts(names tensorNames, n string, ts mjTargets) ([]statedCut, error) 
 
 // statedTensors cuts each of s's tensors c's statement names -- a
 // model-level one by its name, a block's by its name past the blk.N. prefix,
-// a recurrent block's table first -- into its targets, laid out in its
+// a linear-attention block's table first -- into its targets, laid out in its
 // place, env the source's keys; a target of a joined role is held, and each
 // block's joins are laid out after every other tensor, by block and role.
 func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
@@ -63,10 +63,10 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 		cuts, ok := st.modelTensors[t.Name]
 		rest := t.Name
 		if t.Block >= 0 {
-			r, in := strings.CutPrefix(t.Name, "blk."+itoa(int(t.Block))+".")
+			r, in := ggufBlockRest(t.Name)
 			rest = r
 			cuts, ok = st.blockTensors[rest]
-			if lc, lin := st.linearTensors[rest]; lin && int(t.Block) < len(c.LayerKinds) && c.LayerKinds[t.Block].Recurrent() {
+			if lc, lin := st.linearTensors[rest]; lin && int(t.Block) < len(c.LayerKinds) && c.LayerKinds[t.Block] == jlm.LayerLinearAttn {
 				cuts, ok = lc, true
 			}
 			ok = ok && in
@@ -76,7 +76,7 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 			continue
 		}
 		in := mjVal{shape: mjTorch(&t), typ: t.Type}
-		if slices.ContainsFunc(cuts, func(x statedCut) bool { return len(x.do) > 0 }) {
+		if slices.ContainsFunc(cuts, func(x statedCut) bool { return len(x.do) > 0 && !x.do.reshapes() }) {
 			b, err := t.Bytes()
 			if err != nil {
 				return err
@@ -97,7 +97,9 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 				if err := mjSetShape(&p, v); err != nil {
 					return err
 				}
-				p.Data, p.Load = v.data, nil
+				if !x.do.reshapes() {
+					p.Data, p.Load = v.data, nil
+				}
 			}
 			srcs, joins := st.fuse[p.Role]
 			if !joins || p.Block < 0 {
@@ -142,6 +144,17 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 	}
 	s.Tensors = out
 	return nil
+}
+
+// ggufBlockRest is a block tensor's name past its blk.N. prefix, false for a
+// name of none.
+func ggufBlockRest(name string) (string, bool) {
+	r, ok := strings.CutPrefix(name, "blk.")
+	i := strings.IndexByte(r, '.')
+	if !ok || i <= 0 || strings.Trim(r[:i], "0123456789") != "" {
+		return name, false
+	}
+	return r[i+1:], true
 }
 
 // joinRows stacks matrices of one k by rows, in order. Of one type the

@@ -1,10 +1,24 @@
 {
   "gguf": ["lfm2", "lfm2moe"],
   "container": {
-    "lfm2": {"readouts": ["lfm2-d1-omni"], "retarget": [
+    "lfm2": {"tensors": {"block": {
+        "shortconv.in_proj.weight": [
+          {"role": "shortconv.in_proj.b", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 0, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.c", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 1, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.x", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 2, 1]}, {"reshape": ["embedding_length", -1]}]}
+        ]
+      }},
+      "readouts": ["lfm2-d1-omni"], "retarget": [
                  {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (llama.cpp's LLM_TENSOR_OUTPUT_NORM_LFM2) and is applied after the last block, not to the embeddings"}],
       "flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]},
-    "lfm2moe": {"retarget": [
+    "lfm2moe": {"tensors": {"block": {
+        "shortconv.in_proj.weight": [
+          {"role": "shortconv.in_proj.b", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 0, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.c", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 1, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.x", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 2, 1]}, {"reshape": ["embedding_length", -1]}]}
+        ]
+      }},
+      "retarget": [
                  {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (llama.cpp's LLM_TENSOR_OUTPUT_NORM_LFM2) and is applied after the last block, not to the embeddings"}],
       "flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]}
   },

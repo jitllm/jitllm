@@ -11,66 +11,10 @@ import (
 // Mamba-1's selective scan (jlm.LayerScan): plain Mamba and FalconMamba
 // (arch "mamba") and Jamba's recurrent blocks. In the delta rule's terms every
 // one of Inner channels is a value head of one row: NHeadV is Inner and the
-// state is StateSize wide per channel, B and C shared by every channel. The
-// converter does three things to the source's layout, all of them copies:
-//
-//	in_proj  x | z by rows -> x (RoleAttnQKV, what convolves) and z (RoleAttnGate)
-//	x_proj   dt | B | C by rows -> RoleSSMXDt, RoleSSMXB, RoleSSMXC
-//	dt/B/C   FalconMamba's weightless RMSNorms written as ones, so the engine
-//	         runs them exactly as Jamba's weighted ones
-//
-// dt_proj (ssm_dt.weight, RoleSSMDtProj) takes the bottleneck back up to the
-// channels; its rank is read off that tensor, not stated in the config.
-
-// unfuseScan splits in_proj and x_proj into their outputs (see the top of
-// this file). Row ranges of a row-major matrix are byte ranges, so the bytes
-// are the source's.
-func unfuseScan(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	if !blockIs(c, e.Block, jlm.LayerScan) {
-		return nil, false, nil
-	}
-	inner, n := uint64(c.SSM.Inner), uint64(c.SSM.StateSize)
-	var parts []struct {
-		role jlm.Role
-		rows uint64
-	}
-	switch e.Role {
-	case jlm.RoleSSMInProj:
-		if e.NDim != 2 || e.Dims[1] != 2*inner {
-			return nil, false, fmt.Errorf("convert: %s is %v, want %d rows (x and z of %d)",
-				e.Name, e.Dims[:e.NDim], 2*inner, inner)
-		}
-		parts = []struct {
-			role jlm.Role
-			rows uint64
-		}{{jlm.RoleAttnQKV, inner}, {jlm.RoleAttnGate, inner}}
-	case jlm.RoleSSMXDt:
-		if e.NDim != 2 || e.Dims[0] != inner || e.Dims[1] <= 2*n {
-			return nil, false, fmt.Errorf("convert: %s is %v, want %d inputs and a dt rank plus %d rows",
-				e.Name, e.Dims[:e.NDim], inner, 2*n)
-		}
-		parts = []struct {
-			role jlm.Role
-			rows uint64
-		}{{jlm.RoleSSMXDt, e.Dims[1] - 2*n}, {jlm.RoleSSMXB, n}, {jlm.RoleSSMXC, n}}
-	default:
-		return nil, false, nil
-	}
-	rb, err := tensorRowBytes(e)
-	if err != nil {
-		return nil, false, err
-	}
-	var out []jlm.Tensor
-	lo := uint64(0)
-	for _, p := range parts {
-		t := jlm.Tensor{Role: p.role, Block: e.Block, Index: e.Index, Type: e.Type, NDim: 2,
-			Data: e.Data[lo*rb : (lo+p.rows)*rb], Name: e.Name + "/" + p.role.String()}
-		t.Dims[0], t.Dims[1] = e.Dims[0], p.rows
-		out = append(out, t)
-		lo += p.rows
-	}
-	return out, true, nil
-}
+// state is StateSize wide per channel, B and C shared by every channel.
+// scan.json's tensor table splits in_proj (x | z) and x_proj (dt | B | C) by
+// rows; dt_proj (ssm_dt.weight, RoleSSMDtProj) takes the bottleneck back up
+// to the channels.
 
 // scanUnitNorms writes FalconMamba's weightless dt, B and C RMSNorms
 // (ssm.dt_b_c_rms) as weights of ones, one set per Mamba-1 block, so the

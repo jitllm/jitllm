@@ -228,9 +228,13 @@ schema; `convert/modeljson.go` reads it. Its sections:
   `block`, `block_linear`, `fuse`; `statedTensors`): each name a role or
   targets cut by the primitives, and the roles several are joined into by
   rows, one type back to back and mixed types re-stored as Q8_0 (`joinRows`).
-  Kimi-K3 states its KDA blocks' q|k|v and convolution joins there, and
-  Gemma 3n its AltUp sheets and the cut of llama.cpp's zero-padded per-layer
-  table (`trim_zero`).
+  Kimi-K3 states its KDA blocks' q|k|v and convolution joins there, Gemma 3n
+  its AltUp sheets and the cut of llama.cpp's zero-padded per-layer table
+  (`trim_zero`), the Mamba-2 hybrids their in_proj's z | xBC | dt split with
+  xBC and the convolution put in the delta rule's C | B | x order (`pick`),
+  Mamba-1 and Jamba their in_proj and x_proj splits, LFM2 its short
+  convolution's B | C | x, and DeepSeek V4 its grouped output projection as
+  the bank it is.
   `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
   feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,
