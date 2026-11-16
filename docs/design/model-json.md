@@ -208,7 +208,9 @@ schema; `convert/modeljson.go` reads it. Its sections:
   (`stateKindGeoms`; a per-layer FFN width may be twice the first on the
   KV-sharing layers, for every file); `rope_freqs: true` holds the file to a
   `rope_freqs` tensor; the `dense_moe` flag reads a dense MLP beside a
-  mixture (`denseMoEFits`). `attn_scale` is the score multiplier in place of 1/sqrt(head_dim),
+  mixture (`denseMoEFits`). `attn_scale` is the score multiplier in place of 1/sqrt(head_dim) (0
+  for that; Gemma 2's and 3's state llama.cpp's loader rule for the 27B,
+  n_embd/n_head at 46 and 62 layers, which their GGUFs do not state),
   `kv_shared` how many last layers read an earlier layer's history, `ple_width`
   the per-layer input's width (its table is held to it), `value_key_width:
   true` a value as wide as the key, and `altup` AltUp's streams (at least

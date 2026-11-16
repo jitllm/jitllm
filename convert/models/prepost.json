@@ -1,7 +1,7 @@
 {
   "gguf": ["gemma2", "glm4"],
   "container": {
-    "gemma2": {"flags": {"rope_neox": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5",
+    "gemma2": {"attn_scale": "(src['embedding_length'] // src['attention.head_count']) ** -0.5 if src['block_count'] == 46 else src['attention.scale'] | default(0)", "flags": {"rope_neox": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5",
                "window": {"size": "src['attention.sliding_window'] | default(4096)", "pattern": "2",
                           "rope_base": "src['rope.freq_base_swa'] | default(src['rope.freq_base'] | default(10000))"},
                "attn_softcap": "src['attn_logit_softcapping'] | default(0)",

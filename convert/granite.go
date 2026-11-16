@@ -2,21 +2,9 @@ package convert
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/convert/meta"
 )
-
-// gemmaAttnScale sets the score scale of a 27B gemma2/gemma3.
-//
-// The 27B is the one gemma whose score is not 1/sqrt(head_dim): its
-// query_pre_attn_scalar is n_embd/n_head. The GGUF states neither the scalar
-// nor the size, so like llama.cpp this keys it on the layer count (46, 62).
-func gemmaAttnScale(c *Config) {
-	if (c.Arch == ArchGemma2 && c.NLayer == 46) || (c.Arch == ArchGemma3 && c.NLayer == 62) {
-		c.AttnScale = float32(1 / math.Sqrt(float64(c.NEmbd/c.NHead)))
-	}
-}
 
 // swaPatternOf reads which layers slide, into c.SWAPeriod, from the file's
 // attention.sliding_window_pattern or the architecture's period def.

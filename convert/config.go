@@ -333,10 +333,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 	if err := stateContainer(f, c); err != nil {
 		return nil, err
 	}
-	switch arch {
-	case ArchGemma2, ArchGemma3:
-		gemmaAttnScale(c)
-	}
 
 	// A head narrower than embedding/heads is stated only by key_length; a
 	// file that states none where its q projection says otherwise is refused
