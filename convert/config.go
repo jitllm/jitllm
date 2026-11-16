@@ -340,10 +340,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := gemma4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchGemma3n:
-		if err := gemma3nConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	}
 
 	// A head narrower than embedding/heads is stated only by key_length; a
@@ -383,6 +379,22 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	}
 	if err := statedFeaturesFit(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
+	}
+	// A per-layer FFN width whose layers agree is one width.
+	if kv, ok := f.Key("feed_forward_length"); ok && c.NFFN == 0 && kv.Type == meta.Array {
+		ws, err := kv.Int32s()
+		if err != nil || len(ws) != int(c.NLayer) || ws[0] <= 0 {
+			return nil, fmt.Errorf("convert: %s: feed_forward_length: %d values for %d layers (%v)", name, len(ws), c.NLayer, err)
+		}
+		for i, w := range ws {
+			if w != ws[0] {
+				return nil, fmt.Errorf("convert: %s: feed_forward_length %v: layer %d differs from layer 0: %w", name, ws, i, ErrNotImplemented)
+			}
+		}
+		c.NFFN = uint32(ws[0])
+	}
+	if err := sparsityOf(f, c); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	// A rotary narrower than the head turns its leading pairs and passes the

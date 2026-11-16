@@ -38,8 +38,8 @@ func gemma3nRoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// gemma3nConfig is llama.cpp's gemma3n.cpp and transformers'
-// Gemma3nForCausalLM, text only:
+// Gemma 3n is llama.cpp's gemma3n.cpp and transformers' Gemma3nForCausalLM,
+// text only, as gemma3n.json's statement states it:
 //
 //	gemma3's attention: sqrt(n_embd) embedding,          -> EmbdScale, FlagGELU,
 //	  GELU-tanh, per-head q/k RMSNorm, NEOX on the          FlagQKNorm, FlagRopeNeox
@@ -57,73 +57,13 @@ func gemma3nRoleOf(name string) (jlm.Role, bool) {
 //	  quantile per layer, -inf where none)
 //
 // LAuReL and AltUp's per-block matrices are tensors (altUpTensors).
-func gemma3nConfig(f *meta.File, c *Config) error {
-	c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
-	c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
-	c.Flags2 |= jlm.Flag2VNorm
-	c.AttnScale = 1
-	c.FinalSoftcap = float32(f.FloatKey("final_logit_softcapping", 0))
-	c.NKVShared = uint32(f.UintKey("attention.shared_kv_layers", 0))
-	if c.NKVShared >= c.NLayer {
-		return fmt.Errorf("%d KV-sharing layers of %d", c.NKVShared, c.NLayer)
-	}
-	c.PLEDim = uint32(f.UintKey("embedding_length_per_layer_input", 0))
-	if c.PLEDim == 0 {
-		return fmt.Errorf("no embedding_length_per_layer_input: gemma3n gates a per-layer input into every block")
-	}
-	if _, ok := f.Get("per_layer_token_embd.weight"); !ok {
-		return fmt.Errorf("per-layer embeddings %d wide and no per_layer_token_embd", c.PLEDim)
-	}
-	if c.NFFN == 0 {
-		kv, ok := f.Key("feed_forward_length")
-		if !ok {
-			return fmt.Errorf("no feed_forward_length")
-		}
-		ws, err := kv.Int32s()
-		if err != nil || len(ws) != int(c.NLayer) || ws[0] <= 0 {
-			return fmt.Errorf("feed_forward_length: %d values for %d layers (%v)", len(ws), c.NLayer, err)
-		}
-		for i, w := range ws {
-			if w != ws[0] {
-				return fmt.Errorf("feed_forward_length %v: layer %d differs from layer 0: %w", ws, i, ErrNotImplemented)
-			}
-		}
-		c.NFFN = uint32(ws[0])
-	}
-	c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
-	if c.SWAWindow == 0 {
-		return fmt.Errorf("no attention.sliding_window")
-	}
-	if err := swaPatternOf(f, c, 0); err != nil {
-		return err
-	}
-	if c.SWAPeriod == 0 || c.SWAPeriod > c.NLayer {
-		return fmt.Errorf("no sliding pattern with a global layer in it (period %d of %d layers)",
-			c.SWAPeriod, c.NLayer)
-	}
-	c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", 10000))
-	if c.NRot != c.HeadDim || c.HeadDimV != 0 {
-		return fmt.Errorf("rotary %d and value width %d on a %d-wide head", c.NRot, c.HeadDimV, c.HeadDim)
-	}
-	c.PredStreams = uint32(f.UintKey("altup.num_inputs", 0))
-	if c.PredStreams < 2 {
-		return fmt.Errorf("altup.num_inputs %d: gemma3n runs two or more streams", c.PredStreams)
-	}
-	// The active stream is the first in every published checkpoint and in
-	// both references' defaults; another index would only relabel streams, and
-	// is refused rather than relabelled.
-	if a := f.UintKey("altup.active_idx", 0); a != 0 {
-		return fmt.Errorf("altup.active_idx %d: %w", a, ErrNotImplemented)
-	}
-	return sparsityOf(f, c)
-}
 
 // sparsityOf reads activation_sparsity_scale: the standard normal's quantile
 // at each layer's target sparsity, which transformers computes as
 // Normal(0,1).icdf(p) and llama.cpp's converter writes per layer, -inf where a
 // layer has none (icdf(0)). The published pattern is one value on a leading
 // run of layers, which is what the container holds; any other shape is
-// refused rather than approximated.
+// refused rather than approximated. It is read for any file stating the key.
 func sparsityOf(f *meta.File, c *Config) error {
 	kv, ok := f.Key("activation_sparsity_scale")
 	if !ok {

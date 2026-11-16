@@ -77,6 +77,16 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// AttnScale is the score multiplier in place of 1/sqrt(head_dim), KVShared
+	// how many last layers read an earlier layer's history, PLEWidth the
+	// per-layer input's width (at least one where stated), each a number;
+	// ValueKeyWidth, true, holds the value as wide as the key.
+	AttnScale     string `json:"attn_scale"`
+	KVShared      string `json:"kv_shared"`
+	PLEWidth      string `json:"ple_width"`
+	ValueKeyWidth bool   `json:"value_key_width"`
+	// AltUp is AltUp's parallel residual streams.
+	AltUp *mjStatesAltUp `json:"altup"`
 	// LayersByKVHeads, true, reads each layer's kind off the per-layer kv
 	// head counts, zero on a linear layer (k3Kinds); DeltaDecayBound is the
 	// delta rule's decay bound, lb*sigmoid(...) in place of softplus's, a
@@ -233,6 +243,15 @@ type mjStatesStreams struct {
 	Iterations string `json:"sinkhorn_iterations"`
 	Eps        string `json:"eps"`
 	LowRank    string `json:"low_rank"`
+}
+
+// mjStatesAltUp is Streams parallel residual streams, at least two, and the
+// one the blocks read, Active (the first in every published checkpoint;
+// another would only relabel the streams, and is refused rather than
+// relabelled), each a count.
+type mjStatesAltUp struct {
+	Streams string `json:"streams"`
+	Active  string `json:"active"`
 }
 
 // mjDeltaGates is each delta rule output gate a file may state by name.
@@ -412,7 +431,13 @@ func (mj *modelJSON) checkStates() error {
 		if _, ok := mjDeltaGates()[st.DeltaGate]; st.DeltaGate != "" && !ok {
 			return fmt.Errorf("convert: %s: %s: delta gate %q is not one the container states", mj.name, arch, st.DeltaGate)
 		}
-		srcs = append(srcs, st.QSARatios, st.HeadBlocks, st.DeltaDecayBound)
+		srcs = append(srcs, st.QSARatios, st.HeadBlocks, st.DeltaDecayBound, st.AttnScale, st.KVShared, st.PLEWidth)
+		if x := st.AltUp; x != nil {
+			if x.Streams == "" {
+				return fmt.Errorf("convert: %s: %s: altup states its streams", mj.name, arch)
+			}
+			srcs = append(srcs, x.Streams, x.Active)
+		}
 		if st.YarnMagnitude != "" && !slices.Contains(mjYarnMagnitudes(), st.YarnMagnitude) {
 			return fmt.Errorf("convert: %s: %s: yarn magnitude %q is not one the container states", mj.name, arch, st.YarnMagnitude)
 		}
@@ -504,6 +529,9 @@ func stateContainer(f *meta.File, c *Config) error {
 // table where the library states the input rows add one, and one whose
 // hidden_activation names another activation than the stated one.
 func statedTensorsAgree(f *meta.File, c *Config) error {
+	if _, ok := f.Get("per_layer_token_embd.weight"); !ok && c.PLEDim != 0 {
+		return fmt.Errorf("convert: %s: per-layer inputs %d wide and no per_layer_token_embd", f.Arch(), c.PLEDim)
+	}
 	if kv, ok := f.Key("hidden_activation"); ok {
 		if s, _ := kv.String(); s != c.Stated.activation {
 			return fmt.Errorf("convert: %s: hidden_activation %q, and the library states %q: %w", f.Arch(), s,
@@ -898,6 +926,51 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		c.DeltaGate = mjDeltaGates()[st.DeltaGate]()
 	}
 	c.Stated.splitKDA = st.SplitKDA
+	if st.AttnScale != "" {
+		if c.AttnScale, err = number("attn_scale", st.AttnScale); err != nil {
+			return err
+		}
+		if x := float64(c.AttnScale); !(x >= 0) || math.IsInf(x, 0) {
+			return fmt.Errorf("convert: %s: %s: attn_scale is %g", by, arch, x)
+		}
+	}
+	if st.KVShared != "" {
+		if c.NKVShared, err = whole("kv_shared", st.KVShared); err != nil {
+			return err
+		}
+		if c.NKVShared >= c.NLayer {
+			return fmt.Errorf("convert: %s: %d KV-sharing layers of %d", arch, c.NKVShared, c.NLayer)
+		}
+	}
+	if st.PLEWidth != "" {
+		if c.PLEDim, err = whole("ple_width", st.PLEWidth); err != nil {
+			return err
+		}
+		if c.PLEDim == 0 {
+			return fmt.Errorf("convert: %s: a per-layer input of no width", arch)
+		}
+	}
+	if st.ValueKeyWidth && c.HeadDimV != 0 {
+		return fmt.Errorf("convert: %s: value width %d on a %d-wide key, and the value is as wide as the key", arch,
+			c.HeadDimV, c.HeadDim)
+	}
+	if x := st.AltUp; x != nil {
+		if c.PredStreams, err = whole("altup.streams", x.Streams); err != nil {
+			return err
+		}
+		if c.PredStreams < 2 {
+			return fmt.Errorf("convert: %s: %d AltUp streams: AltUp runs two or more", arch, c.PredStreams)
+		}
+		if x.Active != "" {
+			a, err := whole("altup.active", x.Active)
+			if err != nil {
+				return err
+			}
+			if a != 0 {
+				return fmt.Errorf("convert: %s: AltUp's active stream %d: %w", arch, a, ErrNotImplemented)
+			}
+		}
+	}
 	if st.LayersByKVHeads {
 		if c.LayerKinds, err = k3Kinds(f, c.NLayer); err != nil {
 			return fmt.Errorf("convert: %s: %w", arch, err)
@@ -1042,6 +1115,11 @@ func stateWindow(by string, f *meta.File, w *mjStatesWindow, number func(what, s
 		}
 		if err := swaPatternOf(f, c, def); err != nil {
 			return fmt.Errorf("convert: %s: %w", arch, err)
+		}
+		// A pattern of 0 is one the file must state, with a global layer in it.
+		if def == 0 && (c.SWAPeriod == 0 || c.SWAPeriod > c.NLayer) {
+			return fmt.Errorf("convert: %s: no sliding pattern with a global layer in it (period %d of %d layers)",
+				arch, c.SWAPeriod, c.NLayer)
 		}
 	}
 	if w.RopeBase != "" {

@@ -202,7 +202,15 @@ schema; `convert/modeljson.go` reads it. Its sections:
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
   (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `layers_by_kv_heads: true` reads each layer's kind off the per-layer kv
+  (`sparseBlocksFit`). `attn_scale` is the score multiplier in place of 1/sqrt(head_dim),
+  `kv_shared` how many last layers read an earlier layer's history, `ple_width`
+  the per-layer input's width (its table is held to it), `value_key_width:
+  true` a value as wide as the key, and `altup` AltUp's streams (at least
+  two) and the one the blocks read (the first). A window `pattern` of 0 is one
+  the file must state, with a global layer in it. A per-layer
+  `feed_forward_length` whose layers agree is one width, and
+  `activation_sparsity_scale` is read, for every file.
+  `layers_by_kv_heads: true` reads each layer's kind off the per-layer kv
   head counts (zero on a linear layer, llama.cpp's is_recr), `delta_decay_bound`
   the delta rule's decay bound (KDA's lb*sigmoid, a negative number, `none`
   for none), `latent.norm_eps` the latent norms' epsilon, and `split_kda:

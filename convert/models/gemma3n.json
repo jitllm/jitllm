@@ -1,7 +1,14 @@
 {
   "gguf": ["gemma3n"],
   "container": {
-    "gemma3n": {"ple_padded": true}
+    "gemma3n": {"ple_padded": true, "flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true"},
+                "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5", "attn_scale": "1",
+                "final_softcap": "src['final_logit_softcapping'] | default(0)",
+                "kv_shared": "src['attention.shared_kv_layers'] | default(0)",
+                "ple_width": "src['embedding_length_per_layer_input']",
+                "window": {"size": "src['attention.sliding_window']", "pattern": "0", "rope_base": "src['rope.freq_base_swa'] | default(10000)"},
+                "whole_rotary": true, "value_key_width": true,
+                "altup": {"streams": "src['altup.num_inputs']", "active": "src['altup.active_idx'] | default(0)"}}
   },
   "graph": {
     "block": [
