@@ -121,7 +121,7 @@ func archOf() map[string]Arch {
 		// blocks at conversion (convert/nemotronh.go).
 		"nemotron_h": ArchNemotronH,
 		// Nemotron 3 (Nano): the same blocks with the MLP a mixture of ungated
-		// experts. See nemotronConfig.
+		// experts. See mergeMixers.
 		"nemotron_h_moe": ArchNemotronH,
 		// Mamba-1: plain Mamba and FalconMamba (one arch, the latter's dt/B/C
 		// norms written as ones), and Jamba beside attention. See convert/mamba1.go.
@@ -342,10 +342,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchGemma3n:
 		if err := gemma3nConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchNemotronH:
-		if err := nemotronConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchDeepseek4:
@@ -612,10 +608,8 @@ func configOfFile(f *meta.File) (*Config, error) {
 		return nil, fmt.Errorf("convert: %s: leading_dense_block_count %d in a %d-block model",
 			name, c.NDenseLead, c.NLayer)
 	}
-	if arch == ArchNemotronH {
-		if err := nemotronMixture(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
+	if err := statedMixtureFits(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	if err := sharedExpertWidth(f, c); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)

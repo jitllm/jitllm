@@ -202,7 +202,9 @@ schema; `convert/modeljson.go` reads it. Its sections:
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
   (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `router` is what the class's router does whatever the keys say: `gate`
+  (`sparseBlocksFit`). `merge_mixers: true` merges a source of one-mixer layers (Nemotron-H's
+  Mamba-2, attention and MLP layers) into blocks of a mixer and an FFN
+  (`mergeMixers`). `router` is what the class's router does whatever the keys say: `gate`
   (softmax, sigmoid, or sparsemixer, which reads no gating key, ranks
   the raw logits and weighs each pick by sparsemixer),
   `renormalise` (always or never), `unscaled`, `selects` (the experts it

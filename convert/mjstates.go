@@ -77,6 +77,9 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// MergeMixers, true, merges a source of one-mixer layers into blocks
+	// (mergeMixers).
+	MergeMixers bool `json:"merge_mixers"`
 	// HeadBlocks is how many trailing blocks are a decision head, a count
 	// (stateHeadBlocks; 0 for none).
 	HeadBlocks string `json:"head_blocks"`
@@ -192,6 +195,7 @@ type mjRouter struct {
 	Unscaled    bool   `json:"unscaled"`
 	Selects     uint32 `json:"selects"`
 	Shared      uint32 `json:"shared"`
+	Ungrouped   bool   `json:"ungrouped"`
 }
 
 // mjGates is each gate a router states by name, with the expert_gating_func
@@ -273,6 +277,7 @@ type Statement struct {
 	yarnMagnitude                       string
 	routerGate                          string
 	learnedPositions, ffnUngated        bool
+	mergeMixers, routerUngrouped        bool
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -568,7 +573,13 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 	}
 	if r := st.Router; r != nil {
-		c.Stated.routerGate = r.Gate
+		c.Stated.routerGate, c.Stated.routerUngrouped = r.Gate, r.Ungrouped
+	}
+	if st.MergeMixers {
+		c.Stated.mergeMixers = true
+		if err := mergeMixers(f, c); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
+		}
 	}
 	if r := st.Revision; r != nil {
 		c.Stated.actQuant = mjActQuants()[r.ActQuant]

@@ -76,68 +76,56 @@ func (p *nemotronPlan) remap(role jlm.Role, block int32) (jlm.Role, int32, error
 	return role, p.dst[block], nil
 }
 
-// nemotronConfig is Nemotron-H's graph: the merged blocks, no rotary on the
-// attention, and the MLP's squared ReLU with no gate.
-//
-// Nemotron 3 (nemotron_h_moe) replaces the MLP with a mixture of the same
-// ungated experts -- up and down, no gate bank -- under DeepSeek-V3's router
-// (NemotronHTopkRouter: sigmoid scores, a selection-only bias, renormalised,
-// routed_scaling_factor) beside one ungated shared expert. The class
-// hardcodes the sigmoid and llama.cpp's builder passes it as a literal; the
-// GGUF carries no gating key, so the converter sets it.
-func nemotronConfig(f *meta.File, c *Config) error {
+// mergeMixers merges a source of one-mixer layers into blocks (the
+// merge_mixers statement; Nemotron-H's, see nemotronPlan) and reads the MLP's
+// width, which the source states per layer with zero on the mixers.
+// Refused: a latent mixture (moe_latent_size, Nemotron 3 Super's: the experts
+// at a narrower width between two more matrices) and a prediction block,
+// neither built for such a source.
+func mergeMixers(f *meta.File, c *Config) error {
 	p, err := nemotronPlanOf(f)
 	if err != nil {
 		return err
 	}
 	c.NLayer = uint32(len(p.kinds))
 	c.LayerKinds = p.kinds
-	c.Flags |= jlm.FlagNoPosEnc | jlm.FlagReLU2
-	// The MLP width is per source layer, zero on the mixers.
 	ff, err := uniformCount(f, "feed_forward_length", 0)
 	if err != nil {
 		return err
 	}
 	c.NFFN = ff
-	// The latent projection (Nemotron 3 Super) runs the experts at a narrower
-	// width between two more matrices; not built.
 	if f.UintKey("moe_latent_size", 0) > 0 {
-		return fmt.Errorf("Nemotron-H's latent mixture (moe_latent_size): %w", ErrNotImplemented)
+		return fmt.Errorf("a latent mixture (moe_latent_size) over merged mixers: %w", ErrNotImplemented)
 	}
 	if f.UintKey("nextn_predict_layers", 0) > 0 {
-		return fmt.Errorf("Nemotron-H's prediction block: %w", ErrNotImplemented)
+		return fmt.Errorf("a prediction block over merged mixers: %w", ErrNotImplemented)
 	}
 	return nil
 }
 
-// nemotronMixture is the mixture half of nemotronConfig, run once configOf
-// has read the file's generic mixture keys.
-func nemotronMixture(f *meta.File, c *Config) error {
-	if c.NExpert > 0 {
-		if kv, ok := f.Key("expert_gating_func"); ok {
-			if v, _ := kv.Uint(); v != 2 {
-				return fmt.Errorf("expert_gating_func %d, and NemotronHTopkRouter is sigmoid: %w",
-					v, ErrNotImplemented)
+// statedMixtureFits refuses a mixture whose expert width or top-k is stated
+// per layer (NVIDIA's Puzzle models), which the container states as one, and
+// reads a router the library states ungrouped (router.ungrouped): one
+// routing group, which every published Nemotron 3 config states, is no
+// grouping; transformers' NemotronHTopkRouter groups and llama.cpp's builder
+// never does, so more is a divergence (RULE 7m) nobody has chosen, refused
+// until one is.
+func statedMixtureFits(f *meta.File, c *Config) error {
+	if c.NExpert == 0 {
+		return nil
+	}
+	for _, k := range []string{"expert_feed_forward_length", "expert_used_count"} {
+		if kv, ok := f.Key(k); ok {
+			if _, ok := kv.Uint(); !ok {
+				return fmt.Errorf("a per-layer %s: %w", k, ErrNotImplemented)
 			}
 		}
-		c.Flags |= jlm.FlagExpertSigmoid
-		// One routing group, which every published config states, is no
-		// grouping. transformers' router groups and llama.cpp's builder never
-		// does, so a file with more is a divergence (RULE 7m) nobody has
-		// chosen; it is refused until one is.
+	}
+	if c.Stated.routerUngrouped {
 		if c.NExpertGroup > 1 {
-			return fmt.Errorf("Nemotron-H with %d expert groups: %w", c.NExpertGroup, ErrNotImplemented)
+			return fmt.Errorf("%d expert groups, and the class's router never groups: %w", c.NExpertGroup, ErrNotImplemented)
 		}
 		c.NExpertGroup, c.NExpertGroupUsed = 0, 0
-		// A per-layer expert width or top-k (NVIDIA's Puzzle models) is one
-		// value here or refused.
-		for _, k := range []string{"expert_feed_forward_length", "expert_used_count"} {
-			if kv, ok := f.Key(k); ok {
-				if _, ok := kv.Uint(); !ok {
-					return fmt.Errorf("Nemotron-H with a per-layer %s: %w", k, ErrNotImplemented)
-				}
-			}
-		}
 	}
 	return nil
 }

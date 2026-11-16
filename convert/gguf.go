@@ -226,7 +226,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s.Tensors = make([]jlm.Tensor, 0, len(f.Tensors))
 	// Nemotron-H's one-mixer layers merge into blocks (convert/nemotronh.go).
 	var nemo *nemotronPlan
-	if !tower && c.Arch == ArchNemotronH {
+	if !tower && c.Stated.mergeMixers {
 		if nemo, err = nemotronPlanOf(f); err != nil {
 			return nil, fmt.Errorf("convert: %w", err)
 		}
