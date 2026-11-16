@@ -208,6 +208,8 @@
  "ssm_f_a.weight": "ssm_f_a",
  "ssm_f_b.weight": "ssm_f_b",
  "ssm_g.weight": "attn_gate",
+ "ssm_g_a.weight": "ssm_g_a",
+ "ssm_g_b.weight": "ssm_g_b",
  "ssm_norm.weight": "ssm_norm",
  "ssm_out.weight": "ssm_out",
  "ssm_x.weight": "ssm_x.dt",

@@ -213,7 +213,13 @@ func ArchitectureGraph(name string) (Arch, bool) {
 	return a, ok
 }
 
-func configOf(f *meta.File) (*Config, error) {
+func configOf(f *meta.File) (*Config, error) { return configOfAs(f, false) }
+
+// classConfigOf is configOf for a class's statement, whose graph may be a
+// container no GGUF reaches.
+func classConfigOf(f *meta.File) (*Config, error) { return configOfAs(f, true) }
+
+func configOfAs(f *meta.File, class bool) (*Config, error) {
 	name, t, err := trunkOf(f)
 	if err != nil {
 		return nil, err
@@ -222,7 +228,7 @@ func configOf(f *meta.File) (*Config, error) {
 	if t != nil {
 		c, err = t.config(name, f)
 	} else {
-		c, err = configOfFile(f)
+		c, err = configOfFile(f, class)
 	}
 	if err != nil {
 		return nil, err
@@ -248,12 +254,15 @@ func localAxes(c *Config) error {
 
 // configOfFile is configOf for every file but the ones read through a view
 // (a readout's trunk, trunk.go).
-func configOfFile(f *meta.File) (*Config, error) {
+func configOfFile(f *meta.File, class bool) (*Config, error) {
 	name := f.Arch()
 	if name == towerArch {
 		return nil, fmt.Errorf("convert: %q is a vision tower, not a language model", name)
 	}
 	arch, ok := archOf()[name]
+	if st, _, err := ggufStates(name); !ok && class && err == nil && st != nil {
+		arch, ok = archNamed(name)
+	}
 	if !ok {
 		names, err := Architectures()
 		if err != nil {

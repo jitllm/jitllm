@@ -523,25 +523,45 @@ func TestPlanIsTheWrite(t *testing.T) {
 }
 
 // TestALogPaddingIsTakenOnlyWhenZero: Kimi-K3's release stores A_log as 128
-// entries for 96 heads, the last 32 zero (read off the Hub). The heads'
-// entries are taken, as llama.cpp's converter takes them; a tail that is not
-// zero is another geometry and is refused.
+// entries for 96 heads, the last 32 zero (read off the Hub). Each Moonshot
+// class's table takes the heads' entries, as llama.cpp's converter takes
+// them, as the per-channel rate -exp(A_log) repeated over a head; a tail that
+// is not zero is another geometry and is refused.
 func TestALogPaddingIsTakenOnlyWhenZero(t *testing.T) {
-	c := &jlm.Config{SSM: jlm.SSMConfig{NHeadV: 2, StateSize: 3}}
-	e := jlm.Tensor{Type: jlm.TypeF32, NDim: 1, Dims: [4]uint64{4}, Name: "A_log"}
-	padded := f32AsBytes([]float32{0.5, -1, 0, 0})
-	out, err := kimiExpandALog(e, padded, &Config{Config: c})
+	files, err := libraryFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := f32AsBytes([]float32{
-		float32(-math.Exp(0.5)), float32(-math.Exp(0.5)), float32(-math.Exp(0.5)),
-		float32(-math.Exp(-1)), float32(-math.Exp(-1)), float32(-math.Exp(-1))})
-	if !bytes.Equal(out[0].Data, want) || out[0].Dims[0] != 6 {
-		t.Fatalf("padded A_log expanded to %v", k3Values(t, &out[0]))
+	env := func(p string) any {
+		return map[string]any{"num_attention_heads": 2.0, "linear_attn_config.head_dim": 3.0}[p]
 	}
-	if _, err := kimiExpandALog(e, f32AsBytes([]float32{0.5, -1, 0, 2}), &Config{Config: c}); err == nil {
-		t.Fatal("a tail that is not zero padding was taken")
+	ran := 0
+	for _, mj := range files {
+		ts, ok := mj.Tensors.BlockLinear["self_attn.A_log"]
+		if !ok {
+			continue
+		}
+		ran++
+		p := ts[0].Do
+		run := func(vals []float32) (mjVal, error) {
+			return p.run(env, []mjVal{{shape: []uint64{4}, typ: jlm.TypeF32, data: f32AsBytes(vals)}})
+		}
+		out, err := run([]float32{0.5, -1, 0, 0})
+		if err != nil {
+			t.Fatalf("%s: %v", mj.name, err)
+		}
+		want := f32AsBytes([]float32{
+			float32(-math.Exp(0.5)), float32(-math.Exp(0.5)), float32(-math.Exp(0.5)),
+			float32(-math.Exp(-1)), float32(-math.Exp(-1)), float32(-math.Exp(-1))})
+		if !bytes.Equal(out.data, want) || len(out.shape) != 1 || out.shape[0] != 6 {
+			t.Fatalf("%s: padded A_log came out as %v", mj.name, out.shape)
+		}
+		if _, err := run([]float32{0.5, -1, 0, 2}); err == nil {
+			t.Fatalf("%s: a tail that is not zero padding was taken", mj.name)
+		}
+	}
+	if ran < 2 {
+		t.Fatalf("%d classes state A_log: Kimi-K3's and Kimi-Linear's both should", ran)
 	}
 }
 

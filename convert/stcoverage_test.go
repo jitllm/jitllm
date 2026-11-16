@@ -30,8 +30,8 @@ func stDirBytes(d string) int64 {
 
 // TestSafetensorsArchCoverage walks every HuggingFace model directory in the
 // model directory and pins which architectures the safetensors reader converts. It is
-// two-sided: every hfArchTable entry must convert a real checkpoint, so an
-// entry cannot outlive its code, and an architecture not in the table must be
+// two-sided: every library class must convert a real checkpoint, so an
+// entry cannot outlive its code, and an architecture not in the library must be
 // refused by name (RULE 7) rather than crash or convert plausibly. It prints
 // the count, since the safetensors list is a second list, not the GGUF one.
 func TestSafetensorsArchCoverage(t *testing.T) {

@@ -318,16 +318,16 @@ func TestTheLibraryStatesTheRopeSections(t *testing.T) {
 	}
 }
 
-// TestContainerStatementsAreChecked refuses a statement for an architecture
-// the file does not name, a flag no reader states, an activation that is
-// not the container's, and an expression reading anything but the keys; a
-// statement of the wrong type fails where it is read.
+// TestContainerStatementsAreChecked refuses a flag no reader states, an
+// activation that is not the container's, and an expression reading
+// anything but the keys; a statement of the wrong type fails where it is
+// read. Which containers a file states is the library's
+// (TestLibraryContainersAreChecked).
 func TestContainerStatementsAreChecked(t *testing.T) {
 	file := func(states string) string {
 		return `{"gguf": ["x"], "container": {` + states + `}}`
 	}
 	for _, tc := range []struct{ states, want string }{
-		{`"y": {}`, "names no GGUF architecture"},
 		{`"x": {"flags": {"rope_sideways": "true"}}`, "is no graph feature"},
 		{`"x": {"activation": "gelu_fast"}`, "is not one the container states"},
 		{`"x": {"activation": "xielu"}`, "carries its parameters"},
@@ -471,6 +471,39 @@ func TestTheLibraryStatesWhatAFileMustSay(t *testing.T) {
 		if _, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {"x": `+states+`}}`), "test", testNames(t)); err == nil ||
 			!strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want it refused naming %q", states, err, want)
+		}
+	}
+}
+
+// TestLibraryContainersAreChecked: a file states the containers of the GGUF
+// architectures it names and of a class's own graph (a name no GGUF
+// architecture has, which no GGUF reaches); a container of another file's
+// architecture, one no class names, and a class whose graph no container
+// states are refused.
+func TestLibraryContainersAreChecked(t *testing.T) {
+	file := func(name string, gguf []string, arch string, containers ...string) *modelJSON {
+		mj := &modelJSON{name: name, GGUF: gguf, Container: map[string]*mjStates{}}
+		if arch != "" {
+			mj.Classes, mj.Config.Arch = []string{name + "Class"}, arch
+		}
+		for _, c := range containers {
+			mj.Container[c] = &mjStates{}
+		}
+		return mj
+	}
+	for _, tc := range []struct {
+		name  string
+		files []*modelJSON
+		want  string
+	}{
+		{"a class's own container", []*modelJSON{file("a", []string{"x"}, "", "x", "own"), file("b", nil, "own")}, ""},
+		{"a container no class names", []*modelJSON{file("a", []string{"x"}, "", "x", "y")}, "no GGUF architecture and no class names"},
+		{"another file's architecture", []*modelJSON{file("a", []string{"x"}, "", "z"), file("b", []string{"z"}, "")}, "a GGUF architecture it does not name"},
+		{"a class's graph no container states", []*modelJSON{file("a", []string{"x"}, ""), file("b", nil, "w")}, "no container the library states"},
+	} {
+		err := libraryContainers(tc.files)
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s: %v, want an error naming %q", tc.name, err, tc.want)
 		}
 	}
 }

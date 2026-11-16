@@ -141,9 +141,13 @@
                     "state_size": "src['kda.head_dim']", "inner": "src['attention.head_count'] * src['kda.head_dim']"},
       "delta_decay_bound": "src['kda.gate_lower_bound'] | default(none)",
       "attn_res_block": "src['attn_res.block_size'] | default(0)", "expert_latent": "src['expert_latent_length'] | default(0)",
-      "situ": {"beta": "src['activation.situ_beta'] | default(0)", "linear_beta": "src['activation.situ_linear_beta'] | default(0)"}}
+      "situ": {"beta": "src['activation.situ_beta'] | default(0)", "linear_beta": "src['activation.situ_linear_beta'] | default(0)"}},
+    "kimilinear": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)", "norm_eps": "1e-6"},
+      "flags": {"no_pos_enc": "true"}, "router": {"gate": "sigmoid"},
+      "layers_by_kv_heads": true,
+      "recurrent": {"conv_kernel": "src['ssm.conv_kernel']", "groups": "src['attention.head_count']", "heads_v": "src['attention.head_count']",
+                    "state_size": "src['kda.head_dim']", "inner": "src['attention.head_count'] * src['kda.head_dim']"}}
   },
-  "go_classes": ["KimiLinearForCausalLM"],
   "graph": {
     "block": [
       {"op": "in", "out": "x", "width": "embd"},

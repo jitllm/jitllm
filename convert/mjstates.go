@@ -365,14 +365,11 @@ type mjStatesWindow struct {
 	RopeBase string `json:"rope_base"`
 }
 
-// checkStates refuses a statement for a GGUF architecture the file does not
-// name, a name no reader states, and an expression reading anything but the
-// keys.
+// checkStates refuses a name no reader states and an expression reading
+// anything but the keys; which containers a file states is the library's
+// (libraryContainers).
 func (mj *modelJSON) checkStates() error {
 	for _, arch := range slices.Sorted(maps.Keys(mj.Container)) {
-		if !slices.Contains(mj.GGUF, arch) {
-			return fmt.Errorf("convert: %s states the container of %s, which it names no GGUF architecture", mj.name, arch)
-		}
 		st := mj.Container[arch]
 		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv,
 			st.RopeBase, st.ResidualScale, st.MoEStep, st.RopeSections, st.ClampKQV, st.NoRopeEvery,

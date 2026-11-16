@@ -65,7 +65,7 @@ func (t *readoutTrunk) config(name string, f *meta.File) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	c, err := configOfFile(view)
+	c, err := configOfFile(view, false)
 	if err != nil {
 		return nil, err
 	}

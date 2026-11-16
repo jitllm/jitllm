@@ -9,7 +9,7 @@ like tokenizer.json"*.
 ## What it replaces
 
 Past the converter nothing holds a family (`srcgate.TestNoFamilyCode`). The
-converter still reads each source through Go written per family:
+converter read each source through Go written per family:
 
 | table | where | entries |
 |---|---|---|
@@ -35,7 +35,7 @@ model.json, every size an expression over config.json. A Go function that
 encodes one model's recipe is family code whatever it is called; a class
 that needs an operation the primitives cannot compose gets a new primitive
 only if it is a general tensor operation another model could use unchanged,
-and otherwise stays in the Go table.
+and is otherwise refused by name until one does.
 
 ## Where a model.json comes from
 
@@ -369,12 +369,11 @@ model.json is mostly the config section and the `retarget` it needs.
 - The role list and each role's shape rule (`hfCheckShape`), driven by roles,
   not by families.
 - The tensor primitives (`convert/mjtransforms.go`), generic, each with its
-  gate (`TestModelJSONPrimitives`). The Go table's hooks move with their
-  classes as compositions: KDA's per-head decay is a repeat, `fuseOrder` a
+  gate (`TestModelJSONPrimitives`). The Go table's hooks moved with their
+  classes as compositions, and the table is gone: KDA's per-head decay is a repeat, `fuseOrder` a
   concat, `fused` slices, MLA's `kv_b` split slices of a reshape, llama's
   rotary order a reshape and a transpose by the head counts. What the
-  primitives cannot compose (BitNet's ternary retype, a quantised source)
-  stays in the Go table until a general primitive does it.
+  primitives cannot compose is refused until a general primitive does it.
 - The readers of the statements: the activation names, the published rope
   scaling methods, the named flags, the window.
 - The expression evaluator (`convert/modelexpr.go`).

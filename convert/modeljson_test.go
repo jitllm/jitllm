@@ -1175,31 +1175,6 @@ func TestModelJSONRotaryLayers(t *testing.T) {
 	}
 }
 
-// TestGoTableClassesStateTheirGraphs: every class of the Go table states its
-// blocks' graph through the library.
-func TestGoTableClassesStateTheirGraphs(t *testing.T) {
-	var missing []string
-	n := 0
-	for c, ha := range hfArchTable() {
-		g, err := classGraph(ha)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if g == nil {
-			missing = append(missing, c+" ("+ha.arch.String()+")")
-			continue
-		}
-		n++
-	}
-	slices.Sort(missing)
-	if len(missing) != 0 {
-		t.Errorf("classes of the Go table that state no graph: %v", missing)
-	}
-	if n == 0 {
-		t.Fatal("no class of the Go table states its graph -- this gate proved nothing")
-	}
-}
-
 // TestLibraryGraphsAreUsed: a graph of no class and no GGUF architecture is
 // one another file's use names; the library as it stands passes, a file
 // whose graph nobody uses is refused, and so is a use naming no file.

@@ -11,10 +11,5 @@
 9 convert/arch.go:visionArchName
 140 convert/config.go:archOf
 1 convert/gguf.go:sourceOf
-1 convert/safetensors.go:deepseekHFConfigFFN
-1 convert/safetensors.go:hardcodesSigmoid
-1 convert/safetensors.go:hfArchTable
-1 convert/safetensors.go:kimiLinearHF
-1 convert/safetensors.go:kimiLinearHFConfig
 3 convert/vocab.go:VocabOf
 1 convert/vocab.go:wordPiece

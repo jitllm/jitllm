@@ -326,8 +326,7 @@ balance (fewer instructions, 13.5% slower).
 
 The library's files (`convert/models/*.json`) are the list: their `gguf`
 lists are the GGUF architectures (`convert.Architectures`, with the towers'
-`clip`), their `classes` with what is left of `hfArchTable`
-(`convert/safetensors.go`) the safetensors classes (`convert.HFClasses`), and
+`clip`), their `classes` the safetensors classes (`convert.HFClasses`), and
 `convert.projectorOf` (`convert/config.go`, a case each in `visionOf`) the list
 of projectors. An architecture not in them does not convert (`configOf`:
 "architecture %q is not implemented"); an unknown projector is refused at
@@ -379,8 +378,8 @@ an addition is chosen from and priced against.
 Further rules for every entry:
 
 - **A router's gating function is read per CLASS, never from an absent key**
-  (`hardcodesSigmoid`, `hardcodesSoftmax`); a file whose `scoring_func`
-  contradicts its class is refused (`hfGateAgrees`). The same holds for
+  (the class statement's `gating`); a file whose `scoring_func` contradicts
+  its class is refused (the statement's `require`). The same holds for
   renormalisation and every literal a reference builder hardcodes.
 - **Names matching is not the graph matching.** A class that maps onto an
   existing entry tensor for tensor still needs its own fixture and golden.

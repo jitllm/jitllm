@@ -8,8 +8,8 @@ adding one; this file is the list.
 
 A new architecture adds one row here and its narrative in
 `docs/engineering-history/model-correctness.md` (MC below; GK is
-`gpu-kernels.md`, PL `placement.md`). Names are as `convert.archOf` and
-`hfArchTable` spell them.
+`gpu-kernels.md`, PL `placement.md`). Names are as `convert.archOf` and the
+library's classes spell them.
 
 
 | architecture (source names) | what is special about its graph | gates | evidence |

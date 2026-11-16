@@ -28,8 +28,7 @@ import (
 //
 // One is found, in order of authority: the caller's (WithModelJSON), the
 // model directory's own model.json, the library embedded here
-// (convert/models), and last the Go table (hfArchTable) for the classes not
-// yet moved to the library.
+// (convert/models).
 
 //go:embed models/*.json models/*.jinja
 var modelLibraryFS embed.FS
@@ -46,9 +45,6 @@ type modelJSON struct {
 	// (general.architecture) whose files the graph states too.
 	Graph *mjGraph `json:"graph"`
 	GGUF  []string `json:"gguf"`
-	// GoClasses names the Go table's classes (hfArchTable) whose graph the
-	// file states, read by a Go reader rather than the file's config.
-	GoClasses []string `json:"go_classes"`
 	// Container is what the container states for each GGUF architecture
 	// the file names (mjStates).
 	Container map[string]*mjStates `json:"container"`
@@ -401,11 +397,6 @@ func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error
 	if err := mj.checkStates(); err != nil {
 		return nil, err
 	}
-	for _, n := range mj.GoClasses {
-		if _, ok := hfArchTable()[n]; !ok {
-			return nil, fmt.Errorf("convert: %s: %q is no Go table class", name, n)
-		}
-	}
 	// A file of no class states a GGUF architecture's graph alone, or a
 	// graph other files' blocks use (mjUse).
 	if len(mj.Classes) == 0 && mj.Graph != nil {
@@ -420,7 +411,7 @@ func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error
 	if len(mj.Classes) == 0 {
 		return nil, fmt.Errorf("convert: %s names no class", name)
 	}
-	if _, ok := archOf()[mj.Config.Arch]; !ok {
+	if classArch(mj.Config.Arch) == ArchNone {
 		return nil, fmt.Errorf("convert: %s: graph %q is not one configOf builds", name, mj.Config.Arch)
 	}
 	if mj.Config.Vocab == "" || mj.Config.Head.Tensor == "" {
@@ -484,7 +475,7 @@ func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if len(mj.GGUF)+len(mj.GoClasses) != 0 && mj.Graph == nil {
+	if len(mj.GGUF) != 0 && mj.Graph == nil {
 		return nil, fmt.Errorf("convert: %s names architectures and states no graph for them", name)
 	}
 	return mj, nil
@@ -520,7 +511,53 @@ func libraryFiles() ([]*modelJSON, error) {
 	if err := libraryUses(out); err != nil {
 		return nil, err
 	}
+	if err := libraryContainers(out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// libraryContainers refuses a container of a GGUF architecture its file does
+// not name, a class's own container (one of a name no file's GGUF list has)
+// that no class names, and a class whose graph is neither a GGUF
+// architecture nor a container the library states.
+func libraryContainers(files []*modelJSON) error {
+	gguf, named, stated := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, mj := range files {
+		for _, n := range mj.GGUF {
+			gguf[n] = true
+		}
+		if len(mj.Classes) > 0 {
+			named[mj.Config.Arch] = true
+		}
+		for arch := range mj.Container {
+			stated[arch] = true
+		}
+	}
+	for _, mj := range files {
+		for _, arch := range slices.Sorted(maps.Keys(mj.Container)) {
+			switch {
+			case gguf[arch] && !slices.Contains(mj.GGUF, arch):
+				return fmt.Errorf("convert: %s states the container of %s, a GGUF architecture it does not name", mj.name, arch)
+			case !gguf[arch] && !named[arch]:
+				return fmt.Errorf("convert: %s states the container of %s, which no GGUF architecture and no class names", mj.name, arch)
+			}
+		}
+		if len(mj.Classes) > 0 && !gguf[mj.Config.Arch] && !stated[mj.Config.Arch] {
+			return fmt.Errorf("convert: %s: graph %q is no GGUF architecture and no container the library states", mj.name, mj.Config.Arch)
+		}
+	}
+	return nil
+}
+
+// classArch is the graph a class's statement names: a GGUF architecture's,
+// or its own container's, which no GGUF reaches; ArchNone for neither.
+func classArch(name string) Arch {
+	if a, ok := archOf()[name]; ok {
+		return a
+	}
+	a, _ := archNamed(name)
+	return a
 }
 
 // libraryUses refuses a use naming no graph of files, or one that uses
@@ -564,9 +601,6 @@ func modelLibrary() (map[string]*modelJSON, error) {
 			if prev, dup := lib[c]; dup {
 				return nil, fmt.Errorf("convert: class %s is in both %s and %s", c, prev.name, mj.name)
 			}
-			if _, dup := hfArchTable()[c]; dup {
-				return nil, fmt.Errorf("convert: class %s is in %s and in the Go table", c, mj.name)
-			}
 			lib[c] = mj
 		}
 	}
@@ -574,7 +608,7 @@ func modelLibrary() (map[string]*modelJSON, error) {
 }
 
 // ggufGraph is the graph the library states for a GGUF of architecture
-// arch, or for a Go-table class of that name (go_classes), nil where no file
+// arch, or for a class's own container of that name, nil where no file
 // states one.
 func ggufGraph(arch string) (*mjGraph, error) {
 	files, err := libraryFiles()
@@ -584,7 +618,7 @@ func ggufGraph(arch string) (*mjGraph, error) {
 	var g *mjGraph
 	var by string
 	for _, mj := range files {
-		if !slices.Contains(mj.GGUF, arch) && !slices.Contains(mj.GoClasses, arch) {
+		if _, own := mj.Container[arch]; !own && !slices.Contains(mj.GGUF, arch) {
 			continue
 		}
 		if g != nil {
@@ -596,8 +630,7 @@ func ggufGraph(arch string) (*mjGraph, error) {
 }
 
 // classGraph is the graph the library states for a safetensors class: the
-// one for the GGUF architecture name it converts as (hfArch.name), a Go-table
-// class's by its class name (go_classes).
+// one for the GGUF architecture name it converts as (hfArch.name).
 func classGraph(ha *hfArch) (*mjGraph, error) {
 	return ggufGraph(ha.name)
 }
@@ -609,7 +642,7 @@ func WithModelJSON(path string) Option {
 }
 
 // hfArchFor is the entry a model converts by: the caller's model.json, the
-// directory's, the library's, or the Go table's.
+// directory's, or the library's.
 func hfArchFor(dir hfDir, c *hfConfig, caller string) (*hfArch, error) {
 	var mj *modelJSON
 	names, err := readTensorNames()
@@ -644,7 +677,7 @@ func hfArchFor(dir hfDir, c *hfConfig, caller string) (*hfArch, error) {
 			}
 		}
 		if mj == nil {
-			return hfArchOf(c)
+			return nil, classRefusal(c)
 		}
 	}
 	if !slices.ContainsFunc(c.Architectures, func(a string) bool { return slices.Contains(mj.Classes, a) }) {
@@ -665,7 +698,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		template = string(b)
 	}
 	a := &hfArch{
-		arch:         archOf()[mj.Config.Arch],
+		arch:         classArch(mj.Config.Arch),
 		name:         mj.Config.Arch,
 		template:     template,
 		graph:        mj.Graph,
@@ -1390,7 +1423,7 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 		kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 	}
-	cfg, err := configOf(meta.New(c.path, kvs, ts))
+	cfg, err := classConfigOf(meta.New(c.path, kvs, ts))
 	if err != nil {
 		return nil, err
 	}

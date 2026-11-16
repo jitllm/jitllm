@@ -14,9 +14,10 @@ import (
 // (&& || !), a ?? b, which is b where a is absent or null, c ? a : b, a ** b,
 // and a key of a parenthesised value, (a ?? b).key. There are no loops, and
 // calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x),
-// at(x, i), and the layer lists' each_layer(n, members, first, inside,
-// outside) and partitions(n, first, a, b), whose counts are bounded, so an
-// expression sizes nothing unchecked (RULE 9), and its depth is bounded.
+// at(x, i), and the lists' each_layer(n, members, first, inside, outside),
+// partitions(n, first, a, b), each_match(list, value, inside, outside),
+// leading(list, value) and count(list, value), whose counts are bounded, so
+// an expression sizes nothing unchecked (RULE 9), and its depth is bounded.
 //
 // An absent key is null; null in arithmetic or an ordering is an error that
 // names the key, so a default is written, never assumed.
@@ -441,6 +442,10 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 			return evalEachLayer(n.args, env)
 		case n.str == "partitions" && len(n.args) == 4:
 			return evalPartitions(n.args, env)
+		case n.str == "each_match" && len(n.args) == 4:
+			return evalEachMatch(n.args, env)
+		case (n.str == "leading" || n.str == "count") && len(n.args) == 2:
+			return evalCountOf(n.str == "leading", n.args, env)
 		}
 		return nil, fmt.Errorf("%s(): calls are a tensor map's, not a config's", n.str)
 	case "&&", "||":
@@ -600,6 +605,79 @@ func evalEachLayer(args []*exprNode, env exprEnv) (any, error) {
 		}
 	}
 	return res, nil
+}
+
+// evalEachMatch is each_match(list, value, inside, outside): a value per
+// entry of list, inside where the entry is value and outside elsewhere.
+func evalEachMatch(args []*exprNode, env exprEnv) (any, error) {
+	list, err := evalBoundedList(args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	want, err := evalMJ(args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	in, err := evalMJ(args[2], env)
+	if err != nil {
+		return nil, err
+	}
+	out, err := evalMJ(args[3], env)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]any, len(list))
+	for i, x := range list {
+		eq, err := exprEqual(x, want)
+		if err != nil {
+			return nil, err
+		}
+		res[i] = out
+		if eq {
+			res[i] = in
+		}
+	}
+	return res, nil
+}
+
+// evalCountOf is leading(list, value), how many entries before the first
+// that is not value, or count(list, value), how many entries are value.
+func evalCountOf(leading bool, args []*exprNode, env exprEnv) (any, error) {
+	list, err := evalBoundedList(args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	want, err := evalMJ(args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	n := 0
+	for _, x := range list {
+		eq, err := exprEqual(x, want)
+		if err != nil {
+			return nil, err
+		}
+		if eq {
+			n++
+		} else if leading {
+			break
+		}
+	}
+	return float64(n), nil
+}
+
+// evalBoundedList is a list the config states, bounded as a list of layers
+// is (RULE 9).
+func evalBoundedList(n *exprNode, env exprEnv) ([]any, error) {
+	v, err := evalMJ(n, env)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := v.([]any)
+	if !ok || len(list) > 1<<16 {
+		return nil, fmt.Errorf("%s is %s, not a list of at most %d entries", exprText(n), exprKind(v), 1<<16)
+	}
+	return list, nil
 }
 
 // evalPartitions is partitions(n, first, a, b): whether lists a and b name
