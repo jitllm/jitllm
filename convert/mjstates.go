@@ -77,6 +77,9 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// PLEPadded, true, states that the source pads the per-layer table with
+	// zero rows past its own vocabulary (altUpTensors cuts them).
+	PLEPadded bool `json:"ple_padded"`
 	// CompressedBlocks, true, reads each block's compression off the
 	// tensors and compress_ratios (ds4Kinds).
 	CompressedBlocks bool `json:"compressed_blocks"`
@@ -281,7 +284,7 @@ type Statement struct {
 	routerGate                          string
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
-	compressedBlocks                    bool
+	compressedBlocks, plePadded         bool
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -580,7 +583,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if r := st.Router; r != nil {
 		c.Stated.routerGate, c.Stated.routerUngrouped = r.Gate, r.Ungrouped
 	}
-	c.Stated.compressedBlocks = st.CompressedBlocks
+	c.Stated.compressedBlocks, c.Stated.plePadded = st.CompressedBlocks, st.PLEPadded
 	if st.MergeMixers {
 		c.Stated.mergeMixers = true
 		if err := mergeMixers(f, c); err != nil {

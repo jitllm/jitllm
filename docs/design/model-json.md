@@ -202,7 +202,9 @@ schema; `convert/modeljson.go` reads it. Its sections:
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
   (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `compressed_blocks: true` reads each block's compression (CSA, HCA or
+  (`sparseBlocksFit`). `ple_padded: true` states that the source pads its per-layer table with zero
+  rows past its own vocabulary (llama.cpp's Gemma 3n), which are cut.
+  `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
   feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,
   whose per-block limits are read, `key_value`, held to one kv head and no

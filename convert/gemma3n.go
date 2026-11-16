@@ -14,7 +14,7 @@ func gemma3nRoleOf(name string) (jlm.Role, bool) {
 	switch name {
 	case "altup_proj.weight":
 		return jlm.RoleStreamExpand, true
-	// altup_unembd_proj is one {n, n, AltUp-1} tensor in the file; gemma3nTensors
+	// altup_unembd_proj is one {n, n, AltUp-1} tensor in the file; altUpTensors
 	// cuts it into one matrix per stream.
 	case "altup_unembd_proj.weight":
 		return jlm.RoleStreamCollapse1, true
@@ -56,7 +56,7 @@ func gemma3nRoleOf(name string) (jlm.Role, bool) {
 //	  (activation_sparsity_scale: the standard normal's
 //	  quantile per layer, -inf where none)
 //
-// LAuReL and AltUp's per-block matrices are tensors (gemma3nTensors).
+// LAuReL and AltUp's per-block matrices are tensors (altUpTensors).
 func gemma3nConfig(f *meta.File, c *Config) error {
 	c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 	c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
@@ -153,22 +153,19 @@ func sparsityOf(f *meta.File, c *Config) error {
 	return nil
 }
 
-// gemma3nTensors finishes Gemma 3n's tensors. The unembedding's AltUp-1
-// matrices, stacked in one tensor in the file, become one tensor per stream;
-// each block's prediction and correction coefficients are read as float
-// matrices the router's weights multiply (stateAltUp).
-func gemma3nTensors(c *Config, s *jlm.Source) error {
-	if c == nil || c.Arch != ArchGemma3n {
+// altUpTensors lays out the AltUp streams' tensors (PredStreams, Gemma 3n's):
+// the collapse unembeddings one sheet each, the expansion one matrix of the
+// stacked projections, the coefficients and the router as plain floats; and
+// cuts llama.cpp's zero-padded per-layer table where the library states the
+// source pads it (ple_padded).
+func altUpTensors(c *Config, s *jlm.Source) error {
+	if c == nil || c.PredStreams == 0 && !c.Stated.plePadded {
 		return nil
 	}
 	n, a := uint64(c.NEmbd), uint64(c.PredStreams)
 	out := s.Tensors[:0:0]
 	for _, t := range s.Tensors {
 		switch {
-		case t.Block >= 0 && c.KVShared(int(t.Block)) &&
-			(t.Role == jlm.RoleAttnK || t.Role == jlm.RoleAttnV || t.Role == jlm.RoleAttnKNorm):
-			// A KV-sharing block computes no k or v (Gemma 4's rule).
-			continue
 		case t.Role == jlm.RoleStreamCollapse1 && t.Block < 0:
 			if t.NDim != 3 || t.Dims[0] != n || t.Dims[1] != n || t.Dims[2] != a-1 {
 				return fmt.Errorf("convert: %s is %v, want {%d, %d, %d}", t.Name, t.Dims[:t.NDim], n, n, a-1)
@@ -209,7 +206,7 @@ func gemma3nTensors(c *Config, s *jlm.Source) error {
 			if t.NDim != 2 || t.Dims[0] != a || t.Dims[1] != cols {
 				return fmt.Errorf("convert: %s is %v, want {%d, %d}", t.Name, t.Dims[:t.NDim], a, cols)
 			}
-		case t.Role == jlm.RolePLETokEmbd && t.NDim == 2:
+		case t.Role == jlm.RolePLETokEmbd && t.NDim == 2 && c.Stated.plePadded:
 			// llama.cpp pads the per-layer table from its own vocabulary to
 			// the model's with zero rows (its "vision/audio token slots");
 			// transformers reads row 0 for every id past the table

@@ -476,10 +476,10 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := foldPostRopeQKNorm(s); err != nil {
 		return nil, err
 	}
-	if err := gemma4Tensors(c, s); err != nil {
+	if err := sharedTensors(c, s); err != nil {
 		return nil, err
 	}
-	if err := gemma3nTensors(c, s); err != nil {
+	if err := altUpTensors(c, s); err != nil {
 		return nil, err
 	}
 	if !tower {

@@ -273,14 +273,15 @@ func splitGateUpBank(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	return out, true, nil
 }
 
-// gemma4Tensors finishes Gemma 4's blocks. A KV-sharing block's k and v
-// projections and k norm are dropped: transformers never builds them and
-// llama.cpp loads and never reads them, and a file may carry them anyway.
-// A mixture block's dense MLP (jlm.Flag2DenseMoE) moves to the shared expert's
-// roles, since its gate/up/down roles are its banks, and the router's scale
-// becomes its input's norm weight, router.scale * n_embd^-1/2.
-func gemma4Tensors(c *Config, s *jlm.Source) error {
-	if c == nil || c.Arch != ArchGemma4 {
+// sharedTensors finishes the blocks that share: a KV-sharing block's
+// (NKVShared, Gemma 4's and Gemma 3n's) k and v projections and k norm are
+// dropped, since transformers never builds them and llama.cpp loads and
+// never reads them, and a file may carry them anyway. A mixture block's
+// dense MLP (jlm.Flag2DenseMoE) moves to the shared expert's roles, since
+// its gate/up/down roles are its banks, and the router's scale becomes its
+// input's norm weight, router.scale * n_embd^-1/2.
+func sharedTensors(c *Config, s *jlm.Source) error {
+	if c == nil {
 		return nil
 	}
 	if c.NKVShared != 0 {

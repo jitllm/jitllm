@@ -1,5 +1,8 @@
 {
   "gguf": ["gemma3n"],
+  "container": {
+    "gemma3n": {"ple_padded": true}
+  },
   "graph": {
     "block": [
       {"op": "in",            "out": "x", "width": "embd"},
