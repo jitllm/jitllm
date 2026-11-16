@@ -557,9 +557,6 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	if s.Tensors, err = nextnTensors(s.Tensors, cfg); err != nil {
 		return nil, err
 	}
-	if err := foldPostRopeQKNorm(s); err != nil {
-		return nil, err
-	}
 	if len(s.Tensors) == 0 {
 		return nil, fmt.Errorf("convert: %s: no tensor in this model has a role", dir)
 	}

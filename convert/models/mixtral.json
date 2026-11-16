@@ -99,7 +99,9 @@
                      {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
       "flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_wide": "true"},
                    "router": {"gate": "sigmoid", "renormalise": "always"}},
-    "hunyuan-dense": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "hunyuan-dense": {"tensors": {"gather": [{"role": "attn_q_norm.weight", "every": true, "from": ["attn_q_norm.weight", "attn_k_norm.weight"], "do": [{"map": "x * y"}]},
+                             {"role": "attn_k_norm.weight", "every": true, "from": ["attn_k_norm.weight"], "do": [{"map": "1"}]}],
+                  "sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [
@@ -111,7 +113,9 @@
                      {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
                      {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
       "flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}},
-    "hunyuan-moe": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "hunyuan-moe": {"tensors": {"gather": [{"role": "attn_q_norm.weight", "every": true, "from": ["attn_q_norm.weight", "attn_k_norm.weight"], "do": [{"map": "x * y"}]},
+                             {"role": "attn_k_norm.weight", "every": true, "from": ["attn_k_norm.weight"], "do": [{"map": "1"}]}],
+                  "sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [
@@ -139,7 +143,9 @@
                    "indexer": {"heads": "src['attention.indexer.head_count']", "key_width": "src['attention.indexer.key_length']",
                                "top_k": "src['attention.indexer.top_k']", "block": "src['attention.indexer.block_size']",
                                "local": "src['attention.indexer.local_blocks']"}},
-    "hunyuan_vl": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "hunyuan_vl": {"tensors": {"gather": [{"role": "attn_q_norm.weight", "every": true, "from": ["attn_q_norm.weight", "attn_k_norm.weight"], "do": [{"map": "x * y"}]},
+                             {"role": "attn_k_norm.weight", "every": true, "from": ["attn_k_norm.weight"], "do": [{"map": "1"}]}],
+                  "sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [

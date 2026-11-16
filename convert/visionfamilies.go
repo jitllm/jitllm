@@ -1,7 +1,9 @@
 package convert
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -70,6 +72,36 @@ func setF32Dims(t *jlm.Tensor, vals []float32, dims ...uint64) {
 
 // vecOf decodes a vector to f32.
 func vecOf(t *jlm.Tensor) ([]float32, error) { return normF32(t) }
+
+// normF32 decodes a norm vector to f32, whatever the source stored.
+func normF32(t *jlm.Tensor) ([]float32, error) {
+	typ, ok := jlm.SourceType(t.Type)
+	if !ok {
+		return nil, fmt.Errorf("convert: %s is %v, which has no dequantizer", t.Name, t.Type)
+	}
+	b, err := t.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	n := 1
+	for d := 0; d < int(t.NDim); d++ {
+		n *= int(t.Dims[d])
+	}
+	out := make([]float32, n)
+	if err := quant.Dequant32(typ, b, out); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
+	}
+	return out, nil
+}
+
+// setF32 replaces a tensor's bytes with v as F32.
+func setF32(t *jlm.Tensor, v []float32) {
+	b := make([]byte, 4*len(v))
+	for i, x := range v {
+		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(x))
+	}
+	t.Type, t.Data, t.Load = jlm.TypeF32, b, nil
+}
 
 // foldLayerScales folds InternViT's layer scales into the matrices they
 // follow. ls1 multiplies the attention output and ls2 the MLP output, each per

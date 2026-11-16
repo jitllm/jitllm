@@ -441,9 +441,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if s.Tensors, err = nextnTensors(s.Tensors, c); err != nil {
 		return nil, err
 	}
-	if err := foldPostRopeQKNorm(s); err != nil {
-		return nil, err
-	}
 	if err := statedTensors(c, s, ggufEnv(f)); err != nil {
 		return nil, err
 	}

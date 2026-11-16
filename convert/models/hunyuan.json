@@ -33,6 +33,11 @@
     ]
   },
   "tensors": {
+    "gather": [
+      {"role": "attn_q_norm.weight", "from": ["self_attn.query_layernorm.weight", "self_attn.key_layernorm.weight"],
+       "do": [{"map": "x * y"}]},
+      {"role": "attn_k_norm.weight", "from": ["self_attn.key_layernorm.weight"], "do": [{"map": "1"}]}
+    ],
     "block_prefix": "model.layers.",
     "model": {
       "model.embed_tokens.weight": "token_embd.weight",
@@ -50,8 +55,6 @@
       "self_attn.k_proj.bias":            "attn_k.bias",
       "self_attn.v_proj.bias":            "attn_v.bias",
       "self_attn.o_proj.bias":            "attn_output.bias",
-      "self_attn.query_layernorm.weight": "attn_q_norm.weight",
-      "self_attn.key_layernorm.weight":   "attn_k_norm.weight",
       "mlp.gate_proj.weight":             "ffn_gate.weight",
       "mlp.up_proj.weight":               "ffn_up.weight",
       "mlp.down_proj.weight":             "ffn_down.weight",
