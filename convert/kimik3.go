@@ -28,7 +28,7 @@ func kimiK3RoleOf(name string) (jlm.Role, bool) {
 	case "ffn_routed_norm.weight":
 		return jlm.RoleFFNRoutedNorm, true
 	// Kimi Delta Attention as llama.cpp's kimi-k3 writes it: three causal
-	// convolutions (joined into one filter bank by kimiK3Tensors), the
+	// convolutions (joined into one filter bank by kdaTensors), the
 	// forget gate's two halves, beta alone (no alpha stream beside it), and
 	// the full-rank output gate, which is the linear block's z projection.
 	case "ssm_conv1d_q.weight":
@@ -56,7 +56,7 @@ func kimiK3RoleOf(name string) (jlm.Role, bool) {
 // model's own code).
 const k3LatentNormEps = 1e-6
 
-// kimiK3Config is llama.cpp's kimi-k3.cpp and Moonshot's modeling_kimi_linear.py
+// Kimi K3 is llama.cpp's kimi-k3.cpp and Moonshot's modeling_kimi_linear.py
 // (the text model of KimiK3ForConditionalGeneration), text only:
 //
 //	head_count_kv per layer, 0 on a KDA layer    -> LayerKinds (LayerLinearAttn
@@ -72,51 +72,14 @@ const k3LatentNormEps = 1e-6
 //	the MLA latent norms' eps                      -> LatentNormEps (1e-6)
 //
 // The ranks, the residual-attention block, the experts' latent and the situ
-// bounds are latent_delta.json's container statement. The router is a sigmoid
+// bounds, like the rest of this table, are latent_delta.json's container statement. The router is a sigmoid
 // with the selection bias (llama.cpp's converter asserts it; KimiMoEGate would
 // honour softmax, which no K3 states).
-func kimiK3Config(f *meta.File, c *Config) error {
-	kinds, err := k3Kinds(f, c.NLayer)
-	if err != nil {
-		return err
-	}
-	c.LayerKinds = kinds
-	if c.NRot == 0 || c.NRot >= c.HeadDim {
-		return fmt.Errorf("rope.dimension_count %d on a key of %d: the MLA key's shared part sizes "+
-			"the cached row", c.NRot, c.HeadDim)
-	}
-	// MLA with no positional encoding: KimiMLAAttention asserts use_nope and
-	// concatenates the qk_rope_head_dim channels into the key unrotated.
-	c.Flags |= jlm.FlagNoPosEnc
-
-	hd := uint32(f.UintKey("kda.head_dim", 0))
-	conv := uint32(f.UintKey("ssm.conv_kernel", 0))
-	if hd == 0 || conv < 2 {
-		return fmt.Errorf("kda.head_dim %d, ssm.conv_kernel %d: KDA needs both", hd, conv)
-	}
-	c.SSM = jlm.SSMConfig{
-		ConvKernel: conv, Groups: c.NHead, NHeadV: c.NHead, StateSize: hd, Inner: c.NHead * hd,
-	}
-	if kv, ok := f.Key("kda.gate_lower_bound"); ok {
-		lb, _ := kv.Float()
-		if !(lb < 0) || math.IsInf(lb, 0) {
-			return fmt.Errorf("kda.gate_lower_bound %g: a bound is negative and finite", lb)
-		}
-		c.DeltaDecay = jlm.DeltaDecayBounded(float32(lb))
-	}
-
-	c.LatentNormEps = k3LatentNormEps
-	if kv, ok := f.Key("expert_gating_func"); ok {
-		if v, _ := kv.Uint(); v != 2 {
-			return fmt.Errorf("expert_gating_func %d: Kimi-K3 routes with a sigmoid: %w", v, ErrNotImplemented)
-		}
-	}
-	return nil
-}
 
 // k3Kinds is each layer's kind off head_count_kv, which llama.cpp's
 // converter writes per layer with zero on a KDA layer (its loader's own rule,
-// is_recr = n_head_kv == 0).
+// is_recr = n_head_kv == 0): the layers_by_kv_heads statement. A file with no
+// such layer, or only such layers, is no hybrid and refused.
 func k3Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 	kv, ok := f.Key("attention.head_count_kv")
 	if !ok {
@@ -138,19 +101,20 @@ func k3Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 		}
 	}
 	if linear == 0 || linear == len(vs) {
-		return nil, fmt.Errorf("%d of %d layers are KDA: Kimi-K3 is a hybrid", linear, len(vs))
+		return nil, fmt.Errorf("%d of %d layers are linear: the statement states a hybrid", linear, len(vs))
 	}
 	return kinds, nil
 }
 
-// kimiK3Tensors finishes Kimi-K3's linear blocks into the container's KDA
-// layout (ArchKimiLinear's): q, k and v joined into one mixed projection
+// kdaTensors finishes a source whose linear blocks store KDA's projections
+// and convolutions apart (split_kda, llama.cpp's Kimi-K3) into the
+// container's KDA layout: q, k and v joined into one mixed projection
 // (RoleAttnQKV, q|k|v by rows) and their three convolutions into one filter
 // bank ([taps, channels] with the channels in the same order), the output
 // projection as RoleSSMOut, and the per-head decay rate -exp(A_log) (llama.cpp's
 // converter folds it) repeated per channel, which is the rate KDA's gate reads.
-func kimiK3Tensors(c *Config, s *jlm.Source) error {
-	if c.Arch != ArchKimiK3 {
+func kdaTensors(c *Config, s *jlm.Source) error {
+	if !c.Stated.splitKDA {
 		return nil
 	}
 	type parts struct{ q, k, v, cq, ck, cv *jlm.Tensor }

@@ -77,6 +77,15 @@ type mjStates struct {
 	// n-gram block (ngramConfig).
 	QSARatios string `json:"qsa_ratios"`
 	NGram     bool   `json:"ngram"`
+	// LayersByKVHeads, true, reads each layer's kind off the per-layer kv
+	// head counts, zero on a linear layer (k3Kinds); DeltaDecayBound is the
+	// delta rule's decay bound, lb*sigmoid(...) in place of softplus's, a
+	// negative number (none for none); SplitKDA, true, states that the
+	// source's linear blocks store q, k, v and their convolutions apart
+	// (kdaTensors).
+	LayersByKVHeads bool   `json:"layers_by_kv_heads"`
+	DeltaDecayBound string `json:"delta_decay_bound"`
+	SplitKDA        bool   `json:"split_kda"`
 	// Readouts is the decision readouts, by name, the backbone carries where
 	// a readout asks for its own (clefOf).
 	Readouts []string `json:"readouts"`
@@ -129,6 +138,9 @@ type mjStates struct {
 type mjStatesLatent struct {
 	KV string `json:"kv"`
 	Q  string `json:"q"`
+	// NormEps is the latent norms' epsilon, a number (the model's where
+	// unstated).
+	NormEps string `json:"norm_eps"`
 }
 
 // mjStatesIndexer is an indexer of Heads query heads scoring one cached key
@@ -288,6 +300,7 @@ type Statement struct {
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
 	compressedBlocks, plePadded         bool
+	splitKDA                            bool
 	readouts                            []string
 }
 
@@ -340,7 +353,7 @@ func (mj *modelJSON) checkStates() error {
 			if l.Q == "" {
 				return fmt.Errorf("convert: %s: %s: a latent states its query rank, q", mj.name, arch)
 			}
-			srcs = append(srcs, l.KV, l.Q)
+			srcs = append(srcs, l.KV, l.Q, l.NormEps)
 		}
 		if x := st.Indexer; x != nil {
 			if x.Heads == "" || x.KeyWidth == "" || x.TopK == "" {
@@ -399,7 +412,7 @@ func (mj *modelJSON) checkStates() error {
 		if _, ok := mjDeltaGates()[st.DeltaGate]; st.DeltaGate != "" && !ok {
 			return fmt.Errorf("convert: %s: %s: delta gate %q is not one the container states", mj.name, arch, st.DeltaGate)
 		}
-		srcs = append(srcs, st.QSARatios, st.HeadBlocks)
+		srcs = append(srcs, st.QSARatios, st.HeadBlocks, st.DeltaDecayBound)
 		if st.YarnMagnitude != "" && !slices.Contains(mjYarnMagnitudes(), st.YarnMagnitude) {
 			return fmt.Errorf("convert: %s: %s: yarn magnitude %q is not one the container states", mj.name, arch, st.YarnMagnitude)
 		}
@@ -728,6 +741,14 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 				return fmt.Errorf("convert: %s: %s: latent attention with no key-value rank", by, arch)
 			}
 		}
+		if l.NormEps != "" {
+			if c.LatentNormEps, err = number("latent.norm_eps", l.NormEps); err != nil {
+				return err
+			}
+			if !(c.LatentNormEps > 0) {
+				return fmt.Errorf("convert: %s: %s: latent.norm_eps is %g", by, arch, c.LatentNormEps)
+			}
+		}
 	}
 	if x := st.Indexer; x != nil {
 		if err := counts(map[string]*uint32{"indexer.heads": &c.IdxHeads, "indexer.key_width": &c.IdxHeadDim,
@@ -875,6 +896,28 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	}
 	if st.DeltaGate != "" {
 		c.DeltaGate = mjDeltaGates()[st.DeltaGate]()
+	}
+	c.Stated.splitKDA = st.SplitKDA
+	if st.LayersByKVHeads {
+		if c.LayerKinds, err = k3Kinds(f, c.NLayer); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
+		}
+	}
+	if st.DeltaDecayBound != "" {
+		v, err := value("delta_decay_bound", st.DeltaDecayBound)
+		if err != nil {
+			return err
+		}
+		if !v.IsNone() {
+			lb, err := number("delta_decay_bound", st.DeltaDecayBound)
+			if err != nil {
+				return err
+			}
+			if x := float64(lb); !(x < 0) || math.IsInf(x, 0) {
+				return fmt.Errorf("convert: %s: %s: delta_decay_bound %g: a bound is negative and finite", by, arch, lb)
+			}
+			c.DeltaDecay = jlm.DeltaDecayBounded(lb)
+		}
 	}
 	if st.QSARatios != "" {
 		v, err := value("qsa_ratios", st.QSARatios)

@@ -76,6 +76,12 @@ const ds4SwiGLULimit = 10
 // (ds4Clamp), and compressed blocks (compressed_blocks) read their kinds
 // (ds4Kinds).
 func statedFeaturesFit(f *meta.File, c *Config) error {
+	// A latent attention's key carries a shared rotary part beside the
+	// latent's, which sizes the cached row.
+	if c.KVLoraRank != 0 && (c.NRot == 0 || c.NRot >= c.HeadDim) {
+		return fmt.Errorf("rope.dimension_count %d on a key of %d: a latent attention's key carries its "+
+			"shared rotary part beside the latent's", c.NRot, c.HeadDim)
+	}
 	if c.Flags2.Has(jlm.Flag2KeyValue) {
 		if c.NKVHead != 1 {
 			return fmt.Errorf("%d kv heads, and an attention whose key is its value is one shared key "+

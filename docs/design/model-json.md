@@ -202,7 +202,14 @@ schema; `convert/modeljson.go` reads it. Its sections:
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
   (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `ple_padded: true` states that the source pads its per-layer table with zero
+  (`sparseBlocksFit`). `layers_by_kv_heads: true` reads each layer's kind off the per-layer kv
+  head counts (zero on a linear layer, llama.cpp's is_recr), `delta_decay_bound`
+  the delta rule's decay bound (KDA's lb*sigmoid, a negative number, `none`
+  for none), `latent.norm_eps` the latent norms' epsilon, and `split_kda:
+  true` that the source stores KDA's q, k, v and their convolutions apart,
+  joined at conversion (`kdaTensors`). A latent attention's key carries a
+  shared rotary part narrower than the head, for every file.
+  `ple_padded: true` states that the source pads its per-layer table with zero
   rows past its own vocabulary (llama.cpp's Gemma 3n), which are cut.
   `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a

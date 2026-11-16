@@ -72,7 +72,7 @@ func kimiK3HF() *hfArch {
 
 			// q, k and v joined into one mixed projection and their convolutions
 			// into one filter bank, in the order fuseOrder states: the layout
-			// kimiK3Tensors builds from the GGUF.
+			// kdaTensors builds from the GGUF.
 			"self_attn.q_proj.weight":   jlm.RoleAttnQKV,
 			"self_attn.k_proj.weight":   jlm.RoleAttnQKV,
 			"self_attn.v_proj.weight":   jlm.RoleAttnQKV,
@@ -183,7 +183,7 @@ func k3TextConfigOf(c *hfConfig) (*k3TextConfig, error) {
 
 // kimiK3HFConfig reads text_config into the GGUF keys llama.cpp's
 // converter (conversion/kimi_k3.py) writes from the same dict, and hands them
-// to configOf: one reader, kimiK3Config's, decides what each key means, so
+// to configOf: one reader, the kimi-k3 statement, decides what each key means, so
 // the two inputs cannot drift apart. Every absent key takes
 // KimiLinearConfig's default; every graph the engine does not run is refused
 // by its key.
@@ -349,7 +349,7 @@ func kimiK3HFConfig(c *hfConfig, names []string) (*Config, error) {
 	if tc.RoutedExpertHiddenSize != nil {
 		kvs[ns+"expert_latent_length"] = meta.MakeUint(uint64(*tc.RoutedExpertHiddenSize))
 	}
-	// Absent situ bounds are None in the class; kimiK3Config refuses a pair
+	// Absent situ bounds are None in the class; the situ statement refuses a pair
 	// that is not the one the kernels bake, so a zero here is that refusal.
 	kvs[ns+"activation.situ_beta"] = meta.MakeFloat(float32(f(tc.ActivationSituBeta, 0)))
 	kvs[ns+"activation.situ_linear_beta"] = meta.MakeFloat(float32(f(tc.ActivationSituLinBeta, 0)))

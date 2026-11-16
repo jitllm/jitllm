@@ -496,7 +496,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := groupedOutputTensors(c, s); err != nil {
 		return nil, err
 	}
-	if err := kimiK3Tensors(c, s); err != nil {
+	if err := kdaTensors(c, s); err != nil {
 		return nil, err
 	}
 	// An alpha with no beta was skipped above and never fused: a layer whose
