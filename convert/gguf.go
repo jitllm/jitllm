@@ -77,9 +77,24 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 // buildGGUF is the container's source for a text model f and, when vf is
 // not nil, its vision tower, named src and mmproj in messages.
 func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, error) {
+	// A tower converted alone carries its audio half, as a joined one does.
+	alone := f
+	if vf == nil {
+		f = withoutAudio(f)
+	}
 	s, err := sourceOf(f)
 	if err != nil {
 		return nil, err
+	}
+	if alone != f && s.Vision != nil {
+		aud, ats, err := audioOf(alone, s.Vision.NLayer)
+		if err != nil {
+			return nil, err
+		}
+		if aud != nil {
+			s.Vision.Audio = aud
+			s.Tensors = append(s.Tensors, ats...)
+		}
 	}
 	if err := o.applyModelConfig(f, s, src); err != nil {
 		return nil, err
@@ -100,6 +115,10 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		}
 		if vs.Vision == nil {
 			return nil, fmt.Errorf("convert: %s carries no vision description", mmproj)
+		}
+		vp, err := projectorFor(vs.Vision.Projector)
+		if err != nil {
+			return nil, err
 		}
 		if vs.Vision.ProjDim != s.Config.NEmbd {
 			return nil, fmt.Errorf("convert: %s projects to %d and %s wants %d; "+
@@ -129,10 +148,8 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 			s.Vision.Audio = aud
 			s.Tensors = append(s.Tensors, ats...)
 		}
-		if s.Vision.Projector == jlm.ProjPixtral {
-			if err := imgBreakRow(s); err != nil {
-				return nil, err
-			}
+		if err := transformTower(s, nil, vp, "joined"); err != nil {
+			return nil, err
 		}
 		if err := towerFFNByShape(s); err != nil {
 			return nil, err
@@ -167,9 +184,11 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s := &jlm.Source{}
 	var c *Config
 	var names *towerVocab
+	var proj *projStates
 	tower := f.Arch() == "clip"
 	if tower {
-		v, err := visionOf(f)
+		v, p, err := visionOf(f)
+		proj = p
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +229,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	clamps := map[int32]*[28]float32{}
 	var alphas, fused int
 	scales := map[string]float32{}
-	renames := towerNames(f, s.Vision)
+	renames := towerNames(f, proj)
 	stored := func(n string) bool { _, ok := f.Get(n); return ok }
 	moved, err := retargets(c.Arch, stored)
 	if err != nil {
@@ -329,7 +348,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// The newer families' tower tensors: a fused q|k|v split, and the
 		// deepstack mergers (convert/visiontowers.go).
 		if tower {
-			ts, ok, ferr := familyTowerTensors(f, s.Vision, t)
+			ts, ok, ferr := familyTowerTensors(f, s.Vision, proj, t)
 			if ferr != nil {
 				return nil, ferr
 			}
@@ -489,16 +508,13 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err := foldLayerScales(s, lscales); err != nil {
 			return nil, err
 		}
-		if err := checkDeepstack(f, s); err != nil {
+		if err := checkDeepstack(f, s, proj); err != nil {
 			return nil, err
 		}
-		if s.Vision.Projector == jlm.ProjGemma3nV {
-			mobilenetGeom(s, mobilenetPlaces(f))
-			if err := prepareGemma3nV(s); err != nil {
-				return nil, err
-			}
+		if err := transformTower(s, f, proj, "source"); err != nil {
+			return nil, err
 		}
-		if err := prepareTower(s); err != nil {
+		if err := prepareTower(s, proj); err != nil {
 			return nil, err
 		}
 	}
@@ -660,7 +676,7 @@ func widenedF32(x *jlm.Tensor) (*jlm.Tensor, error) {
 // prepareTower reshapes the patch embedding and quantizes every matrix the
 // tower multiplies by, so that a container's vision weights are all in this
 // format's packed layout.
-func prepareTower(s *jlm.Source) error {
+func prepareTower(s *jlm.Source, p *projStates) error {
 	v := s.Vision
 	if v == nil {
 		return fmt.Errorf("convert: a clip file with no vision description")
@@ -668,23 +684,8 @@ func prepareTower(s *jlm.Source) error {
 	if err := foldPatchPlanes(s); err != nil {
 		return err
 	}
-	if v.Projector == jlm.ProjGemma3 {
-		if err := transposeGemma3Projection(s); err != nil {
-			return err
-		}
-	}
-	if v.Projector == jlm.ProjPixtral {
-		if err := permuteMerger(s); err != nil {
-			return err
-		}
-	}
-	if v.Projector == jlm.ProjGemma4V {
-		if err := halfNeoxToNeox(s); err != nil {
-			return err
-		}
-		if err := negateRole(s, jlm.RoleVStdBias); err != nil {
-			return err
-		}
+	if err := transformTower(s, nil, p, "prepare"); err != nil {
+		return err
 	}
 	if err := padFFN(s); err != nil {
 		return err
@@ -699,18 +700,10 @@ func prepareTower(s *jlm.Source) error {
 			if err := reshapeMergeConv(&s.Tensors[i], int(v.NEmbd)); err != nil {
 				return err
 			}
-		case jlm.RoleVProj:
-			if v.Projector == jlm.ProjHunyuanVL {
-				if err := reshapePointConv(&s.Tensors[i]); err != nil {
-					return err
-				}
-			}
 		}
 	}
-	if v.Projector == jlm.ProjHunyuanVL {
-		if err := normFrameRows(s, v.Eps); err != nil {
-			return err
-		}
+	if err := transformTower(s, nil, p, "finish"); err != nil {
+		return err
 	}
 	return quantizeTower(s.Tensors)
 }

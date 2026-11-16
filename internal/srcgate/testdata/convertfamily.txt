@@ -17,10 +17,8 @@
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
 55 convert/config.go:configOfFile
-19 convert/config.go:projectorOf
 4 convert/config.go:ropeScalingOf
 1 convert/config.go:visionOf
-1 convert/d1omniaudio.go:AudioProjectors
 1 convert/d1omni.go:d1OmniConfig
 1 convert/d1omni.go:d1OmniHead
 1 convert/decision.go:decisionOf
@@ -42,7 +40,7 @@
 4 convert/revision.go:StateRevision
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
-8 convert/safetensors.go:hfArchTable
+2 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
 1 convert/tower.go:hunyuanvlTower

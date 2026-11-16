@@ -460,8 +460,12 @@ func TestEveryVideoProcessorIsStated(t *testing.T) {
 		"qwen3vl_merger": "Qwen3VLVideoProcessor", "resampler": "",
 	}
 	gaps := map[string]bool{}
+	lib, err := projectorLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range Projectors() {
-		p := projectorOf()[name]
+		p := jlm.Projector(lib[name].Code)
 		if !StatesTower(p) {
 			continue
 		}
