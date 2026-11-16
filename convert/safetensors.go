@@ -590,7 +590,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	g := ha.graph
 	if g == nil {
 		var err error
-		if g, err = classGraph(ha, cfg.Arch); err != nil {
+		if g, err = classGraph(ha); err != nil {
 			return nil, err
 		}
 	}
@@ -1021,6 +1021,9 @@ func (c *hfConfig) act() string {
 // against transformers.
 type hfArch struct {
 	arch Arch
+	// name is the GGUF architecture the class converts as, whose library
+	// file states its graph and container (classGraph).
+	name string
 	// template is the class's chat template where its release states none:
 	// one that renders its chat in code ships no Jinja.
 	template string
@@ -2081,6 +2084,7 @@ func hardcodesSigmoid(archs []string) bool {
 func kimiLinearHF() *hfArch {
 	return &hfArch{
 		arch:        ArchKimiLinear,
+		name:        "kimilinear",
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{

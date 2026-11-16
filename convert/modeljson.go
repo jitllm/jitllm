@@ -356,7 +356,7 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		return nil, err
 	}
 	for _, n := range mj.Archs {
-		if !slices.ContainsFunc(slices.Collect(maps.Values(hfArchTable())), func(a *hfArch) bool { return a.arch.String() == n }) {
+		if !slices.ContainsFunc(slices.Collect(maps.Values(hfArchTable())), func(a *hfArch) bool { return a.name == n }) {
 			return nil, fmt.Errorf("convert: %s: %q is no Go table class's architecture", name, n)
 		}
 	}
@@ -520,7 +520,8 @@ func modelLibrary() (map[string]*modelJSON, error) {
 }
 
 // ggufGraph is the graph the library states for a GGUF of architecture
-// arch, nil where no file states one.
+// arch, or for a Go-table class's architecture of that name (archs), nil
+// where no file states one.
 func ggufGraph(arch string) (*mjGraph, error) {
 	files, err := libraryFiles()
 	if err != nil {
@@ -529,7 +530,7 @@ func ggufGraph(arch string) (*mjGraph, error) {
 	var g *mjGraph
 	var by string
 	for _, mj := range files {
-		if !slices.Contains(mj.GGUF, arch) {
+		if !slices.Contains(mj.GGUF, arch) && !slices.Contains(mj.Archs, arch) {
 			continue
 		}
 		if g != nil {
@@ -540,39 +541,11 @@ func ggufGraph(arch string) (*mjGraph, error) {
 	return g, nil
 }
 
-// archGraph is the graph the library states for the GGUF architectures that
-// convert as a, or for a by its name, nil where no file claims one: a
-// safetensors class of the Go table states what a GGUF of its architecture
-// states, its container being that architecture's.
-func archGraph(a Arch) (*mjGraph, error) {
-	files, err := libraryFiles()
-	if err != nil {
-		return nil, err
-	}
-	archs := archOf()
-	var g *mjGraph
-	var by string
-	for _, mj := range files {
-		if !slices.ContainsFunc(mj.GGUF, func(n string) bool { return archs[n] == a }) && !slices.Contains(mj.Archs, a.String()) {
-			continue
-		}
-		if g != nil {
-			return nil, fmt.Errorf("convert: architecture %v's graph is stated by both %s and %s", a, by, mj.name)
-		}
-		g, by = mj.Graph, mj.name
-	}
-	return g, nil
-}
-
-// classGraph is the graph the library states for a Go-table class: its
-// config's architecture's (a), else the one the class declares, as a GGUF
-// is read by the name it declares before its config refines it.
-func classGraph(ha *hfArch, a Arch) (*mjGraph, error) {
-	g, err := archGraph(a)
-	if g != nil || err != nil {
-		return g, err
-	}
-	return archGraph(ha.arch)
+// classGraph is the graph the library states for a safetensors class: the
+// one for the GGUF architecture name it converts as (hfArch.name), a Go-table
+// class's by the archs a file lists it under.
+func classGraph(ha *hfArch) (*mjGraph, error) {
+	return ggufGraph(ha.name)
 }
 
 // WithModelJSON converts a safetensors model by the model.json at path,
@@ -627,6 +600,7 @@ func hfArchFor(dir hfDir, c *hfConfig, caller string) (*hfArch, error) {
 func (mj *modelJSON) hfArch() (*hfArch, error) {
 	a := &hfArch{
 		arch:         archOf()[mj.Config.Arch],
+		name:         mj.Config.Arch,
 		template:     mj.Template,
 		graph:        mj.Graph,
 		blockPrefix:  mj.Tensors.BlockPrefix,

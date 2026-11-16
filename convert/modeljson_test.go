@@ -1099,7 +1099,7 @@ func TestGoTableClassesStateTheirGraphs(t *testing.T) {
 	var missing []string
 	n := 0
 	for c, ha := range hfArchTable() {
-		g, err := classGraph(ha, ha.arch)
+		g, err := classGraph(ha)
 		if err != nil {
 			t.Fatal(err)
 		}
