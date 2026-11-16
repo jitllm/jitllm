@@ -7,7 +7,7 @@
       "flags": {"rope_neox": "true", "swiglu_oai": "true", "yarn_exact": "true"},
                 "window": {"size": "src['attention.sliding_window']", "period": "2"}},
     "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2", "revision": {"act_quant": "row_int8"}},
-    "mistral3": {"attn_temp": {"scale": "src['attention.temperature_scale'] | default(0)",
+    "mistral3": {"yarn_magnitude": "mscale_ratio", "attn_temp": {"scale": "src['attention.temperature_scale'] | default(0)",
                                "floor": "src['rope.scaling.original_context_length'] | default(0)"}},
     "granite": {"logit_div": "src['logit_scale']", "embd_scale": "src['embedding_scale'] | default(1)",
                 "residual_scale": "src['residual_scale'] | default(0)"},

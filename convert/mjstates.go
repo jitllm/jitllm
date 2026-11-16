@@ -69,6 +69,9 @@ type mjStates struct {
 	// Retarget is the roles whose name in the source means what another
 	// role does (retargets).
 	Retarget []mjRetarget `json:"retarget"`
+	// YarnMagnitude is where a YaRN's magnitude reaches, by name
+	// (mjYarnMagnitudes; cos and sin and the softmax both where unstated).
+	YarnMagnitude string `json:"yarn_magnitude"`
 	// WholeRotary states that the class turns every dimension of a head.
 	WholeRotary bool `json:"whole_rotary"`
 	// Router is what the class's router does whatever a file's keys say.
@@ -222,6 +225,11 @@ type mjStatesRevision struct {
 // with erf.
 func mjNamedActivations() []string { return []string{"gelu"} }
 
+// mjYarnMagnitudes is each place a YaRN's magnitude may be stated to reach
+// (ropeScalingOf): the softmax alone, or cos and sin by mscale(s, 1) over
+// mscale(s, m) and the softmax not at all.
+func mjYarnMagnitudes() []string { return []string{"softmax", "mscale_ratio"} }
+
 // mjRopeLayouts is each rotary layout a file may state by name
 // (stateRopeTable): interleaved pair by pair, or over the elements.
 func mjRopeLayouts() []string { return []string{"interleaved", "xd"} }
@@ -239,6 +247,7 @@ type Statement struct {
 	ropeScaleSWA                        float32
 	swaGlobalFirst, pictureBidirSliding bool
 	activation, ropeLayout              string
+	yarnMagnitude                       string
 	routerGate                          string
 	learnedPositions, ffnUngated        bool
 }
@@ -347,6 +356,9 @@ func (mj *modelJSON) checkStates() error {
 			if _, ok := named[m.To]; !ok {
 				return fmt.Errorf("convert: %s: %s: retarget %+v: %q is not a container role", mj.name, arch, m, m.To)
 			}
+		}
+		if st.YarnMagnitude != "" && !slices.Contains(mjYarnMagnitudes(), st.YarnMagnitude) {
+			return fmt.Errorf("convert: %s: %s: yarn magnitude %q is not one the container states", mj.name, arch, st.YarnMagnitude)
 		}
 		if st.RopeLayout != "" && !slices.Contains(mjRopeLayouts(), st.RopeLayout) {
 			return fmt.Errorf("convert: %s: %s: rotary layout %q is not one the container states", mj.name, arch, st.RopeLayout)
@@ -495,7 +507,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		return err == nil && v.AsBool(), err
 	}
-	c.Stated = &Statement{activation: st.Activation, ropeLayout: st.RopeLayout}
+	c.Stated = &Statement{activation: st.Activation, ropeLayout: st.RopeLayout, yarnMagnitude: st.YarnMagnitude}
 	for _, b := range []struct {
 		what, src string
 		to        *bool

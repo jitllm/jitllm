@@ -1,8 +1,8 @@
 {
   "gguf": ["deepseek2", "deepseek32"],
   "container": {
-    "deepseek2": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(src['attention.value_length'] | default(0))", "q": "src['attention.q_lora_rank'] | default(0)"}},
-    "deepseek32": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(src['attention.value_length'] | default(0))", "q": "src['attention.q_lora_rank'] | default(0)"},
+    "deepseek2": {"yarn_magnitude": "softmax", "latent": {"kv": "src['attention.kv_lora_rank'] | default(src['attention.value_length'] | default(0))", "q": "src['attention.q_lora_rank'] | default(0)"}},
+    "deepseek32": {"yarn_magnitude": "softmax", "latent": {"kv": "src['attention.kv_lora_rank'] | default(src['attention.value_length'] | default(0))", "q": "src['attention.q_lora_rank'] | default(0)"},
       "indexer": {"heads": "src['attention.indexer.head_count']", "key_width": "src['attention.indexer.key_length']", "top_k": "src['attention.indexer.top_k']"}}
   },
   "graph": {

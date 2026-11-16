@@ -737,7 +737,7 @@ func ropeScalingOf(f *meta.File, c *Config) error {
 		// writes 0.1*mscale_all_dim here and divides by 0.1 at load, so it
 		// replaces the 0.1 rather than scaling it.
 		logMul := 0.1
-		if c.Arch == ArchMistral3 {
+		if c.Stated.yarnMagnitude == "mscale_ratio" {
 			if haveExplicit {
 				c.AttnFactor *= float32(explicit)
 				return nil
@@ -760,15 +760,16 @@ func ropeScalingOf(f *meta.File, c *Config) error {
 		// mscale_all_dim), and every released DeepSeek has the two equal, so the
 		// rotary is untouched and only the score takes the square. Folding it
 		// here made DeepSeek-V2-Lite generate fluent nonsense.
+		//
+		// DeepSeek V4 scales neither: transformers forces the compressed
+		// rotary's attention_factor to 1 and scores at head_dim^-1/2, and
+		// llama.cpp's builder passes an attn_factor that cancels ggml's own
+		// magnitude and a kq_scale of 1/sqrt(head_dim). Each states
+		// yarn_magnitude softmax.
 		switch {
 		case haveExplicit:
 			c.AttnFactor *= float32(explicit)
-		case c.Arch == ArchDeepseek4:
-			// DeepSeek V4 scales neither: transformers forces the compressed
-			// rotary's attention_factor to 1 and scores at head_dim^-1/2, and
-			// llama.cpp's builder passes an attn_factor that cancels ggml's
-			// own magnitude and a kq_scale of 1/sqrt(head_dim).
-		case c.Arch != ArchDeepseek2 && c.Arch != ArchDeepseek32:
+		case c.Stated.yarnMagnitude != "softmax":
 			c.AttnFactor *= float32(logMul*math.Log(float64(factor)) + 1)
 		}
 		return nil

@@ -209,7 +209,10 @@ schema; `convert/modeljson.go` reads it. Its sections:
   of a class stated `ffn_ungated` (arcee's), and no `position_embd.weight`
   where `learned_positions` states the input rows add one (a starcoder's);
   each of those two is true or false. A learned position table is as wide
-  as the rows and bounds the context. `retarget` is the roles whose name in
+  as the rows and bounds the context. `yarn_magnitude` is where a YaRN's
+  magnitude reaches, by name: `softmax` (DeepSeek's, the score alone) or
+  `mscale_ratio` (Ministral 3's, cos and sin by mscale(s, 1)/mscale(s, m)
+  and the score not at all); both where unstated. `retarget` is the roles whose name in
   the source means what another role does, a list of `{"from", "to",
   "why"}` by role name, with `when` naming the tensor that marks a layout
   (Falcon-40B's two norms) where it holds of one (`retargets`; qwen3next's

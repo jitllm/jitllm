@@ -1,7 +1,7 @@
 {
   "gguf": ["deepseek4"],
   "container": {
-    "deepseek4": {"rope_base": "src['attention.compress_rope_freq_base']",
+    "deepseek4": {"yarn_magnitude": "softmax", "rope_base": "src['attention.compress_rope_freq_base']",
       "streams": {"count": "src['hyper_connection.count'] | default(0)", "sinkhorn_iterations": "src['hyper_connection.sinkhorn_iterations'] | default(0)", "eps": "src['hyper_connection.epsilon'] | default(0)"},
       "output_groups": {"groups": "src['attention.output_group_count'] | default(0)", "rank": "src['attention.output_lora_rank'] | default(0)"},
       "hash_layers": "src['hash_layer_count'] | default(0)",
