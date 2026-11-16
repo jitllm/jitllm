@@ -1458,7 +1458,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 
 	// A block already on this device is shared and only the history is new: the
-	// weights, norms, biases and router are the model's. Rebuilding would
+	// weights, norms and biases are the model's. Rebuilding would
 	// re-upload them and replace the layer the first session is running against.
 	if l := g.layers[li]; l != nil && l.ok {
 		// Sharing is of one block: a model's block is the graph it was
@@ -1567,6 +1567,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	slots := 0
 	if moe {
 		if p.NExpert < 1 || p.NExpertUsed < 1 || p.NExpertUsed > p.NExpert {
+			return false
+		}
+		if rw.Rows != p.NExpert || rw.K != p.NEmbd {
+			g.LastErr = fmt.Sprintf("block %d: %s is %dx%d, the plan routes %d experts over %d", li, jlm.RoleRouter, rw.Rows, rw.K, p.NExpert, p.NEmbd)
 			return false
 		}
 		bank, slots = p.NExpert, p.NExpertUsed

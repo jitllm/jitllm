@@ -981,6 +981,7 @@ limit	engine/device/gpu/layer.go	"block %d needs %d bytes, %d of %d used (pool %
 bug	engine/device/gpu/layer.go	"block %d: %s (%s %dx%d) not resident"
 bug	engine/device/gpu/layer.go	"block %d: %s has %d rows, not a multiple of %d experts"
 bug	engine/device/gpu/layer.go	"block %d: %s holds neither its packed planes nor its rows"
+bug	engine/device/gpu/layer.go	"block %d: %s is %dx%d, the plan routes %d experts over %d"	a model whose router does not match its plan
 bug	engine/device/gpu/layer.go	"block %d: %s is %s, which has no device kernel"	a weight type no container carries (off quant.Dequantable, or TQ1_0, which the converter repacks): the container's check
 bug	engine/device/gpu/layer.go	"block %d: %s"
 bug	engine/device/gpu/layer.go	"block %d: %v"
