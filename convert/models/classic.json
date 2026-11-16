@@ -21,8 +21,15 @@
                           "pattern": "src['block_count'] + 1"}},
     "falcon": {"flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
                "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
-    "bert": {"flags": {"non_causal": "true"}},
-    "nomic-bert": {"flags": {"non_causal": "true"}},
+    "starcoder": {"flags": {"layer_norm": "true", "no_pos_enc": "true"}, "activation": "gelu_pytorch_tanh",
+                  "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
+                  "learned_positions": "true"},
+    "stablelm": {"flags": {"layer_norm": "true", "rope_neox": "true", "parallel": "'blk.0.ffn_norm.weight' not in tensors"},
+                 "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
+    "bert": {"flags": {"layer_norm": "true", "non_causal": "true", "no_pos_enc": "true"}, "activation": "gelu_pytorch_tanh",
+             "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-12)"},
+    "nomic-bert": {"flags": {"layer_norm": "true", "non_causal": "true", "rope_neox": "true"},
+                   "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-12)"},
     "modern-bert": {"flags": {"non_causal": "true"}, "activation": "gelu", "revision": {"swa_global_first": "true"}}
   },
   "graph": {

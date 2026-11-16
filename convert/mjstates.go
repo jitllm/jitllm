@@ -5,6 +5,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -57,6 +58,14 @@ type mjStates struct {
 	MoEStep       string `json:"moe_step"`
 	// AttnTemp scales the queries by position (jlm.Config.AttnTempScale).
 	AttnTemp *mjStatesTemp `json:"attn_temp"`
+	// NoRopeEvery is n where every n-th layer, (il+1) % n == 0, skips the
+	// rotary, a count (0 for none).
+	NoRopeEvery string `json:"no_rope_every"`
+	// LearnedPositions states that the input rows add a learned position
+	// table, and FFNUngated that the FFN has no gate, each true or false;
+	// a file's tensors are held to them (statedTensorsAgree).
+	LearnedPositions string `json:"learned_positions"`
+	FFNUngated       string `json:"ffn_ungated"`
 	// MRope, true, reads the rotary's sections off rope.dimension_sections
 	// (mropeSectionsOf).
 	MRope string `json:"mrope"`
@@ -135,8 +144,9 @@ func mjLayerKinds() map[string]jlm.LayerKind {
 	}
 }
 
-// mjStatesTemp is the queries' temperature by position: Scale, Floor and
-// Offset, each a number.
+// mjStatesTemp is the queries' temperature by position, 1 +
+// Scale*ln(1 + floor((pos+Offset)/Floor)): each a number, Offset 0 where
+// unstated, and a Scale of 0 states none.
 type mjStatesTemp struct {
 	Scale  string `json:"scale"`
 	Floor  string `json:"floor"`
@@ -221,6 +231,7 @@ type Statement struct {
 	swaGlobalFirst, pictureBidirSliding bool
 	activation, ropeLayout              string
 	routerGate                          string
+	learnedPositions, ffnUngated        bool
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -246,10 +257,11 @@ func (mj *modelJSON) checkStates() error {
 		}
 		st := mj.Container[arch]
 		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv,
-			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope, st.RopeSections, st.ClampKQV}
+			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope, st.RopeSections, st.ClampKQV, st.NoRopeEvery,
+			st.LearnedPositions, st.FFNUngated}
 		if tp := st.AttnTemp; tp != nil {
-			if tp.Scale == "" || tp.Floor == "" || tp.Offset == "" {
-				return fmt.Errorf("convert: %s: %s: a temperature states its scale, floor and offset", mj.name, arch)
+			if tp.Scale == "" || tp.Floor == "" {
+				return fmt.Errorf("convert: %s: %s: a temperature states its scale and its floor", mj.name, arch)
 			}
 			srcs = append(srcs, tp.Scale, tp.Floor, tp.Offset)
 		}
@@ -400,8 +412,18 @@ func stateContainer(f *meta.File, c *Config) error {
 	return statedTensorsAgree(f, c)
 }
 
-// statedTensorsAgree refuses a file storing a router over no expert_count.
+// statedTensorsAgree refuses a file storing a router over no expert_count,
+// a gate on an FFN the library states ungated, and one storing no position
+// table where the library states the input rows add one.
 func statedTensorsAgree(f *meta.File, c *Config) error {
+	if _, ok := f.Get("position_embd.weight"); !ok && c.Stated.learnedPositions {
+		return fmt.Errorf("convert: %s: no position_embd.weight, which the graph adds to the input rows", f.Arch())
+	}
+	for i := range f.Tensors {
+		if n := f.Tensors[i].Name; c.Stated.ffnUngated && strings.HasPrefix(n, "blk.") && strings.HasSuffix(n, ".ffn_gate.weight") {
+			return fmt.Errorf("convert: %s: a block stores %s, and its FFN is ungated: %w", f.Arch(), n, ErrNotImplemented)
+		}
+	}
 	if f.UintKey("expert_count", 0) != 0 {
 		return nil
 	}
@@ -428,7 +450,8 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	value := func(what, src string) (jinja.Value, error) {
 		v, err := st.exprs[src].Eval(vars, blockExprSteps)
 		if err == nil && v.IsUndefined() {
-			err = fmt.Errorf("%q is undefined", src)
+			err = fmt.Errorf("%q is undefined: the file does not state it, and the publisher's config.json "+
+				"does (jitllm convert -config, WithModelConfig)", src)
 		}
 		if err != nil {
 			return jinja.Undefined(), fmt.Errorf("convert: %s: %s: %s: %w", by, arch, what, err)
@@ -455,6 +478,17 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		return err == nil && v.AsBool(), err
 	}
 	c.Stated = &Statement{activation: st.Activation, ropeLayout: st.RopeLayout}
+	for _, b := range []struct {
+		what, src string
+		to        *bool
+	}{{"learned_positions", st.LearnedPositions, &c.Stated.learnedPositions}, {"ffn_ungated", st.FFNUngated, &c.Stated.ffnUngated}} {
+		if b.src == "" {
+			continue
+		}
+		if *b.to, err = boolean(b.what, b.src); err != nil {
+			return err
+		}
+	}
 	if r := st.Router; r != nil {
 		c.Stated.routerGate = r.Gate
 	}
@@ -534,18 +568,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 	}
 	if tp := st.AttnTemp; tp != nil {
-		if c.AttnTempScale, err = number("attn_temp.scale", tp.Scale); err != nil {
-			return err
-		}
-		floor, err := number("attn_temp.floor", tp.Floor)
-		if err != nil {
-			return err
-		}
-		if floor < 1 || floor != float32(uint32(floor)) {
-			return fmt.Errorf("convert: %s: %s: attn_temp.floor is %g, not a count", by, arch, floor)
-		}
-		c.AttnTempFloor = uint32(floor)
-		if c.AttnTempOffset, err = number("attn_temp.offset", tp.Offset); err != nil {
+		if err := stateAttnTemp(by, arch, tp, number, c); err != nil {
 			return err
 		}
 	}
@@ -735,10 +758,59 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return fmt.Errorf("convert: %s: %s: %d hash-routed blocks of %d", by, arch, c.NHashLayers, c.NLayer)
 		}
 	}
-	w := st.Window
-	if w == nil {
+	if w := st.Window; w != nil {
+		if err := stateWindow(by, f, w, number, whole, c); err != nil {
+			return err
+		}
+	}
+	if st.NoRopeEvery == "" {
 		return nil
 	}
+	n, err := whole("no_rope_every", st.NoRopeEvery)
+	switch {
+	case err != nil:
+		return err
+	case n == 0:
+		return nil
+	case n == 1:
+		return fmt.Errorf("convert: %s: every layer skips the rotary: %w", arch, ErrNotImplemented)
+	case c.SWAWindow != 0:
+		return fmt.Errorf("convert: %s: layers skipping the rotary beside a sliding window of %d: %w",
+			arch, c.SWAWindow, ErrNotImplemented)
+	}
+	c.SWAPeriod = n
+	c.Flags |= jlm.FlagNoPEGlobal
+	return nil
+}
+
+// stateAttnTemp states the queries' temperature tp in c.
+func stateAttnTemp(by, arch string, tp *mjStatesTemp, number func(what, src string) (float32, error), c *Config) error {
+	s, err := number("attn_temp.scale", tp.Scale)
+	if err != nil || s == 0 {
+		return err
+	}
+	floor, err := number("attn_temp.floor", tp.Floor)
+	if err != nil {
+		return err
+	}
+	if floor < 1 || floor != float32(uint32(floor)) {
+		return fmt.Errorf("convert: %s: %s: a temperature of %g with attn_temp.floor %g, no count to floor positions by",
+			by, arch, s, floor)
+	}
+	off := float32(0)
+	if tp.Offset != "" {
+		if off, err = number("attn_temp.offset", tp.Offset); err != nil {
+			return err
+		}
+	}
+	c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset = s, uint32(floor), off
+	return nil
+}
+
+// stateWindow states the sliding window w of f in c.
+func stateWindow(by string, f *meta.File, w *mjStatesWindow, number func(what, src string) (float32, error),
+	whole func(what, src string) (uint32, error), c *Config) error {
+	arch := f.Arch()
 	size, err := whole("window.size", w.Size)
 	if err != nil {
 		return err
@@ -747,10 +819,14 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		return fmt.Errorf("convert: %s: chunked attention over no chunk, every layer attending globally: %w", arch, ErrNotImplemented)
 	}
 	if size == 0 {
-		if w.Period != "" {
-			return fmt.Errorf("convert: %s: %s: a window period over a window of 0", by, arch)
+		if w.Period == "" {
+			return nil
 		}
-		return nil
+		p, err := whole("window.period", w.Period)
+		if err == nil && p != 0 {
+			err = fmt.Errorf("convert: %s: %s: a window period over a window of 0", by, arch)
+		}
+		return err
 	}
 	if w.From != "" {
 		from, err := whole("window.from", w.From)

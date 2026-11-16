@@ -1,24 +1,12 @@
 package convert
 
-import (
-	"fmt"
-
-	"github.com/jitllm/jitllm/convert/meta"
-	"github.com/jitllm/jitllm/format/jlm"
-)
+import "fmt"
 
 // The classic-transformer blocks (C6) have GPT-2's shape rather than llama's.
 // Each architecture here is a set of switches over one kit the graph already
 // runs: a LayerNorm (FlagLayerNorm) with or without a bias, a parallel
 // residual (FlagParallel), an ungated FFN (the absent gate tensor), biases on
 // every projection, partial rotary (NRot).
-
-// layerNormEps reads the LayerNorm epsilon, which is a different key from the
-// RMSNorm one: these files carry attention.layer_norm_epsilon and no
-// layer_norm_rms_epsilon.
-func layerNormEps(f *meta.File, c *Config) {
-	c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-5))
-}
 
 // partialRotary checks a rotary width that is not the whole head: it must be
 // even (the pairs) and fit inside the head. The rotated dimensions lead and
@@ -43,33 +31,6 @@ func partialRotary(c *Config) error {
 // precision issues" and runs the softmax at scale 1; that is the same function
 // as scaling the scores, which is what this engine does.
 
-// starcoderConfig is GPTBigCode, llama.cpp's starcoder.cpp:
-//
-//	inpL = tok_embd[t] + position_embd[pos]       -> the position table
-//	attn_norm (LayerNorm + bias), attn_qkv (+bias) -> LayerNorm, split at
-//	    conversion into q, k, v with ONE kv head      conversion (MQA)
-//	no rotary                                      -> FlagNoPosEnc
-//	ffn_norm (+bias), up (+bias), GELU, down (+bias), sequential residual
-//	output_norm (+bias); output is tok_embd when absent
-//
-// The position table's length bounds the context: a position past it has no
-// embedding, so NCtx is clamped to the table's rows.
-func starcoderConfig(f *meta.File, c *Config) error {
-	layerNormEps(f, c)
-	c.Flags |= jlm.FlagLayerNorm | jlm.FlagNoPosEnc | jlm.FlagGELU
-	t, ok := f.Get("position_embd.weight")
-	if !ok || len(t.Dims) < 2 {
-		return fmt.Errorf("no position_embd.weight, which a starcoder carries")
-	}
-	if uint32(t.Dims[0]) != c.NEmbd {
-		return fmt.Errorf("position_embd is %d wide, the model %d", t.Dims[0], c.NEmbd)
-	}
-	if uint32(t.Dims[1]) < c.NCtx {
-		c.NCtx = uint32(t.Dims[1])
-	}
-	return nil
-}
-
 // Cohere's graph, llama.cpp's command-r.cpp and cohere2.cpp, whose containers
 // classic.json states:
 //
@@ -90,24 +51,3 @@ func starcoderConfig(f *meta.File, c *Config) error {
 // command-r-plus's per-head q/k LayerNorm ({head_dim, n_head}, a weight per
 // head) is refused by name in configOfFile: running without it would be
 // fluent and wrong.
-
-// stableLMConfig is llama.cpp's stablelm.cpp:
-//
-//	attn_norm (LayerNorm + bias); q, k, v biased, o not     -> LayerNorm
-//	NEOX rotary on rope.dimension_count of head_dim          -> RopeNeox, NRot
-//	ffn gate/up/down, SwiGLU                                 -> the gated FFN
-//	ffn_norm present: sequential; absent: parallel from the  -> FlagParallel
-//	    attention's normed row (StableLM 2 12B)
-//	output_norm (+bias), output untied
-//
-// The residual is read off the tensor, as llama.cpp reads it
-// ("if (model.layers[il].ffn_norm)"); use_parallel_residual is not consulted,
-// since some files say true while carrying an ffn_norm in every block.
-func stableLMConfig(f *meta.File, c *Config) error {
-	layerNormEps(f, c)
-	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
-	if _, ok := f.Get("blk.0.ffn_norm.weight"); !ok {
-		c.Flags |= jlm.FlagParallel
-	}
-	return nil
-}

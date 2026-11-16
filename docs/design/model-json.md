@@ -152,15 +152,20 @@ schema; `convert/modeljson.go` reads it. Its sections:
   after another where unstated),
   `norm_eps` and `embd_scale`
   (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
-  `attn_softcap` and `final_softcap`, `rope_base` (the rotary base of the
+  `attn_softcap` and `final_softcap`, `attn_temp` (`scale`, `floor` and
+  `offset`: q scaled by 1 + scale*ln(1 + floor((pos+offset)/floor)), the
+  offset 0 where unstated, a scale of 0 for none, and a scale over a floor
+  that is no count refused), `rope_base` (the rotary base of the
   layers no window states one for, refused unless positive), and `window`: `size` (0 states no
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
   state one, or `from`, the first layer that slides (every layer from it
   on; none at or past the last, and a first layer between them follows no
   period and is refused), and `rope_base`, the windowed layers' rotary
-  base. A fixed period over no window, and a chunked window over none, are
-  refused. `logit_div` and `clamp_kqv` (the bound on q, k and v) are
+  base. A nonzero period over a window of 0, and a chunked window over
+  none, are refused. `no_rope_every` is n where every n-th layer skips the
+  rotary (0 for none), refused beside a sliding window and at 1, where no
+  layer rotates. `logit_div` and `clamp_kqv` (the bound on q, k and v) are
   numbers, 0 for none; an expression over a key the file lacks, with no
   default, is refused, which is how a class whose every file states a key
   holds a file to it: deepseek32's indexer counts are read so, since its
@@ -199,11 +204,20 @@ schema; `convert/modeljson.go` reads it. Its sections:
   picks); a key contradicting it is refused. Every file is held to its
   tensors alike: a router over no `expert_count` is refused
   (`statedTensorsAgree`), as is `rope.scaling.finetuned` false where the
-  graph states a rotary, and a tensor the stated block graph binds and the
-  block does not store (a stated q/k norm with no norm). An expression may read the tensors' names too
+  graph states a rotary, a tensor the stated block graph binds and the
+  block does not store (a stated q/k norm with no norm), a gate in a block
+  of a class stated `ffn_ungated` (arcee's), and no `position_embd.weight`
+  where `learned_positions` states the input rows add one (a starcoder's);
+  each of those two is true or false. A learned position table is as wide
+  as the rows and bounds the context. An expression may read the tensors' names too
   (`'blk.0.attn_q_norm.weight' in tensors`). It replaces `configOfFile`'s
   case for the architecture; one statement per architecture, and an
   expression reading anything but `src`, `layer_tensors` and `tensors` is refused.
+  An expression reading a key the GGUF does not carry, with no `default`,
+  is refused naming `-config`: the publisher's config.json states what the
+  converter that wrote the GGUF did not (`stateAbsentKeys`: each absent key
+  and the window, as the class's file maps the config onto them), never a
+  guess from the model's size.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform

@@ -1,6 +1,9 @@
 {
   "classes": ["ArceeForCausalLM"],
   "gguf": ["arcee"],
+  "container": {
+    "arcee": {"activation": "relu2", "ffn_ungated": "true"}
+  },
   "config": {
     "arch": "arcee",
     "keys": {

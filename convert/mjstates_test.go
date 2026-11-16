@@ -36,6 +36,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		ropeSWA     float32
 		acap, fcap  float32
 		logit       float32
+		actq        jlm.ActQuant
 	}{
 		{arch: "qwen2", flags: neox},
 		{arch: "qwen2vl", flags: neox},
@@ -47,7 +48,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "nomic-bert", flags: jlm.FlagNonCausal},
 		{arch: "modern-bert", flags: jlm.FlagNonCausal},
 		{arch: "olmoe", flags: qk | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm},
-		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2},
+		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2, actq: jlm.ActQuantRowInt8},
 		{arch: "gemma", keys: map[string]meta.Value{"embedding_length": meta.MakeUint(2048)},
 			flags: neox | jlm.FlagGELU, scale: float32(math.Sqrt(2048))},
 		{arch: "starcoder2", flags: ln, eps: 1e-5},
@@ -79,6 +80,23 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 			win: 128, period: 5, ropeSWA: 10000},
 		{arch: "gpt-oss", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128)},
 			flags: neox | jlm.FlagSwiGLUOAI | jlm.FlagYarnExact, win: 128, period: 2},
+		{arch: "phi3", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(2047), "block_count": meta.MakeUint(32)},
+			flags: neox, win: 2047, period: 33},
+		{arch: "phi3", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(0), "block_count": meta.MakeUint(32)},
+			flags: neox},
+		{arch: "smollm3", flags: jlm.FlagNoPEGlobal, period: 4},
+		{arch: "seed_oss", flags: neox},
+		{arch: "arcee", flags: jlm.FlagReLU2},
+		{arch: "olmo2", flags: qk | jlm.FlagQKNormWide},
+		{arch: "olmo2", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(4096), "rope.freq_base": meta.MakeFloat(5e5)},
+			flags: qk | jlm.FlagQKNormWide, win: 4096, period: 4, ropeSWA: 5e5},
+		{arch: "exaone4", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(0)}, flags: qk},
+		{arch: "exaone4", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(4096), "rope.freq_base": meta.MakeFloat(1e6)},
+			flags: qk | jlm.FlagNoPEGlobal, win: 4096, period: 4},
+		{arch: "exaone4", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(4096), "rope.freq_base_swa": meta.MakeFloat(1e4),
+			"rope.freq_base": meta.MakeFloat(1e6)},
+			flags: qk | jlm.FlagNoPEGlobal, win: 4096, period: 4, ropeSWA: 1e4},
+		{arch: "mistral3"},
 	} {
 		kv := map[string]meta.Value{"general.architecture": meta.MakeString(tc.arch)}
 		for k, v := range tc.keys {
@@ -94,6 +112,9 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		}
 		if c.LogitScale != tc.logit {
 			t.Errorf("%s: logits divided by %g, want %g", tc.arch, c.LogitScale, tc.logit)
+		}
+		if c.Stated.actQuant != tc.actq {
+			t.Errorf("%s: activation quantization %v, want %v", tc.arch, c.Stated.actQuant, tc.actq)
 		}
 		if c.SWAWindow != tc.win || c.SWAPeriod != tc.period || c.RopeBaseSWA != tc.ropeSWA ||
 			c.AttnSoftcap != tc.acap || c.FinalSoftcap != tc.fcap {
@@ -343,10 +364,17 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{mjStates{Revision: &mjStatesRevision{SWAGlobalFirst: "src['heads']"}}, "swa_global_first is 8, not true or false"},
 		{mjStates{Revision: &mjStatesRevision{RopeScaleSWA: "'one'"}}, "rope_scale_swa is"},
 		{mjStates{Revision: &mjStatesRevision{PictureBidirSliding: "src['heads'] + 1"}}, "picture_bidir_sliding is 9"},
+		{mjStates{NoRopeEvery: "1"}, "every layer skips the rotary"},
+		{mjStates{NoRopeEvery: "4", Window: &mjStatesWindow{Size: "8", Period: "2"}}, "beside a sliding window"},
+		{mjStates{Window: &mjStatesWindow{Size: "0", Period: "4"}}, "a window period over a window of 0"},
 	} {
-		srcs := []string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale, tc.st.RopeSections}
+		srcs := []string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale, tc.st.NoRopeEvery,
+			tc.st.RopeSections}
 		if r := tc.st.Revision; r != nil {
 			srcs = append(srcs, r.SWAGlobalFirst, r.RopeScaleSWA, r.PictureBidirSliding)
+		}
+		if w := tc.st.Window; w != nil {
+			srcs = append(srcs, w.Size, w.Period)
 		}
 		if err := tc.st.compile(srcs); err != nil {
 			t.Fatal(err)
@@ -354,6 +382,89 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		err := tc.st.apply("test", f, &Config{Config: &jlm.Config{}})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%+v: %v, want an error naming %q", tc.st, err, tc.want)
+		}
+	}
+}
+
+// TestTheLibraryStatesWhatAFileMustSay holds the statements a GGUF must
+// carry the key of (an absent one is refused naming -config: no guess from
+// the model's size), the windowed layers' unscaled rotary and the q
+// temperature to what configOfFile set by name before the files did.
+func TestTheLibraryStatesWhatAFileMustSay(t *testing.T) {
+	state := func(arch string, keys map[string]meta.Value) (*Config, error) {
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString(arch)}
+		for k, v := range keys {
+			kv[arch+"."+k] = v
+		}
+		c := &Config{Config: &jlm.Config{}}
+		return c, stateContainer(meta.New(arch+".gguf", kv, nil), c)
+	}
+	stored := func(arch string, names ...string) (*Config, error) {
+		ts := make([]meta.Tensor, len(names))
+		for i, n := range names {
+			ts[i] = meta.Tensor{Name: n, Dims: []uint64{8, 8}}
+		}
+		c := &Config{Config: &jlm.Config{}}
+		return c, stateContainer(meta.New(arch+".gguf", map[string]meta.Value{"general.architecture": meta.MakeString(arch)}, ts), c)
+	}
+	ln := jlm.FlagLayerNorm | jlm.FlagRopeNeox
+	for _, tc := range []struct {
+		arch    string
+		tensors []string
+		flags   jlm.Flags
+		eps     float32
+		refused string
+	}{
+		{arch: "stablelm", tensors: []string{"blk.0.ffn_norm.weight"}, flags: ln, eps: 1e-5},
+		{arch: "stablelm", flags: ln | jlm.FlagParallel, eps: 1e-5},
+		{arch: "starcoder", tensors: []string{"position_embd.weight"}, flags: jlm.FlagLayerNorm | jlm.FlagNoPosEnc | jlm.FlagGELU, eps: 1e-5},
+		{arch: "starcoder", refused: "no position_embd.weight"},
+		{arch: "bert", flags: jlm.FlagLayerNorm | jlm.FlagNonCausal | jlm.FlagNoPosEnc | jlm.FlagGELU, eps: 1e-12},
+		{arch: "nomic-bert", flags: ln | jlm.FlagNonCausal, eps: 1e-12},
+		{arch: "arcee", flags: jlm.FlagReLU2},
+		{arch: "arcee", tensors: []string{"blk.0.ffn_gate.weight"}, refused: "its FFN is ungated"},
+	} {
+		c, err := stored(tc.arch, tc.tensors...)
+		switch {
+		case tc.refused != "":
+			if err == nil || !strings.Contains(err.Error(), tc.refused) {
+				t.Errorf("%s storing %v: %v, want it refused naming %q", tc.arch, tc.tensors, err, tc.refused)
+			}
+		case err != nil:
+			t.Errorf("%s storing %v: %v", tc.arch, tc.tensors, err)
+		case c.Flags != tc.flags || c.RMSEps != tc.eps:
+			t.Errorf("%s storing %v: flags %v eps %g, want %v %g", tc.arch, tc.tensors, c.Flags, c.RMSEps, tc.flags, tc.eps)
+		}
+	}
+	for _, arch := range []string{"phi3", "exaone4"} {
+		if _, err := state(arch, map[string]meta.Value{"block_count": meta.MakeUint(64), "context_length": meta.MakeUint(4096)}); err == nil ||
+			!strings.Contains(err.Error(), "-config") {
+			t.Errorf("%s with no attention.sliding_window: %v, want it refused naming -config", arch, err)
+		}
+	}
+	c, err := state("olmo2", map[string]meta.Value{"attention.sliding_window": meta.MakeUint(4096)})
+	if err != nil || c.Stated.ropeScaleSWA != 1 || c.RopeBaseSWA != 10000 {
+		t.Errorf("olmo2 with a window: %v, sliding rotary at %g scaled %g; want 10000 unscaled", err, c.RopeBaseSWA, c.Stated.ropeScaleSWA)
+	}
+	if c, err := state("olmo2", nil); err != nil || c.Stated.ropeScaleSWA != 0 {
+		t.Errorf("olmo2 with no window: %v, sliding rotary scaled %g; want none stated", err, c.Stated.ropeScaleSWA)
+	}
+	c, err = state("mistral3", map[string]meta.Value{"attention.temperature_scale": meta.MakeFloat(0.125),
+		"rope.scaling.original_context_length": meta.MakeUint(16384)})
+	if err != nil || c.AttnTempScale != 0.125 || c.AttnTempFloor != 16384 || c.AttnTempOffset != 0 {
+		t.Errorf("mistral3's q temperature: %v, %g floor %d offset %g", err, c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset)
+	}
+	if _, err := state("mistral3", map[string]meta.Value{"attention.temperature_scale": meta.MakeFloat(0.125)}); err == nil ||
+		!strings.Contains(err.Error(), "no count to floor positions by") {
+		t.Errorf("a q temperature with no original context: %v, want it refused", err)
+	}
+	for states, want := range map[string]string{
+		`{"attn_temp": {"scale": "1"}}`:  "states its scale and its floor",
+		`{"learned_positions": "names"}`: "is not the keys",
+	} {
+		if _, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {"x": `+states+`}}`), "test"); err == nil ||
+			!strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want it refused naming %q", states, err, want)
 		}
 	}
 }

@@ -36,7 +36,8 @@ import (
 //
 // The graph's other facts -- squared ReLU on the gate, NEOX rotary on the
 // rows as shipped, the two inner norms, per-token int8 activations -- are the
-// arch's (mixtral.json's container statement, ArchBitNet).
+// file's (mixtral.json's container statement: act_quant row_int8 makes the
+// projections ternary).
 
 // bitnetProjections are the roles a BitNet block runs as BitLinear.
 func bitnetProjections(r jlm.Role) bool {
@@ -236,12 +237,13 @@ func bitnetScaleOf(name string) (string, bool) {
 	return strings.TrimSuffix(name, ".scale") + ".weight", true
 }
 
-// bitnetTensors finishes a BitNet source: every projection becomes a ternary
+// ternaryTensors finishes a source whose projections are ternary (ActQuant
+// row_int8, BitNet b1.58's BitLinear): every projection becomes a ternary
 // type, its optional per-tensor scale folded into each block's scale, and
 // anything that is not ternary is refused by name. scales maps a weight's
 // name to its scale.
-func bitnetTensors(c *Config, s *jlm.Source, scales map[string]float32) error {
-	if c == nil || c.Arch != ArchBitNet {
+func ternaryTensors(c *Config, s *jlm.Source, scales map[string]float32) error {
+	if c == nil || c.Stated == nil || c.Stated.actQuant != jlm.ActQuantRowInt8 {
 		if len(scales) > 0 {
 			return fmt.Errorf("convert: %d projection scales on a model that is not BitNet", len(scales))
 		}

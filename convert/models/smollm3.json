@@ -1,6 +1,9 @@
 {
   "classes": ["SmolLM3ForCausalLM"],
   "gguf": ["smollm3"],
+  "container": {
+    "smollm3": {"no_rope_every": "4"}
+  },
   "config": {
     "defaults": {"num_key_value_heads": 4},
     "arch": "smollm3",

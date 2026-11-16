@@ -920,6 +920,87 @@ func (mj *modelJSON) env(c *hfConfig) (exprEnv, error) {
 	return env, nil
 }
 
+// absentKeyError is a key whose expression reads what the source does not
+// state, with no default in its file.
+type absentKeyError struct{ error }
+
+// keyValue is the GGUF key k as the file states it (Config.Keys), its
+// expression evaluated by eval over config.json at path.
+func (mj *modelJSON) keyValue(path, k string, eval func(what, src string) (any, error)) (meta.Value, error) {
+	spec := mj.Config.Keys[k]
+	var src string
+	n := 0
+	for _, s := range []string{spec.Uint, spec.Float, spec.Int32s, spec.Bool} {
+		if s != "" {
+			src, n = s, n+1
+		}
+	}
+	if n != 1 {
+		return meta.Value{}, fmt.Errorf("convert: %s: key %s states %d types; one is the rule", mj.name, k, n)
+	}
+	v, err := eval(k, src)
+	if err != nil {
+		return meta.Value{}, err
+	}
+	if v == nil {
+		// An absent key takes the CLASS's default, which the model.json
+		// writes with ??; the reader's own default is another class's.
+		return meta.Value{}, absentKeyError{fmt.Errorf("convert: %s: %s reads %q, which is absent, and %s states no default",
+			path, k, src, mj.name)}
+	}
+	switch {
+	case spec.Uint != "":
+		u, err := exprUint(k, v)
+		if err != nil {
+			return meta.Value{}, err
+		}
+		return meta.MakeUint(u), nil
+	case spec.Bool != "":
+		b, ok := v.(bool)
+		if !ok {
+			return meta.Value{}, fmt.Errorf("convert: %s: %s is %s, not a boolean", path, k, exprKind(v))
+		}
+		return meta.MakeBool(b), nil
+	case spec.Float != "":
+		f, ok := v.(float64)
+		if !ok {
+			return meta.Value{}, fmt.Errorf("convert: %s: %s is %s, not a number", path, k, exprKind(v))
+		}
+		return meta.MakeFloat(float32(f)), nil
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return meta.Value{}, fmt.Errorf("convert: %s: %s is %s, not a list", path, k, exprKind(v))
+	}
+	out := make([]int32, len(list))
+	for i, x := range list {
+		u, err := exprUint(fmt.Sprintf("%s[%d]", k, i), x)
+		if err != nil || u > 1<<31-1 {
+			return meta.Value{}, fmt.Errorf("convert: %s: %s[%d] is not a 32-bit count", path, k, i)
+		}
+		out[i] = int32(u)
+	}
+	return meta.MakeInt32s(out), nil
+}
+
+// windowSize is the sliding window the file states (Config.Window) over
+// config.json at path, 0 where none is in use.
+func (mj *modelJSON) windowSize(path string, eval func(what, src string) (any, error)) (uint64, error) {
+	w := mj.Config.Window
+	used, err := eval("window used", w.Used)
+	if err != nil {
+		return 0, err
+	}
+	if used != true && used != false {
+		return 0, fmt.Errorf("convert: %s: window used is %s, not a boolean", path, exprKind(used))
+	}
+	size, err := eval("window size", w.Size)
+	if err != nil || used != true || size == nil {
+		return 0, err
+	}
+	return exprUint("window size", size)
+}
+
 // mjWindowSlides is which of n layers slide, as l states it.
 func mjWindowSlides(l *mjWindowLayers, eval func(what, src string) (any, error), n int) ([]bool, error) {
 	slides := make([]bool, n)
@@ -1063,61 +1144,11 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		spec := mj.Config.Keys[k]
-		var src string
-		n := 0
-		for _, s := range []string{spec.Uint, spec.Float, spec.Int32s, spec.Bool} {
-			if s != "" {
-				src, n = s, n+1
-			}
-		}
-		if n != 1 {
-			return nil, fmt.Errorf("convert: %s: key %s states %d types; one is the rule", mj.name, k, n)
-		}
-		v, err := eval(k, src)
+		v, err := mj.keyValue(c.path, k, eval)
 		if err != nil {
 			return nil, err
 		}
-		if v == nil {
-			// An absent key takes the CLASS's default, which the model.json
-			// writes with ??; the reader's own default is another class's.
-			return nil, fmt.Errorf("convert: %s: %s reads %q, which is absent, and %s states no default",
-				c.path, k, src, mj.name)
-		}
-		switch {
-		case spec.Uint != "":
-			u, err := exprUint(k, v)
-			if err != nil {
-				return nil, err
-			}
-			kvs[ns+k] = meta.MakeUint(u)
-		case spec.Bool != "":
-			b, ok := v.(bool)
-			if !ok {
-				return nil, fmt.Errorf("convert: %s: %s is %s, not a boolean", c.path, k, exprKind(v))
-			}
-			kvs[ns+k] = meta.MakeBool(b)
-		case spec.Float != "":
-			f, ok := v.(float64)
-			if !ok {
-				return nil, fmt.Errorf("convert: %s: %s is %s, not a number", c.path, k, exprKind(v))
-			}
-			kvs[ns+k] = meta.MakeFloat(float32(f))
-		default:
-			list, ok := v.([]any)
-			if !ok {
-				return nil, fmt.Errorf("convert: %s: %s is %s, not a list", c.path, k, exprKind(v))
-			}
-			out := make([]int32, len(list))
-			for i, x := range list {
-				u, err := exprUint(fmt.Sprintf("%s[%d]", k, i), x)
-				if err != nil || u > 1<<31-1 {
-					return nil, fmt.Errorf("convert: %s: %s[%d] is not a 32-bit count", c.path, k, i)
-				}
-				out[i] = int32(u)
-			}
-			kvs[ns+k] = meta.MakeInt32s(out)
-		}
+		kvs[ns+k] = v
 	}
 
 	for i, r := range mj.Config.Require {
@@ -1231,22 +1262,10 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 	window := uint64(0)
-	if w := mj.Config.Window; w != nil {
-		used, err := eval("window used", w.Used)
-		if err != nil {
+	if mj.Config.Window != nil {
+		var err error
+		if window, err = mj.windowSize(c.path, eval); err != nil {
 			return nil, err
-		}
-		if used != true && used != false {
-			return nil, fmt.Errorf("convert: %s: window used is %s, not a boolean", c.path, exprKind(used))
-		}
-		size, err := eval("window size", w.Size)
-		if err != nil {
-			return nil, err
-		}
-		if used == true && size != nil {
-			if window, err = exprUint("window size", size); err != nil {
-				return nil, err
-			}
 		}
 		kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 	}

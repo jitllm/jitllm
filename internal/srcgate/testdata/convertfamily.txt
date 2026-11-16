@@ -9,7 +9,6 @@
 8 convert/arch.go:moe2ArchName
 15 convert/arch.go:ssmArchName
 9 convert/arch.go:visionArchName
-1 convert/bitnet.go:bitnetTensors
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
 55 convert/config.go:configOfFile
@@ -18,7 +17,6 @@
 1 convert/d1omni.go:d1OmniConfig
 1 convert/d1omni.go:d1OmniHead
 1 convert/deepseek4.go:ds4Tensors
-7 convert/dense.go:denseConfig
 1 convert/flagship.go:gemma4Tensors
 1 convert/gemma3n.go:gemma3nTensors
 3 convert/gguf.go:sourceOf

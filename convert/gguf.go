@@ -77,6 +77,9 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 // buildGGUF is the container's source for a text model f and, when vf is
 // not nil, its vision tower, named src and mmproj in messages.
 func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, error) {
+	if err := o.stateAbsentKeys(f); err != nil {
+		return nil, err
+	}
 	// A tower converted alone carries its audio half, as a joined one does.
 	alone := f
 	if vf == nil {
@@ -329,9 +332,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			s.Tensors = append(s.Tensors, e)
 			continue
 		}
-		// BitNet's optional per-tensor projection scale is folded into its
-		// weight's blocks (bitnetTensors).
-		if w, ok := bitnetScaleOf(t.Name); ok && !tower && c.Arch == ArchBitNet {
+		// A ternary projection's optional per-tensor scale is folded into
+		// its weight's blocks (ternaryTensors).
+		if w, ok := bitnetScaleOf(t.Name); ok && !tower && c.Stated.actQuant == jlm.ActQuantRowInt8 {
 			e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
 			copy(e.Dims[:], t.Dims)
 			if e.Type, err = typeOf(t.Type); err != nil {
@@ -487,7 +490,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 	}
-	if err := bitnetTensors(c, s, scales); err != nil {
+	if err := ternaryTensors(c, s, scales); err != nil {
 		return nil, err
 	}
 	if err := ds4Tensors(c, s); err != nil {
