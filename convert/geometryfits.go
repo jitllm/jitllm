@@ -65,6 +65,87 @@ func interleavedMRope(a Arch) bool {
 	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next || a == ArchQwen4Exp
 }
 
+// stateRopeTable states c's rotary sections as the table a row turns by
+// and a picture's layout on its axes (jlm.Config.RopeTable, PictureRope):
+// sections laid one after another over the NRot/2 pairs; interleaved pair
+// by pair (Qwen3-VL's apply_interleaved_mrope: pair p by axis 1 where
+// p%3 == 1 and p < 3*sections[1], by axis 2 where p%3 == 2 and
+// p < 3*sections[2], by axis 0 otherwise); or over the elements of
+// cat(freq, freq) (HunyuanVL's XD-RoPE: a table of NRot entries, section i
+// 2*sections[i] of them, element e at frequency e mod NRot/2). A picture is
+// a grid from its span's start, the text after it at that start plus its
+// longer side (transformers' get_rope_index); under XD-RoPE its rows keep
+// their positions and take column, row and the picture's ordinal on the
+// other three axes. Sections ropeFits refuses state nothing.
+func stateRopeTable(c *Config) {
+	c.RopeTable, c.PictureRope = nil, jlm.PictureRope{}
+	if c.RopeSections == [4]uint32{} || c.NRot == 0 || c.NRot%2 != 0 {
+		return
+	}
+	half := int(c.NRot) / 2
+	sec := func(i int) int { return int(c.RopeSections[i]) }
+	sum := 0
+	for i := range c.RopeSections {
+		sum += sec(i)
+	}
+	var out []jlm.RopePair
+	switch {
+	case xdRope(c.Arch):
+		if sum != half {
+			return
+		}
+		out = make([]jlm.RopePair, 2*half)
+		for e := range out {
+			out[e].Freq = e % half
+			for i, at := 0, 0; i < len(c.RopeSections); i++ {
+				if at += 2 * sec(i); e < at {
+					out[e].Axis = i
+					break
+				}
+			}
+		}
+		c.PictureRope = jlm.PictureRope{Axes: [4]jlm.PictureAxis{
+			{Pos: true},
+			{Mul: jlm.PicOne, Mod: jlm.PicCols},
+			{Mul: jlm.PicOne, Div: jlm.PicCols},
+			{Base: jlm.PicOrdinal},
+		}}
+	case interleavedMRope(c.Arch):
+		if c.RopeSections[3] != 0 {
+			return
+		}
+		out = make([]jlm.RopePair, half)
+		for p := range out {
+			out[p].Freq = p
+			switch {
+			case p%3 == 1 && p < 3*sec(1):
+				out[p].Axis = 1
+			case p%3 == 2 && p < 3*sec(2):
+				out[p].Axis = 2
+			}
+		}
+	default:
+		if sum != half {
+			return
+		}
+		for ax := range c.RopeSections {
+			for range sec(ax) {
+				out = append(out, jlm.RopePair{Axis: ax, Freq: len(out)})
+			}
+		}
+	}
+	if !xdRope(c.Arch) {
+		frame := jlm.PictureAxis{Base: jlm.PicStart, Mul: jlm.PicStride, Div: jlm.PicCells}
+		c.PictureRope = jlm.PictureRope{Side: true, Axes: [4]jlm.PictureAxis{
+			frame,
+			{Base: jlm.PicStart, Mul: jlm.PicOne, Div: jlm.PicCols, Mod: jlm.PicRows},
+			{Base: jlm.PicStart, Mul: jlm.PicOne, Mod: jlm.PicCols},
+			frame,
+		}}
+	}
+	c.RopeTable = out
+}
+
 // ropeFits refuses a rotary the blocks cannot turn as stated: sections that
 // do not cover the head's rotated pairs (an XD-RoPE's chunks covering the
 // whole head, never interleaved), and an encoder rotating a block by a

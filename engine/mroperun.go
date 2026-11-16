@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/graph"
@@ -63,34 +64,65 @@ func textMark(at, base int) (m [graph.MarkWords]uint32) {
 	return m
 }
 
-// gridMark is a mark whose rows from cache position at are a grid of t
-// frames of h rows of w cells from rotary position base: a row's frame
-// stride positions apart on the first and fourth axes, its row and column on
-// the second and third.
-func gridMark(at, base, h, w, stride int) (m [graph.MarkWords]uint32) {
-	m[graph.MarkAt] = uint32(at)
-	set := func(a, mul, div, mod int) {
-		m[graph.MarkAxis(a, graph.MarkBase)] = uint32(base)
-		m[graph.MarkAxis(a, graph.MarkMul)], m[graph.MarkAxis(a, graph.MarkDiv)], m[graph.MarkAxis(a, graph.MarkMod)] = uint32(mul), uint32(div), uint32(mod)
+// pictureMark is the mark of a picture's grid g whose rows start at cache
+// position at, laid out as pr states (jlm.PictureRope) from rotary position
+// start, the sequence's picture ord: every frame's rows, the grid's ends
+// before and after them turning at their positions.
+func pictureMark(pr *jlm.PictureRope, at, start, ord int, g model.ImageGrid) (m [graph.MarkWords]uint32) {
+	cols := g.W + g.Line
+	term := func(t jlm.PicTerm) uint32 {
+		switch t {
+		case jlm.PicOne:
+			return 1
+		case jlm.PicStart:
+			return uint32(start)
+		case jlm.PicOrdinal:
+			return uint32(ord)
+		case jlm.PicStride:
+			return uint32(g.Stride)
+		case jlm.PicCols:
+			return uint32(cols)
+		case jlm.PicRows:
+			return uint32(g.H)
+		case jlm.PicCells:
+			return uint32(g.H * cols)
+		}
+		return 0
 	}
-	set(0, stride, h*w, 0)
-	set(1, 1, w, h)
-	set(2, 1, 1, w)
-	set(3, stride, h*w, 0)
+	m[graph.MarkAt], m[graph.MarkSkip], m[graph.MarkCount] = uint32(at), uint32(g.Ends), uint32(g.T*g.H*cols)
+	for a, x := range pr.Axes {
+		m[graph.MarkAxis(a, graph.MarkBase)] = term(x.Base)
+		if x.Pos {
+			m[graph.MarkAxis(a, graph.MarkPos)] = 1
+		}
+		m[graph.MarkAxis(a, graph.MarkMul)] = term(x.Mul)
+		m[graph.MarkAxis(a, graph.MarkDiv)] = term(x.Div)
+		m[graph.MarkAxis(a, graph.MarkMod)] = term(x.Mod)
+	}
 	return m
 }
 
-// xdMark is a mark whose rows from cache position at+ends are a picture's
-// h rows of w cells: a row's position, its column, its row and the
-// picture's ordinal idx on the four axes; the rows before and after them
-// turn at their positions.
-func xdMark(at, ends, h, w, idx int) (m [graph.MarkWords]uint32) {
-	m[graph.MarkAt], m[graph.MarkSkip], m[graph.MarkCount] = uint32(at), uint32(ends), uint32(h*w)
-	m[graph.MarkAxis(0, graph.MarkPos)] = 1
-	m[graph.MarkAxis(1, graph.MarkMul)], m[graph.MarkAxis(1, graph.MarkMod)] = 1, uint32(w)
-	m[graph.MarkAxis(2, graph.MarkMul)], m[graph.MarkAxis(2, graph.MarkDiv)] = 1, uint32(w)
-	m[graph.MarkAxis(3, graph.MarkBase)] = uint32(idx)
-	return m
+// markTop is the highest rotary position a bounded mark's rows take on any
+// axis, its ends' cache positions among them.
+func markTop(m [graph.MarkWords]uint32) int {
+	skip, n := m[graph.MarkSkip], m[graph.MarkCount]
+	if n == 0 {
+		return 0
+	}
+	last := m[graph.MarkAt] + skip + n - 1
+	top := 0
+	if skip > 0 {
+		top = int(last + skip)
+	}
+	for a := range 4 {
+		w := func(k int) uint32 { return m[graph.MarkAxis(a, k)] }
+		q := (n - 1) / max(w(graph.MarkDiv), 1)
+		if mod := w(graph.MarkMod); mod != 0 {
+			q = min(q, mod-1)
+		}
+		top = max(top, int(w(graph.MarkBase)+w(graph.MarkPos)*last+w(graph.MarkMul)*q))
+	}
+	return top
 }
 
 // rewindRope forgets slot's marks past cache position p.
@@ -99,52 +131,16 @@ func (s *Instance) rewindRope(slot, p int) {
 	s.sendMarks()
 }
 
-// xdRope is spanRope under XD-RoPE (HunyuanVL, transformers' get_rope_index):
-// every row's first coordinate is its sequence position, nothing after an
-// image is shifted, and a picture's grid rows -- the newline column included
-// -- take (position, column, row, picture) on the four axes, the picture's
-// ordinal in the sequence; its begin and end rows are text-like. A picture
-// is a mark where it starts (xdMark), its ordinal the slot's pictures
-// before it, each a mark of a bounded span.
-func (s *Instance) xdRope(slot, p0 int, spans []model.Span) (next int, err error) {
-	c := s.c
-	s.rewindRope(slot, p0-1)
-	pics := 0
-	for k := range s.rmarks.Count(slot) {
-		if s.rmarks.Mark(slot, k)[graph.MarkCount] != 0 {
-			pics++
-		}
-	}
-	r := p0
-	for i, sp := range spans {
-		n := sp.N(c.NEmbd)
-		if !sp.Rows() || sp.Grid.Zero() {
-			r += n
-			continue
-		}
-		g := sp.Grid
-		if g.Rows() != n || g.T != 1 {
-			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d (+%d, %d ends) is %d",
-				i, n, g.T, g.H, g.W, g.Line, g.Ends, g.Rows())
-		}
-		s.rmarks.Add(slot, xdMark(r, g.Ends, g.H, g.W+g.Line, pics))
-		pics++
-		r += n
-	}
-	s.sendMarks()
-	return r, nil
-}
-
 // spanRope lays a mixed prompt's rows out on the rotary axes as slot's
 // marks, from cache position p0 where the slot's next text row would turn,
 // and says the rotary position the row after the prompt takes: an image's
-// rows a grid from the position its span starts at (gridMark), the
-// text after it at that position plus max(H, W) (transformers'
-// get_rope_index: current_pos += max(h, w), whatever T). A video whose
-// pairs are spans of their own is one grid over them, its frames Stride
-// apart on the temporal axis. The row after the prompt takes one past the
-// highest position the prompt holds where a grid's frames reach past the
-// text (transformers' rope deltas: max + 1 - the prompt's length). A
+// rows a grid from the position its span starts at, as the container lays
+// a picture out (jlm.PictureRope, pictureMark), the text after it at that
+// position plus the grid's longer side or its rows. A video whose pairs are
+// spans of their own is one grid over them, its frames Stride apart on the
+// temporal axis. The row after the prompt takes one past the highest
+// position the prompt holds where a grid reaches past the text
+// (transformers' rope deltas: max + 1 - the prompt's length). A
 // single-axis model's rows all advance like text, the image's too.
 //
 // An embedding span with no grid is rows that advance like text: the
@@ -155,9 +151,6 @@ func (s *Instance) xdRope(slot, p0 int, spans []model.Span) (next int, err error
 // holds an image passes its grid (ChatSpans does).
 func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err error) {
 	c := s.c
-	if c.RopeXD {
-		return s.xdRope(slot, p0, spans)
-	}
 	r := s.ropeOf(slot, p0)
 	if len(s.m.Rope.Runs) == 0 {
 		for _, sp := range spans {
@@ -165,11 +158,19 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 		}
 		return r, nil
 	}
+	pr := &s.m.Container.Config().PictureRope
 	s.rewindRope(slot, p0-1)
+	ord := 0
+	for k := range s.rmarks.Count(slot) {
+		if s.rmarks.Mark(slot, k)[graph.MarkCount] != 0 {
+			ord++
+		}
+	}
 	p, hi := p0, r-1
-	// open is the grid a video's next pair continues, frame its next frame.
+	// open is the grid a video's next pair continues, frame its next frame,
+	// from cache position gp.
 	var open model.ImageGrid
-	frame := 0
+	frame, gp := 0, 0
 	for i, sp := range spans {
 		n := sp.N(c.NEmbd)
 		if !sp.Rows() || sp.Grid.Zero() {
@@ -182,8 +183,8 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 		}
 		g := sp.Grid
 		if g.Rows() != n {
-			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d is %d",
-				i, n, g.T, g.H, g.W, g.Rows())
+			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d (+%d, %d ends) is %d",
+				i, n, g.T, g.H, g.W, g.Line, g.Ends, g.Rows())
 		}
 		switch {
 		case open.T > 0 && (g.Frame != frame || g.T != open.T || g.H != open.H || g.W != open.W || g.Stride != open.Stride):
@@ -192,14 +193,22 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 		case open.T == 0 && g.Frame != 0:
 			return 0, fmt.Errorf("model: span %d starts a grid at frame %d", i, g.Frame)
 		case open.T == 0:
-			s.rmarks.Add(slot, gridMark(p, r, g.H, g.W, g.Stride))
-			hi = max(hi, r+(g.T-1)*g.Stride, r+max(g.H, g.W)-1)
+			m := pictureMark(pr, p, r, ord, g)
+			s.rmarks.Add(slot, m)
+			hi = max(hi, markTop(m))
+			ord, gp = ord+1, p
 		}
 		p += n
 		if g.Last() {
 			open, frame = model.ImageGrid{}, 0
-			r += max(g.H, g.W)
-			s.rmarks.Add(slot, textMark(p, r))
+			if pr.Side {
+				r += max(g.H, g.W)
+			} else {
+				r += p - gp
+			}
+			if s.rmarks.TextAt(slot, p) != r {
+				s.rmarks.Add(slot, textMark(p, r))
+			}
 			continue
 		}
 		open, frame = g, g.Frame+g.Frames

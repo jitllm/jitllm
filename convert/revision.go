@@ -14,12 +14,7 @@ import "github.com/jitllm/jitllm/format/jlm"
 // token by its absolute maximum).
 func StateRevision(c *Config) {
 	c.Revision = jlm.StatementRevision
-	if interleavedMRope(c.Arch) {
-		c.Flags |= jlm.FlagRopeInterleaved
-	}
-	if xdRope(c.Arch) {
-		c.Flags |= jlm.FlagRopeXD
-	}
+	stateRopeTable(c)
 	if c.Arch == ArchBitNet {
 		c.ActQuant = jlm.ActQuantRowInt8
 	}

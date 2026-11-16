@@ -149,6 +149,12 @@ type Config struct {
 	// the sections must sum to NRot/2 (Qwen2-VL-2B: [16, 24, 24, 0], head_dim
 	// 128). Read as dimensions they rotate a quarter of each head, fluently.
 	RopeSections [4]uint32
+	// RopeTable is the text rotary's table where its pairs turn by several
+	// position axes: each entry's axis and frequency, in the order a row's
+	// table holds them (RopePairs). PictureRope is how a picture's rows lie
+	// on those axes. Together the twenty-ninth optional tail.
+	RopeTable   []RopePair
+	PictureRope PictureRope
 
 	// Sliding-window attention. Zero for either means every layer sees the
 	// whole history.
@@ -796,13 +802,6 @@ const (
 	// image_resize_algo, which d1's file states and LFM2-VL's older files do
 	// not. A vision-section flag; no text model sets it.
 	FlagVisionBicubic Flags = 1 << 28
-	// FlagRopeInterleaved says the M-RoPE sections are interleaved over a
-	// head's pairs (Qwen3-VL's split) rather than laid out as contiguous runs.
-	// Stated from revision 3.
-	FlagRopeInterleaved Flags = 1 << 29
-	// FlagRopeXD says the M-RoPE assigns its axes per element of the rotary
-	// rather than per pair (HunyuanVL's XD-RoPE). Stated from revision 3.
-	FlagRopeXD Flags = 1 << 30
 )
 
 // Pooling is the embedding readout the flags describe, or PoolNone for a model
@@ -1069,69 +1068,73 @@ func (c *Config) Sliding(li int) bool {
 // the frequency index it turns at (Base^(-2*Freq/NRot)).
 type RopePair struct{ Axis, Freq int }
 
-// RopePairs is the text rotary's table as the container states it: each pair's
-// axis and frequency, none for a rotary of one position. The container's
-// statement is RopeSections and its two layout flags: sections laid one after
-// another over the NRot/2 pairs, interleaved pair by pair
-// (FlagRopeInterleaved: pair p by axis 1 where p%3 == 1 and p < 3*sections[1],
-// by axis 2 where p%3 == 2 and p < 3*sections[2], by axis 0 otherwise), or
-// over the elements of cat(freq, freq) (FlagRopeXD: a table of NRot pairs, one
-// an element of a head's rotated half pairs, section i 2*sections[i] of them,
-// element e at frequency e mod NRot/2). A pair's frequency is its index
-// otherwise. Contiguous sections that do not cover the NRot/2 pairs, an interleaved
-// fourth section and both layouts at once are refused.
+// RopePairs is the text rotary's table as the container states it
+// (RopeTable), none for a rotary of one position. A container with rotary
+// sections that states no table was written before the converter stated
+// it, and is refused.
 func (c *Config) RopePairs() ([]RopePair, error) {
-	if c.RopeSections == [4]uint32{} {
-		return nil, nil
+	if c.RopeSections == [4]uint32{} || len(c.RopeTable) != 0 {
+		return c.RopeTable, nil
 	}
-	half := int(c.NRot) / 2
-	sec := func(i int) int { return int(c.RopeSections[i]) }
-	sum := 0
-	for i := range c.RopeSections {
-		sum += sec(i)
+	if c.Revision < 3 {
+		return nil, &UpgradeError{What: "rotary layout"}
 	}
-	xd, il := c.Flags.Has(FlagRopeXD), c.Flags.Has(FlagRopeInterleaved)
-	switch {
-	case c.NRot == 0 || c.NRot%2 != 0:
-		return nil, fmt.Errorf("jlm: rotary sections %v over a rotary of %d", c.RopeSections, c.NRot)
-	case !il && sum != half:
-		return nil, fmt.Errorf("jlm: rotary sections %v cover %d of %d pairs", c.RopeSections, sum, half)
-	case xd && il:
-		return nil, fmt.Errorf("jlm: rotary sections %v stated interleaved and over the elements at once", c.RopeSections)
-	case il && c.RopeSections[3] != 0:
-		return nil, fmt.Errorf("jlm: interleaved rotary sections %v: a fourth axis is not interleaved", c.RopeSections)
+	return nil, fmt.Errorf("jlm: the container states rotary sections %v and not the table they lay out, "+
+		"which this build reads: convert the model again", c.RopeSections)
+}
+
+// PictureRope is how a picture's grid rows place themselves on the text
+// rotary's axes (graph's rotary marks): row j of the grid, raster order,
+// turns on axis a at Axes[a].Base, plus the row's own position where
+// Axes[a].Pos, plus Mul times j/Div modulo Mod (a Mod of PicZero is none).
+// The text after the picture resumes at its start plus its grid's longer
+// side where Side, after its rows otherwise; the row after a prompt at one
+// past the highest position it holds.
+type PictureRope struct {
+	Axes [4]PictureAxis
+	Side bool
+}
+
+// PictureAxis is one axis of a PictureRope.
+type PictureAxis struct {
+	Base, Mul, Div, Mod PicTerm
+	Pos                 bool
+}
+
+// PicTerm is a number a picture's layout reads off its grid.
+type PicTerm uint8
+
+const (
+	PicZero PicTerm = iota
+	PicOne
+	// PicStart is the rotary position the picture's span starts at.
+	PicStart
+	// PicOrdinal is how many pictures the sequence holds before it.
+	PicOrdinal
+	// PicStride is the positions a video's frames step apart.
+	PicStride
+	// PicCols is a grid row's cells, its extra columns included; PicRows a
+	// frame's grid rows; PicCells a frame's cells.
+	PicCols
+	PicRows
+	PicCells
+)
+
+func (c *Config) ropeTableValid() error {
+	if len(c.RopeTable) > int(c.NRot) {
+		return fmt.Errorf("jlm: a rotary table of %d entries over a rotary of %d", len(c.RopeTable), c.NRot)
 	}
-	switch {
-	case c.Flags.Has(FlagRopeXD):
-		out := make([]RopePair, 2*half)
-		for e := range out {
-			out[e].Freq = e % half
-			for i, at := 0, 0; i < len(c.RopeSections); i++ {
-				if at += 2 * sec(i); e < at {
-					out[e].Axis = i
-					break
-				}
+	for i, p := range c.RopeTable {
+		if p.Axis < 0 || p.Axis > 3 || p.Freq < 0 || p.Freq >= int(c.NRot)/2 {
+			return fmt.Errorf("jlm: rotary table entry %d turns by axis %d at frequency %d of %d", i, p.Axis, p.Freq, c.NRot/2)
+		}
+	}
+	for a, x := range c.PictureRope.Axes {
+		for _, t := range [...]PicTerm{x.Base, x.Mul, x.Div, x.Mod} {
+			if t > PicCells {
+				return fmt.Errorf("jlm: a picture's rotary axis %d reads term %d, which this format does not define", a, t)
 			}
 		}
-		return out, nil
-	case c.Flags.Has(FlagRopeInterleaved):
-		out := make([]RopePair, half)
-		for p := range out {
-			out[p].Freq = p
-			switch {
-			case p%3 == 1 && p < 3*sec(1):
-				out[p].Axis = 1
-			case p%3 == 2 && p < 3*sec(2):
-				out[p].Axis = 2
-			}
-		}
-		return out, nil
 	}
-	out := make([]RopePair, 0, half)
-	for ax := range c.RopeSections {
-		for range sec(ax) {
-			out = append(out, RopePair{Axis: ax, Freq: len(out)})
-		}
-	}
-	return out, nil
+	return nil
 }

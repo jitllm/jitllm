@@ -30,7 +30,7 @@ func yarnFixtures() []struct {
 		{"synth-olmo3-af", func(m *model.Model) bool {
 			c := m.Cfg
 			return c.YarnFactor == 8 && m.Rope.Scale == 1.5 &&
-				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
+				len(m.Ropes) == 1 && m.Ropes[0].Scale == 1 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
 		}},
 		// attention_factor 0.75, outranking the mscale/mscale_all_dim ratio.
 		{"synth-mistral3-af", func(m *model.Model) bool {

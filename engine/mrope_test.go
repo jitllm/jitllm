@@ -241,6 +241,20 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 	if text := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp)); slices.Equal(text, rows) {
 		t.Fatal("VIOLATION: the picture laid out as text lays out as its grid does")
 	}
+	// The violation: the text after the picture resumed as the other layout
+	// the container could state.
+	pr := &m.Container.Config().PictureRope
+	was := *pr
+	pr.Side = !pr.Side
+	_, err = st.spanRope(0, 0, sp)
+	moved := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp))
+	*pr = was
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Equal(moved, rows) {
+		t.Fatal("VIOLATION: the text after the picture resumes alike whichever layout the container states")
+	}
 	t.Logf("%d prompt rows, image grid %v, rope delta %d", len(rows), g.Image.Grid, g.Delta)
 }
 
@@ -648,7 +662,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			// positions and moves only the other axes -- there the picture's
 			// ordinal says decode follows one.
 			switch {
-			case m.Cfg.RopeXD:
+			case !m.Container.Config().PictureRope.Side:
 				if st.rmarks.Count(0) == 0 {
 					t.Fatal("the prompt recorded no picture: this measured text decode")
 				}
@@ -753,7 +767,7 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 	// turned by the second's, in the blocks and the table the composer
 	// states and in the host's rotary alike. The rows after the picture
 	// must part from transformers.
-	if m.Cfg.RopeXD {
+	if 2*m.Cfg.RopePairs > m.Cfg.NRot {
 		was, a := m.Cfg, m.Rope.Runs
 		c := *was
 		d := c.RopeSections[0] / 2
@@ -762,15 +776,18 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 		}
 		c.RopeSections[0] -= d
 		c.RopeSections[1] += d
-		jc := *m.Container.Config()
-		jc.RopeSections[0] -= uint32(d)
-		jc.RopeSections[1] += uint32(d)
+		pairs := slices.Clone(m.Container.Config().RopeTable)
+		n0 := 0
+		for _, p := range pairs {
+			if p.Axis == 0 {
+				n0++
+			}
+		}
+		for e := n0 - 2*d; e < n0; e++ {
+			pairs[e].Axis = 1
+		}
 		undo := builtGraphs(m)
 		m.Cfg = &c
-		pairs, err := jc.RopePairs()
-		if err != nil {
-			t.Fatal(err)
-		}
 		m.Rope.Runs = nn.PairRuns(pairs)
 		bad, _ := run(0)
 		m.Cfg, m.Rope.Runs = was, a

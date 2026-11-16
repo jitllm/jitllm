@@ -80,7 +80,7 @@ func denseFixtures() []struct {
 			return c.QKNormWide && c.NKVHead < c.NHead && len(l.KNorm) == c.NKVHead*c.HeadDim &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.YarnFactor == 8 &&
 				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
-				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && m.RopeSWA.Freqs == nil && l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil
+				len(m.Ropes) == 1 && m.Ropes[0].Scale == 1 && m.Ropes[0].Freqs == nil && l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},
 	}
 }
@@ -108,11 +108,10 @@ func kFromQ(m *model.Model) func() {
 // localYarn gives OLMo 3's sliding layers the global rotary -- YaRN's
 // frequencies and its magnitude -- and localScaled its magnitude alone.
 func localYarn(m *model.Model) func() {
-	was := m.RopeSWA
-	r := m.Rope
-	r.Base = was.Base
-	m.RopeSWA = &r
-	return func() { m.RopeSWA = was }
+	was := m.Ropes[0]
+	m.Ropes[0] = m.Rope
+	m.Ropes[0].Base = was.Base
+	return func() { m.Ropes[0] = was }
 }
 
 // windowBy is the model with its sliding window d keys wider: a window off
@@ -122,9 +121,9 @@ func windowBy(d int) func(m *model.Model) func() {
 }
 
 func localScaled(m *model.Model) func() {
-	was := m.RopeSWA.Scale
-	m.RopeSWA.Scale = m.Rope.Scale
-	return func() { m.RopeSWA.Scale = was }
+	was := m.Ropes[0].Scale
+	m.Ropes[0].Scale = m.Rope.Scale
+	return func() { m.Ropes[0].Scale = was }
 }
 
 func denseViolations() map[string][]c6Violation {

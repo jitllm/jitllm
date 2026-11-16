@@ -99,12 +99,6 @@ type Config struct {
 	// entry of its own (graph.RopeSplit).
 	RopePairs int
 
-	// RopeXD is HunyuanVL's XD-RoPE (jlm.FlagRopeXD): four axes assigned per
-	// element, so a row's table is two pair tables, A for each NEOX pair's
-	// first half and B for its second (RopeW floats), the rotation
-	// graph.RopeSplit, and k's norm after it as q's is.
-	RopeXD bool
-
 	// Mixture of experts. NExpert 0 is a dense FFN. NFFNExp is the per-expert
 	// FFN width, distinct from NFFN, which a MoE file carries for a dense width
 	// the model never uses.
@@ -494,7 +488,7 @@ func (c *Config) setGeoms(gs []jlm.Geom) {
 }
 
 // LocalNRot is the rotary width the blocks reading the second table
-// (Model.RopeSWA) turn: theirs where they state one, NRot otherwise.
+// (Model.Ropes) turn: theirs where they state one, NRot otherwise.
 func (c *Config) LocalNRot() int {
 	if c.localNRot != 0 {
 		return c.localNRot
@@ -1229,9 +1223,10 @@ type Model struct {
 	Embd Tensor
 	// rope is the model's rotary configuration, built once at load.
 	Rope nn.Rope
-	// ropeSWA is the LOCAL layers' rotary where an architecture trains two
-	// bases, and nil where it trains one -- which is every model but gemma3.
-	RopeSWA *nn.Rope
+	// Ropes is the model's rotaries past its own (Rope), rotary i+1 at [i]
+	// (graph.Attrs.Rotary, nn.RopeTables): the sliding layers' where the
+	// container states them a base, width or magnitude of their own.
+	Ropes []nn.Rope
 	// RopeLong is the rotary with the container's long factors
 	// (rope_factors_long), which an instance whose context passes LongCtx
 	// turns (RopeFor); nil where the container holds none. LongCtx is the
@@ -2689,12 +2684,11 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
 		Scale: cfg.AttnFactor, Runs: nn.PairRuns(pairs)}
-	cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD)
 	if len(m.Rope.Runs) > 0 {
 		cfg.RopePairs = m.Rope.TablePairs()
 	}
-	// A second rotary for architectures trained with two bases (gemma3's
-	// sliding layers), built only when RopeBaseSWA is set.
+	// The sliding layers' rotary, where the container states them a base,
+	// width or magnitude of their own.
 	if cfg.RopeBaseSWA != 0 || cfg.LocalNRot() != cfg.NRot {
 		r := m.Rope
 		if cfg.RopeBaseSWA != 0 {
@@ -2708,7 +2702,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if len(r.Runs) > 0 {
 			return nil, fmt.Errorf("model: rotary sections on the sliding layers' own rotary, which the converter refuses")
 		}
-		m.RopeSWA = &r
+		m.Ropes = append(m.Ropes, r)
 	}
 	// Per-pair rotary factors are a tensor: llama 3.1+ ships rope_freqs and
 	// phi3 rope_factors_short/long, dividing theta per pair: the short within

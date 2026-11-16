@@ -548,12 +548,7 @@ type LayerPlan struct {
 	// Tables are the step's rotary tables as the front end states them (the
 	// model's rotaries in order, graph.Attrs.Rotary; nil for none): what a
 	// device serving the tables forms, writing a call's RopeTables.
-	// RopeTabAxes is the folded planes (Rope.TabPlanes) of a rotary over
-	// several position axes, which RopeTabs leaves nil: its table turns
-	// each row by its positions on the axes (RopeAxesDevice), never by its
-	// cache position.
-	Tables      []*graph.Graph
-	RopeTabAxes []float32
+	Tables []*graph.Graph
 	// GridPlanes is a non-causal block's grid table's planes (Tables[0] a
 	// graph.RopeTable over grid cells): the rotary's planes and each pair's
 	// axis after them, 0 a cell's row. The table it states turns each row by
