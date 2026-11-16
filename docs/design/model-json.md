@@ -197,7 +197,12 @@ schema; `convert/modeljson.go` reads it. Its sections:
   `residual_scale` and `moe_step` (the mixture blocks' interleave, at least 1) are
   numbers; `whole_rotary: true` states that the class
   turns the whole head, and a file whose rotary is narrower contradicts it.
-  `router` is what the class's router does whatever the keys say: `gate`
+  `indexer.block` and `indexer.local` state an indexer that selects blocks
+  of positions (MiniMax Sparse Attention) and the blocks a query's own
+  forces in; the engine's block selection holds it to one head per kv group,
+  a key as wide as a head and its own block inside the top-k
+  (`blockIndexerFits`), on exactly the blocks past the dense lead
+  (`sparseBlocksFit`). `router` is what the class's router does whatever the keys say: `gate`
   (softmax, sigmoid, or sparsemixer, which reads no gating key, ranks
   the raw logits and weighs each pick by sparsemixer),
   `renormalise` (always or never), `unscaled`, `selects` (the experts it

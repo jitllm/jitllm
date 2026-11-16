@@ -352,10 +352,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := nemotronConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchMiniMaxM3:
-		if err := minimaxM3Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchDeepseek4:
 		if err := deepseek4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -633,10 +629,8 @@ func configOfFile(f *meta.File) (*Config, error) {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if arch == ArchMiniMaxM3 {
-		if err := minimaxM3Blocks(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
+	if err := sparseBlocksFit(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	if kv, ok := f.Key("rope.scaling.finetuned"); ok && !c.Flags.Has(jlm.FlagNoPosEnc) {
 		if v, ok := kv.Uint(); ok && v == 0 {

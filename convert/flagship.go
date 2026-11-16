@@ -189,54 +189,20 @@ func gemma4Config(f *meta.File, c *Config) error {
 	return nil
 }
 
-// minimaxM3Config is llama.cpp's minimax-m3.cpp and transformers'
-// MiniMaxM3VLForCausalLM: a per-head q/k norm, NEOX rotary on part of each
-// head, a dense lead and then V3's sigmoid router with a shared expert,
-// gpt-oss's clamped SwiGLU in every FFN (FlagSwiGLUOAI), and MiniMax Sparse
-// Attention (the Idx fields) on every block past the lead.
-//
-// Refused by name: a gate that is not sigmoid or weights not renormalised
-// (MiniMaxM3VLTopKRouter hardcodes both; RULE 7m), an indexer key of another
-// width than the head (it is cached as one more kv head), other than one
-// indexer head per kv group, and no local block (every group must read the
-// same number of positions). The swigluoai constants are literals.
-//
-// The reference-to-container table and the reasons in full:
-// docs/engineering-history/model-correctness.md,
-// "convert/flagship.go: minimaxM3Config".
-func minimaxM3Config(f *meta.File, c *Config) error {
-	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagExpertSigmoid | jlm.FlagSwiGLUOAI
-	if err := partialRotary(c); err != nil {
-		return err
-	}
-	if kv, ok := f.Key("expert_gating_func"); ok {
-		if v, _ := kv.Uint(); v != 2 {
-			return fmt.Errorf("expert_gating_func %d, and MiniMaxM3VLTopKRouter is sigmoid: %w",
-				v, ErrNotImplemented)
-		}
-	}
-	if kv, ok := f.Key("expert_weights_norm"); ok {
-		if v, _ := kv.Uint(); v == 0 {
-			return fmt.Errorf("expert_weights_norm false, and MiniMaxM3VLTopKRouter always "+
-				"renormalises: %w", ErrNotImplemented)
-		}
-	}
-	if f.UintKey("expert_count", 0) == 0 || f.UintKey("expert_shared_count", 0) != 1 {
-		return fmt.Errorf("expert_count %d with %d shared experts: minimax-m3 is a mixture "+
-			"with one shared expert: %w", f.UintKey("expert_count", 0),
-			f.UintKey("expert_shared_count", 0), ErrNotImplemented)
-	}
-	c.IdxHeads = uint32(f.UintKey("attention.indexer.head_count", 0))
-	c.IdxHeadDim = uint32(f.UintKey("attention.indexer.key_length", 0))
-	c.IdxTopK = uint32(f.UintKey("attention.indexer.top_k", 0))
-	c.IdxBlock = uint32(f.UintKey("attention.indexer.block_size", 0))
-	c.IdxLocal = uint32(f.UintKey("attention.indexer.local_blocks", 0))
+// blockIndexerFits refuses an indexer selecting blocks of positions (IdxBlock;
+// MiniMax Sparse Attention, llama.cpp's minimax-m3.cpp) that the engine's
+// selection cannot run: other than one indexer head per kv group, a key of
+// another width than the head (it is cached as one more kv head), and no
+// query's own block forced in inside the top-k. None for an indexer that
+// selects positions.
+func blockIndexerFits(c *Config) error {
 	switch {
-	case c.IdxHeads == 0 || c.IdxHeadDim == 0 || c.IdxTopK == 0 || c.IdxBlock == 0:
-		return fmt.Errorf("indexer %d heads of %d, top %d blocks of %d: minimax-m3 has an indexer",
-			c.IdxHeads, c.IdxHeadDim, c.IdxTopK, c.IdxBlock)
+	case c.IdxBlock == 0:
+		return nil
+	case c.IdxHeads == 0 || c.IdxHeadDim == 0 || c.IdxTopK == 0:
+		return fmt.Errorf("indexer %d heads of %d, top %d blocks of %d", c.IdxHeads, c.IdxHeadDim, c.IdxTopK, c.IdxBlock)
 	case c.IdxHeads != c.NKVHead:
-		return fmt.Errorf("%d indexer heads for %d kv groups, and MiniMax Sparse Attention "+
+		return fmt.Errorf("%d indexer heads for %d kv groups, and a block selection "+
 			"selects once per group: %w", c.IdxHeads, c.NKVHead, ErrNotImplemented)
 	case c.IdxHeadDim != c.HeadDim:
 		return fmt.Errorf("indexer keys of %d on %d-wide heads: the engine caches the key as "+
@@ -248,11 +214,14 @@ func minimaxM3Config(f *meta.File, c *Config) error {
 	return nil
 }
 
-// minimaxM3Blocks checks the indexer sits exactly where the selection runs:
-// on every block past the dense lead (llama.cpp's is_sparse, and the
-// published sparse_attention_freq), never inside it. Read after the dense
-// lead, which configOf reads with the mixture.
-func minimaxM3Blocks(f *meta.File, c *Config) error {
+// sparseBlocksFit checks a block-selecting indexer sits exactly where the
+// selection runs: on every block past the dense lead (llama.cpp's
+// is_sparse, and MiniMax-M3's published sparse_attention_freq), never inside
+// it. Read after the dense lead, which configOf reads with the mixture.
+func sparseBlocksFit(f *meta.File, c *Config) error {
+	if c.IdxBlock == 0 {
+		return nil
+	}
 	for i := 0; i < int(c.NLayer); i++ {
 		_, ok := f.Get("blk." + itoa(i) + ".indexer.q_proj.weight")
 		if want := i >= int(c.NDenseLead); ok != want {

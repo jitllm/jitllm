@@ -126,6 +126,10 @@ type mjStatesIndexer struct {
 	Heads    string `json:"heads"`
 	KeyWidth string `json:"key_width"`
 	TopK     string `json:"top_k"`
+	// Block is the positions an indexer selecting blocks scores as one, and
+	// Local the blocks a query's own forces in, each a count (blockIndexerFits).
+	Block string `json:"block"`
+	Local string `json:"local"`
 }
 
 // mjStatesRecurrent is a recurrent geometry: the convolution's taps, the key
@@ -187,6 +191,7 @@ type mjRouter struct {
 	Renormalise string `json:"renormalise"`
 	Unscaled    bool   `json:"unscaled"`
 	Selects     uint32 `json:"selects"`
+	Shared      uint32 `json:"shared"`
 }
 
 // mjGates is each gate a router states by name, with the expert_gating_func
@@ -325,7 +330,7 @@ func (mj *modelJSON) checkStates() error {
 			if x.Heads == "" || x.KeyWidth == "" || x.TopK == "" {
 				return fmt.Errorf("convert: %s: %s: an indexer states its heads, key_width and top_k", mj.name, arch)
 			}
-			srcs = append(srcs, x.Heads, x.KeyWidth, x.TopK)
+			srcs = append(srcs, x.Heads, x.KeyWidth, x.TopK, x.Block, x.Local)
 		}
 		if r := st.Recurrent; r != nil {
 			if r.ConvKernel == "" {
@@ -704,8 +709,25 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			"indexer.key_width": x.KeyWidth, "indexer.top_k": x.TopK}); err != nil {
 			return err
 		}
+		for _, b := range []struct {
+			what, src string
+			to        *uint32
+		}{{"indexer.block", x.Block, &c.IdxBlock}, {"indexer.local", x.Local, &c.IdxLocal}} {
+			if b.src == "" {
+				continue
+			}
+			if *b.to, err = whole(b.what, b.src); err != nil {
+				return err
+			}
+		}
+		if x.Block != "" && c.IdxBlock == 0 {
+			return fmt.Errorf("convert: %s: %s: an indexer selecting blocks of 0 positions", by, arch)
+		}
 		if err := indexerFits(c); err != nil {
 			return fmt.Errorf("convert: %s: %s: %w", by, arch, err)
+		}
+		if err := blockIndexerFits(c); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
 		}
 	}
 	if st.RopeSections != "" {
@@ -1010,6 +1032,10 @@ func (r *mjRouter) apply(f *meta.File, c *Config) error {
 		if v, _ := kv.Float(); v != 0 && v != 1 {
 			return fmt.Errorf("expert_weights_scale %g, and the class's router scales nothing: %w", v, ErrNotImplemented)
 		}
+	}
+	if n, sh := f.UintKey("expert_count", 0), f.UintKey("expert_shared_count", 0); r.Shared != 0 && (n == 0 || sh != uint64(r.Shared)) {
+		return fmt.Errorf("expert_count %d with %d shared experts, and the class's router is a mixture beside %d: %w",
+			n, sh, r.Shared, ErrNotImplemented)
 	}
 	if kv, ok := f.Key("expert_used_count"); ok && r.Selects != 0 {
 		if v, _ := kv.Uint(); v != uint64(r.Selects) {
