@@ -33,13 +33,7 @@ func HistoryPoolGraph(span, width, rw int, segs [][4]uint64, bias jlm.Role) *gra
 			graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0])
 		values = append(values, b.HistoryRows(h, graph.Attrs{Span: span, Width: rw, Offset: int(s[1]), Local: int(s[0])}, width))
 	}
-	n := len(segs) * span
-	sc, v := scores[0], values[0]
-	if len(segs) > 1 {
-		sc = b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "pool.scores", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
-		v = b.Emit(graph.OpConcat, values, []graph.Result{{Name: "pool.values", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
-	}
-	b.Out(b.ColumnSoftmaxSum(sc, v, n, width))
+	b.Out(b.ColumnSoftmaxSum(scores, values, span, width))
 	return b.G
 }
 
