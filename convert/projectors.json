@@ -501,7 +501,16 @@
     "span": {"mark": "<image_placeholder>", "before_marks": ["<begin_of_image>"], "after_marks": ["<end_of_image>"]}
    }
   },
-  "qwen3vl_merger": {
+  "qwen3vl_merger": {"tensors": {"sizes": {"e": "vision.embedding_length"},
+          "block": {"v.attn_qkv.weight": [
+            {"role": "v.attn_q.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, 0, "size.e"]}]},
+            {"role": "v.attn_k.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, "size.e", "size.e"]}]},
+            {"role": "v.attn_v.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, "2 * size.e", "size.e"]}]}],
+                    "v.attn_qkv.bias": [
+            {"role": "v.attn_q.bias", "do": [{"reshape": ["3 * size.e"]}, {"slice": [0, 0, "size.e"]}]},
+            {"role": "v.attn_k.bias", "do": [{"reshape": ["3 * size.e"]}, {"slice": [0, "size.e", "size.e"]}]},
+            {"role": "v.attn_v.bias", "do": [{"reshape": ["3 * size.e"]}, {"slice": [0, "2 * size.e", "size.e"]}]}]}},
+      
    "code": 48,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
@@ -581,7 +590,16 @@
     }
    }
   },
-  "glm4v": {
+  "glm4v": {"tensors": {"sizes": {"e": "vision.embedding_length"},
+          "block": {"v.attn_qkv.weight": [
+            {"role": "v.attn_q.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, 0, "size.e"]}]},
+            {"role": "v.attn_k.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, "size.e", "size.e"]}]},
+            {"role": "v.attn_v.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, "2 * size.e", "size.e"]}]}],
+                    "v.attn_qkv.bias": [
+            {"role": "v.attn_q.bias", "do": [{"reshape": ["3 * size.e"]}, {"slice": [0, 0, "size.e"]}]},
+            {"role": "v.attn_k.bias", "do": [{"reshape": ["3 * size.e"]}, {"slice": [0, "size.e", "size.e"]}]},
+            {"role": "v.attn_v.bias", "do": [{"reshape": ["3 * size.e"]}, {"slice": [0, "2 * size.e", "size.e"]}]}]}},
+      
    "code": 49,
    "output": {"tensor": "mm.down.weight", "dim": 1},
    "flags": ["vision_rope"],

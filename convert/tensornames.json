@@ -230,6 +230,8 @@
  "v.attn_out.weight": "v_attn_out",
  "v.attn_post_norm.weight": "v.attn_post_norm",
  "v.attn_q.bias": "v_attn_q.bias",
+ "v.attn_qkv.bias": "attn_qkv.bias",
+ "v.attn_qkv.weight": "attn_qkv",
  "v.attn_q.weight": "v_attn_q",
  "v.attn_q_norm.weight": "v.attn_q_norm",
  "v.attn_v.bias": "v_attn_v.bias",

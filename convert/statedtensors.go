@@ -353,8 +353,13 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 }
 
 // ggufBlockRest is a block tensor's name past its blk.N. prefix, false for a
-// name of none.
+// name of none; a tower's block (v.blk.N.) keeps its v., as the vocabulary
+// names it.
 func ggufBlockRest(name string) (string, bool) {
+	if r, ok := strings.CutPrefix(name, "v.blk."); ok {
+		rest, ok := ggufBlockRest("blk." + r)
+		return "v." + rest, ok
+	}
 	r, ok := strings.CutPrefix(name, "blk.")
 	i := strings.IndexByte(r, '.')
 	if !ok || i <= 0 || strings.Trim(r[:i], "0123456789") != "" {

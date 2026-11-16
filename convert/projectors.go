@@ -70,7 +70,10 @@ type projStates struct {
 	Transforms map[string][]string `json:"transforms"`
 	// Tower is the tower as its reference runs it (mjTower).
 	Tower *mjTower `json:"tower"`
-	exprs map[string]*jinja.Expr
+	// Tensors is the tower's tensor table over its file's names: block
+	// entries by the name past v.blk.N. (as v.<name>), and sizes.
+	Tensors *mjTensors `json:"tensors"`
+	exprs   map[string]*jinja.Expr
 }
 
 // towerPhases is where a tower's transforms run: joined, once the text
@@ -114,6 +117,34 @@ func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projState
 		"conv_layouts":        func(s *jlm.Source, _ *meta.File, _ *projStates) error { return convLayouts(s) },
 		"fold_channel_scales": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return foldChannelScales(s) },
 	}
+}
+
+// statement is the tower's tensor table as the GGUF table's runner reads it:
+// block entries and sizes, which is all a tower's table states.
+func (p *projStates) statement() (*Statement, error) {
+	st := &Statement{}
+	t := p.Tensors
+	if t == nil {
+		return st, nil
+	}
+	if len(t.Model)+len(t.BlockLinear)+len(t.Fuse)+len(t.Joined)+len(t.Gather)+len(t.Drop)+len(t.Keys) > 0 ||
+		t.BlockPrefix != "" || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil || t.Ternary != nil || t.Present != nil {
+		return nil, fmt.Errorf("tensors: a tower's table states its block tensors and sizes")
+	}
+	names, err := readTensorNames()
+	if err != nil {
+		return nil, err
+	}
+	st.blockTensors = map[string][]statedCut{}
+	for _, n := range slices.Sorted(maps.Keys(t.Block)) {
+		if st.blockTensors[n], err = statedCuts(names, n, t.Block[n]); err != nil {
+			return nil, fmt.Errorf("tensors: %w", err)
+		}
+	}
+	if st.sizes, err = statedSizes(t.Sizes); err != nil {
+		return nil, fmt.Errorf("tensors: %w", err)
+	}
+	return st, nil
 }
 
 // projectorFor is what the library states for the container's projector
@@ -206,6 +237,9 @@ func (p *projStates) check() error {
 		if err := t.check(); err != nil {
 			return fmt.Errorf("tower: %w", err)
 		}
+	}
+	if _, err := p.statement(); err != nil {
+		return err
 	}
 	for _, f := range p.Flags {
 		if _, ok := projFlags()[f]; !ok {
