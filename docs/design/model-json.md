@@ -144,7 +144,10 @@ schema; `convert/modeljson.go` reads it. Its sections:
   unstated), `revision` (what `StateRevision` states once the geometry is
   read: `act_quant` by name, `rope_scale_swa` a number, and
   `swa_global_first` and `picture_bidir_sliding`, each true or false and
-  applied on a windowed model), `norm_eps` and `embd_scale`
+  applied on a windowed model), `pre_tokenizer` (a pre-tokenizer by name,
+  the one a file naming none of its own, `default`, splits with; its
+  `add_bos` and `ignore_merges` are `convert/pretokenizers.json`'s),
+  `norm_eps` and `embd_scale`
   (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
   `attn_softcap` and `final_softcap`, and `window`: `size` (0 states no
   window, and nothing else of it applies), a fixed `period` or a `pattern`,

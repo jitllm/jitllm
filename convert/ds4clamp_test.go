@@ -36,7 +36,7 @@ func TestDS4ClampIsTheFiles(t *testing.T) {
 		{"none stated", map[string]meta.Value{}, []float32{10, 10, 10}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			cfg := &Config{Config: &jlm.Config{NLayer: 3, Flags2: jlm.Flag2SwiGLUClamp}}
+			cfg := Unstated(&jlm.Config{NLayer: 3, Flags2: jlm.Flag2SwiGLUClamp})
 			if err := ds4Clamp(file(c.kv), cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestDS4ClampIsTheFiles(t *testing.T) {
 			"deepseek4.swiglu_clamp_exp": meta.MakeFloat32s([]float32{10, 0, 10})}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			cfg := &Config{Config: &jlm.Config{NLayer: 3}}
+			cfg := Unstated(&jlm.Config{NLayer: 3})
 			if err := ds4Clamp(file(c.kv), cfg); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want a refusal naming %q", err, c.want)
 			}

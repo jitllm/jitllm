@@ -583,7 +583,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 		return nil, err
 	}
 	StateDelta(cfg.Config, sourceStores(s))
-	StateRevision(cfg)
+	if err := StateRevision(cfg); err != nil {
+		return nil, err
+	}
 	g := ha.graph
 	if g == nil {
 		var err error
@@ -1897,7 +1899,7 @@ func llamaHFConfig(arch Arch, c *hfConfig, names []string) (*Config, error) {
 		return nil, bad("sliding_window %d is in use and is not implemented from "+
 			"safetensors", *c.SlidingWindow)
 	}
-	cfg := &Config{Arch: arch, Config: &jlm.Config{
+	cfg := &Config{Arch: arch, Stated: &Statement{}, Config: &jlm.Config{
 		NLayer:     c.NumHiddenLayers,
 		NEmbd:      c.HiddenSize,
 		NHead:      c.NumAttentionHeads,

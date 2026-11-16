@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // mjStates is what the container states for one GGUF architecture a file
@@ -38,7 +39,10 @@ type mjStates struct {
 	// Router is how a mixture's router scores its experts and weighs the
 	// picks (RouterScore, RouterWeight).
 	Router *mjStatesRouter `json:"router"`
-	exprs  map[string]*jinja.Expr
+	// PreTokenizer is the pre-tokenizer, by name, of a file that names none
+	// of its own ("default").
+	PreTokenizer string `json:"pre_tokenizer"`
+	exprs        map[string]*jinja.Expr
 }
 
 // mjStatesRevision is what StateRevision states, each read off the keys
@@ -80,10 +84,10 @@ func mjActQuants() map[string]jlm.ActQuant {
 	return map[string]jlm.ActQuant{"row_int8": jlm.ActQuantRowInt8}
 }
 
-// libStated is what the library states for the stages after the config's:
+// Statement is what the library states for the stages after the config's:
 // StateRevision's, read off the keys, the activation by its name and the
 // router's score and weight by theirs.
-type libStated struct {
+type Statement struct {
 	actQuant                            jlm.ActQuant
 	ropeScaleSWA                        float32
 	swaGlobalFirst, pictureBidirSliding bool
@@ -128,6 +132,9 @@ func (mj *modelJSON) checkStates() error {
 			if r.Score != "" && !slices.Contains(mjRouterScores(), r.Score) || r.Weight != "" && !slices.Contains(mjRouterWeights(), r.Weight) {
 				return fmt.Errorf("convert: %s: %s: router %+v is not one the container states", mj.name, arch, *r)
 			}
+		}
+		if _, ok := pretok.PreOps(st.PreTokenizer); st.PreTokenizer != "" && !ok {
+			return fmt.Errorf("convert: %s: %s: pre-tokenizer %q is not one the tokenizer has", mj.name, arch, st.PreTokenizer)
 		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
@@ -191,6 +198,7 @@ func ggufStates(arch string) (*mjStates, string, error) {
 // GGUF architecture to c.
 func stateContainer(f *meta.File, c *Config) error {
 	st, by, err := ggufStates(f.Arch())
+	c.Stated = &Statement{}
 	if err != nil || st == nil {
 		return err
 	}
@@ -231,22 +239,22 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		return err == nil && v.AsBool(), err
 	}
-	c.stated.activation = st.Activation
+	c.Stated = &Statement{activation: st.Activation}
 	if r := st.Router; r != nil {
-		c.stated.routerScore, c.stated.routerWeight = r.Score, r.Weight
+		c.Stated.routerScore, c.Stated.routerWeight = r.Score, r.Weight
 	}
 	if r := st.Revision; r != nil {
-		c.stated.actQuant = mjActQuants()[r.ActQuant]
+		c.Stated.actQuant = mjActQuants()[r.ActQuant]
 		if r.RopeScaleSWA != "" {
-			if c.stated.ropeScaleSWA, err = number("revision.rope_scale_swa", r.RopeScaleSWA); err != nil {
+			if c.Stated.ropeScaleSWA, err = number("revision.rope_scale_swa", r.RopeScaleSWA); err != nil {
 				return err
 			}
 		}
 		for _, b := range []struct {
 			what, src string
 			to        *bool
-		}{{"revision.swa_global_first", r.SWAGlobalFirst, &c.stated.swaGlobalFirst},
-			{"revision.picture_bidir_sliding", r.PictureBidirSliding, &c.stated.pictureBidirSliding}} {
+		}{{"revision.swa_global_first", r.SWAGlobalFirst, &c.Stated.swaGlobalFirst},
+			{"revision.picture_bidir_sliding", r.PictureBidirSliding, &c.Stated.pictureBidirSliding}} {
 			if b.src == "" {
 				continue
 			}

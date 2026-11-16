@@ -76,7 +76,10 @@ func codes(ss []string) string {
 }
 
 func render(d lines) ([]byte, error) {
-	names := convert.Architectures()
+	names, err := convert.Architectures()
+	if err != nil {
+		return nil, err
+	}
 	classes := convert.HFClasses()
 	projectors := convert.Projectors()
 	if err := covered("GGUF architecture", names, d.gguf); err != nil {
@@ -140,7 +143,10 @@ func render(d lines) ([]byte, error) {
 	}
 	sort.Slice(order, func(i, j int) bool { return order[i].arch.String() < order[j].arch.String() })
 
-	encoders := convert.Encoders()
+	encoders, err := convert.Encoders()
+	if err != nil {
+		return nil, err
+	}
 
 	var read []quant.Type
 	for t := quant.Type(0); t < 256; t++ {

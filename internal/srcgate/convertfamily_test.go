@@ -38,7 +38,7 @@ func TestConverterFamilyCodeOnlyShrinks(t *testing.T) {
 	if len(fam.arch) < 40 {
 		t.Fatalf("read %d architecture constants: the gate read nothing", len(fam.arch))
 	}
-	lits := familyLiterals()
+	lits := familyLiterals(t)
 	got, files := convertFamilyCounts(t, root, fam.arch, lits)
 	if files < 60 {
 		t.Fatalf("read %d files under convert/: the gate read nothing", files)
@@ -87,9 +87,14 @@ func plain(n int) int { return n + 1 }
 
 // familyLiterals is every name the converter lists for a family: the
 // safetensors classes, the GGUF architectures and the projectors.
-func familyLiterals() map[string]bool {
+func familyLiterals(t *testing.T) map[string]bool {
+	t.Helper()
+	archs, err := convert.Architectures()
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := map[string]bool{}
-	for _, l := range [][]string{convert.HFClasses(), convert.Architectures(), convert.Projectors(), convert.AudioProjectors()} {
+	for _, l := range [][]string{convert.HFClasses(), archs, convert.Projectors(), convert.AudioProjectors()} {
 		for _, n := range l {
 			m[n] = true
 		}

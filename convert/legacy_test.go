@@ -13,7 +13,10 @@ import (
 // them and another architecture stating neither are not.
 func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
 	routed := statedBy(t, "phimoe", &jlm.Config{NExpert: 16})
-	routed.RouterWeight = RouterWeight(routed)
+	var err error
+	if routed.RouterWeight, err = RouterWeight(routed); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name string
 		arch Arch

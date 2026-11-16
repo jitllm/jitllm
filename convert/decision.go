@@ -73,9 +73,11 @@ func decisionOf(f *meta.File, c *Config) error {
 	c.DecisionLabels = decisionLabelsOf(kind)
 	c.DecisionBlocks = uint32(f.UintKey("decision.block_count", 0))
 	if kind == jlm.DecisionLaya {
-		if !c.Flags.Has(jlm.FlagNonCausal) || c.DecisionBlocks == 0 {
-			return fmt.Errorf("a laya readout is an encoder's head blocks, and this is a model of non-causal %v with %d",
-				c.Flags.Has(jlm.FlagNonCausal), c.DecisionBlocks)
+		if !c.Flags.Has(jlm.FlagNonCausal) {
+			return fmt.Errorf("a laya readout reads an encoder's rows, and this model's attention is causal")
+		}
+		if c.DecisionBlocks == 0 {
+			return fmt.Errorf("a laya readout is its head blocks after the encoder's, and this file states none")
 		}
 		if c.DecisionHeadTokens = uint32(f.UintKey("decision.max_head_tokens", 0)); c.DecisionHeadTokens == 0 {
 			return fmt.Errorf("a laya readout needs decision.max_head_tokens, the budget its prompt is cut to")

@@ -2,7 +2,6 @@
 # family's name (architecture constants, class/architecture/projector literals),
 # read at 514456eea. A count may only fall; lower a line when the work that
 # removes it lands.
-1 convert/acts.go:StateActivations
 1 convert/apertus.go:apertusXIELU
 59 convert/arch.go:coreArchName
 14 convert/arch.go:denseArchName
@@ -43,6 +42,5 @@
 4 convert/ssm.go:ssdArch
 4 convert/ssm.go:ssdConfig
 1 convert/tower.go:hunyuanvlTower
-3 convert/vocab.go:llama3Family
-6 convert/vocab.go:VocabOf
+3 convert/vocab.go:VocabOf
 1 convert/vocab.go:wordPiece

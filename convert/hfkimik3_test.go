@@ -458,11 +458,11 @@ func TestK3SituBoundsAreTheFiles(t *testing.T) {
 	if c.SituBeta != 3 || c.SituLinearBeta != 20 {
 		t.Fatalf("situ bounds %g and %g, want the file's 3 and 20", c.SituBeta, c.SituLinearBeta)
 	}
-	want, err := Activation(&Config{Config: &jlm.Config{NLayer: 1, SituBeta: 3, SituLinearBeta: 20}}, 0, true, false)
+	want, err := Activation(Unstated(&jlm.Config{NLayer: 1, SituBeta: 3, SituLinearBeta: 20}), 0, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	published, err := Activation(&Config{Config: &jlm.Config{NLayer: 1, SituBeta: 4, SituLinearBeta: 25}}, 0, true, false)
+	published, err := Activation(Unstated(&jlm.Config{NLayer: 1, SituBeta: 4, SituLinearBeta: 25}), 0, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

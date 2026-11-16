@@ -14,9 +14,12 @@ import "github.com/jitllm/jitllm/format/jlm"
 // other on (Gemma 4's 26B and 31B, use_bidirectional_attention "vision":
 // the sliding ones, which its tower's span then states bidirectional; none
 // stated is every layer, Gemma 3's, and the E-models' pictures are causal).
-func StateRevision(c *Config) {
+func StateRevision(c *Config) error {
+	r := c.Stated
+	if r == nil {
+		return unstated("the revision")
+	}
 	c.Revision = jlm.StatementRevision
-	r := c.stated
 	if r.actQuant != jlm.ActQuantNone {
 		c.ActQuant = r.actQuant
 	}
@@ -32,4 +35,5 @@ func StateRevision(c *Config) {
 			c.BidirLayers[li] = c.Sliding(li)
 		}
 	}
+	return nil
 }

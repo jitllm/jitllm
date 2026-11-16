@@ -289,7 +289,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) (*model.Model, []Option) {
 		},
 		Tensors: tensors,
 	}
-	if err := convert.StateActivations(&convert.Config{Config: cfg}, src); err != nil {
+	if err := convert.StateActivations(convert.Unstated(cfg), src); err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "hybrid"+jlm.Ext)

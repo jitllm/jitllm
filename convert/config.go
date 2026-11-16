@@ -180,16 +180,16 @@ func Supported(arch string) bool {
 }
 
 // Architectures is every GGUF architecture name the library's files name
-// (convert/models), and the vision tower's (towerArch), sorted; nil where
-// the library does not read (TestArchitecturesAreTheLibrarys).
+// (convert/models), and the vision tower's (towerArch), sorted
+// (TestArchitecturesAreTheLibrarys).
 //
 // It exists so the list can be checked against, not just consulted:
 // library.TestEveryArchitectureIsObtainable reads it to confirm everything the
 // converter implements is reachable from the download catalogue.
-func Architectures() []string {
+func Architectures() ([]string, error) {
 	files, err := libraryFiles()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := []string{towerArch}
 	for _, mj := range files {
@@ -200,7 +200,7 @@ func Architectures() []string {
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // ArchitectureGraph is the graph a GGUF architecture name converts to, and
@@ -248,8 +248,12 @@ func configOfFile(f *meta.File) (*Config, error) {
 	name := f.Arch()
 	arch, ok := archOf()[name]
 	if !ok {
+		names, err := Architectures()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("convert: architecture %q is not implemented (%s): %w",
-			name, strings.Join(Architectures(), ", "), ErrNotImplemented)
+			name, strings.Join(names, ", "), ErrNotImplemented)
 	}
 	// A state-space hybrid writes its head counts per layer with zeros on the
 	// recurrent layers, and a model with no attention at all writes zero:

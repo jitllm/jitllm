@@ -57,7 +57,10 @@ func obtainableExempt() map[string]string {
 // direction of TestEveryEntryIsWellFormed, which catches a typo in the
 // catalogue but never an absence from it.
 func TestEveryArchitectureIsObtainable(t *testing.T) {
-	archs := convert.Architectures()
+	archs, err := convert.Architectures()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(archs) < 5 {
 		t.Fatalf("the converter reports %d architectures -- this gate proved nothing", len(archs))
 	}

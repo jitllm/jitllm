@@ -145,6 +145,7 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"window": {"size": "8", "period": "2", "pattern": "2"}}`, "not both"},
 		{`"x": {"revision": {"act_quant": "int4"}}`, "activation quantization \"int4\" is not one"},
 		{`"x": {"revision": {"rope_scale_swa": "scale"}}`, "is not the keys"},
+		{`"x": {"pre_tokenizer": "o200k-ish"}`, "pre-tokenizer \"o200k-ish\" is not one"},
 	} {
 		_, err := parseModelJSON([]byte(file(tc.states)), "test")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

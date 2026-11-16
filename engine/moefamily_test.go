@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 
@@ -345,7 +344,7 @@ func routerSwap(sigmoid bool) func(*model.Model) func() {
 		if sigmoid {
 			s.Flags |= jlm.FlagExpertSigmoid
 		}
-		c.RouterScore = convert.RouterScore(&convert.Config{Config: &s})
+		c.RouterScore = unstatedScore(&s)
 		undo := restate(m, func(map[jlm.Role]graph.Shape) {})
 		return func() {
 			c.RouterScore = was

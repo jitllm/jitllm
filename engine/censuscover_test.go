@@ -25,7 +25,7 @@ func TestTheCensusCoversEveryGraph(t *testing.T) {
 	for _, p := range projectors {
 		t.Errorf("no census model carries projector %s", p)
 	}
-	want, wantProj := censusWants()
+	want, wantProj := censusWants(t)
 	t.Logf("%d graphs and %d projectors in the converter's lists; %d and %d without a census model",
 		len(want), len(wantProj), len(graphs), len(projectors))
 	g0, p0 := censusGaps(t, nil)
@@ -37,9 +37,14 @@ func TestTheCensusCoversEveryGraph(t *testing.T) {
 
 // censusWants is the graphs the converter's two lists convert to, each with
 // the first name that reaches it, and the projectors it reads.
-func censusWants() (map[convert.Arch]string, map[string]bool) {
+func censusWants(t *testing.T) (map[convert.Arch]string, map[string]bool) {
+	t.Helper()
+	names, err := convert.Architectures()
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := map[convert.Arch]string{}
-	for _, a := range convert.Architectures() {
+	for _, a := range names {
 		// A projector's own container: its towers are the projectors below.
 		if a == "clip" {
 			continue
@@ -69,7 +74,7 @@ func censusWants() (map[convert.Arch]string, map[string]bool) {
 // catalog model's projector.
 func censusGaps(t *testing.T, ms []auditModel) (graphs, projectors []string) {
 	t.Helper()
-	want, proj := censusWants()
+	want, proj := censusWants(t)
 	have := map[convert.Arch]bool{}
 	carried := map[string]bool{}
 	for _, m := range ms {

@@ -76,6 +76,9 @@ func (e *expr) bounded(a jlm.Arg, c float32) jlm.Arg {
 // model of config c, gated or not; xielu where the block stores an xIELU's
 // numbers (jlm.RoleXIELU).
 func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
+	if c.Stated == nil {
+		return jlm.Expr{}, unstated("the activation")
+	}
 	var e expr
 	g, u := operand(0), operand(1)
 	var unary func(jlm.Arg) jlm.Arg
@@ -97,7 +100,7 @@ func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
 		e.Fn(jlm.FnMul, e.Fn(jlm.FnMul, e.bounded(g, c.SituBeta), e.Fn(jlm.FnSigmoid, g)), e.bounded(u, c.SituLinearBeta))
 	case c.Flags.Has(jlm.FlagReLU2):
 		unary = e.relu2
-	case c.stated.activation == "gelu":
+	case c.Stated.activation == "gelu":
 		unary = e.GELUErf
 	case c.Flags.Has(jlm.FlagGELU) && c.SparseStd != 0 && li < int(c.NSparse):
 		unary = func(a jlm.Arg) jlm.Arg { return e.GELUTanh(e.gaussTopK(a, c.SparseStd)) }
@@ -125,7 +128,7 @@ func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
 // the layers differ. A layer is gated unless it stores an up and no gate
 // (a dense one or an expert bank).
 func StateActivations(c *Config, s *jlm.Source) error {
-	if c == nil || c.NLayer == 0 || c.Arch == ArchCLIP {
+	if c == nil || c.NLayer == 0 {
 		return nil
 	}
 	n := statedLayers(c.Config)
@@ -190,6 +193,13 @@ func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
 		}
 	}
 	n := statedLayers(c.Config)
+	if len(c.Acts) != 0 && (c.NExpert == 0 || len(c.RouterScore.Terms) != 0) {
+		return true, nil
+	}
+	// A container that states no activations, or no router, predates the
+	// statements, and the migration refuses one whose architecture's
+	// statement names them (LegacyStated): the library states it nothing.
+	c.Stated = &Statement{}
 	xielu := make([]bool, n)
 	for li := range xielu {
 		xielu[li] = stores(jlm.RoleXIELU)(li)
@@ -234,7 +244,13 @@ func StateGated(c *Config, gated, xielu []bool) error {
 		c.ActLayers = nil
 	}
 	if len(c.RouterScore.Terms) == 0 {
-		c.RouterScore, c.RouterWeight = RouterScore(c), RouterWeight(c)
+		var err error
+		if c.RouterScore, err = RouterScore(c); err != nil {
+			return err
+		}
+		if c.RouterWeight, err = RouterWeight(c); err != nil {
+			return err
+		}
 	}
 	for _, e := range []*jlm.Expr{&c.RouterScore, &c.RouterWeight} {
 		if len(e.Terms) != 0 {
@@ -250,14 +266,17 @@ func StateGated(c *Config, gated, xielu []bool) error {
 // from its logits (operand 0), the formula its family's reference computes:
 // what the selection ranks, and the routed weights are read from where the
 // config states no RouterWeight. None for a model with no mixture.
-func RouterScore(c *Config) jlm.Expr {
+func RouterScore(c *Config) (jlm.Expr, error) {
+	if c.Stated == nil {
+		return jlm.Expr{}, unstated("the router's score")
+	}
 	if c.NExpert == 0 {
-		return jlm.Expr{}
+		return jlm.Expr{}, nil
 	}
 	var e expr
 	x := operand(0)
 	switch {
-	case c.stated.routerScore == "logits":
+	case c.Stated.routerScore == "logits":
 		// The raw logits, which sparsemixer picks by (RouterWeight).
 		e.Fn(jlm.FnMul, x, num(1))
 	case c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus):
@@ -273,7 +292,7 @@ func RouterScore(c *Config) jlm.Expr {
 		e.T = append(e.T, jlm.Term{Fn: jlm.FnAdd, Reduce: true, Args: [3]jlm.Arg{ex}})
 		e.Fn(jlm.FnDiv, ex, s)
 	}
-	return jlm.Expr{Terms: e.T}
+	return jlm.Expr{Terms: e.T}, nil
 }
 
 // RouterWeight is the routed weight of a mixture of config c whose weights
@@ -282,11 +301,14 @@ func RouterScore(c *Config) jlm.Expr {
 // sparsemixer (transformers' PhimoeTopKRouter in eval), the softmax over the
 // logits s_j kept where (m - s_j)/max(|s_j|, m) is not past twice its
 // jitter, read at the pick. None for every other model.
-func RouterWeight(c *Config) jlm.Expr {
-	if c.NExpert == 0 || c.stated.routerWeight != "sparsemixer" {
-		return jlm.Expr{}
+func RouterWeight(c *Config) (jlm.Expr, error) {
+	if c.Stated == nil {
+		return jlm.Expr{}, unstated("the routed weight")
 	}
-	return SparseMixerWeight(PhiMoEJitter)
+	if c.NExpert == 0 || c.Stated.routerWeight != "sparsemixer" {
+		return jlm.Expr{}, nil
+	}
+	return SparseMixerWeight(PhiMoEJitter), nil
 }
 
 // SparseMixerWeight is sparsemixer's routed weight at jitter eps
