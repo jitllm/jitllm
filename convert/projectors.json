@@ -1147,7 +1147,7 @@
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
    "scale": "src['vision.spatial_merge_size'] | default(1)",
-   "transforms": {"joined": ["image_break_row"]},
+   "text_rows": [{"role": "v.token_embd.img_break", "token": "[IMG_BREAK]"}],
    "tensors": {"sizes": {"sq": "(vision.spatial_merge_size ?? 1) ** 2"},
      "model": {"mm.patch_merger.weight": {"role": "mm.patch_merger", "do": [
        {"shape": ["vision.embedding_length", "vision.embedding_length * size.sq"]}, {"type": "f32"},

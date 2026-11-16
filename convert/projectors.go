@@ -62,9 +62,9 @@ type projStates struct {
 	Mean       *[3]float32 `json:"mean"`
 	Std        *[3]float32 `json:"std"`
 	Activation string      `json:"activation"`
-	// Transforms are the tensor transforms (towerTransforms) the tower's
-	// tensors take at each phase of conversion (towerPhases).
-	Transforms map[string][]string `json:"transforms"`
+	// TextRows are the tower's rows that are text tokens' embeddings
+	// (textRows).
+	TextRows []projTextRow `json:"text_rows"`
 	// Tower is the tower as its reference runs it (mjTower).
 	Tower *mjTower `json:"tower"`
 	// Tensors is the tower's tensor table over its file's names: model
@@ -75,18 +75,45 @@ type projStates struct {
 	exprs   map[string]*jinja.Expr
 }
 
-// towerPhases is where a tower's transforms run: joined, once the text
-// model's table is beside the tower; source, once the tower's tensors are
-// read; prepare, before the blocks' FFNs are padded; finish, after the
-// patch and merge kernels are reshaped, before quantization.
-func towerPhases() []string { return []string{"joined", "source", "prepare", "finish"} }
+// projTextRow is a tower tensor that is a text token's embedding: Token's
+// row of the text table, stored as Role.
+type projTextRow struct {
+	Role  string `json:"role"`
+	Token string `json:"token"`
+}
 
-// towerTransforms is every tensor transform a projector's entry may name.
-// f is the tower's file, nil outside the source phase.
-func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projStates) error {
-	return map[string]func(*jlm.Source, *meta.File, *projStates) error{
-		"image_break_row": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
+// textRows gives a tower each text row p states that its file does not
+// carry: the text table's own row of the token, the row the reference looks
+// up for it, at the precision the text file keeps it. llama.cpp's converter
+// copies such a row into the mmproj only from a file whose table it can see
+// (from a transformers checkpoint it skips every language_model tensor
+// first), and the container holds the text model too.
+func textRows(s *jlm.Source, p *projStates) error {
+	if p == nil {
+		return nil
 	}
+	roles := rolesByName()
+	for _, tr := range p.TextRows {
+		r := roles[tr.Role]
+		if slices.ContainsFunc(s.Tensors, func(t jlm.Tensor) bool { return t.Role == r }) {
+			continue
+		}
+		id := -1
+		if s.Vocab != nil {
+			id = slices.Index(s.Vocab.Tokens, tr.Token)
+		}
+		if id < 0 {
+			return fmt.Errorf("convert: the tower carries no %s and the text vocabulary has no %q", tr.Role, tr.Token)
+		}
+		row, err := tokenRow(s, id)
+		if err != nil {
+			return err
+		}
+		e := jlm.Tensor{Role: r, Block: jlm.DenseBlock, Index: -1, Name: r.String()}
+		setF32Dims(&e, row, uint64(len(row)))
+		s.Tensors = append(s.Tensors, e)
+	}
+	return nil
 }
 
 // statement is the tower's tensor table as the GGUF table's runner reads it:
@@ -170,21 +197,6 @@ func projectorFor(code jlm.Projector) (*projStates, error) {
 	return nil, nil
 }
 
-// transformTower runs the transforms p names for phase; p is nil for a
-// source with no tower.
-func transformTower(s *jlm.Source, f *meta.File, p *projStates, phase string) error {
-	if p == nil {
-		return nil
-	}
-	ts := towerTransforms()
-	for _, t := range p.Transforms[phase] {
-		if err := ts[t](s, f, p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // projOutput is the matrix whose rows are the projector's output width, and
 // the dimension they are.
 type projOutput struct {
@@ -260,15 +272,9 @@ func (p *projStates) check() error {
 	if p.Activation != "" && p.Activation != "gelu" {
 		return fmt.Errorf("activation %q: only \"gelu\" is stated", p.Activation)
 	}
-	ts := towerTransforms()
-	for _, phase := range slices.Sorted(maps.Keys(p.Transforms)) {
-		if !slices.Contains(towerPhases(), phase) {
-			return fmt.Errorf("transforms at %q, which is no phase of conversion", phase)
-		}
-		for _, t := range p.Transforms[phase] {
-			if _, ok := ts[t]; !ok {
-				return fmt.Errorf("transform %q is no tower transform", t)
-			}
+	for _, tr := range p.TextRows {
+		if r, ok := rolesByName()[tr.Role]; !ok || !r.Vision() || tr.Token == "" {
+			return fmt.Errorf("text row %q of %q: a tower role and a token", tr.Role, tr.Token)
 		}
 	}
 	if (p.When == "") != (p.States == "") {

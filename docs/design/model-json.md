@@ -401,15 +401,14 @@ model.json is mostly the config section and the `retarget` it needs.
    (`shape`) and the tower's patch, picture and merge (`tower`); `mean`,
    `std` and `activation` replace the file's; `when` is the condition an
    entry holds under (`states` what it covers), outside which the file is
-   refused, and `as` takes another entry's statements; `transforms` names,
-   per phase of conversion (`joined`, `source`, `prepare`, `finish`), the
-   tensor transforms the tower's tensors take (`convert.towerTransforms`);
-   `taps` says the projector reads taps off the tower's blocks (their
+   refused, and `as` takes another entry's statements; `text_rows` the
+   tower's rows that are text tokens' embeddings (Pixtral's `[IMG_BREAK]`),
+   each the text table's own row of its token, stored as its role where the
+   tower's file carries none; `taps` says the projector reads taps off the tower's blocks (their
    mergers named by its vocabulary's `indexed` prefix in
    convert/towertensors.json, `v.deepstack.N.*`), `blocks` "staged" that the file names its blocks
    by a stage and a place in it (`v.blk.S.I.*`, numbered stage by stage),
-   each block carrying its place. The transforms are named primitives
-   (`image_break_row`), each usable by any entry. A projector's
+   each block carrying its place. A projector's
    `tensors` is the GGUF table over the tower's names (model entries by
    name, block entries past `v.blk.N.` as `v.<name>`, and sizes): Gemma 3's
    input projection transposed, Mistral 3's merger permuted into the

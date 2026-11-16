@@ -76,64 +76,6 @@ func setF32(t *jlm.Tensor, v []float32) {
 	t.Type, t.Data, t.Load = jlm.TypeF32, b, nil
 }
 
-// imgBreakRow gives a Pixtral tower its [IMG_BREAK] row when the mmproj does
-// not carry one. llama.cpp's converter copies the token's embedding into the
-// mmproj only from a file whose table it can see: from a transformers
-// checkpoint it skips every language_model tensor first, so the row is
-// absent. The container holds the text model too, so the row is the text
-// table's own, read once here: the same row the reference looks up for the
-// token, at the precision the text file keeps it.
-func imgBreakRow(s *jlm.Source) error {
-	for i := range s.Tensors {
-		if s.Tensors[i].Role == jlm.RoleVImgBreak {
-			return nil
-		}
-	}
-	id := -1
-	if s.Vocab != nil {
-		for i, tok := range s.Vocab.Tokens {
-			if tok == "[IMG_BREAK]" {
-				id = i
-				break
-			}
-		}
-	}
-	if id < 0 {
-		return fmt.Errorf("convert: a pixtral tower and no [IMG_BREAK] row: the mmproj carries no " +
-			"v.token_embd.img_break and the text vocabulary has no [IMG_BREAK]")
-	}
-	for i := range s.Tensors {
-		t := &s.Tensors[i]
-		if t.Role != jlm.RoleTokenEmbd {
-			continue
-		}
-		src, ok := sourceType(t.Type)
-		if !ok || t.NDim != 2 || uint64(id) >= t.Dims[1] {
-			return fmt.Errorf("convert: %s cannot give token %d's row", t.Name, id)
-		}
-		k := int(t.Dims[0])
-		be, bb := int(src.BlockElems()), int(src.BlockBytes())
-		if k%be != 0 {
-			return fmt.Errorf("convert: %s rows are %d wide, not whole %v blocks", t.Name, k, src)
-		}
-		rb := k / be * bb
-		b, err := t.Bytes()
-		if err != nil {
-			return err
-		}
-		row := make([]float32, k)
-		if err := quant.Dequant32(src, b[id*rb:(id+1)*rb], row); err != nil {
-			return fmt.Errorf("convert: %s row %d: %w", t.Name, id, err)
-		}
-		e := jlm.Tensor{Role: jlm.RoleVImgBreak, Block: jlm.DenseBlock, Index: -1,
-			Name: "v.token_embd.img_break"}
-		setF32Dims(&e, row, uint64(k))
-		s.Tensors = append(s.Tensors, e)
-		return nil
-	}
-	return fmt.Errorf("convert: a pixtral tower and no text token table to take [IMG_BREAK]'s row from")
-}
-
 // padFFN widens a tower's MLP to a whole quantization block when its width is
 // not one: SigLIP-so400m's is 4304, 16 short of a block, and Qwen2.5-VL's
 // 3420 (the published mmproj keeps that contraction F16 for the reason). The

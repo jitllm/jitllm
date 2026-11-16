@@ -150,7 +150,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 			s.Vision.Audio = aud
 			s.Tensors = append(s.Tensors, ats...)
 		}
-		if err := transformTower(s, nil, vp, "joined"); err != nil {
+		if err := textRows(s, vp); err != nil {
 			return nil, err
 		}
 		if err := towerFFNByShape(s); err != nil {
@@ -399,10 +399,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err := checkDeepstack(f, s, proj); err != nil {
 			return nil, err
 		}
-		if err := transformTower(s, f, proj, "source"); err != nil {
-			return nil, err
-		}
-		if err := prepareTower(s, proj); err != nil {
+		if err := prepareTower(s); err != nil {
 			return nil, err
 		}
 	}
@@ -575,15 +572,12 @@ func widenedF32(x *jlm.Tensor) (*jlm.Tensor, error) {
 // prepareTower reshapes the patch embedding and quantizes every matrix the
 // tower multiplies by, so that a container's vision weights are all in this
 // format's packed layout.
-func prepareTower(s *jlm.Source, p *projStates) error {
+func prepareTower(s *jlm.Source) error {
 	v := s.Vision
 	if v == nil {
 		return fmt.Errorf("convert: a clip file with no vision description")
 	}
 	if err := foldPatchPlanes(s); err != nil {
-		return err
-	}
-	if err := transformTower(s, nil, p, "prepare"); err != nil {
 		return err
 	}
 	if err := padFFN(s); err != nil {
@@ -600,9 +594,6 @@ func prepareTower(s *jlm.Source, p *projStates) error {
 				return err
 			}
 		}
-	}
-	if err := transformTower(s, nil, p, "finish"); err != nil {
-		return err
 	}
 	return quantizeTower(s.Tensors)
 }
