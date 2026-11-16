@@ -1001,7 +1001,15 @@
    "mean": [0.5, 0.5, 0.5],
    "std": [0.5, 0.5, 0.5],
    "activation": "gelu",
-   "transforms": {"prepare": ["half_neox_to_neox", "negate_std_bias"]},
+   "tensors": {"sizes": {"hd": "vision.embedding_length / vision.attention.head_count"},
+     "model": {"v.std_bias": {"role": "v.std_bias", "do": [{"map": "-x"}]}},
+     "block": {
+       "v.attn_q.weight": {"role": "v.attn_q.weight", "do": [{"reshape": [-1, 4, "size.hd / 4", "vision.embedding_length"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1, "vision.embedding_length"]}, {"type": "f32"}]},
+       "v.attn_k.weight": {"role": "v.attn_k.weight", "do": [{"reshape": [-1, 4, "size.hd / 4", "vision.embedding_length"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1, "vision.embedding_length"]}, {"type": "f32"}]},
+       "v.attn_q.bias": {"role": "v.attn_q.bias", "do": [{"reshape": [-1, 4, "size.hd / 4"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1]}, {"type": "f32"}]},
+       "v.attn_k.bias": {"role": "v.attn_k.bias", "do": [{"reshape": [-1, 4, "size.hd / 4"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1]}, {"type": "f32"}]},
+       "v.attn_q_norm.weight": {"role": "v.attn_q_norm.weight", "do": [{"reshape": [-1, 4, "size.hd / 4"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1]}, {"type": "f32"}]},
+       "v.attn_k_norm.weight": {"role": "v.attn_k_norm.weight", "do": [{"reshape": [-1, 4, "size.hd / 4"]}, {"pick": [1, 0, 1, 2, 1, 1, 1, 3, 1]}, {"reshape": [-1]}, {"type": "f32"}]}}},
    "tower": {
     "requires": ["v_patch_embd", "v_pos_embd", "v_proj"],
     "require": [

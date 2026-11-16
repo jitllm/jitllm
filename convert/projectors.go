@@ -70,8 +70,9 @@ type projStates struct {
 	Transforms map[string][]string `json:"transforms"`
 	// Tower is the tower as its reference runs it (mjTower).
 	Tower *mjTower `json:"tower"`
-	// Tensors is the tower's tensor table over its file's names: block
-	// entries by the name past v.blk.N. (as v.<name>), and sizes.
+	// Tensors is the tower's tensor table over its file's names: model
+	// entries, block entries by the name past v.blk.N. (as v.<name>), and
+	// sizes.
 	Tensors *mjTensors `json:"tensors"`
 	exprs   map[string]*jinja.Expr
 }
@@ -89,10 +90,6 @@ func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projState
 		"image_break_row":      func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
 		"transpose_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return transposeProjection(s) },
 		"permute_merger":       func(s *jlm.Source, _ *meta.File, _ *projStates) error { return permuteMerger(s) },
-		"half_neox_to_neox":    func(s *jlm.Source, _ *meta.File, _ *projStates) error { return halfNeoxToNeox(s) },
-		"negate_std_bias": func(s *jlm.Source, _ *meta.File, _ *projStates) error {
-			return negateRole(s, jlm.RoleVStdBias)
-		},
 		"point_conv_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error {
 			for i := range s.Tensors {
 				if s.Tensors[i].Role == jlm.RoleVProj {
@@ -120,25 +117,30 @@ func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projState
 }
 
 // statement is the tower's tensor table as the GGUF table's runner reads it:
-// block entries and sizes, which is all a tower's table states.
+// model and block entries and sizes, which is all a tower's table states.
 func (p *projStates) statement() (*Statement, error) {
 	st := &Statement{}
 	t := p.Tensors
 	if t == nil {
 		return st, nil
 	}
-	if len(t.Model)+len(t.BlockLinear)+len(t.Fuse)+len(t.Joined)+len(t.Gather)+len(t.Drop)+len(t.Keys) > 0 ||
+	if len(t.BlockLinear)+len(t.Fuse)+len(t.Joined)+len(t.Gather)+len(t.Drop)+len(t.Keys) > 0 ||
 		t.BlockPrefix != "" || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil || t.Ternary != nil || t.Present != nil {
-		return nil, fmt.Errorf("tensors: a tower's table states its block tensors and sizes")
+		return nil, fmt.Errorf("tensors: a tower's table states its model and block tensors and sizes")
 	}
 	names, err := readTensorNames()
 	if err != nil {
 		return nil, err
 	}
-	st.blockTensors = map[string][]statedCut{}
-	for _, n := range slices.Sorted(maps.Keys(t.Block)) {
-		if st.blockTensors[n], err = statedCuts(names, n, t.Block[n]); err != nil {
-			return nil, fmt.Errorf("tensors: %w", err)
+	st.modelTensors, st.blockTensors = map[string][]statedCut{}, map[string][]statedCut{}
+	for _, x := range []struct {
+		table map[string]mjTargets
+		to    map[string][]statedCut
+	}{{t.Model, st.modelTensors}, {t.Block, st.blockTensors}} {
+		for _, n := range slices.Sorted(maps.Keys(x.table)) {
+			if x.to[n], err = statedCuts(names, n, x.table[n]); err != nil {
+				return nil, fmt.Errorf("tensors: %w", err)
+			}
 		}
 	}
 	if st.sizes, err = statedSizes(t.Sizes); err != nil {
