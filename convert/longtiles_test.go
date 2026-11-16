@@ -36,7 +36,7 @@ func TestLongTileGeometryFollowsTheProcessor(t *testing.T) {
 	}
 	const doubled = 1
 	parts := func(longest, tile, w, h, rows, cols, squares int) error {
-		geo := longTileGeometry(longest, tile, tile/16, doubled, idefics3Grid, true, false)
+		geo := longTileGeometry(longest, tile, tile/16, doubled, smolvlmGrid, true, false)
 		_, n, err := model.GeometrySquare(geo, w, h, 0)
 		if err != nil {
 			return err
@@ -54,7 +54,7 @@ func TestLongTileGeometryFollowsTheProcessor(t *testing.T) {
 			case i < n-1:
 				r, c := i/cols, i%cols
 				want.Ow, want.Oh, want.X0, want.Y0 = cols*tile, rows*tile, c*tile, r*tile
-				want.Mark, want.Trail, want.TrailN = 4+doubled+2*(r*idefics3Grid+c), 0, 0
+				want.Mark, want.Trail, want.TrailN = 4+doubled+2*(r*smolvlmGrid+c), 0, 0
 				if c == cols-1 && r < rows-1 {
 					want.Trail, want.TrailN = 1, 1
 				}

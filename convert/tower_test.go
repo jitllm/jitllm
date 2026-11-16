@@ -77,10 +77,10 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 			cuts = append(cuts, s.Ints)
 		}
 	}
-	if want := [][]int32{{4 * side, 1, idefics3Grid, 0}, {4 * side, 1, idefics3Grid, 1}}; !reflect.DeepEqual(cuts, want) ||
+	if want := [][]int32{{4 * side, 1, smolvlmGrid, 0}, {4 * side, 1, smolvlmGrid, 1}}; !reflect.DeepEqual(cuts, want) ||
 		tw.Geometry == nil {
 		t.Errorf("the cuts are %v (geometry %v), want the picture's and a frame's longer side to %d, a frame one square, a double newline of one token, a grid of %d",
-			cuts, tw.Geometry != nil, 4*side, idefics3Grid)
+			cuts, tw.Geometry != nil, 4*side, smolvlmGrid)
 	}
 	if g := tw.Geometry; g != nil && len(g.Stages) != 2 {
 		t.Errorf("the picture is resized in %d stages before its cut, want the processor's two", len(g.Stages))
@@ -107,8 +107,8 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 	// A special token decodes to nothing, so each marker is held to the id
 	// its piece looks up, and the table's row to that id's text row.
 	names := []string{"\n", "\n\n", "<fake_token_around_image>", "<global-img>"}
-	for r := range idefics3Grid {
-		for c := range idefics3Grid {
+	for r := range smolvlmGrid {
+		for c := range smolvlmGrid {
 			names = append(names, "<fake_token_around_image>", fmt.Sprintf("<row_%d_col_%d>", r+1, c+1))
 		}
 	}
@@ -314,7 +314,11 @@ func TestInternVLTilesAreTheFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Vision.MinTiles, s.Vision.MaxTiles = 2, 6
-	tw, err := internvlTower(s)
+	lt, by, err := libraryTower(s.Vision.Projector)
+	if err != nil || lt == nil {
+		t.Fatalf("the library states no %v tower: %v", s.Vision.Projector, err)
+	}
+	tw, err := lt.state(by, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,3 +726,7 @@ func TestGELUTowersStateTheExactForm(t *testing.T) {
 		t.Fatal("a tower of SiLU was stated as the exact GELU")
 	}
 }
+
+// smolvlmGrid is the most tiles a side Idefics3Processor names, its
+// <row_R_col_C> tokens' rows and columns, as the SmolVLM statement states it.
+const smolvlmGrid = 6

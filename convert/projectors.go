@@ -68,7 +68,9 @@ type projStates struct {
 	// Transforms are the tensor transforms (towerTransforms) the tower's
 	// tensors take at each phase of conversion (towerPhases).
 	Transforms map[string][]string `json:"transforms"`
-	exprs      map[string]*jinja.Expr
+	// Tower is the tower as its reference runs it (mjTower).
+	Tower *mjTower `json:"tower"`
+	exprs map[string]*jinja.Expr
 }
 
 // towerPhases is where a tower's transforms run: joined, once the text
@@ -199,6 +201,11 @@ func projectorLibrary() (map[string]*projStates, error) {
 func (p *projStates) check() error {
 	if p.Code == 0 || p.Output.Tensor == "" || p.Output.Dim < 0 || p.Output.Dim > 1 {
 		return fmt.Errorf("an entry states its code and its output matrix's tensor and dim (0 or 1)")
+	}
+	if t := p.Tower; t != nil {
+		if err := t.check(); err != nil {
+			return fmt.Errorf("tower: %w", err)
+		}
 	}
 	for _, f := range p.Flags {
 		if _, ok := projFlags()[f]; !ok {

@@ -3,47 +3,411 @@
  "projectors": {
   "idefics3": {
    "code": 1,
-   "output": {"tensor": "mm.model.fc.weight", "dim": 1}
+   "output": {"tensor": "mm.model.fc.weight", "dim": 1},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_post_norm", "v_proj"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.scale != 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0", "else": "the heads do not divide the width, there is no shuffle, or the patches do not divide the picture"},
+     {"that": "(v.image_size // v.patch_size) % v.scale == 0", "else": "the patch grid does not shuffle by the tower's scale"}
+    ],
+    "pre": [
+     {"kind": "resize", "ints": ["v.image_size", "v.image_size", "filter.pil_lanczos", "prec.torch"]},
+     {"kind": "long_tiles", "ints": ["4 * v.image_size", "tokens('\\n\\n') | length", "6", "0"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps"
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "regroup", "span": "v.scale"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "mark_row", "w": "v.token_embd.tile_marks", "span": "(tokens('\\n\\n') | length) + 2", "offset": "1"}
+    ],
+    "marks": {"ids": ["token('\\n')", "tokens('\\n\\n')", "token('<fake_token_around_image>')", "token('<global-img>')"], "grid": {"side": "6", "each": ["token('<fake_token_around_image>')", "token('<row_' ~ (r + 1) ~ '_col_' ~ (c + 1) ~ '>')"]}},
+    "span": {},
+    "video": {
+     "default_fps": "24",
+     "once": true,
+     "max_frames": "64",
+     "group": "1",
+     "sized": {"value": "sampled"},
+     "count": {"value": "max(min(round_even(1 * (N / R)), 64), 1)"},
+     "index": {"let": [["n1", "N - 1"], ["long", "64 < N / R - 2"], ["s0", "max(0, where(long, trunc(1 * R), 0))"], ["e0", "min(n1, where(long, trunc(N - 1 * R), n1))"], ["ok", "s0 < e0"], ["start", "where(ok, s0, 0)"], ["end", "where(ok, e0, n1)"], ["k1", "K - 1"], ["pos", "at * ((end - start) / k1) + start"]], "value": "where(at < k1, pos, where(1 < K, end, start))"},
+     "pre": [
+      {"kind": "resize", "ints": ["v.image_size", "v.image_size", "filter.pil_lanczos", "prec.torch"]},
+      {"kind": "long_tiles", "ints": ["4 * v.image_size", "tokens('\\n\\n') | length", "6", "1"]},
+      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+     ],
+     "prompt": [
+      {"text": "You are provided the following series of "},
+      {"value": {"value": "K"}, "format": {"kind": "words", "words": "64"}},
+      {"text": " frames from a "},
+      {"value": {"value": "seconds"}, "format": {"kind": "clock", "clock": [1, 2, 2], "sep": ":", "days": [" day, ", " days, "]}},
+      {"text": " [H:MM:SS] video.\n"},
+      {"groups": [{"text": "\nFrame from "}, {"value": {"value": "t0"}, "format": {"kind": "clock", "clock": [0, 2, 2], "sep": ":"}}, {"text": ":"}, {"span": true}]},
+      {"text": "\n\n"}
+     ],
+     "template": "<|im_start|>{% for message in messages %}{{message['role'] | capitalize}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% elif line['type'] == 'video' %}{{ '<video>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
+    }
+   }
   },
   "mlp": {
    "code": 2,
-   "output": {"tensor": "mm.2.weight", "dim": 1}
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "tower": {
+    "requires": ["v_patch_embd", "v_class_embd", "v_pos_embd", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0", "else": "the heads do not divide the width, or the patches the picture"}
+    ],
+    "pre": [
+     {"kind": "resize_short", "ints": ["v.image_size", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "center_crop", "ints": ["v.image_size", "v.image_size"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size", "offset": "1"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]},
+     {"op": "lead_row", "w": "v_class_embd", "offset": "1", "out": "x"},
+     {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]},
+     {"op": "layer_norm", "if": "'v_pre_norm' in has", "w": ["v_pre_norm", "v_pre_norm.bias?"], "eps": "v.eps"}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps"
+    },
+    "head": [
+     {"op": "layer_norm", "if": "'v_post_norm' in has", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "drop_rows", "offset": "1"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "span": {"mark": "<image>\n", "after": "\n"}
+   }
   },
   "qwen2vl_merger": {
    "code": 3,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
-   "merge_of": "mm.0.weight"
+   "merge_of": "mm.0.weight",
+   "tower": {
+    "requires": ["v_patch_embd", "v_post_norm", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.scale >= 2", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or no merge"},
+     {"that": "'v_ds_fc1' not in has", "else": "deepstack taps on a tower of no deepstack"}
+    ],
+    "pre": [
+     {"kind": "smart_resize", "ints": ["v.patch_size * v.scale", "3136", "1003520", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size", "width": "v.scale"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "rope": {"base": "10000", "dim": "v.embd // v.heads // 2", "neox": true, "runs": [{"count": "1", "each": [{"pairs": "v.embd // v.heads // 4", "axis": "0", "freq": "0"}, {"pairs": "v.embd // v.heads // 4", "axis": "1", "freq": "0"}]}]}
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "fold", "span": "v.scale * v.scale"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "span": {"mark": "<|vision_start|><|image_pad|><|vision_end|>", "before_marks": ["<|vision_start|>"], "after_marks": ["<|vision_end|>"], "grid_div": "v.scale"},
+    "video": {
+     "if": "'v.patch_embd.weight.1' in has",
+     "default_fps": "24",
+     "count": {"value": "N"},
+     "index": {"value": "at"},
+     "group": "2",
+     "sized": {"value": "sampled"},
+     "stride": {"value": "1"},
+     "pre": [
+      {"kind": "video_resize", "ints": ["v.patch_size * v.scale", "100352", "602112", "filter.pil_bicubic", "prec.torch", "2", "1"]},
+      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+     ],
+     "inputs": 2,
+     "entry": [
+      {"op": "patchify", "span": "v.patch_size", "width": "v.scale", "out": "a"},
+      {"op": "patchify", "in": "in1", "span": "v.patch_size", "width": "v.scale", "out": "b"},
+      {"op": "sub", "in": ["b", "a"], "out": "d"},
+      {"op": "linear", "in": "a", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+      {"op": "linear", "in": "d", "w": "v.patch_embd.weight.1", "out": "y"},
+      {"op": "add", "in": ["x", "y"], "out": "xy"}
+     ],
+     "prompt": [
+      {"ids": ["<|vision_start|>"]},
+      {"groups": [{"span": true}]},
+      {"ids": ["<|vision_end|>"]}
+     ]
+    }
+   }
   },
   "gemma3": {
    "code": 4,
    "output": {"tensor": "mm.input_projection.weight", "dim": 0},
    "scale": "src['vision.projector.scale_factor'] | default(4)",
-   "transforms": {"prepare": ["transpose_projection"]}
+   "transforms": {"prepare": ["transpose_projection"]},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_post_norm", "v_proj_norm", "v_proj"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.scale != 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0", "else": "the heads do not divide the width, or the patches the picture, or there is no pool"},
+     {"that": "(v.image_size // v.patch_size) % v.scale == 0", "else": "the patch grid does not pool by the tower's scale"}
+    ],
+    "pre": [
+     {"kind": "resize", "ints": ["v.image_size", "v.image_size", "filter.pil_bilinear", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps"
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "pool", "span": "v.scale"},
+     {"op": "rms_norm", "w": "v_proj_norm", "eps": "v.eps"},
+     {"op": "linear", "w": "v_proj"}
+    ],
+    "span": {"before": "\n\n<start_of_image>", "after": "<end_of_image>\n\n", "bidir": true}
+   }
   },
   "internvl": {
    "code": 5,
    "when": "'v.blk.0.attn_q_norm.weight' not in shape",
    "states": "InternViT-300M; a q/k norm in the blocks is the 6B tower's",
    "output": {"tensor": "mm.model.mlp.3.weight", "dim": 1},
-   "tiles": {"min": "src['vision.preproc_min_tiles'] | default(1)", "max": "src['vision.preproc_max_tiles'] | default(12)"}
+   "tiles": {"min": "src['vision.preproc_min_tiles'] | default(1)", "max": "src['vision.preproc_max_tiles'] | default(12)"},
+   "tower": {
+    "requires": ["v_patch_embd", "v_class_embd", "v_pos_embd", "v_proj_norm", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.scale != 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0", "else": "the heads do not divide the width, there is no shuffle, or the patches do not divide the picture"},
+     {"that": "(v.image_size // v.patch_size) % v.scale == 0", "else": "the patch grid does not shuffle by the tower's scale"}
+    ],
+    "pre": [
+     {"kind": "tile", "ints": ["v.min_tiles", "v.max_tiles", "1"]},
+     {"kind": "resize", "ints": ["v.image_size", "v.image_size", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size", "offset": "1"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]},
+     {"op": "lead_row", "w": "v_class_embd", "offset": "1", "out": "x"},
+     {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "fn": "gelu_erf"
+    },
+    "head": [
+     {"op": "drop_rows", "offset": "1"},
+     {"op": "regroup", "span": "v.scale"},
+     {"op": "layer_norm", "w": ["v_proj_norm", "v_proj_norm.bias?"], "eps": "1e-5"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "span": {"mark": "<image>\n", "after": "\n", "before_marks": ["<img>"], "after_marks": ["</img>"]},
+    "video": {
+     "count": {"value": "N"},
+     "index": {"value": "at"},
+     "group": "1",
+     "sized": {"value": "sampled"},
+     "prompt": [
+      {"groups": [{"text": "Frame"}, {"value": {"value": "group + 1"}, "format": {"kind": "decimal"}}, {"text": ": "}, {"picture": true}], "between": [{"text": "\n"}]}
+     ]
+    }
+   }
   },
   "qwen2.5vl_merger": {
    "code": 6,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
    "merge_of": "mm.0.weight",
-   "window": {"size": "src['vision.window_size'] | default(112)", "pattern": "src['vision.n_wa_pattern'] | default(0)"}
+   "window": {"size": "src['vision.window_size'] | default(112)", "pattern": "src['vision.n_wa_pattern'] | default(0)"},
+   "tower": {
+    "requires": ["v_patch_embd", "v_post_norm", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.scale >= 2", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or no merge"},
+     {"that": "'v_ds_fc1' not in has", "else": "deepstack taps on a tower of no deepstack"},
+     {"that": "v.win_pattern != 0 and v.win_size != 0 and v.win_size % (v.patch_size * v.scale) == 0", "else": "the windows are not whole merge windows, or there are none"}
+    ],
+    "pre": [
+     {"kind": "smart_resize", "ints": ["v.patch_size * v.scale", "3136", "1003520", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size", "width": "v.scale"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "rms",
+     "eps": "v.eps",
+     "rope": {"base": "10000", "dim": "v.embd // v.heads // 2", "neox": true, "runs": [{"count": "1", "each": [{"pairs": "v.embd // v.heads // 4", "axis": "0", "freq": "0"}, {"pairs": "v.embd // v.heads // 4", "axis": "1", "freq": "0"}]}]},
+     "gated": true,
+     "window": "v.win_size // v.patch_size",
+     "full": {"count": "v.layers", "if": "(i + 1) % v.win_pattern == 0"}
+    },
+    "head": [
+     {"op": "rms_norm", "w": "v_post_norm", "eps": "v.eps"},
+     {"op": "fold", "span": "v.scale * v.scale"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]},
+     {"op": "untile", "span": "v.scale", "width": "v.win_size // v.patch_size // v.scale"}
+    ],
+    "span": {"mark": "<|vision_start|><|image_pad|><|vision_end|>", "before_marks": ["<|vision_start|>"], "after_marks": ["<|vision_end|>"], "grid_div": "v.scale"},
+    "video": {
+     "if": "'v.patch_embd.weight.1' in has",
+     "default_fps": "24",
+     "count": {"value": "N"},
+     "index": {"value": "at"},
+     "group": "2",
+     "sized": {"value": "sampled"},
+     "stride": {"value": "2 * trunc(2 / R)"},
+     "pre": [
+      {"kind": "video_resize", "ints": ["v.patch_size * v.scale", "100352", "602112", "filter.pil_bicubic", "prec.torch", "2", "1"]},
+      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+     ],
+     "inputs": 2,
+     "entry": [
+      {"op": "patchify", "span": "v.patch_size", "width": "v.scale", "out": "a"},
+      {"op": "patchify", "in": "in1", "span": "v.patch_size", "width": "v.scale", "out": "b"},
+      {"op": "sub", "in": ["b", "a"], "out": "d"},
+      {"op": "linear", "in": "a", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+      {"op": "linear", "in": "d", "w": "v.patch_embd.weight.1", "out": "y"},
+      {"op": "add", "in": ["x", "y"], "out": "xy"}
+     ],
+     "prompt": [
+      {"ids": ["<|vision_start|>"]},
+      {"groups": [{"span": true}]},
+      {"ids": ["<|vision_end|>"]}
+     ]
+    }
+   }
   },
   "resampler": {
    "code": 32,
    "when": "(src['minicpmv_version'] | default(2)) in [3, 4, 5, 6]",
    "states": "minicpmv_version 3 to 6: MiniCPM-V 2.6, o-2.6, 4.0, 4.5",
-   "output": {"tensor": "resampler.proj.weight", "dim": 1}
+   "output": {"tensor": "resampler.proj.weight", "dim": 1},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_post_norm", "v_rs_query", "v_rs_kv", "v_rs_ln_q", "v_rs_ln_kv", "v_rs_q", "v_rs_k", "v_rs_v", "v_rs_out", "v_rs_ln_post", "v_rs_proj"],
+    "require": [
+     {"that": "((dims['v_pos_embd'][1] ** 0.5) | round | int) >= 1 and ((dims['v_pos_embd'][1] ** 0.5) | round | int) * ((dims['v_pos_embd'][1] ** 0.5) | round | int) == dims['v_pos_embd'][1] and dims['v_rs_query'][0] >= 128 and dims['v_rs_query'][0] % 128 == 0 and v.patch_size != 0 and v.heads != 0 and v.embd % v.heads == 0", "else": "the position table is not a square grid, the resampler is not whole heads of 128, or there are no patches"}
+    ],
+    "pre": [
+     {"kind": "slice_uhd", "ints": ["v.image_size", "v.patch_size", "9", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_buckets", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | round | int", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps"
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "linear", "w": "v_rs_kv"},
+     {"op": "layer_norm", "w": ["v_rs_ln_kv", "v_rs_ln_kv.bias"], "eps": "1e-6", "out": "kv"},
+     {"op": "pos_axes", "in": [], "w": "resampler.pos_axes", "span": "v.widest_picture // v.patch_size + 1", "out": "pos"},
+     {"op": "add", "in": ["kv", "pos"]},
+     {"op": "linear", "w": ["v_rs_k", "v_rs_k.bias"], "out": "k"},
+     {"op": "linear", "in": "kv", "w": ["v_rs_v", "v_rs_v.bias"], "out": "values"},
+     {"op": "table_rows", "in": [], "w": "v_rs_query"},
+     {"op": "layer_norm", "w": ["v_rs_ln_q", "v_rs_ln_q.bias"], "eps": "1e-6"},
+     {"op": "linear", "w": ["v_rs_q", "v_rs_q.bias"], "out": "q"},
+     {"op": "rows_attend", "in": ["q", "k", "values"], "span": "dims['v_rs_query'][0] // 128"},
+     {"op": "linear", "w": ["v_rs_out", "v_rs_out.bias"]},
+     {"op": "layer_norm", "w": ["v_rs_ln_post", "v_rs_ln_post.bias"], "eps": "1e-6"},
+     {"op": "linear", "w": "v_rs_proj"},
+     {"op": "mark_row", "w": "v.token_embd.tile_marks", "span": "2", "offset": "1"}
+    ],
+    "tables": [
+     {"kind": "sincos_axes", "width": "dims['v_rs_query'][0]", "length": "v.widest_picture // v.patch_size + 1"}
+    ],
+    "marks": {"names": ["<image>", "</image>", "<slice>", "</slice>", "\n", "<slice>"]},
+    "span": {"mark": "(<image>./</image>)", "index_before": "<image_id>", "index_after": "</image_id>"}
+   }
   },
   "janus_pro": {
    "code": 33,
-   "output": {"tensor": "mm.1.weight", "dim": 1}
+   "output": {"tensor": "mm.1.weight", "dim": 1},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0", "else": "the heads do not divide the width, or the patches the picture"}
+    ],
+    "pre": [
+     {"kind": "long_box", "ints": ["v.image_size", "14", "v.mean[0] * 255", "v.mean[1] * 255", "v.mean[2] * 255", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "act": "gelu_erf"
+    },
+    "head": [
+     {"op": "layer_norm", "if": "'v_post_norm' in has", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "span": {"mark": "<image_placeholder>", "before_marks": ["<begin_of_image>"], "after_marks": ["<end_of_image>"]}
+   }
   },
   "qwen3vl_merger": {
    "code": 48,
@@ -51,21 +415,198 @@
    "flags": ["vision_rope"],
    "requires": ["v.position_embd.weight"],
    "merge_of": "mm.0.weight",
-   "taps": true
+   "taps": true,
+   "tower": {
+    "requires": ["v_patch_embd", "v_post_norm", "v_proj", "v_proj2", "v_pos_embd"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.scale >= 2", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or no merge"},
+     {"that": "((dims['v_pos_embd'][1] ** 0.5) | int) >= 2 and ((dims['v_pos_embd'][1] ** 0.5) | int) * ((dims['v_pos_embd'][1] ** 0.5) | int) == dims['v_pos_embd'][1]", "else": "the position table is not a square grid"}
+    ],
+    "pre": [
+     {"kind": "smart_resize", "ints": ["v.patch_size * v.scale", "65536", "16777216", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size", "width": "v.scale"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | int", "width": "v.scale", "chain": "aligned", "taps": "linear", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "rope": {"base": "10000", "dim": "v.embd // v.heads // 2", "neox": true, "runs": [{"count": "1", "each": [{"pairs": "v.embd // v.heads // 4", "axis": "0", "freq": "0"}, {"pairs": "v.embd // v.heads // 4", "axis": "1", "freq": "0"}]}]}
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "fold", "span": "v.scale * v.scale"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "taps": {
+     "of": "v_ds_fc1",
+     "prog": [
+      {"op": "fold", "span": "v.scale * v.scale"},
+      {"op": "layer_norm", "w": ["v_ds_norm", "v_ds_norm.bias"], "eps": "v.eps"},
+      {"op": "linear", "w": ["v_ds_fc1", "v_ds_fc1.bias"]},
+      {"op": "stated", "fn": "gelu_erf", "width": "tap.dims[1]"},
+      {"op": "linear", "w": ["v_ds_fc2", "v_ds_fc2.bias"]}
+     ]
+    },
+    "span": {"mark": "<|vision_start|><|image_pad|><|vision_end|>", "before_marks": ["<|vision_start|>"], "after_marks": ["<|vision_end|>"], "grid_div": "v.scale"},
+    "video": {
+     "if": "'v.patch_embd.weight.1' in has",
+     "default_fps": "24",
+     "count": {"let": [["k", "trunc(N / R * 2)"]], "value": "min(min(max(k, 4), 768), N)"},
+     "index": {"let": [["last", "N - 1"], ["step", "at * (last / (K - 1))"]], "value": "round_even(where(at < K - 1, step, last))"},
+     "max_frames": "768",
+     "group": "2",
+     "sized": {"value": "sampled"},
+     "pre": [
+      {"kind": "video_resize", "ints": ["v.patch_size * v.scale", "4096", "25165824", "filter.pil_bicubic", "prec.torch", "2"]},
+      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+     ],
+     "inputs": 2,
+     "entry": [
+      {"op": "patchify", "span": "v.patch_size", "width": "v.scale", "out": "a"},
+      {"op": "patchify", "in": "in1", "span": "v.patch_size", "width": "v.scale", "out": "b"},
+      {"op": "sub", "in": ["b", "a"], "out": "d"},
+      {"op": "linear", "in": "a", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+      {"op": "linear", "in": "d", "w": "v.patch_embd.weight.1", "out": "y"},
+      {"op": "add", "in": ["x", "y"], "out": "xy"},
+      {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | int", "width": "v.scale", "chain": "aligned", "taps": "linear", "out": "pos"},
+      {"op": "add", "in": ["xy", "pos"]}
+     ],
+     "prompt": [
+      {"ids": ["<|vision_start|>"]},
+      {"groups": [{"text": "<"}, {"value": {"value": "(t0 + t1) / 2"}, "format": {"kind": "decimal", "digits": 1}}, {"text": " seconds>"}, {"picture": true}]},
+      {"ids": ["<|vision_end|>"]}
+     ]
+    }
+   }
   },
   "glm4v": {
    "code": 49,
    "output": {"tensor": "mm.down.weight", "dim": 1},
    "flags": ["vision_rope"],
    "requires": ["mm.patch_merger.weight", "v.position_embd.weight"],
-   "scale": "shape['mm.patch_merger.weight'][0] if (shape['mm.patch_merger.weight'] | length) == 4 and shape['mm.patch_merger.weight'][0] == shape['mm.patch_merger.weight'][1] else 0"
+   "scale": "shape['mm.patch_merger.weight'][0] if (shape['mm.patch_merger.weight'] | length) == 4 and shape['mm.patch_merger.weight'][0] == shape['mm.patch_merger.weight'][1] else 0",
+   "tower": {
+    "requires": ["v_patch_embd", "v_embd_norm", "v_pos_embd", "v_post_norm", "v_merge_conv", "v_proj", "v_proj_norm", "v_proj_gate", "v_proj_up", "v_proj_down"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.scale >= 2", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or no merge"},
+     {"that": "((dims['v_pos_embd'][1] ** 0.5) | int) >= 2 and ((dims['v_pos_embd'][1] ** 0.5) | int) * ((dims['v_pos_embd'][1] ** 0.5) | int) == dims['v_pos_embd'][1]", "else": "the position table is not a square grid"}
+    ],
+    "pre": [
+     {"kind": "smart_resize", "ints": ["v.patch_size * v.scale", "6272", "4816896", "filter.pil_bicubic", "prec.pil", "1"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size", "width": "v.scale"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]},
+     {"op": "rms_norm", "w": "v_embd_norm", "eps": "v.eps", "out": "x"},
+     {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | int", "width": "v.scale", "chain": "half_pixel", "taps": "cubic", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "rms",
+     "eps": "v.eps",
+     "gated": true,
+     "rope": {"base": "10000", "dim": "v.embd // v.heads // 2", "neox": true, "runs": [{"count": "1", "each": [{"pairs": "v.embd // v.heads // 4", "axis": "0", "freq": "0"}, {"pairs": "v.embd // v.heads // 4", "axis": "1", "freq": "0"}]}]}
+    },
+    "head": [
+     {"op": "rms_norm", "w": "v_post_norm", "eps": "v.eps"},
+     {"op": "fold", "span": "v.scale * v.scale"},
+     {"op": "linear", "w": ["v_merge_conv", "v_merge_conv.bias?"]},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "layer_norm", "w": ["v_proj_norm", "v_proj_norm.bias?"], "eps": "1e-5"},
+     {"op": "stated", "fn": "gelu_erf", "width": "v.proj_dim", "out": "g"},
+     {"op": "linear", "in": "g", "w": ["v_proj_gate", "v_proj_gate.bias?"], "out": "gate"},
+     {"op": "linear", "in": "g", "w": ["v_proj_up", "v_proj_up.bias?"], "out": "up"},
+     {"op": "stated", "fn": "swiglu", "in": ["gate", "up"], "width": "dims['v_proj_gate'][1]"},
+     {"op": "linear", "w": ["v_proj_down", "v_proj_down.bias?"]}
+    ],
+    "span": {"mark": "<|begin_of_image|><|image|><|end_of_image|>", "before_marks": ["<|begin_of_image|>"], "after_marks": ["<|end_of_image|>"], "grid_div": "v.scale"},
+    "video": {
+     "if": "'v.patch_embd.weight.1' in has",
+     "default_fps": "24",
+     "once": true,
+     "max_frames": "600",
+     "count": {"let": [["d", "round_even((N - 1) / R) + 1"], ["past", "300 < d"], ["within", "max(floor(d * 2), 1)"]], "value": "where(past, where(600 < N, 600, N), within)"},
+     "index": {"let": [["d", "round_even((N - 1) / R) + 1"], ["last", "N - 1"], ["steps", "min(last, ceil(at * R / 2))"], ["k1", "K - 1"], ["secs", "where(at < k1, at * (d / k1), d)"], ["spread", "where(600 < N, min(last, ceil(secs * R)), at)"]], "value": "where(300 < d, spread, steps)"},
+     "group": "2",
+     "sized": {"value": "filled"},
+     "pre": [
+      {"kind": "video_resize", "ints": ["v.patch_size * v.scale", "12544", "47040000", "filter.pil_bicubic", "prec.torch", "2"]},
+      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+     ],
+     "inputs": 2,
+     "entry": [
+      {"op": "patchify", "span": "v.patch_size", "width": "v.scale", "out": "a"},
+      {"op": "patchify", "in": "in1", "span": "v.patch_size", "width": "v.scale", "out": "b"},
+      {"op": "sub", "in": ["b", "a"], "out": "d"},
+      {"op": "linear", "in": "a", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+      {"op": "linear", "in": "d", "w": "v.patch_embd.weight.1", "out": "y"},
+      {"op": "add", "in": ["x", "y"]},
+      {"op": "rms_norm", "w": "v_embd_norm", "eps": "v.eps", "out": "n"},
+      {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | int", "width": "v.scale", "chain": "half_pixel", "taps": "cubic", "out": "pos"},
+      {"op": "add", "in": ["n", "pos"]}
+     ],
+     "prompt": [
+      {"ids": ["<|begin_of_video|>"]},
+      {"groups": [{"picture": true}, {"value": {"value": "t0"}, "format": {"kind": "decimal", "trunc": true}}]},
+      {"ids": ["<|end_of_video|>"]}
+     ]
+    }
+   }
   },
   "kimivl": {
    "code": 50,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
    "requires": ["v.position_embd.weight"],
-   "scale": "src['vision.projector.scale_factor'] | default(2)"
+   "scale": "src['vision.projector.scale_factor'] | default(2)",
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_post_norm", "v_proj_in_norm", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.scale >= 2", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or no merge"},
+     {"that": "((dims['v_pos_embd'][1] ** 0.5) | int) >= 2 and ((dims['v_pos_embd'][1] ** 0.5) | int) * ((dims['v_pos_embd'][1] ** 0.5) | int) == dims['v_pos_embd'][1]", "else": "the position table is not a square grid"}
+    ],
+    "pre": [
+     {"kind": "limit_pad", "ints": ["v.patch_size", "4096", "v.patch_size * v.scale", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | int", "chain": "half_pixel", "taps": "cubic", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "rope": {"base": "10000", "dim": "v.embd // v.heads", "runs": [{"count": "v.embd // v.heads // 4", "each": [{"pairs": "1", "axis": "1", "freq": "2 * j"}, {"pairs": "1", "axis": "0", "freq": "2 * j"}]}]}
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "layer_norm", "w": ["v_proj_in_norm", "v_proj_in_norm.bias?"], "eps": "1e-5"},
+     {"op": "regroup", "span": "v.scale"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "span": {"mark": "<|media_start|>image<|media_content|><|media_pad|><|media_end|>", "before_marks": ["<|media_start|>", "image", "<|media_content|>"], "after_marks": ["<|media_end|>"]}
+   }
   },
   "hunyuanvl": {
    "code": 51,
@@ -73,7 +614,44 @@
    "requires": ["v.position_embd.weight"],
    "scale": "src['vision.spatial_merge_size'] | default(2)",
    "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"},
-   "transforms": {"finish": ["point_conv_projection", "norm_frame_rows"]}
+   "transforms": {"finish": ["point_conv_projection", "norm_frame_rows"]},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_proj_in_norm", "v_merge_conv", "v_proj", "v_img_newline", "v_proj2", "v_img_begin", "v_img_end", "v_proj_norm"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.scale >= 2 and v.min_pixels != 0 and v.max_pixels >= v.min_pixels", "else": "the heads do not divide the width, there are no patches, no merge, or the pixel bounds are not ones"},
+     {"that": "((dims['v_pos_embd'][1] ** 0.5) | int) >= 2 and ((dims['v_pos_embd'][1] ** 0.5) | int) * ((dims['v_pos_embd'][1] ** 0.5) | int) == dims['v_pos_embd'][1]", "else": "the position table is not a square grid"}
+    ],
+    "pre": [
+     {"kind": "smart_resize", "ints": ["v.patch_size * v.scale", "v.min_pixels", "v.max_pixels", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "(dims['v_pos_embd'][1] ** 0.5) | int", "chain": "half_pixel", "taps": "linear", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "act": "gelu_erf"
+    },
+    "head": [
+     {"op": "rms_norm", "w": "v_proj_in_norm", "eps": "v.eps"},
+     {"op": "regroup", "span": "v.scale"},
+     {"op": "linear", "w": ["v_merge_conv", "v_merge_conv.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_merge_conv'][1]"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "row_break", "w": "v_img_newline", "span": "v.scale"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]},
+     {"op": "rms_norm", "w": "v_proj_norm", "eps": "v.eps"},
+     {"op": "wrap_rows", "w": ["v_img_begin", "v_img_end"], "span": "v.scale"}
+    ],
+    "span": {"mark": "<｜hy_place▁holder▁no▁100｜><｜hy_place▁holder▁no▁102｜><｜hy_place▁holder▁no▁101｜>", "before_marks": ["<｜hy_place▁holder▁no▁100｜>"], "after_marks": ["<｜hy_place▁holder▁no▁101｜>"], "grid_div": "v.scale"}
+   }
   },
   "lfm2": {
    "code": 65530,
@@ -82,7 +660,41 @@
    "tiles": {"min": "2", "max": "10"},
    "pixels": {"min": "64 * tower.patch_size * tower.scale * tower.patch_size * tower.scale", "max": "256 * tower.patch_size * tower.scale * tower.patch_size * tower.scale"},
    "tile": {"size": "512", "tolerance": "2"},
-   "resize": "src['vision.image_resize_algo'] | default('bilinear')"
+   "resize": "src['vision.image_resize_algo'] | default('bilinear')",
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_post_norm", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.scale >= 1 and v.image_size % v.patch_size == 0 and v.tile_size != 0 and v.min_tiles >= 1 and v.max_tiles >= v.min_tiles and v.tolerance > 0", "else": "the heads do not divide the width, there are no patches, no merge or no tiles, or the tile bounds or tolerance are not ones"}
+    ],
+    "pre": [
+     {"kind": "tile_smart", "ints": ["v.tile_size", "v.min_tiles", "v.max_tiles", "v.patch_size", "v.patch_size * v.scale", "v.min_pixels", "v.max_pixels", "filter.pil_bicubic if v.bicubic else filter.pil_bilinear", "prec.torch"], "floats": ["v.tolerance"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "v.image_size // v.patch_size", "chain": "half_pixel", "taps": "antialias", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps"
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "regroup", "span": "v.scale"},
+     {"op": "layer_norm", "if": "'v_proj_norm' in has", "w": ["v_proj_norm", "v_proj_norm.bias?"], "eps": "1e-5"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]},
+     {"op": "mark_row", "w": "v.token_embd.tile_marks", "span": "1", "width": "v.scale"}
+    ],
+    "marks": {"grid": {"side": "v.max_tiles", "if": "(r + 1) * (c + 1) <= side", "name": "'<|img_row_' ~ (r + 1) ~ '_col_' ~ (c + 1) ~ '|>'"}, "after": ["<|img_thumbnail|>"]},
+    "span": {"mark": "<image>", "before_marks": ["<|image_start|>"], "after_marks": ["<|image_end|>"]}
+   }
   },
   "d1omni_v": {
    "as": "lfm2"
@@ -101,7 +713,36 @@
   "phi4": {
    "code": 65532,
    "output": {"tensor": "mm.2.weight", "dim": 1},
-   "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"}
+   "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_proj", "v_proj2"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0 and v.min_pixels >= v.patch_size * v.patch_size and v.max_pixels >= v.min_pixels", "else": "the heads do not divide the width, or the patches the picture, or the pixel bounds hold no patch"}
+    ],
+    "pre": [
+     {"kind": "naflex", "ints": ["v.patch_size", "v.min_pixels // (v.patch_size * v.patch_size)", "v.max_pixels // (v.patch_size * v.patch_size)", "filter.pil_bilinear", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_resample", "in": [], "w": "v_pos_embd", "span": "v.image_size // v.patch_size", "chain": "half_pixel", "taps": "antialias", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps"
+    },
+    "head": [
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
+    ],
+    "span": {"mark": "<image>"}
+   }
   },
   "gemma4v": {
    "code": 65533,
@@ -111,20 +752,147 @@
    "mean": [0.5, 0.5, 0.5],
    "std": [0.5, 0.5, 0.5],
    "activation": "gelu",
-   "transforms": {"prepare": ["half_neox_to_neox", "negate_std_bias"]}
+   "transforms": {"prepare": ["half_neox_to_neox", "negate_std_bias"]},
+   "tower": {
+    "requires": ["v_patch_embd", "v_pos_embd", "v_proj"],
+    "require": [
+     {"that": "('v.std_bias' in has) == ('v.std_scale' in has)", "else": "a standardisation states a bias and no scale, or a scale and no bias"},
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.scale >= 1", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or no pool"},
+     {"that": "dims['v_pos_embd'] | length == 3 and dims['v_pos_embd'][2] == 2 and dims['v_pos_embd'][1] >= 1", "else": "the position tables are not two of one length"}
+    ],
+    "pre": [
+     {"kind": "aspect_budget", "ints": ["280 * v.scale * v.scale", "v.patch_size", "v.patch_size * v.scale", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "pos_axes", "in": [], "w": "v_pos_embd", "span": "dims['v_pos_embd'][1]", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "rms",
+     "eps": "v.eps",
+     "gated": true,
+     "attn_scale": "1",
+     "v_norm": true,
+     "rope": {"base": "100", "dim": "v.embd // v.heads // 2", "neox": true, "runs": [{"count": "1", "each": [{"pairs": "v.embd // v.heads // 4", "axis": "1", "freq": "0"}, {"pairs": "v.embd // v.heads // 4", "axis": "0", "freq": "0"}]}]}
+    },
+    "head": [
+     {"op": "pool", "span": "v.scale"},
+     {"op": "stated", "fn": "scale", "const": "v.embd ** 0.5"},
+     {"op": "shift", "if": "'v.std_bias' in has", "w": "v.std_bias"},
+     {"op": "scale", "if": "'v.std_bias' in has", "w": "v.std_scale"},
+     {"op": "rms_norm", "eps": "v.eps"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]}
+    ],
+    "span": {"mark": "<|image|>", "before_marks": ["<|image>"], "after_marks": ["<image|>"], "bidir_if": "text.bidir_layers > 0"},
+    "video": {
+     "default_fps": "24",
+     "count": {"value": "min(N, 32)"},
+     "index": {"value": "f32(at * (N / K))"},
+     "max_frames": "32",
+     "group": "1",
+     "sized": {"value": "sampled"},
+     "pre": [
+      {"kind": "aspect_budget", "ints": ["70 * v.scale * v.scale", "v.patch_size", "v.patch_size * v.scale", "filter.pil_bicubic", "prec.pil"]},
+      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+     ],
+     "prompt": [
+      {"groups": [{"value": {"value": "t0"}, "format": {"kind": "clock", "clock": [0, 2, 2], "sep": ":"}}, {"text": " "}, {"picture": true}], "between": [{"text": " "}]}
+     ]
+    }
+   }
   },
   "llama4": {
    "code": 65534,
    "output": {"tensor": "mm.model.fc.weight", "dim": 1},
    "flags": ["vision_rope"],
-   "tiles": {"min": "1", "max": "16"}
+   "tiles": {"min": "1", "max": "16"},
+   "tower": {
+    "requires": ["v_patch_embd", "v_class_embd", "v_pos_embd", "v_pre_norm", "v_post_norm", "v_proj", "v_proj2", "mm.model.fc"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and (v.embd // v.heads) % 4 == 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0 and v.scale >= 1 and (v.image_size // v.patch_size) % v.scale == 0 and v.max_tiles >= 1", "else": "the heads do not divide the width or a head's into quarters, the patches the picture, or the shuffle the grid, or there are no tiles"}
+    ],
+    "pre": [
+     {"kind": "resize", "ints": ["v.image_size", "v.image_size", "filter.pil_bilinear", "prec.torch"]},
+     {"kind": "best_fit", "ints": ["v.max_tiles"]},
+     {"kind": "normalize_bf16", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]},
+     {"op": "tail_row", "w": "v_class_embd", "out": "x"},
+     {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
+     {"op": "add", "in": ["x", "pos"]},
+     {"op": "layer_norm", "w": ["v_pre_norm", "v_pre_norm.bias?"], "eps": "v.eps"}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "layer",
+     "eps": "v.eps",
+     "fn": "gelu_erf",
+     "rope": {"base": "10000", "dim": "v.embd // v.heads // 2", "origin": "1", "runs": [{"count": "1", "each": [{"pairs": "v.embd // v.heads // 4", "axis": "1", "freq": "0"}, {"pairs": "v.embd // v.heads // 4", "axis": "0", "freq": "0"}]}]}
+    },
+    "head": [
+     {"op": "layer_norm", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
+     {"op": "regroup", "span": "v.scale"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]},
+     {"op": "stated", "fn": "gelu_erf"},
+     {"op": "linear", "w": "mm.model.fc"},
+     {"op": "mark_row", "w": "v.token_embd.tile_marks", "span": "1", "width": "v.scale", "offset": "1"}
+    ],
+    "marks": {"names": ["<|tile_x_separator|>", "<|tile_y_separator|>", "<|image|>"]},
+    "span": {"mark": "<|image|>", "before_marks": ["<|image_start|>"], "after_marks": ["<|image_end|>"]}
+   }
   },
   "pixtral": {
    "code": 65535,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
    "scale": "src['vision.spatial_merge_size'] | default(1)",
-   "transforms": {"joined": ["image_break_row"], "prepare": ["permute_merger"]}
+   "transforms": {"joined": ["image_break_row"], "prepare": ["permute_merger"]},
+   "tower": {
+    "requires": ["v_patch_embd", "v_post_norm", "v_proj", "v_proj2", "v.token_embd.img_break"],
+    "require": [
+     {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.image_size != 0 and (v.embd // v.heads) % 4 == 0 and (v.scale <= 1 or 'mm.patch_merger' in has)", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or the file merges with no merger"}
+    ],
+    "pre": [
+     {"kind": "cap_unit", "ints": ["v.image_size", "v.patch_size * (v.scale if v.scale > 1 else 1)", "filter.pil_bicubic", "prec.pil"]},
+     {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "v.patch_size"},
+     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]},
+     {"op": "rms_norm", "if": "'v_pre_norm' in has", "w": "v_pre_norm", "eps": "v.eps"}
+    ],
+    "block": {
+     "heads": "v.heads",
+     "kv_heads": "v.heads",
+     "head_dim": "v.embd // v.heads",
+     "norm": "rms",
+     "eps": "v.eps",
+     "gated": true,
+     "rope": {"base": "10000", "dim": "v.embd // v.heads", "runs": [{"count": "v.embd // v.heads // 4", "each": [{"pairs": "1", "axis": "0", "freq": "2 * j"}]}, {"count": "v.embd // v.heads // 4", "each": [{"pairs": "1", "axis": "1", "freq": "2 * j + 1"}]}]}
+    },
+    "head": [
+     {"op": "rms_norm", "w": "v_post_norm", "eps": "v.eps"},
+     {"op": "regroup", "if": "v.scale > 1", "span": "v.scale"},
+     {"op": "linear", "if": "v.scale > 1", "w": "mm.patch_merger"},
+     {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
+     {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
+     {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]},
+     {"op": "row_break", "w": "v.token_embd.img_break", "span": "v.scale if v.scale > 1 else 1", "offset": "1"}
+    ],
+    "span": {"mark": "[IMG]", "after_marks": ["[IMG_END]"]}
+   }
   }
  }
 }

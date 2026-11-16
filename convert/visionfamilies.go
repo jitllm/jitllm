@@ -446,19 +446,3 @@ func markRows(s *jlm.Source, ids []int32) error {
 	s.Tensors = append(s.Tensors, e)
 	return nil
 }
-
-// tileMarks writes a tiled picture's marker rows: <|img_row_R_col_C|> at
-// (R-1)*span + C-1 for every tile a grid of at most span tiles reaches, then
-// <|img_thumbnail|>; the rows no grid reaches are zero.
-func tileMarks(s *jlm.Source, span int) error {
-	names := make([]string, span*span+1)
-	for r := range span {
-		for c := range span {
-			if (r+1)*(c+1) <= span {
-				names[r*span+c] = fmt.Sprintf("<|img_row_%d_col_%d|>", r+1, c+1)
-			}
-		}
-	}
-	names[span*span] = "<|img_thumbnail|>"
-	return markTable(s, names)
-}

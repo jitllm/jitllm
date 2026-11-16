@@ -380,7 +380,11 @@ func TestSmolVLMStatesItsVideo(t *testing.T) {
 	}
 	// SmolVLMProcessor renders a conversation carrying a video by its own
 	// template, the published one writing no video part.
-	if body, ok := f.Vocab().Template("video"); !ok || body != smolvlmVideoTemplate {
+	lt, _, err := libraryTower(jlm.ProjIdefics3)
+	if err != nil || lt == nil || lt.Video == nil || lt.Video.Template == "" {
+		t.Fatalf("the library states no SmolVLM video template: %v", err)
+	}
+	if body, ok := f.Vocab().Template("video"); !ok || body != lt.Video.Template {
 		t.Fatalf("the container states the video template %v: want SmolVLMProcessor's", ok)
 	}
 	if _, ok := f.Vocab().Template("default"); !ok {
