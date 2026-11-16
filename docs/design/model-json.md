@@ -144,7 +144,14 @@ schema; `convert/modeljson.go` reads it. Its sections:
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
   state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. It replaces `configOfFile`'s case for
+  period over no window is refused. `latent` states latent attention's
+  ranks, `kv` and `q` (0 where the query is projected in one step; a file
+  whose keys and values are no latent states `q` alone), and `indexer` the
+  indexer selecting the positions attention reads: `heads`, `key_width` and
+  `top_k`, each a count, all three 0 for none. A stated `kv` of 0, and an
+  indexer missing a count, with a key that is not whole groups of eight or
+  narrower than the rotary, or over a key-value latent with no query latent
+  are refused (`indexerFits`). It replaces `configOfFile`'s case for
   the architecture; one statement per architecture, and an expression
   reading anything but `src` is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name

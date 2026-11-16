@@ -68,8 +68,9 @@ const k3LatentNormEps = 1e-6
 //	                                               lb*sigmoid(exp(A_log)*(f+dt))
 //	                                               in place of -exp(A_log)*
 //	                                               softplus(f+dt)
-//	attention.kv_lora_rank, q_lora_rank, MLA with  -> KVLoraRank, QLoraRank,
-//	  no rotary (mla_use_nope)                       FlagNoPosEnc
+//	MLA with no rotary (mla_use_nope)              -> FlagNoPosEnc (the ranks
+//	                                               are latent_delta.json's
+//	                                               container statement)
 //	attn_res.block_size                            -> AttnResBlock
 //	expert_latent_length                           -> ExpertLatent
 //	activation.situ_beta, situ_linear_beta         -> SituBeta, SituLinearBeta
@@ -86,11 +87,6 @@ func kimiK3Config(f *meta.File, c *Config) error {
 		return err
 	}
 	c.LayerKinds = kinds
-	c.KVLoraRank = uint32(f.UintKey("attention.kv_lora_rank", 0))
-	c.QLoraRank = uint32(f.UintKey("attention.q_lora_rank", 0))
-	if c.KVLoraRank == 0 {
-		return fmt.Errorf("no attention.kv_lora_rank: Kimi-K3's full blocks are MLA")
-	}
 	if c.NRot == 0 || c.NRot >= c.HeadDim {
 		return fmt.Errorf("rope.dimension_count %d on a key of %d: the MLA key's shared part sizes "+
 			"the cached row", c.NRot, c.HeadDim)

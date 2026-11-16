@@ -70,34 +70,6 @@ func flagshipRoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// deepseek32Config is llama.cpp's deepseek32.cpp and transformers'
-// DeepseekV32ForCausalLM: deepseek2's MLA and V3 router, read by the shared
-// path, plus DeepSeek Sparse Attention's lightning indexer:
-//
-//	attention.indexer.head_count  -> IdxHeads   heads of the indexer's query
-//	attention.indexer.key_length  -> IdxHeadDim one key per position, cached
-//	attention.indexer.top_k       -> IdxTopK    the positions attention reads
-//
-// The indexer's query is projected from the query latent, so a model without
-// q_lora_rank has nothing to project it from and is refused; its rotary is
-// the model's on the first rope.dimension_count dimensions of each head.
-func deepseek32Config(f *meta.File, c *Config) error {
-	c.IdxHeads = uint32(f.UintKey("attention.indexer.head_count", 0))
-	c.IdxHeadDim = uint32(f.UintKey("attention.indexer.key_length", 0))
-	c.IdxTopK = uint32(f.UintKey("attention.indexer.top_k", 0))
-	switch {
-	case c.IdxHeads == 0 || c.IdxHeadDim == 0 || c.IdxTopK == 0:
-		return fmt.Errorf("indexer %d heads of %d, top %d: deepseek32 has an indexer",
-			c.IdxHeads, c.IdxHeadDim, c.IdxTopK)
-	case c.KVLoraRank == 0 || c.QLoraRank == 0:
-		return fmt.Errorf("an indexer with no query latent (q_lora_rank %d, kv_lora_rank %d)",
-			c.QLoraRank, c.KVLoraRank)
-	case c.IdxHeadDim%8 != 0 || c.NRot > c.IdxHeadDim:
-		return fmt.Errorf("indexer heads of %d with a %d-wide rotary", c.IdxHeadDim, c.NRot)
-	}
-	return nil
-}
-
 // gemma4Config is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
 // text only: gemma3's block with two attention geometries (the global layers'
 // HeadDim, NKVHead and NRot, the sliding layers' their own, each block's

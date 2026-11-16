@@ -324,21 +324,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		return nil, err
 	}
 	switch arch {
-	case ArchDeepseek2, ArchDeepseek32:
-		// The two latent ranks. The explicit key is the authority; value_length is
-		// the fallback because on this arch it is kv_lora_rank (the absorbed row,
-		// see above). The safetensors path reads these from config.json directly, so
-		// only a real GGUF exercises this.
-		c.KVLoraRank = uint32(f.UintKey("attention.kv_lora_rank",
-			f.UintKey("attention.value_length", 0)))
-		// Absent on V2-Lite, whose q_lora_rank is null: it projects the query
-		// straight to NHead*HeadDim, and model.mlaProject asks the config.
-		c.QLoraRank = uint32(f.UintKey("attention.q_lora_rank", 0))
-		if arch == ArchDeepseek32 {
-			if err := deepseek32Config(f, c); err != nil {
-				return nil, fmt.Errorf("convert: %s: %w", name, err)
-			}
-		}
 	case ArchPhi3:
 		// phi3, and phi4 which uses this arch string too. No fusion flags: the
 		// converter unfuses phi3's attn_qkv and fused ffn_up (see unfuse), because

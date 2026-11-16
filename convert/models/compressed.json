@@ -1,5 +1,10 @@
 {
   "gguf": ["deepseek4"],
+  "container": {
+    "deepseek4": {"latent": {"q": "src['attention.q_lora_rank'] | default(0)"},
+      "window": {"size": "src['attention.sliding_window'] | default(0)", "period": "src['block_count'] + 1", "rope_base": "src['rope.freq_base'] | default(10000)"},
+      "indexer": {"heads": "src['attention.indexer.head_count'] | default(0)", "key_width": "src['attention.indexer.key_length'] | default(0)", "top_k": "src['attention.indexer.top_k'] | default(0)"}}
+  },
   "graph": {
     "block": [
       {"op": "in", "out": "x", "width": "embd"},

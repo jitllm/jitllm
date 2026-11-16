@@ -70,6 +70,8 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "gemma3", keys: with(with(gemma, "attention.sliding_window", meta.MakeUint(512)),
 			"attention.sliding_window_pattern", meta.MakeUint(4)),
 			flags: qk | jlm.FlagGELU, scale: float32(math.Sqrt(2048)), win: 512, period: 4, ropeSWA: 10000},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
+			win: 128, period: 5, ropeSWA: 10000},
 		{arch: "gpt-oss", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128)},
 			flags: neox | jlm.FlagSwiGLUOAI | jlm.FlagYarnExact, win: 128, period: 2},
 	} {
@@ -93,6 +95,55 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 			t.Errorf("%s: window %d every %d at base %g, caps %g %g; want %d every %d at %g, %g %g", tc.arch,
 				c.SWAWindow, c.SWAPeriod, c.RopeBaseSWA, c.AttnSoftcap, c.FinalSoftcap,
 				tc.win, tc.period, tc.ropeSWA, tc.acap, tc.fcap)
+		}
+	}
+	u := meta.MakeUint
+	for _, tc := range []struct {
+		arch               string
+		keys               map[string]meta.Value
+		kv, q, heads, w, k uint32
+	}{
+		{arch: "deepseek2", keys: map[string]meta.Value{"attention.value_length": u(512)}, kv: 512},
+		{arch: "deepseek2", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.value_length": u(80),
+			"attention.q_lora_rank": u(96)}, kv: 64, q: 96},
+		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64)}, kv: 64},
+		{arch: "kimi-k3", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64)}, kv: 64},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
+			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)}, q: 96, heads: 4, w: 32, k: 8},
+		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
+			"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
+			kv: 64, q: 96, heads: 4, w: 32, k: 8},
+	} {
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString(tc.arch)}
+		for k, v := range tc.keys {
+			kv[tc.arch+"."+k] = v
+		}
+		c := &Config{Config: &jlm.Config{}}
+		if err := stateContainer(meta.New(tc.arch+".gguf", kv, nil), c); err != nil {
+			t.Fatalf("%s: %v", tc.arch, err)
+		}
+		if c.KVLoraRank != tc.kv || c.QLoraRank != tc.q || c.IdxHeads != tc.heads || c.IdxHeadDim != tc.w || c.IdxTopK != tc.k {
+			t.Errorf("%s %v: latents %d %d, indexer %d of %d top %d; want %d %d, %d of %d top %d", tc.arch, tc.keys,
+				c.KVLoraRank, c.QLoraRank, c.IdxHeads, c.IdxHeadDim, c.IdxTopK, tc.kv, tc.q, tc.heads, tc.w, tc.k)
+		}
+	}
+	for want, keys := range map[string]map[string]meta.Value{
+		"an indexer of 0 heads": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
+			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
+		"no key-value rank": {"attention.q_lora_rank": u(96)},
+		"no query latent": {"attention.kv_lora_rank": u(64), "attention.indexer.head_count": u(4),
+			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
+		"with a 64-wide rotary": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
+			"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(36), "attention.indexer.top_k": u(8)},
+	} {
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString("deepseek32")}
+		for k, v := range keys {
+			kv["deepseek32."+k] = v
+		}
+		err := stateContainer(meta.New("deepseek32.gguf", kv, nil), &Config{Config: &jlm.Config{NRot: 64}})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("deepseek32 with %v: %v, want an error naming %q", keys, err, want)
 		}
 	}
 	kv := map[string]meta.Value{"general.architecture": meta.MakeString("command-r"), "command-r.logit_scale": meta.MakeFloat(-2)}
@@ -132,6 +183,9 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"norm_eps": "src[["}`, "jinja expression"},
 		{`"x": {"window": {"period": "2"}}`, "states its size"},
 		{`"x": {"window": {"size": "8", "period": "2", "pattern": "2"}}`, "not both"},
+		{`"x": {"latent": {"kv": "64"}}`, "states its query rank"},
+		{`"x": {"indexer": {"heads": "4", "top_k": "8"}}`, "states its heads, key_width and top_k"},
+		{`"x": {"indexer": {"heads": "n", "key_width": "32", "top_k": "8"}}`, "is not the keys"},
 	} {
 		_, err := parseModelJSON([]byte(file(tc.states)), "test")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
