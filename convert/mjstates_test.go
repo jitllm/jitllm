@@ -115,6 +115,34 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 	}
 }
 
+// TestTheLibraryStatesTheRopeSections holds the M-RoPE sections the library
+// states to the ones the qwen3next family's case read: the file's own, none
+// where it writes none, and a split short of the head's pairs refused.
+func TestTheLibraryStatesTheRopeSections(t *testing.T) {
+	for _, arch := range []string{"qwen3next", "qwen35", "qwen35moe", "qwen4exp", "clef"} {
+		keys := map[string]meta.Value{"ssm.conv_kernel": meta.MakeUint(4), "ssm.group_count": meta.MakeUint(2),
+			"ssm.inner_size": meta.MakeUint(64), "ssm.state_size": meta.MakeUint(16), "ssm.time_step_rank": meta.MakeUint(4)}
+		for _, tc := range []struct {
+			secs []int32
+			want [4]uint32
+			fail bool
+		}{
+			{nil, [4]uint32{}, false},
+			{[]int32{11, 11, 10, 0}, [4]uint32{11, 11, 10, 0}, false},
+			{[]int32{11, 11, 9}, [4]uint32{}, true},
+		} {
+			if tc.secs != nil {
+				keys["rope.dimension_sections"] = meta.MakeInt32s(tc.secs)
+			}
+			c := &Config{Arch: ArchQwen3Next, Config: &jlm.Config{NRot: 64}}
+			err := stateContainer(layerFile(arch, keys, nil), c)
+			if tc.fail != (err != nil) || !tc.fail && c.RopeSections != tc.want {
+				t.Errorf("%s %v: sections %v, %v; want %v, refused %v", arch, tc.secs, c.RopeSections, err, tc.want, tc.fail)
+			}
+		}
+	}
+}
+
 // TestContainerStatementsAreChecked refuses a statement for an architecture
 // the file does not name, a flag no reader states, an activation that is
 // not the container's, and an expression reading anything but the keys; a
@@ -148,8 +176,12 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{mjStates{NormEps: "'small'"}, "not a number"},
 		{mjStates{EmbdScale: "src['width']"}, "is undefined"},
 		{mjStates{Flags: map[string]string{"post_norm": "true"}}, "not implemented"},
+		{mjStates{RopeSections: "src['heads']"}, "not a list"},
+		{mjStates{RopeSections: "[4, -1]"}, "not a count"},
+		{mjStates{RopeSections: "[8, 8]"}, "sum to 16"},
 	} {
-		if err := tc.st.compile([]string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale}); err != nil {
+		if err := tc.st.compile([]string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale,
+			tc.st.RopeSections}); err != nil {
 			t.Fatal(err)
 		}
 		err := tc.st.apply("test", f, &Config{Config: &jlm.Config{}})
