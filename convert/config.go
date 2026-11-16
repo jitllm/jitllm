@@ -344,10 +344,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := gemma3nConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchGraniteHybrid:
-		if err := graniteHybridConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchNemotronH:
 		if err := nemotronConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
