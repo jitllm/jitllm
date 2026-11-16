@@ -7,42 +7,61 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// Nemotron-H's source layers are each ONE mixer under its own RMSNorm --
-// Mamba-2 (M), attention (*) or a squared-ReLU MLP (-) -- where this engine's
-// block is a mixer and an FFN. llama.cpp's nemotron-h.cpp runs them as
-// `x = x + mixer(norm(x))` one at a time; a mixer followed by an MLP is
-// exactly one block of a mixer and an FFN, the MLP's norm becoming the FFN's.
-// So the converter merges each mixer with the MLP that follows it, and a
-// mixer followed by another mixer becomes a block with no FFN (nn's NoFFN).
-// Every published pattern starts with a mixer and puts every MLP after one;
-// an MLP that follows an MLP or opens the stack is refused by name.
+// A source of one-mixer layers (merge_mixers; Nemotron-H's) is layers that
+// are each ONE mixer under its own RMSNorm -- a recurrent mixer, attention or
+// an MLP -- where this engine's block is a mixer and an FFN. Such a source
+// runs them as `x = x + mixer(norm(x))` one at a time; a mixer followed by an
+// MLP is exactly one block of a mixer and an FFN, the MLP's norm becoming the
+// FFN's. So the converter merges each mixer with the MLP that follows it,
+// and a mixer followed by another mixer becomes a block with no FFN (nn's
+// NoFFN). An MLP that follows an MLP or opens the stack is refused.
 
-// nemotronPlan is the merge: source layer i lands in block dst[i], and ffn[i]
+// mixerPlan is the merge: source layer i lands in block dst[i], and ffn[i]
 // says it is an MLP layer, whose attn_norm is the block's ffn_norm.
-type nemotronPlan struct {
+type mixerPlan struct {
 	dst   []int32
 	ffn   []bool
 	kinds []jlm.LayerKind
 }
 
-// nemotronPlanOf reads the source layers' kinds off the tensors -- a layer
-// with a convolution is Mamba-2, one with a query projection attends, one
-// with an up projection or a router is an MLP -- and merges them.
-func nemotronPlanOf(f *meta.File) (*nemotronPlan, error) {
+// mixerPlanOf reads the source layers' kinds off the tensors -- a layer
+// carrying the tensors of a kind the statement's layers entries name is a
+// mixer of that kind, one with a query projection attends, one with an up
+// projection or a router is an MLP -- and merges them.
+func mixerPlanOf(f *meta.File) (*mixerPlan, error) {
 	n := int(f.UintKey("block_count", 0))
 	if n == 0 {
 		return nil, fmt.Errorf("no block_count")
+	}
+	st, _, err := ggufStates(f.Arch())
+	if err != nil {
+		return nil, err
 	}
 	has := func(i int, t string) bool {
 		_, ok := f.Get("blk." + itoa(i) + "." + t)
 		return ok
 	}
-	p := &nemotronPlan{dst: make([]int32, n), ffn: make([]bool, n)}
+	stated := func(i int) (jlm.LayerKind, bool) {
+		var k jlm.LayerKind
+		found := false
+		for _, l := range st.Layers {
+			carries := true
+			for _, t := range l.Tensors {
+				carries = carries && has(i, t)
+			}
+			if carries {
+				k, found = mjLayerKinds()[l.Kind], true
+			}
+		}
+		return k, found
+	}
+	p := &mixerPlan{dst: make([]int32, n), ffn: make([]bool, n)}
 	open := false // the last block has no FFN yet
 	for i := 0; i < n; i++ {
+		k, mixer := stated(i)
 		switch {
-		case has(i, "ssm_conv1d.weight"):
-			p.kinds = append(p.kinds, jlm.LayerSSD)
+		case mixer:
+			p.kinds = append(p.kinds, k)
 			open = true
 		case has(i, "attn_q.weight"):
 			p.kinds = append(p.kinds, jlm.LayerFullAttn)
@@ -55,7 +74,7 @@ func nemotronPlanOf(f *meta.File) (*nemotronPlan, error) {
 			p.dst[i] = int32(len(p.kinds) - 1)
 			continue
 		default:
-			return nil, fmt.Errorf("layer %d is neither Mamba-2, attention nor an MLP", i)
+			return nil, fmt.Errorf("layer %d is neither a stated mixer, attention nor an MLP", i)
 		}
 		p.dst[i] = int32(len(p.kinds) - 1)
 	}
@@ -63,7 +82,7 @@ func nemotronPlanOf(f *meta.File) (*nemotronPlan, error) {
 }
 
 // remap moves a source tensor to its merged block and role.
-func (p *nemotronPlan) remap(role jlm.Role, block int32) (jlm.Role, int32, error) {
+func (p *mixerPlan) remap(role jlm.Role, block int32) (jlm.Role, int32, error) {
 	if block < 0 {
 		return role, block, nil
 	}
@@ -77,13 +96,13 @@ func (p *nemotronPlan) remap(role jlm.Role, block int32) (jlm.Role, int32, error
 }
 
 // mergeMixers merges a source of one-mixer layers into blocks (the
-// merge_mixers statement; Nemotron-H's, see nemotronPlan) and reads the MLP's
+// merge_mixers statement; Nemotron-H's, see mixerPlan) and reads the MLP's
 // width, which the source states per layer with zero on the mixers.
 // Refused: a latent mixture (moe_latent_size, Nemotron 3 Super's: the experts
 // at a narrower width between two more matrices) and a prediction block,
 // neither built for such a source.
 func mergeMixers(f *meta.File, c *Config) error {
-	p, err := nemotronPlanOf(f)
+	p, err := mixerPlanOf(f)
 	if err != nil {
 		return err
 	}
