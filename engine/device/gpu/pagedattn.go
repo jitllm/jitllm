@@ -615,6 +615,9 @@ func (g *devTier) dropKVLayer(kp *kvPool, li int) {
 	}
 	g.freeKVLayer(l)
 	delete(kp.layers, li)
+	if li == keyBlock(li) {
+		delete(kp.hists, li)
+	}
 	for s := range l.owned {
 		kp.dropRange(s)
 	}

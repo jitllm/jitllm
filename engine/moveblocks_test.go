@@ -84,6 +84,12 @@ func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts nn.Parts
 // blocksMoveBetweenDevicesWith is blocksMoveBetweenDevices with check given
 // the tier's counts once the moves ran.
 func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.Parts, check func(gpu.Stats), opts ...Option) {
+	blocksMoveBetweenDevicesOf(t, func() (*model.Model, error) { return model.Open(path) }, arm, parts, check, opts...)
+}
+
+// blocksMoveBetweenDevicesOf is blocksMoveBetweenDevicesWith on the model
+// open opens.
+func blocksMoveBetweenDevicesOf(t *testing.T, open func() (*model.Model, error), arm int, parts nn.Parts, check func(gpu.Stats), opts ...Option) {
 	a, b := moveDevices(t)
 	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
@@ -92,7 +98,7 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 	defer g.Close()
 	distinctCards(t, g)
 	instOpts := append(opts, WithPlacement(Placement{Rest: &Place{On: a}, Head: &Place{On: a}}))
-	m, err := model.Open(path)
+	m, err := open()
 	if err != nil {
 		t.Fatal(err)
 	}

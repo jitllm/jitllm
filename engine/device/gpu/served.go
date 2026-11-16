@@ -3059,10 +3059,10 @@ func (g *devTier) bindHists(t map[composer.TableKey]backend.Buf, src int) {
 	if g.kvp == nil {
 		return
 	}
-	for h := 1; ; h++ {
+	for h := 1; h < g.kvp.blockHists(src); h++ {
 		pe := g.kvp.layers[histKey(src, h)]
 		if pe == nil {
-			return
+			continue
 		}
 		t[composer.TableKey{Table: composer.TableKeys, Instance: h}] = pe.k
 		t[composer.TableKey{Table: composer.TablePages, Instance: h}] = pe.tab
@@ -3136,7 +3136,11 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			history: poolHistory(geom),
 			keys:    keys, page: page, seqs: seqs, paged: l.paged(), context: context}
 		for h := 1; h < nh; h++ {
-			sl.more = append(sl.more, entryHistory(g.kvp.layers[histKey(l.kvSrc, h)].geom))
+			var eh composer.History
+			if pe := g.kvp.layers[histKey(l.kvSrc, h)]; pe != nil {
+				eh = entryHistory(pe.geom)
+			}
+			sl.more = append(sl.more, eh)
 		}
 		g.bindHists(sl.tables, l.kvSrc)
 		if run != nil {

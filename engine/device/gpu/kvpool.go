@@ -55,16 +55,11 @@ func histKey(li, h int) int { return li | h<<histShift }
 
 func keyBlock(key int) int { return key & (1<<histShift - 1) }
 
-// blockHists is how many histories key li's block keeps in kp: its rows'
-// and each past them its graph appends to, numbered from 0 without a gap.
+// blockHists bounds the indices of the histories key li's block keeps in
+// kp: its rows' and each past them its graph appends to, an index below it
+// with no pool layer one the block does not keep.
 func (kp *kvPool) blockHists(li int) int {
-	n := 1
-	for {
-		if _, ok := kp.layers[histKey(li, n)]; !ok {
-			return n
-		}
-		n++
-	}
+	return max(1, kp.hists[keyBlock(li)])
 }
 func (k kvGeom) vWords(p int) int {
 	switch {
@@ -202,7 +197,10 @@ type kvPool struct {
 	// short and read the wrong memory.
 	maxBytes uint64
 	layers   map[int]*kvLayerPool
-	ranges   map[seqID]tabRange
+	// hists is, per block keeping a history past its rows, one past the
+	// highest index it keeps (blockHists).
+	hists  map[int]int
+	ranges map[seqID]tabRange
 	// tabWords is every arena's size; tabTop the first word never handed out
 	// (word 0 is the dummy entry); tabFree runs given back, reused first-fit.
 	tabWords, tabTop int
@@ -222,7 +220,7 @@ type kvPool struct {
 // newKVPool starts a pool of p-position pages with no layers. maxBuf is the
 // backend's largest buffer in bytes, 0 for no limit.
 func newKVPool(p int, maxBuf uint64) *kvPool {
-	return &kvPool{p: p, maxBytes: maxBuf, layers: map[int]*kvLayerPool{},
+	return &kvPool{p: p, maxBytes: maxBuf, layers: map[int]*kvLayerPool{}, hists: map[int]int{},
 		ranges: map[seqID]tabRange{}, tabWords: 256, tabTop: 1}
 }
 
@@ -258,6 +256,9 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 		return nil
 	}
 	n = max(n, 1)
+	if h := li >> histShift; h > 0 {
+		kp.hists[keyBlock(li)] = max(kp.hists[keyBlock(li)], h+1)
+	}
 	l := &kvLayerPool{geom: geom, n: n, owned: map[seqID][]uint32{}, clk: &g.clk}
 	for id := n - 1; id >= 1; id-- {
 		l.free = append(l.free, uint32(id))

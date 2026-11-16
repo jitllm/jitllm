@@ -440,10 +440,10 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 						return err
 					}
 				}
-				for h := 0; ; h++ {
+				for h := range kp.blockHists(src) {
 					l := kp.layers[histKey(src, h)]
 					if l == nil {
-						break
+						continue
 					}
 					if err := upload(l, q, u.p0, u.p1); err != nil {
 						return err
