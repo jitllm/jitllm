@@ -1089,13 +1089,7 @@ func historyPool(b *graph.Builder, h graph.StateRef, a graph.Attrs, bias jlm.Rol
 			graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0])
 		values = append(values, b.HistoryRows(h, graph.Attrs{Span: span, Width: a.Width, Offset: vo, Local: back}, width))
 	}
-	n := len(scores) * span
-	sc, v := scores[0], values[0]
-	if len(scores) > 1 {
-		sc = b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "pool.scores", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
-		v = b.Emit(graph.OpConcat, values, []graph.Result{{Name: "pool.values", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
-	}
-	return b.ColumnSoftmaxSum(sc, v, n, width), nil
+	return b.ColumnSoftmaxSum(scores, values, span, width), nil
 }
 
 // emitted is an emit's op on b over in, reading the histories hist: its

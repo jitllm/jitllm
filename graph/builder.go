@@ -125,20 +125,37 @@ func (s *Builder) HistoryRows(h StateRef, a Attrs, width int) ValueID {
 	return y
 }
 
-// ColumnSoftmaxSum is, of scores and values each n rows of width, each
-// column's values weighted by the softmax of its scores over the n rows and
-// summed: width elements.
-func (s *Builder) ColumnSoftmaxSum(scores, values ValueID, n, width int) ValueID {
+// ColumnSoftmaxSum is, of the segments scores[i] and values[i], each n rows
+// of width, each column's values weighted by the softmax of its scores over
+// every segment's rows and summed: width elements. Each segment is read
+// where it is, with no copy of the segments side by side: the softmax's
+// maximum is the larger of theirs, its sums the sum of theirs.
+func (s *Builder) ColumnSoftmaxSum(scores, values []ValueID, n, width int) ValueID {
 	emit := func(k OpKind, name string, w int, in []ValueID, at Attrs) ValueID {
 		return s.Emit(k, in, []Result{{Name: name, Width: w}}, nil, at, nil, nil)[0]
 	}
 	column := func(name string, fn MapFn, x ValueID) ValueID {
 		return emit(OpReduce, name, width, []ValueID{x}, Attrs{Fn: fn, Span: n, HeadDim: width})
 	}
-	m := emit(OpTile, "pool.max", n*width, []ValueID{column("pool.best", MapMax, scores)}, Attrs{Span: width})
-	e := emit(OpMap, "pool.exp", n*width, []ValueID{emit(OpMap, "pool.shift", n*width, []ValueID{scores, m}, Attrs{Fn: MapSub})}, Attrs{Fn: MapExp})
-	num := column("pool.num", MapAdd, emit(OpMap, "pool.weighted", n*width, []ValueID{e, values}, Attrs{Fn: MapMul}))
-	return emit(OpMap, "pool", width, []ValueID{num, column("pool.sum", MapAdd, e)}, Attrs{Fn: MapDiv})
+	across := func(name string, fn MapFn, xs []ValueID) ValueID {
+		y := xs[0]
+		for _, x := range xs[1:] {
+			y = emit(OpMap, name, width, []ValueID{y, x}, Attrs{Fn: fn})
+		}
+		return y
+	}
+	var bests []ValueID
+	for _, sc := range scores {
+		bests = append(bests, column("pool.best", MapMax, sc))
+	}
+	m := emit(OpTile, "pool.max", n*width, []ValueID{across("pool.best", MapMax, bests)}, Attrs{Span: width})
+	var nums, sums []ValueID
+	for i, sc := range scores {
+		e := emit(OpMap, "pool.exp", n*width, []ValueID{emit(OpMap, "pool.shift", n*width, []ValueID{sc, m}, Attrs{Fn: MapSub})}, Attrs{Fn: MapExp})
+		nums = append(nums, column("pool.num", MapAdd, emit(OpMap, "pool.weighted", n*width, []ValueID{e, values[i]}, Attrs{Fn: MapMul})))
+		sums = append(sums, column("pool.sum", MapAdd, e))
+	}
+	return emit(OpMap, "pool", width, []ValueID{across("pool.num", MapAdd, nums), across("pool.sum", MapAdd, sums)}, Attrs{Fn: MapDiv})
 }
 
 // AttendBoth is AttendOf over the histories rows and entries in one softmax

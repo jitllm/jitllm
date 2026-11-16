@@ -2436,11 +2436,5 @@ func windowPool(b *graph.Builder, hist graph.StateRef, span, row int, segs []poo
 			graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0])
 		values = append(values, b.HistoryRows(hist, graph.Attrs{Span: span, Width: row, Offset: s.values, Local: s.back}, width))
 	}
-	n := len(scores) * span
-	sc, v := scores[0], values[0]
-	if len(scores) > 1 {
-		sc = b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "pool.scores", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
-		v = b.Emit(graph.OpConcat, values, []graph.Result{{Name: "pool.values", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
-	}
-	return b.ColumnSoftmaxSum(sc, v, n, width)
+	return b.ColumnSoftmaxSum(scores, values, span, width)
 }
