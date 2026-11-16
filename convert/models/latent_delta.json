@@ -239,6 +239,51 @@
       {"op": "add", "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
       {"op": "out_streams", "if": "streams > 1", "streams": "xs", "in": "y"},
       {"op": "out", "if": "streams < 2", "in": "y"}
-    ]
+    ],
+    "streams": {
+      "if": "attn_res_block > 0",
+      "count": "1 + (trunk + attn_res_block - 1) // attn_res_block",
+      "defs": {
+        "bank": [
+          {"op": "each", "var": "j", "count": "inputs", "ops": [
+            {"op": "rms_norm", "in": ["@j"], "eps": "eps"},
+            {"op": "scale",    "w": ["$0"]},
+            {"op": "sum",      "out": "sc[j]"}
+          ]},
+          {"op": "concat", "in": ["sc[range(inputs)]"], "out": "s"},
+          {"op": "max",    "out": "mx"},
+          {"op": "stated", "in": ["s", "mx"], "width": "inputs", "expr": "exp(x - y)", "out": "ex"},
+          {"op": "sum",    "out": "se"},
+          {"op": "stated", "in": ["ex", "se"], "width": "inputs", "expr": "x / y", "out": "pr"},
+          {"op": "each", "var": "j", "count": "inputs", "ops": [
+            {"op": "slice",  "in": ["pr"], "offset": "j", "width": "1", "out": "pj"},
+            {"op": "stated", "in": ["pj", "@j"], "width": "embd", "expr": "x * y", "out": "part"},
+            {"op": "let",    "if": "j == 0", "in": ["part"], "out": "acc"},
+            {"op": "add",    "if": "j > 0", "in": ["acc", "part"], "out": "acc"}
+          ]},
+          {"op": "let", "in": ["acc"]}
+        ]
+      },
+      "block": {
+        "bank": "1 + layer // attn_res_block if layer % attn_res_block == 0 else 0",
+        "attn": {
+          "read_if": "stored('attn_res_score')",
+          "join_if": "layer % attn_res_block == 0",
+          "from": ["@range(1, (layer + attn_res_block - 1) // attn_res_block + 1) + ['run']"],
+          "read": [{"op": "call", "def": "bank", "w": ["attn_res_score"]}],
+          "join": [{"op": "let", "in": ["in1"]}]
+        },
+        "ffn": {
+          "read_if": "stored('ffn_res_score')",
+          "from": ["@range(1, layer // attn_res_block + (1 if layer % attn_res_block == 0 else 2)) + (['in'] if layer % attn_res_block == 0 else []) + ['run']"],
+          "read": [{"op": "call", "def": "bank", "w": ["ffn_res_score"]}]
+        }
+      },
+      "head": {
+        "read_if": "dense('output_res_score')",
+        "from": ["@range(1, streams) + ['run']"],
+        "read": [{"op": "call", "def": "bank", "w": ["output_res_score"]}]
+      }
+    }
   }
 }

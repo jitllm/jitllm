@@ -166,11 +166,11 @@ func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
 		c.NLayer == 0 {
 		return roped, nil
 	}
+	// The streams are a library statement, and a v31 container records no
+	// architecture to find it by.
 	if !streams {
-		StateStreams(c.Config, func(r jlm.Role, li int32) bool {
-			_, ok := f.Find(r, li, -1)
-			return ok
-		})
+		return false, fmt.Errorf("a container written before its residual streams were stated carries no statement " +
+			"of them, and v31 records no architecture to state them by: convert the model again")
 	}
 	// What a revision states it states from the architecture, which a v31
 	// container records none of: the v30 migration stated it (LegacyStated).

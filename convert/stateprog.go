@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jitllm/jitllm/convert/gather"
@@ -23,6 +24,8 @@ type stateProg struct {
 	facts map[string]jinja.Value
 	role  func(string) (jlm.Role, bool)
 	defs  map[string][]mjTowerOp
+	// wargs are the weights the call running passes, a def's $0, $1 ...
+	wargs []string
 }
 
 // prog is ops as a program over nin inputs, held saying which optional
@@ -40,8 +43,17 @@ func (sp *stateProg) progNamed(ops []mjTowerOp, nin int, held func(string) bool)
 	for i := range max(nin, 2) {
 		named[inName(i)] = uint16(i)
 	}
+	// inputs is the program's input count, which its expressions read.
+	outer, had := sp.facts["inputs"]
+	sp.facts["inputs"] = jinja.NewInt(int64(nin))
 	last := uint16(0)
-	if err := sp.run(&p, ops, held, named, &last); err != nil {
+	err := sp.run(&p, ops, held, named, &last)
+	if had {
+		sp.facts["inputs"] = outer
+	} else {
+		delete(sp.facts, "inputs")
+	}
+	if err != nil {
 		return p, nil, err
 	}
 	p.Out = last
@@ -82,12 +94,33 @@ func (sp *stateProg) run(p *jlm.Program, ops []mjTowerOp, held func(string) bool
 				for i, v := range ins {
 					local[inName(i)] = v
 				}
-				if err := sp.run(p, def, held, local, last); err != nil {
+				var args []string
+				for _, w := range o.W {
+					n, optional, err := sp.weight(o, w)
+					if err != nil {
+						return err
+					}
+					if optional {
+						n += "?"
+					}
+					args = append(args, n)
+				}
+				outer := sp.wargs
+				sp.wargs = args
+				err := sp.run(p, def, held, local, last)
+				sp.wargs = outer
+				if err != nil {
 					return err
 				}
+				// The def's names are the call's out and a dot before each.
+				if o.Out != "" {
+					for k, v := range local {
+						named[o.Out+"."+k] = v
+					}
+				}
 			}
-			if o.Out != "" {
-				named[o.Out] = *last
+			if err := sp.name(named, o.Out, *last); err != nil {
+				return err
 			}
 			continue
 		}
@@ -155,16 +188,9 @@ func (sp *stateProg) run(p *jlm.Program, ops []mjTowerOp, held func(string) bool
 		}
 		op.In = ins
 		for _, w := range o.W {
-			n, optional := strings.CutSuffix(w, "?")
-			if at, ok := strings.CutPrefix(n, "@"); ok {
-				v, err := sp.value(at)
-				if err != nil {
-					return err
-				}
-				if !v.IsString() {
-					return fmt.Errorf("convert: %s: op %s's weight %q is %v, not a name", sp.where, o.Op, at, v)
-				}
-				n = v.AsString()
+			n, optional, err := sp.weight(o, w)
+			if err != nil {
+				return err
 			}
 			if optional && !held(n) {
 				continue
@@ -204,19 +230,136 @@ func (sp *stateProg) run(p *jlm.Program, ops []mjTowerOp, held func(string) bool
 			op.Expr = &jlm.Expr{Terms: e.T}
 		}
 		if o.Expr != "" {
-			x, err := statedExpr(o.Expr, map[string]uint32{"x": 0, "y": 1, "z": 2}, sp.num)
+			x, err := statedExpr(o.Expr, o.With, map[string]uint32{"x": 0, "y": 1, "z": 2}, sp.num)
 			if err != nil {
 				return fmt.Errorf("convert: %s: %w", sp.where, err)
 			}
 			op.Expr = &x
 		}
+		if h := o.Hash; h != nil {
+			if op.Hash, err = sp.hash(h); err != nil {
+				return err
+			}
+		}
 		p.Ops = append(p.Ops, op)
 		*last = uint16(nin + len(p.Ops) - 1)
-		if o.Out != "" {
-			named[o.Out] = *last
+		if err := sp.name(named, o.Out, *last); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// weight is o's weight w by its tensor name -- the running call's where w is
+// a $ and its index, an expression's where it is an @ and one -- and whether
+// it is optional, a ? after it.
+func (sp *stateProg) weight(o mjTowerOp, w string) (string, bool, error) {
+	n, optional := strings.CutSuffix(w, "?")
+	if i, ok := strings.CutPrefix(n, "$"); ok {
+		k, err := strconv.Atoi(i)
+		if err != nil || k < 0 || k >= len(sp.wargs) {
+			return "", false, fmt.Errorf("convert: %s: op %s binds %q, and the call passes %d weights", sp.where, o.Op, w, len(sp.wargs))
+		}
+		a, opt := strings.CutSuffix(sp.wargs[k], "?")
+		return a, optional || opt, nil
+	}
+	if at, ok := strings.CutPrefix(n, "@"); ok {
+		v, err := sp.value(at)
+		if err != nil {
+			return "", false, err
+		}
+		if !v.IsString() {
+			return "", false, fmt.Errorf("convert: %s: op %s's weight %q is %v, not a name", sp.where, o.Op, at, v)
+		}
+		n = v.AsString()
+	}
+	return n, optional, nil
+}
+
+// keys are the names n stands for: n, or where it is a name and an index in
+// brackets, rows[i], the name at each of the index's values, a count or a
+// list of them.
+func (sp *stateProg) keys(n string) ([]string, error) {
+	i := strings.IndexByte(n, '[')
+	if i <= 0 || !strings.HasSuffix(n, "]") {
+		return []string{n}, nil
+	}
+	v, err := sp.value(n[i+1 : len(n)-1])
+	if err != nil {
+		return nil, err
+	}
+	var at []jinja.Value
+	switch {
+	case v.IsInt():
+		at = []jinja.Value{v}
+	case v.IsList():
+		at = v.AsList().Items
+	}
+	var out []string
+	for _, x := range at {
+		if !x.IsInt() {
+			return nil, fmt.Errorf("convert: %s: %q's index is %v, not a count or a list of them", sp.where, n, v)
+		}
+		out = append(out, n[:i]+"["+itoa(int(x.AsInt()))+"]")
+	}
+	if out == nil {
+		return nil, fmt.Errorf("convert: %s: %q's index is %v, not a count or a list of them", sp.where, n, v)
+	}
+	return out, nil
+}
+
+// name names v n in named, n one name (keys); nothing where n is empty.
+func (sp *stateProg) name(named map[string]uint16, n string, v uint16) error {
+	if n == "" {
+		return nil
+	}
+	ks, err := sp.keys(n)
+	if err != nil {
+		return err
+	}
+	if len(ks) != 1 {
+		return fmt.Errorf("convert: %s: an op's output named %q, %d names", sp.where, n, len(ks))
+	}
+	named[ks[0]] = v
+	return nil
+}
+
+// hash is an n-gram rows op's hash (jlm.NGramHash), each field an
+// expression: a count, or the lists a list.
+func (sp *stateProg) hash(h *mjNGramHash) (*jlm.NGramHash, error) {
+	out := &jlm.NGramHash{}
+	for _, f := range []struct {
+		src string
+		to  *uint32
+	}{{h.EOS, &out.EOS}, {h.Image, &out.Image}, {h.HeadsPer, &out.HeadsPer}} {
+		x, err := sp.num(f.src)
+		if err != nil {
+			return nil, err
+		}
+		if x < 0 || x > math.MaxUint32 || x != math.Trunc(x) {
+			return nil, fmt.Errorf("convert: %s: an n-gram hash's %q is %v, not a count", sp.where, f.src, x)
+		}
+		*f.to = uint32(x)
+	}
+	for _, f := range []struct {
+		src string
+		to  *[]uint64
+	}{{h.Mul, &out.Mul}, {h.Off, &out.Off}, {h.Voc, &out.Voc}} {
+		v, err := sp.value(f.src)
+		if err != nil {
+			return nil, err
+		}
+		if !v.IsList() {
+			return nil, fmt.Errorf("convert: %s: an n-gram hash's %q is %v, not a list", sp.where, f.src, v)
+		}
+		for _, x := range v.AsList().Items {
+			if !x.IsInt() || x.AsInt() < 0 {
+				return nil, fmt.Errorf("convert: %s: an n-gram hash's %q holds %v, not a count", sp.where, f.src, x)
+			}
+			*f.to = append(*f.to, uint64(x.AsInt()))
+		}
+	}
+	return out, nil
 }
 
 // progsCheck checks programs' ops: each an op of the tower op language, extra
@@ -240,15 +383,24 @@ func progsCheck(progs [][]mjTowerOp, extra []string, defs map[string][]mjTowerOp
 				return nil, nil, fmt.Errorf("a call of %q, which no def states", o.Def)
 			}
 			if o.Expr != "" {
-				x, err := parseExpr(o.Expr)
-				if err != nil {
-					return nil, nil, err
+				bound := []string{"x", "y", "z"}
+				for _, w := range append(slices.Clone(o.With), [2]string{"", o.Expr}) {
+					x, err := parseExpr(w[1])
+					if err != nil {
+						return nil, nil, err
+					}
+					srcs = append(srcs, exprPaths(x, bound...)...)
+					bound = append(bound, w[0])
 				}
-				srcs = append(srcs, exprPaths(x, "x", "y", "z")...)
 			}
-			for _, n := range o.In {
+			if o.Hash != nil {
+				srcs = append(srcs, o.Hash.EOS, o.Hash.Image, o.Hash.HeadsPer, o.Hash.Mul, o.Hash.Off, o.Hash.Voc)
+			}
+			for _, n := range append(slices.Clone(o.In), o.Out) {
 				if at, ok := strings.CutPrefix(n, "@"); ok {
 					srcs = append(srcs, at)
+				} else if i := strings.IndexByte(n, '['); i > 0 && strings.HasSuffix(n, "]") {
+					srcs = append(srcs, n[i+1:len(n)-1])
 				}
 			}
 			if _, ok := towerOps()[o.Op]; !ok && !slices.Contains(extra, o.Op) {
@@ -267,8 +419,12 @@ func progsCheck(progs [][]mjTowerOp, extra []string, defs map[string][]mjTowerOp
 				return nil, nil, fmt.Errorf("resample taps %q are not ones the container names", o.Taps)
 			}
 			for _, w := range o.W {
-				if at, ok := strings.CutPrefix(strings.TrimSuffix(w, "?"), "@"); ok {
+				n := strings.TrimSuffix(w, "?")
+				if at, ok := strings.CutPrefix(n, "@"); ok {
 					srcs = append(srcs, at)
+					continue
+				}
+				if _, err := strconv.Atoi(strings.TrimPrefix(n, "$")); err == nil && strings.HasPrefix(n, "$") {
 					continue
 				}
 				if err := role(w); err != nil {
@@ -281,8 +437,9 @@ func progsCheck(progs [][]mjTowerOp, extra []string, defs map[string][]mjTowerOp
 	return srcs, vars, nil
 }
 
-// operands are o's inputs: values by name, or by number where a name is an
-// @ and an expression; the last value where o names none.
+// operands are o's inputs: values by name (keys), or by number where a name
+// is an @ and an expression of a number or a list of them; the last value
+// where o names none.
 func (sp *stateProg) operands(p *jlm.Program, o mjTowerOp, named map[string]uint16, last uint16) ([]uint16, error) {
 	if o.In == nil {
 		return []uint16{last}, nil
@@ -290,21 +447,33 @@ func (sp *stateProg) operands(p *jlm.Program, o mjTowerOp, named map[string]uint
 	var out []uint16
 	for _, n := range o.In {
 		if at, ok := strings.CutPrefix(n, "@"); ok {
-			x, err := sp.num(at)
+			v, err := sp.value(at)
 			if err != nil {
 				return nil, err
 			}
-			if x < 0 || int(x) >= int(p.NIn)+len(p.Ops) {
-				return nil, fmt.Errorf("convert: %s: op %s reads value %v of %d", sp.where, o.Op, x, int(p.NIn)+len(p.Ops))
+			xs := []jinja.Value{v}
+			if v.IsList() {
+				xs = v.AsList().Items
 			}
-			out = append(out, uint16(x))
+			for _, x := range xs {
+				if !x.IsInt() || x.AsInt() < 0 || x.AsInt() >= int64(int(p.NIn)+len(p.Ops)) {
+					return nil, fmt.Errorf("convert: %s: op %s reads value %v of %d", sp.where, o.Op, x, int(p.NIn)+len(p.Ops))
+				}
+				out = append(out, uint16(x.AsInt()))
+			}
 			continue
 		}
-		i, ok := named[n]
-		if !ok {
-			return nil, fmt.Errorf("convert: %s: op %s reads %q, which no earlier op names", sp.where, o.Op, n)
+		ks, err := sp.keys(n)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, i)
+		for _, k := range ks {
+			i, ok := named[k]
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: op %s reads %q, which no earlier op names", sp.where, o.Op, k)
+			}
+			out = append(out, i)
+		}
 	}
 	return out, nil
 }
@@ -353,18 +522,19 @@ func exprPaths(x *exprNode, operands ...string) []string {
 // subexpression of no operand is folded to its number in float64 and written
 // once as a float32, as a Go builder computes a constant before it.
 // gelu_tanh, gelu_erf and silu are the builder's own forms.
-func statedExpr(src string, operands map[string]uint32, num func(string) (float64, error)) (jlm.Expr, error) {
+func statedExpr(src string, with [][2]string, operands map[string]uint32, num func(string) (float64, error)) (jlm.Expr, error) {
 	x, err := parseExpr(src)
 	if err != nil {
 		return jlm.Expr{}, err
 	}
 	var e jlm.ExprBuilder
-	bin := map[string]jlm.Fn{"+": jlm.FnAdd, "-": jlm.FnSub, "*": jlm.FnMul, "/": jlm.FnDiv}
+	bin := map[string]jlm.Fn{"+": jlm.FnAdd, "-": jlm.FnSub, "*": jlm.FnMul, "/": jlm.FnDiv, "<": jlm.FnLess}
 	type val struct {
 		arg   jlm.Arg
 		konst bool
 		f     float64
 	}
+	bound := map[string]val{}
 	var lower func(n *exprNode) (val, error)
 	lowerAll := func(ns []*exprNode) ([]val, bool, error) {
 		vs := make([]val, len(ns))
@@ -393,6 +563,9 @@ func statedExpr(src string, operands map[string]uint32, num func(string) (float6
 		case "num":
 			return val{konst: true, f: n.num}, nil
 		case "path":
+			if v, ok := bound[n.str]; ok {
+				return v, nil
+			}
 			if i, ok := operands[n.str]; ok {
 				return val{arg: jlm.Operand(i)}, nil
 			}
@@ -452,9 +625,23 @@ func statedExpr(src string, operands map[string]uint32, num func(string) (float6
 		if all {
 			l, r := vs[0].f, vs[1].f
 			c := map[string]float64{"+": l + r, "-": l - r, "*": l * r, "/": l / r}[n.op]
+			if n.op == "<" && l < r {
+				c = 1
+			}
 			return val{konst: true, f: c}, nil
 		}
 		return val{arg: e.Fn(f, args(vs)...)}, nil
+	}
+	for _, w := range with {
+		wx, err := parseExpr(w[1])
+		if err != nil {
+			return jlm.Expr{}, err
+		}
+		v, err := lower(wx)
+		if err != nil {
+			return jlm.Expr{}, err
+		}
+		bound[w[0]] = v
 	}
 	v, err := lower(x)
 	if err != nil {

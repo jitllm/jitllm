@@ -79,7 +79,9 @@ func ds4Violations() []c6Violation {
 			return streamsMut(m, func(s *jlm.Streams) {
 				c := *m.Container.Config()
 				c.HCIters = n
-				convert.StateStreams(&c, func(r jlm.Role, li int32) bool { return m.Stores(int(li), r) })
+				if err := convert.LibraryStreams(m.Container, &c, "deepseek4"); err != nil {
+					panic(err)
+				}
 				*s = c.Streams
 			})
 		}

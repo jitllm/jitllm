@@ -119,7 +119,9 @@ func k3Violations() []c6Violation {
 			return streamsMut(m, func(s *jlm.Streams) {
 				c := *m.Container.Config()
 				c.AttnResBlock = 3
-				convert.StateStreams(&c, func(r jlm.Role, li int32) bool { return m.Stores(int(li), r) })
+				if err := convert.LibraryStreams(m.Container, &c, "kimi-k3"); err != nil {
+					panic(err)
+				}
 				*s = c.Streams
 			})
 		}},

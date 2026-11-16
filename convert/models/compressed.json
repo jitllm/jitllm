@@ -91,6 +91,123 @@
       {"op": "add", "if": "(stored('ffn_up_shexp')) and (moe)", "in": ["d", "so"], "out": "d"},
       {"op": "stream_writes", "streams": "cur", "in": "d", "ex": "fi.ex", "out": "fo", "of": "ffn"},
       {"op": "out_streams", "streams": "fo"}
-    ]
+    ],
+    "streams": {
+      "if": "hc_iters > 0 and hc_streams > 1",
+      "count": "hc_streams",
+      "defs": {
+        "collapse": [
+          {"op": "slice",  "in": ["in"], "offset": "0", "width": "1", "out": "w0"},
+          {"op": "stated", "in": ["w0", "@0"], "width": "embd", "expr": "x * y", "out": "acc"},
+          {"op": "each", "var": "k", "start": "1", "count": "streams", "ops": [
+            {"op": "slice",  "in": ["in"], "offset": "k", "width": "1", "out": "wk"},
+            {"op": "stated", "in": ["wk", "@k"], "width": "embd", "expr": "x * y", "out": "t"},
+            {"op": "add",    "in": ["acc", "t"], "out": "acc"}
+          ]}
+        ],
+        "mhc": [
+          {"op": "concat",   "in": ["@range(inputs)"]},
+          {"op": "rms_norm", "eps": "eps"},
+          {"op": "linear",   "w": ["$0"], "out": "m"},
+          {"op": "slice",    "in": ["m"], "offset": "0", "width": "3"},
+          {"op": "stated",   "width": "3", "expr": "x * 0"},
+          {"op": "shift",    "w": ["$1"], "out": "sc"},
+          {"op": "slice",    "in": ["m"], "offset": "0", "width": "streams", "out": "s0"},
+          {"op": "slice",    "in": ["sc"], "offset": "0", "width": "1", "out": "k0"},
+          {"op": "stated",   "in": ["s0", "k0"], "width": "streams", "expr": "x * y", "out": "g0"},
+          {"op": "slice",    "in": ["m"], "offset": "streams", "width": "streams", "out": "s1"},
+          {"op": "slice",    "in": ["sc"], "offset": "1", "width": "1", "out": "k1"},
+          {"op": "stated",   "in": ["s1", "k1"], "width": "streams", "expr": "x * y", "out": "g1"},
+          {"op": "slice",    "in": ["m"], "offset": "2 * streams", "width": "streams * streams", "out": "s2"},
+          {"op": "slice",    "in": ["sc"], "offset": "2", "width": "1", "out": "k2"},
+          {"op": "stated",   "in": ["s2", "k2"], "width": "streams * streams", "expr": "x * y", "out": "g2"},
+          {"op": "concat",   "in": ["g0", "g1", "g2"]},
+          {"op": "shift",    "w": ["$2"], "out": "mm"},
+          {"op": "slice",    "in": ["mm"], "offset": "0", "width": "streams"},
+          {"op": "stated",   "width": "streams", "expr": "sigmoid(x) + hc_eps", "out": "pre"},
+          {"op": "slice",    "in": ["mm"], "offset": "streams", "width": "streams"},
+          {"op": "stated",   "width": "streams", "expr": "sigmoid(x) * 2", "out": "post"},
+          {"op": "each", "var": "i", "count": "streams", "ops": [
+            {"op": "slice",  "in": ["mm"], "offset": "2 * streams + i * streams", "width": "streams", "out": "r"},
+            {"op": "max",    "in": ["r"], "out": "mx"},
+            {"op": "stated", "in": ["r", "mx"], "width": "streams", "expr": "exp(x - y)", "out": "ex"},
+            {"op": "sum",    "in": ["ex"], "out": "se"},
+            {"op": "stated", "in": ["ex", "se"], "width": "streams", "expr": "x / y + hc_eps", "out": "rows[i]"}
+          ]},
+          {"op": "let", "in": ["rows[0]"], "out": "cs"},
+          {"op": "each", "var": "i", "start": "1", "count": "streams", "ops": [
+            {"op": "add", "in": ["cs", "rows[i]"], "out": "cs"}
+          ]},
+          {"op": "each", "var": "i", "count": "streams", "ops": [
+            {"op": "stated", "in": ["rows[i]", "cs"], "width": "streams", "expr": "x / (y + hc_eps)", "out": "rows[i]"}
+          ]},
+          {"op": "each", "var": "t", "start": "1", "count": "hc_iters", "ops": [
+            {"op": "each", "var": "i", "count": "streams", "ops": [
+              {"op": "sum",    "in": ["rows[i]"], "out": "rs"},
+              {"op": "stated", "in": ["rows[i]", "rs"], "width": "streams", "expr": "x / (y + hc_eps)", "out": "rows[i]"}
+            ]},
+            {"op": "let", "in": ["rows[0]"], "out": "cs"},
+            {"op": "each", "var": "i", "start": "1", "count": "streams", "ops": [
+              {"op": "add", "in": ["cs", "rows[i]"], "out": "cs"}
+            ]},
+            {"op": "each", "var": "i", "count": "streams", "ops": [
+              {"op": "stated", "in": ["rows[i]", "cs"], "width": "streams", "expr": "x / (y + hc_eps)", "out": "rows[i]"}
+            ]}
+          ]},
+          {"op": "call", "def": "collapse", "in": ["pre"], "out": "coll"},
+          {"op": "each", "var": "k", "count": "streams", "ops": [
+            {"op": "slice",  "in": ["rows[0]"], "offset": "k", "width": "1", "out": "c"},
+            {"op": "stated", "in": ["c", "@0"], "width": "embd", "expr": "x * y", "out": "a"},
+            {"op": "each", "var": "j", "start": "1", "count": "streams", "ops": [
+              {"op": "slice",  "in": ["rows[j]"], "offset": "k", "width": "1", "out": "c"},
+              {"op": "stated", "in": ["c", "@j"], "width": "embd", "expr": "x * y", "out": "t"},
+              {"op": "add",    "in": ["a", "t"], "out": "a"}
+            ]},
+            {"op": "let", "in": ["a"], "out": "mix[k]"}
+          ]},
+          {"op": "let", "in": ["coll"]}
+        ]
+      },
+      "expand": {"copy": true},
+      "block": {
+        "attn": {
+          "from": ["@range(streams)"],
+          "read": [{"op": "call", "def": "mhc", "w": ["hc_attn_fn", "hc_attn_scale", "hc_attn_base"], "out": "m"}],
+          "exports": ["m.mix[range(streams)]", "m.post"],
+          "writes": {"var": "k", "ops": [
+            {"op": "slice",  "in": ["@2 + streams"], "offset": "k", "width": "1", "out": "pk"},
+            {"op": "stated", "in": ["pk", "in1"], "width": "embd", "expr": "x * y", "out": "o"},
+            {"op": "add",    "in": ["@2 + k", "o"]}
+          ]}
+        },
+        "ffn": {
+          "from": ["@range(streams)"],
+          "read": [{"op": "call", "def": "mhc", "w": ["hc_ffn_fn", "hc_ffn_scale", "hc_ffn_base"], "out": "m"}],
+          "exports": ["m.mix[range(streams)]", "m.post"],
+          "writes": {"var": "k", "ops": [
+            {"op": "slice",  "in": ["@2 + streams"], "offset": "k", "width": "1", "out": "pk"},
+            {"op": "stated", "in": ["pk", "in1"], "width": "embd", "expr": "x * y", "out": "o"},
+            {"op": "add",    "in": ["@2 + k", "o"]}
+          ]}
+        }
+      },
+      "head": {
+        "from": ["@range(streams)"],
+        "read": [
+          {"op": "concat",   "in": ["@range(inputs)"]},
+          {"op": "rms_norm", "eps": "eps"},
+          {"op": "linear",   "w": ["output_hc_fn"], "out": "m"},
+          {"op": "slice",    "in": ["m"], "offset": "0", "width": "1"},
+          {"op": "stated",   "width": "1", "expr": "x * 0"},
+          {"op": "shift",    "w": ["output_hc_scale"], "out": "sc"},
+          {"op": "slice",    "in": ["m"], "offset": "0", "width": "streams", "out": "s0"},
+          {"op": "slice",    "in": ["sc"], "offset": "0", "width": "1", "out": "k0"},
+          {"op": "stated",   "in": ["s0", "k0"], "width": "streams", "expr": "x * y"},
+          {"op": "shift",    "w": ["output_hc_base"]},
+          {"op": "stated",   "width": "streams", "expr": "sigmoid(x) + hc_eps", "out": "pre"},
+          {"op": "call",     "def": "collapse", "in": ["pre"]}
+        ]
+      }
+    }
   }
 }

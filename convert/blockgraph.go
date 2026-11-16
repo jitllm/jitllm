@@ -1696,6 +1696,13 @@ func nextnRole(r jlm.Role) bool {
 func (bf *blockFacts) vars() map[string]jinja.Value {
 	c, li := bf.c, bf.li
 	i := func(n uint32) jinja.Value { return jinja.NewInt(int64(n)) }
+	counts := func(xs []uint64) jinja.Value {
+		out := make([]jinja.Value, len(xs))
+		for k, x := range xs {
+			out[k] = jinja.NewInt(int64(x))
+		}
+		return jinja.NewList(out)
+	}
 	tensor := func(name string, args []jinja.Value) (jlm.Role, graph.Shape, bool, error) {
 		if len(args) != 1 || !args[0].IsString() {
 			return 0, graph.Shape{}, false, fmt.Errorf("%s takes one tensor name", name)
@@ -1755,6 +1762,21 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"attn_join":          jinja.NewBool(bf.streamsAt().Attn.Join != nil),
 		"ffn_writes":         jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
 		"ple_dim":            i(c.PLEDim),
+		"hc_streams":         i(c.HCMult),
+		"hc_rank":            i(c.HCLowRank),
+		"hc_iters":           i(c.HCIters),
+		"hc_eps":             jinja.NewFloat(float64(c.HCEps)),
+		"attn_res_block":     i(c.AttnResBlock),
+		"ngram":              i(c.NGram),
+		"ngram_block":        i(c.NGramBlock),
+		"ngram_heads":        i(c.NGramHeadsPer),
+		"ngram_row":          i(c.NGramRowDim),
+		"ngram_conv":         i(c.NGramConv),
+		"ngram_eos":          i(c.NGramEOS),
+		"ngram_image":        i(c.NGramImage),
+		"ngram_mul":          counts(c.NGramMul),
+		"ngram_off":          counts(c.NGramOff),
+		"ngram_voc":          counts(c.NGramVoc),
 		"kv_shared":          jinja.NewBool(c.KVShared(li)),
 		"kv_source":          jinja.NewInt(int64(c.KVSource(li))),
 		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
@@ -1780,6 +1802,10 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"stored": jinja.NewCallable("stored", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
 			_, _, held, err := tensor("stored", args)
 			return jinja.NewBool(held), err
+		}),
+		"dense": jinja.NewCallable("dense", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+			r, _, _, err := tensor("dense", args)
+			return jinja.NewBool(bf.dense[r]), err
 		}),
 		"rows": jinja.NewCallable("rows", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
 			_, sh, held, err := tensor("rows", args)

@@ -145,12 +145,16 @@ type mjTowerOp struct {
 	Start string      `json:"start"`
 	Count string      `json:"count"`
 	Ops   []mjTowerOp `json:"ops"`
-	// Def is the op list a call runs (stateProg.defs).
-	Def    string `json:"def"`
-	Span   string `json:"span"`
-	Offset string `json:"offset"`
-	Width  string `json:"width"`
-	Eps    string `json:"eps"`
+	// Def is the op list a call runs (stateProg.defs); With are a stated
+	// op's named subexpressions, each lowered once, in order, before Expr.
+	Def  string      `json:"def"`
+	With [][2]string `json:"with"`
+	// Hash is an n-gram rows op's hash.
+	Hash   *mjNGramHash `json:"hash"`
+	Span   string       `json:"span"`
+	Offset string       `json:"offset"`
+	Width  string       `json:"width"`
+	Eps    string       `json:"eps"`
 	// Chain and Taps are a position resample's, by name (towerChains,
 	// towerTaps).
 	Chain string `json:"chain"`
@@ -160,6 +164,18 @@ type mjTowerOp struct {
 	// GridW is a grid op's input grid's width in rows and Stride its step.
 	GridW  string `json:"grid_w"`
 	Stride string `json:"stride"`
+}
+
+// mjNGramHash is an n-gram rows op's hash (jlm.NGramHash), each an
+// expression: the end-of-sequence and picture ids and the heads an n-gram,
+// counts; the multipliers, offsets and vocabularies, lists of them.
+type mjNGramHash struct {
+	EOS      string `json:"eos"`
+	Image    string `json:"image"`
+	HeadsPer string `json:"heads_per"`
+	Mul      string `json:"mul"`
+	Off      string `json:"off"`
+	Voc      string `json:"voc"`
 }
 
 // mjTowerBlock is the tower block's attributes: its heads, their width, its

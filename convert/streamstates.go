@@ -15,8 +15,10 @@ import (
 // tensor names: Count the streams; Expand stream k's input row from the
 // embedding, Var the stream, from 1; Block each block's reads and writes,
 // over its own facts; Head the row the head reads. Expand and Head read the
-// first block's facts. Defs are op lists an op calls by name.
+// first block's facts. Defs are op lists an op calls by name. Where If, over
+// the first block's facts, does not hold, the model has no streams.
 type mjStreams struct {
+	If     string                 `json:"if"`
 	Count  string                 `json:"count"`
 	Defs   map[string][]mjTowerOp `json:"defs"`
 	Expand *mjStreamProgs         `json:"expand"`
@@ -24,10 +26,12 @@ type mjStreams struct {
 	Head   *mjSubStreams          `json:"head"`
 }
 
-// mjStreamProgs is a program for each stream, Var its index.
+// mjStreamProgs is a program for each stream, Var its index; Copy, true,
+// states none, each stream a copy of what it is made from (jlm.Streams).
 type mjStreamProgs struct {
-	Var string      `json:"var"`
-	Ops []mjTowerOp `json:"ops"`
+	Var  string      `json:"var"`
+	Ops  []mjTowerOp `json:"ops"`
+	Copy bool        `json:"copy"`
 }
 
 // mjStreamBlock is a block's use of the streams (jlm.BlockStreams): Bank
@@ -41,12 +45,15 @@ type mjStreamBlock struct {
 
 // mjSubStreams is a sublayer's use of the streams (jlm.SubStreams) where If
 // holds: From its read's inputs, each run, in, side or an @ and an
-// expression of a stream or a list of them; Read the read over them (absent,
-// the running residual); Exports the read's values the writes take, each a
-// name its ops give or an @ and an expression of a value or a list of them;
-// Join, Post and Writes the container's.
+// expression of a stream, of one of those names, or of a list of them; Read
+// the read over them (absent, the running residual), where ReadIf holds;
+// Exports the read's values the writes take, each names its ops give (keys)
+// or an @ and an expression of a value or a list of them; Join, where JoinIf
+// holds, Post and Writes the container's.
 type mjSubStreams struct {
 	If      string         `json:"if"`
+	ReadIf  string         `json:"read_if"`
+	JoinIf  string         `json:"join_if"`
 	From    []string       `json:"from"`
 	Read    []mjTowerOp    `json:"read"`
 	Exports []string       `json:"exports"`
@@ -76,14 +83,14 @@ func (st *mjStreams) check(g *mjGraph, names tensorNames) error {
 	for _, d := range st.Defs {
 		progs = append(progs, d)
 	}
-	srcs := []string{st.Count, st.Block.Bank}
-	var vars []string
+	srcs := []string{st.If, st.Count, st.Block.Bank}
+	vars := []string{"inputs"}
 	each := func(ps *mjStreamProgs) error {
 		if ps == nil {
 			return nil
 		}
-		if ps.Var == "" || len(ps.Ops) == 0 {
-			return fmt.Errorf("a stream's programs state their variable and their ops")
+		if ps.Copy != (ps.Var == "" && len(ps.Ops) == 0) {
+			return fmt.Errorf("a stream's programs are a copy, or state their variable and their ops")
 		}
 		progs, vars = append(progs, ps.Ops), append(vars, ps.Var)
 		return nil
@@ -98,11 +105,13 @@ func (st *mjStreams) check(g *mjGraph, names tensorNames) error {
 		if len(u.From) == 0 && u.Read != nil {
 			return fmt.Errorf("a stream read states no inputs")
 		}
-		srcs = append(srcs, u.If)
+		srcs = append(srcs, u.If, u.ReadIf, u.JoinIf)
 		for _, xs := range [][]string{u.From, u.Exports} {
 			for _, x := range xs {
 				if at, ok := strings.CutPrefix(x, "@"); ok {
 					srcs = append(srcs, at)
+				} else if i := strings.IndexByte(x, '['); i > 0 && strings.HasSuffix(x, "]") {
+					srcs = append(srcs, x[i+1:len(x)-1])
 				}
 			}
 		}
@@ -124,13 +133,36 @@ func (st *mjStreams) check(g *mjGraph, names tensorNames) error {
 	return nil
 }
 
+// LibraryStreams states c's streams over f's tensors as the library states
+// them for GGUF architecture arch, reading no source keys: what a test that
+// changes a config states the changed streams by.
+func LibraryStreams(f *jlm.File, c *jlm.Config, arch string) error {
+	g, err := ggufGraph(arch)
+	if err != nil {
+		return err
+	}
+	s := &jlm.Source{}
+	for _, e := range f.Entries() {
+		s.Tensors = append(s.Tensors, jlm.Tensor{Role: e.Role, Block: e.Block, Index: e.Index, Type: e.Type, NDim: e.NDim,
+			Dims: e.Dims, Name: e.Name})
+	}
+	return stateGraphStreams(c, s, g, jinja.NewDict())
+}
+
 // stateGraphStreams states c's streams as g states them, src the source's
-// keys; where g states none, as StateStreams does. Stated streams are the
-// container's, and the count the converter laid the tensors out by
-// (PredStreams) is not.
+// keys. Stated streams are the container's, and the count the converter
+// laid the tensors out by (PredStreams) is not. A config of several streams,
+// or of an n-gram block, that no statement states is refused.
 func stateGraphStreams(c *jlm.Config, s *jlm.Source, g *mjGraph, src jinja.Value) error {
-	if g == nil || g.Streams == nil || c.NLayer == 0 {
-		StateStreams(c, sourceStores(s))
+	if c.NLayer == 0 {
+		return nil
+	}
+	if g == nil || g.Streams == nil {
+		if c.HCMult > 1 || c.AttnResBlock > 0 || c.PredStreams > 1 || c.NGramBlock > 0 {
+			return fmt.Errorf("convert: the config carries residual streams (%d hyper-connected, a bank every %d blocks, "+
+				"%d predicted, an n-gram block at %d) and the library states none: %w", c.HCMult, c.AttnResBlock,
+				c.PredStreams, c.NGramBlock, ErrNotImplemented)
+		}
 		return nil
 	}
 	st := g.Streams
@@ -144,6 +176,15 @@ func stateGraphStreams(c *jlm.Config, s *jlm.Source, g *mjGraph, src jinja.Value
 		return bf, bf.vars()
 	}
 	_, f0 := facts(0)
+	if st.If != "" {
+		on, err := g.flag(st.If, f0)
+		if err != nil {
+			return fmt.Errorf("convert: the streams' condition: %w", err)
+		}
+		if !on {
+			return nil
+		}
+	}
 	n, err := g.num(st.Count, f0)
 	if err != nil {
 		return fmt.Errorf("convert: the streams' count: %w", err)
@@ -170,13 +211,14 @@ func stateGraphStreams(c *jlm.Config, s *jlm.Source, g *mjGraph, src jinja.Value
 	bf, vars := facts(0)
 	sp, held := builder(bf, vars, "the streams")
 	if e := st.Expand; e != nil {
-		for k := 1; k < int(n); k++ {
+		c.Streams.Expand = make([]*jlm.Program, int(n)-1)
+		for k := 1; k < int(n) && !e.Copy; k++ {
 			vars[e.Var] = jinja.NewInt(int64(k))
 			p, err := sp.prog(e.Ops, 1, held)
 			if err != nil {
 				return err
 			}
-			c.Streams.Expand = append(c.Streams.Expand, &p)
+			c.Streams.Expand[k-1] = &p
 		}
 		delete(vars, e.Var)
 	}
@@ -217,68 +259,68 @@ func streamSub(u *mjSubStreams, sp *stateProg, held func(string) bool, n int) (j
 	if u == nil {
 		return out, nil
 	}
-	if u.If != "" {
-		on, err := sp.value(u.If)
-		if err != nil {
-			return out, err
+	flag := func(x string) (bool, error) {
+		if x == "" {
+			return true, nil
 		}
-		if !on.IsBool() {
-			return out, fmt.Errorf("convert: %s: %q is %v, not true or false", sp.where, u.If, on)
+		on, err := sp.value(x)
+		if err == nil && !on.IsBool() {
+			err = fmt.Errorf("convert: %s: %q is %v, not true or false", sp.where, x, on)
 		}
-		if !on.AsBool() {
-			return out, nil
-		}
+		return err == nil && on.AsBool(), err
 	}
-	ints := func(x string) ([]int64, error) {
+	on, err := flag(u.If)
+	if err != nil || !on {
+		return out, err
+	}
+	reads, err := flag(u.ReadIf)
+	if err != nil {
+		return out, err
+	}
+	joins, err := flag(u.JoinIf)
+	if err != nil {
+		return out, err
+	}
+	list := func(x string) ([]jinja.Value, error) {
 		v, err := sp.value(x)
 		if err != nil {
 			return nil, err
 		}
-		if v.IsInt() {
-			return []int64{v.AsInt()}, nil
+		if v.IsList() {
+			return v.AsList().Items, nil
 		}
-		var out []int64
-		bad := !v.IsList()
-		if !bad {
-			for _, e := range v.AsList().Items {
-				if bad = !e.IsInt(); bad {
-					break
-				}
-				out = append(out, e.AsInt())
-			}
-		}
-		if bad {
-			return nil, fmt.Errorf("convert: %s: %q is %v, not a count or a list of them", sp.where, x, v)
-		}
-		return out, nil
+		return []jinja.Value{v}, nil
 	}
+	streams := map[string]int8{"run": jlm.StreamRun, "in": jlm.StreamIn, "side": jlm.StreamSide}
 	for _, f := range u.From {
-		switch f {
-		case "run":
-			out.From = append(out.From, jlm.StreamRun)
-		case "in":
-			out.From = append(out.From, jlm.StreamIn)
-		case "side":
-			out.From = append(out.From, jlm.StreamSide)
-		default:
-			at, ok := strings.CutPrefix(f, "@")
-			if !ok {
-				return out, fmt.Errorf("convert: %s: a read from %q, not run, in, side or an @ and a stream", sp.where, f)
-			}
-			ks, err := ints(at)
-			if err != nil {
-				return out, err
-			}
-			for _, k := range ks {
-				if k < 0 || k >= int64(n) {
-					return out, fmt.Errorf("convert: %s: a read from stream %d of %d", sp.where, k, n)
-				}
-				out.From = append(out.From, int8(k))
+		if !reads {
+			break
+		}
+		if k, ok := streams[f]; ok {
+			out.From = append(out.From, k)
+			continue
+		}
+		at, ok := strings.CutPrefix(f, "@")
+		if !ok {
+			return out, fmt.Errorf("convert: %s: a read from %q, not run, in, side or an @ and a stream", sp.where, f)
+		}
+		xs, err := list(at)
+		if err != nil {
+			return out, err
+		}
+		for _, x := range xs {
+			switch {
+			case x.IsString() && streams[x.AsString()] != 0:
+				out.From = append(out.From, streams[x.AsString()])
+			case x.IsInt() && x.AsInt() >= 0 && x.AsInt() < int64(n):
+				out.From = append(out.From, int8(x.AsInt()))
+			default:
+				return out, fmt.Errorf("convert: %s: a read from %v of %d streams", sp.where, x, n)
 			}
 		}
 	}
 	var named map[string]uint16
-	if u.Read != nil {
+	if u.Read != nil && reads {
 		p, nm, err := sp.progNamed(u.Read, len(out.From), held)
 		if err != nil {
 			return out, err
@@ -286,24 +328,33 @@ func streamSub(u *mjSubStreams, sp *stateProg, held func(string) bool, n int) (j
 		out.Read, named = &p, nm
 	}
 	for _, x := range u.Exports {
+		if out.Read == nil {
+			break
+		}
 		if at, ok := strings.CutPrefix(x, "@"); ok {
-			vs, err := ints(at)
+			vs, err := list(at)
 			if err != nil {
 				return out, err
 			}
 			for _, v := range vs {
-				if v < 0 || out.Read == nil || v >= int64(int(out.Read.NIn)+len(out.Read.Ops)) {
-					return out, fmt.Errorf("convert: %s: an export of value %d the read has not", sp.where, v)
+				if !v.IsInt() || v.AsInt() < 0 || v.AsInt() >= int64(int(out.Read.NIn)+len(out.Read.Ops)) {
+					return out, fmt.Errorf("convert: %s: an export of value %v the read has not", sp.where, v)
 				}
-				out.Exports = append(out.Exports, uint16(v))
+				out.Exports = append(out.Exports, uint16(v.AsInt()))
 			}
 			continue
 		}
-		v, ok := named[x]
-		if !ok {
-			return out, fmt.Errorf("convert: %s: an export of %q, which the read names not", sp.where, x)
+		ks, err := sp.keys(x)
+		if err != nil {
+			return out, err
 		}
-		out.Exports = append(out.Exports, v)
+		for _, k := range ks {
+			v, ok := named[k]
+			if !ok {
+				return out, fmt.Errorf("convert: %s: an export of %q, which the read names not", sp.where, k)
+			}
+			out.Exports = append(out.Exports, v)
+		}
 	}
 	prog := func(ops []mjTowerOp, nin int) (*jlm.Program, error) {
 		if ops == nil {
@@ -312,9 +363,10 @@ func streamSub(u *mjSubStreams, sp *stateProg, held func(string) bool, n int) (j
 		p, err := sp.prog(ops, nin, held)
 		return &p, err
 	}
-	var err error
-	if out.Join, err = prog(u.Join, 2); err != nil {
-		return out, err
+	if joins {
+		if out.Join, err = prog(u.Join, 2); err != nil {
+			return out, err
+		}
 	}
 	if out.Post, err = prog(u.Post, 1+len(out.Exports)); err != nil {
 		return out, err
@@ -324,13 +376,15 @@ func streamSub(u *mjSubStreams, sp *stateProg, held func(string) bool, n int) (j
 		if out.Post != nil {
 			nin++
 		}
+		out.Writes = make([]*jlm.Program, n)
 		for k := range n {
+			if w.Copy {
+				break
+			}
 			sp.facts[w.Var] = jinja.NewInt(int64(k))
-			p, err := prog(w.Ops, nin)
-			if err != nil {
+			if out.Writes[k], err = prog(w.Ops, nin); err != nil {
 				return out, err
 			}
-			out.Writes = append(out.Writes, p)
 		}
 		delete(sp.facts, w.Var)
 	}
