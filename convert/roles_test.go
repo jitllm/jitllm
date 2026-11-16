@@ -75,13 +75,11 @@ func TestEveryTensorHasARole(t *testing.T) {
 			tensors++
 			// A tower's tensors are named as conversion names them
 			// (towerRoleOf), and the ones it reads into another or not at all
-			// are accounted for by the same predicates sourceOf uses. The
-			// newer towers' fused q|k|v and deepstack mergers are resolved by
-			// familyTowerTensors (gated by the towers' own end-to-end gates).
+			// are accounted for by the same predicates sourceOf uses.
 			var role jlm.Role
 			var err error
 			switch {
-			case vis != nil && (names.unreadName(n) || towerGathered(n) || familyTowerName(n)):
+			case vis != nil && (names.unreadName(n) || towerGathered(n)):
 				continue
 			case vis != nil:
 				role, _, _, err = names.roleOf(n)

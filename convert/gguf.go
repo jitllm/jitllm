@@ -323,18 +323,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		var role jlm.Role
 		var block, index int32
-		// The newer families' tower tensors: a fused q|k|v split, and the
-		// deepstack mergers (convert/visiontowers.go).
-		if tower {
-			ts, ok, ferr := familyTowerTensors(f, s.Vision, proj, t)
-			if ferr != nil {
-				return nil, ferr
-			}
-			if ok {
-				s.Tensors = append(s.Tensors, ts...)
-				continue
-			}
-		}
 		if tower {
 			role, block, index, err = names.roleOf(t.Name)
 		} else {

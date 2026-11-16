@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -24,9 +25,16 @@ type towerTensors struct {
 // different things in different projectors: InternVL's mm.model.mlp.0 is a
 // LayerNorm, llava's mm.0 a matrix), the renames into the shared table's
 // names (a prefix or a part of the name), and the names it carries that
-// nothing reads, by name or prefix.
+// nothing reads, by name or prefix. Indexed are its
+// names of a numbered part outside the blocks: a name Prefix, N, ".", then a
+// part Roles names takes that role at index N, N one of the tower's blocks
+// (a tap, Qwen3-VL's deepstack mergers).
 type towerProjector struct {
 	Roles   map[string]string `json:"roles"`
+	Indexed []struct {
+		Prefix string            `json:"prefix"`
+		Roles  map[string]string `json:"roles"`
+	} `json:"indexed"`
 	Renames []struct {
 		Prefix string `json:"prefix"`
 		Infix  string `json:"infix"`
@@ -42,7 +50,11 @@ type towerVocab struct {
 	unread map[string]string
 	p      towerProjector
 	roles  map[string]jlm.Role
-	text   tensorNames
+	// indexed is p.Indexed's roles resolved, by prefix and part; blocks the
+	// tower's block count, which bounds an index.
+	indexed map[string]map[string]jlm.Role
+	blocks  uint32
+	text    tensorNames
 }
 
 // towerVocabOf is v's projector's tower names, over the text vocabulary.
@@ -55,11 +67,22 @@ func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
 	if err := json.Unmarshal(b, &t); err != nil {
 		return nil, fmt.Errorf("convert: towertensors.json: %w", err)
 	}
-	n := &towerVocab{unread: t.Unread, p: t.Projectors[v.Projector.String()], roles: map[string]jlm.Role{}, text: text}
-	if len(n.p.Roles) == 0 {
-		return n, nil
-	}
+	n := &towerVocab{unread: t.Unread, p: t.Projectors[v.Projector.String()], roles: map[string]jlm.Role{},
+		indexed: map[string]map[string]jlm.Role{}, blocks: v.NLayer, text: text}
 	named := rolesByName()
+	for _, ix := range n.p.Indexed {
+		if ix.Prefix == "" || !strings.HasSuffix(ix.Prefix, ".") || len(ix.Roles) == 0 {
+			return nil, fmt.Errorf("convert: towertensors.json: %s states an indexed prefix %q with no roles or no trailing dot", v.Projector, ix.Prefix)
+		}
+		n.indexed[ix.Prefix] = map[string]jlm.Role{}
+		for part, role := range ix.Roles {
+			r, ok := named[role]
+			if !ok {
+				return nil, fmt.Errorf("convert: towertensors.json: %s's %s%s is role %q, which the container does not know", v.Projector, ix.Prefix, part, role)
+			}
+			n.indexed[ix.Prefix][part] = r
+		}
+	}
 	for name, role := range n.p.Roles {
 		r, ok := named[role]
 		if !ok {
@@ -77,6 +100,25 @@ func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
 func (n *towerVocab) roleOf(name string) (jlm.Role, int32, int32, error) {
 	if r, ok := n.roles[name]; ok {
 		return r, jlm.DenseBlock, -1, nil
+	}
+	for prefix, parts := range n.indexed {
+		rest, ok := strings.CutPrefix(name, prefix)
+		if !ok {
+			continue
+		}
+		num, part, ok := strings.Cut(rest, ".")
+		i, err := strconv.Atoi(num)
+		if !ok || err != nil || i < 0 || num != strconv.Itoa(i) {
+			return 0, 0, 0, fmt.Errorf("convert: %s: no index after %s", name, prefix)
+		}
+		r, known := parts[part]
+		if !known {
+			return 0, 0, 0, fmt.Errorf("convert: %s: %s names no %s part", name, prefix, part)
+		}
+		if uint32(i) >= n.blocks {
+			return 0, 0, 0, fmt.Errorf("convert: %s taps block %d of %d", name, i, n.blocks)
+		}
+		return r, jlm.DenseBlock, int32(i), nil
 	}
 	for _, rn := range n.p.Renames {
 		switch {

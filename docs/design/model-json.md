@@ -401,8 +401,9 @@ model.json is mostly the config section and the `retarget` it needs.
    refused, and `as` takes another entry's statements; `transforms` names,
    per phase of conversion (`joined`, `source`, `prepare`, `finish`), the
    tensor transforms the tower's tensors take (`convert.towerTransforms`);
-   `taps` says the projector reads taps off the tower's blocks
-   (`v.deepstack.N.*`), `blocks` "staged" that the file names its blocks
+   `taps` says the projector reads taps off the tower's blocks (their
+   mergers named by its vocabulary's `indexed` prefix in
+   convert/towertensors.json, `v.deepstack.N.*`), `blocks` "staged" that the file names its blocks
    by a stage and a place in it (`v.blk.S.I.*`, numbered stage by stage),
    and `hard_tokens` the first id of a token table the tower embeds itself
    (read by the `hard_token_embeddings` transform). The transforms are

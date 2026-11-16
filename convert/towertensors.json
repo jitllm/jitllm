@@ -3,6 +3,10 @@
   "resampler.pos_embed_k": "the resampler's position is computed per grid"
  },
  "projectors": {
+  "qwen3vl_merger": {
+   "indexed": [{"prefix": "v.deepstack.", "roles": {"norm.weight": "v_ds_norm", "norm.bias": "v_ds_norm.bias",
+     "fc1.weight": "v_ds_fc1", "fc1.bias": "v_ds_fc1.bias", "fc2.weight": "v_ds_fc2", "fc2.bias": "v_ds_fc2.bias"}}]
+  },
   "janus_pro": {
    "renames": [{"prefix": "mm.1.", "to": "mm.2."}]
   },
