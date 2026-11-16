@@ -966,7 +966,6 @@ bug	engine/device/gpu/layer.go	"a batched submission of %d rows %d wide with a h
 limit	engine/device/gpu/layer.go	"a bidirectional chunk this device has no batched scratch for"	the batched scratch does not fit
 limit	engine/device/gpu/layer.go	"a chunk of a centred convolution this device has no batched scratch for"	the batched scratch does not fit
 bug	engine/device/gpu/layer.go	"a chunked attention of a different shape from the one this tier was built for"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
-bug	engine/device/gpu/layer.go	"a head folded into %d blocks of %d streams"
 limit	engine/device/gpu/layer.go	"a second session's KV cache does not fit in this device's budget"
 limit	engine/device/gpu/layer.go	"a session's recurrent state does not fit in this device's budget"
 bug	engine/device/gpu/layer.go	"a sliding window of %d keys on a tier built for %d"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
@@ -1008,7 +1007,7 @@ bug	engine/device/gpu/layer.go	"the composer does not serve the step's token: %s
 bug	engine/device/gpu/layer.go	"the folded head's row take: %v"
 bug	engine/device/gpu/layer.go	"the head brings vectors this device was not given (PrepHead)"
 bug	engine/device/gpu/layer.go	"the head is not resident on this device"
-bug	engine/device/gpu/layer.go	"the head offered is not the one its model placed on the tier"
+bug	engine/device/gpu/layer.go	"the head offered is not one an instance placed on the tier"
 limit	engine/device/gpu/layer.go	"the input rows' tables have no room beside the head and the blocks placed: %v"
 context	engine/device/gpu/layer.go	"the head's vectors: %v"
 context	engine/device/gpu/layer.go	"the output projection and a block slot"
@@ -1183,6 +1182,7 @@ limit	engine/device/gpu/served.go	"its buffers need %d bytes, which the device's
 bug	engine/device/gpu/served.go	"its graph binds %v, which the block does not hold"
 bug	engine/device/gpu/served.go	"its graph reads %d inputs and writes %d streams, where the step holds %d streams and per-layer inputs %v"
 bug	engine/device/gpu/served.go	"its recurrent state is not where the form steps it"
+bug	engine/device/gpu/served.go	"no head was placed"
 bug	engine/device/gpu/served.go	"rotary table %d's buffers are not held (table %v, planes %v, positions %v)"
 bug	engine/device/gpu/served.go	"rotary table %d's graph is %d wide, its rows %d"
 bug	engine/device/gpu/served.go	"the banks in pages read two selections"
