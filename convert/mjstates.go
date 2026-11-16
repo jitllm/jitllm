@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -31,18 +32,34 @@ type mjStates struct {
 	FinalSoftcap string          `json:"final_softcap"`
 	// LogitDiv divides the logits (0 for none).
 	LogitDiv string `json:"logit_div"`
-	exprs    map[string]*jinja.Expr
+	// AttnTemp scales each layer's q by its position.
+	AttnTemp *mjStatesAttnTemp `json:"attn_temp"`
+	// Require holds the file to what the reference's graph reads, as the
+	// config's do (mjRequire).
+	Require []mjRequire `json:"require"`
+	exprs   map[string]*jinja.Expr
 }
 
-// mjStatesWindow is a sliding window: Size positions (0 for none, and then
-// nothing else of it applies); every Period'th layer attends globally, or
-// Pattern's where the file's attention.sliding_window_pattern does not say
-// (swaPatternOf); RopeBase the windowed layers' rotary base.
+// mjStatesAttnTemp scales q by 1 + Scale*ln(1 + floor((pos+Offset)/Floor)),
+// each a number; a Scale of 0 states none.
+type mjStatesAttnTemp struct {
+	Scale  string `json:"scale"`
+	Floor  string `json:"floor"`
+	Offset string `json:"offset"`
+}
+
+// mjStatesWindow is a sliding window: Size positions; every Period'th layer
+// attends globally, or Pattern's where the file's
+// attention.sliding_window_pattern does not say (swaPatternOf); RopeBase the
+// windowed layers' rotary base and RopeScale its magnitude (0 for the global
+// layers'). A Size of 0 slides nothing, and then a Period names the layers
+// that skip the rotary (no_pe_global) or is 0.
 type mjStatesWindow struct {
-	Size     string `json:"size"`
-	Period   string `json:"period"`
-	Pattern  string `json:"pattern"`
-	RopeBase string `json:"rope_base"`
+	Size      string `json:"size"`
+	Period    string `json:"period"`
+	Pattern   string `json:"pattern"`
+	RopeBase  string `json:"rope_base"`
+	RopeScale string `json:"rope_scale"`
 }
 
 // checkStates refuses a statement for a GGUF architecture the file does not
@@ -55,11 +72,23 @@ func (mj *modelJSON) checkStates() error {
 		}
 		st := mj.Container[arch]
 		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv}
+		for i, r := range st.Require {
+			if r.That == "" || r.Else == "" {
+				return fmt.Errorf("convert: %s: %s: require %d states what it holds and why", mj.name, arch, i)
+			}
+			srcs = append(srcs, r.That)
+		}
 		if w := st.Window; w != nil {
 			if w.Size == "" || w.Period != "" && w.Pattern != "" {
 				return fmt.Errorf("convert: %s: %s: a window states its size, and a period or a pattern, not both", mj.name, arch)
 			}
-			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase)
+			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase, w.RopeScale)
+		}
+		if t := st.AttnTemp; t != nil {
+			if t.Scale == "" || t.Floor == "" {
+				return fmt.Errorf("convert: %s: %s: a q temperature states its scale and its floor", mj.name, arch)
+			}
+			srcs = append(srcs, t.Scale, t.Floor, t.Offset)
 		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
@@ -95,8 +124,8 @@ func (st *mjStates) compile(srcs []string) error {
 			return err
 		}
 		for _, n := range x.Names() {
-			if n != "src" {
-				return fmt.Errorf("%q reads %q, which is not the keys (src)", src, n)
+			if n != "src" && n != "tensors" {
+				return fmt.Errorf("%q reads %q, which is not the keys (src) or the tensors the file stores (tensors)", src, n)
 			}
 		}
 		st.exprs[src] = x
@@ -133,11 +162,16 @@ func stateContainer(f *meta.File, c *Config) error {
 func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	arch := f.Arch()
 	var err error
-	vars := map[string]jinja.Value{"src": ggufKeys(f)}
+	tensors := jinja.NewDict()
+	for i := range f.Tensors {
+		tensors.AsDict().Set(f.Tensors[i].Name, jinja.NewBool(true))
+	}
+	vars := map[string]jinja.Value{"src": ggufKeys(f), "tensors": tensors}
 	value := func(what, src string) (jinja.Value, error) {
 		v, err := st.exprs[src].Eval(vars, blockExprSteps)
 		if err == nil && v.IsUndefined() {
-			err = fmt.Errorf("%q is undefined", src)
+			err = fmt.Errorf("%q is undefined: the file does not state it, and the publisher's config.json "+
+				"does (jitllm convert -config, WithModelConfig)", src)
 		}
 		if err != nil {
 			return jinja.Undefined(), fmt.Errorf("convert: %s: %s: %s: %w", by, arch, what, err)
@@ -155,6 +189,18 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return float32(v.AsFloat()), nil
 		}
 		return 0, fmt.Errorf("convert: %s: %s: %s is %v, not a number", by, arch, what, v)
+	}
+	for i, r := range st.Require {
+		v, err := value(fmt.Sprintf("require %d", i), r.That)
+		if err != nil {
+			return err
+		}
+		if !v.IsBool() {
+			return fmt.Errorf("convert: %s: %s: require %d is %v, not true or false", by, arch, i, v)
+		}
+		if !v.AsBool() {
+			return fmt.Errorf("convert: %s: %s: %w", arch, r.Else, ErrNotImplemented)
+		}
 	}
 	for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 		v, err := value("flag "+k, st.Flags[k])
@@ -201,10 +247,6 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return fmt.Errorf("convert: %s: %s: %s is %g", by, arch, s.what, x)
 		}
 	}
-	w := st.Window
-	if w == nil {
-		return nil
-	}
 	whole := func(what, src string) (uint32, error) {
 		x, err := number(what, src)
 		if err == nil && (x < 0 || x != float32(uint32(x))) {
@@ -212,14 +254,46 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		return uint32(x), err
 	}
+	if t := st.AttnTemp; t != nil {
+		s, err := number("attn_temp.scale", t.Scale)
+		if err != nil || s == 0 {
+			return err
+		}
+		floor, err := whole("attn_temp.floor", t.Floor)
+		if err != nil {
+			return err
+		}
+		if floor == 0 {
+			return fmt.Errorf("convert: %s: %s: a q temperature of %g with no floor to divide positions by", by, arch, s)
+		}
+		off := float32(0)
+		if t.Offset != "" {
+			if off, err = number("attn_temp.offset", t.Offset); err != nil {
+				return err
+			}
+		}
+		c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset = s, floor, off
+	}
+	w := st.Window
+	if w == nil {
+		return nil
+	}
 	size, err := whole("window.size", w.Size)
 	if err != nil {
 		return err
 	}
 	if size == 0 {
-		if w.Period != "" {
+		if w.Period == "" {
+			return nil
+		}
+		p, err := whole("window.period", w.Period)
+		switch {
+		case err != nil:
+			return err
+		case p != 0 && !c.Flags.Has(jlm.FlagNoPEGlobal):
 			return fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
 		}
+		c.SWAPeriod = p
 		return nil
 	}
 	c.SWAWindow = size
@@ -239,6 +313,11 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	}
 	if w.RopeBase != "" {
 		if c.RopeBaseSWA, err = number("window.rope_base", w.RopeBase); err != nil {
+			return err
+		}
+	}
+	if w.RopeScale != "" {
+		if c.RopeScaleSWA, err = number("window.rope_scale", w.RopeScale); err != nil {
 			return err
 		}
 	}

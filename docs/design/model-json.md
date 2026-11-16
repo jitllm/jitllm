@@ -140,13 +140,25 @@ schema; `convert/modeljson.go` reads it. Its sections:
   | default(1e-5)`): `flags` (the `mjFlags` names, each true or false),
   `activation` (an `mjActivations` name), `norm_eps` and `embd_scale`
   (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
-  `attn_softcap` and `final_softcap`, and `window`: `size` (0 states no
-  window, and nothing else of it applies), a fixed `period` or a `pattern`,
-  the period where the file's `attention.sliding_window_pattern` does not
-  state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. It replaces `configOfFile`'s case for
-  the architecture; one statement per architecture, and an expression
-  reading anything but `src` is refused.
+  `attn_softcap` and `final_softcap`, `attn_temp` (`scale`, `floor` and
+  `offset`: q scaled by 1 + scale*ln(1 + floor((pos+offset)/floor)), a scale
+  of 0 for none, a scale over a floor of 0 refused), and `window`: `size`, a
+  fixed `period` or a `pattern`, the period where the file's
+  `attention.sliding_window_pattern` does not state one, `rope_base`, the
+  windowed layers' rotary base, and `rope_scale`, their rotary magnitude. A
+  size of 0 slides nothing; a nonzero period over it names the layers that
+  skip the rotary, and is refused unless `no_pe_global` is stated. It
+  replaces `configOfFile`'s case for the architecture; one statement per
+  architecture. An expression may read `tensors` too, the names the file
+  stores (`'blk.0.ffn_norm.weight' not in tensors`: StableLM's parallel
+  residual), and `require` holds the file to what the reference's graph
+  reads, each `that` a boolean and `else` why (a starcoder's position table,
+  arcee's ungated FFN); an expression reading anything else is refused. An
+  expression reading a key the GGUF does not carry, with no `default`, is
+  refused naming `-config`: the publisher's config.json states what the
+  converter that wrote the GGUF did not (`stateAbsentKeys`: each absent key
+  and the window, as the class's file maps the config onto them), never a
+  guess from the model's size.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform

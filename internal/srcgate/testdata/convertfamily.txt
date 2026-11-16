@@ -17,7 +17,7 @@
 1 convert/bitnet.go:bitnetTensors
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
-85 convert/config.go:configOfFile
+58 convert/config.go:configOfFile
 19 convert/config.go:projectorOf
 4 convert/config.go:ropeScalingOf
 1 convert/config.go:visionOf
@@ -26,7 +26,6 @@
 1 convert/d1omni.go:d1OmniHead
 1 convert/decision.go:decisionOf
 1 convert/deepseek4.go:ds4Tensors
-7 convert/dense.go:denseConfig
 1 convert/flagship.go:gemma4Tensors
 1 convert/gemma3n.go:gemma3nTensors
 4 convert/geometryfits.go:Encoder

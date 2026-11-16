@@ -339,39 +339,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)
 			}
 		}
-	case ArchPhi3:
-		// phi3, and phi4 which uses this arch string too. No fusion flags: the
-		// converter unfuses phi3's attn_qkv and fused ffn_up (see unfuse), because
-		// a packed row range has no byte range and the device tier cannot slice one.
-		c.Flags |= jlm.FlagRopeNeox
-		// Every phi3 layer slides (HuggingFace and llama.cpp both mask every layer
-		// to sliding_window). The key when the file has it; otherwise llama.cpp's
-		// defaults for files written before the key existed (its PR 8931), and a
-		// refusal for anything else, as llama.cpp refuses. A key that is
-		// present and zero says no window at all: llama.cpp's converter writes
-		// 0 for Phi-4-reasoning-vision, whose config's sliding_window is null,
-		// and reads it as full attention. Only an ABSENT key falls to the
-		// defaults.
-		win := uint32(f.UintKey("attention.sliding_window", 0))
-		if _, stated := f.Key("attention.sliding_window"); win == 0 && !stated {
-			switch nkv := c.NKVHead; {
-			case (c.NLayer == 32 || c.NLayer == 40) && c.NCtx == 4096:
-				win = 2047
-			case c.NLayer == 32 && nkv == 32 && c.NCtx == 131072:
-				win = 262144
-			case c.NLayer == 40 && c.NCtx == 131072:
-				win = 131072
-			case c.NLayer == 40 && c.NCtx == 16384 && nkv == 10:
-				// phi-4 (14B): its config's sliding_window is null -- full
-				// attention on every layer -- so the absent key means none.
-			default:
-				return nil, fmt.Errorf("convert: %s: no attention.sliding_window and no "+
-					"known default for %d layers at context %d", name, c.NLayer, c.NCtx)
-			}
-		}
-		if win > 0 {
-			c.SWAWindow, c.SWAPeriod = win, allLocal(c.NLayer)
-		}
 	case ArchGemma2, ArchGemma3:
 		gemmaAttnScale(c)
 	case ArchQwen3Next, ArchQwen4Exp:
@@ -422,14 +389,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := graniteConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchStarcoder:
-		if err := starcoderConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchStableLM:
-		if err := stableLMConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchDBRX:
 		if err := dbrxConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -468,10 +427,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchErnie45MoE:
 		if err := ernie45moeConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchSmolLM3, ArchArcee, ArchSeedOSS, ArchOLMo2, ArchExaone4, ArchMistral3, ArchOLMo3:
-		if err := denseConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchHunyuan:
@@ -539,29 +494,25 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchCLIP:
 		return nil, fmt.Errorf("convert: %q is a vision tower, not a language model", name)
-	case ArchBERT, ArchNomicBERT:
-		// The encoder's norms are LayerNorms under attention.layer_norm_epsilon
-		// (all-minilm's is 1e-12); layer_norm_rms_epsilon read above is absent.
-		c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-12))
-		// An encoder has no causal mask: every token attends to every token.
-		c.Flags |= jlm.FlagNonCausal | jlm.FlagLayerNorm
-		if arch == ArchNomicBERT {
-			// Rotary on q and k in place of the position table, NEOX-paired
-			// (llama.cpp's rope-type table groups nomic-bert with qwen2). The
-			// base comes off rope.freq_base -- 1000 on nomic-embed-text-v1.5.
-			c.Flags |= jlm.FlagRopeNeox
-			if n := f.UintKey("moe_every_n_layers", 0); n > 0 {
-				return nil, fmt.Errorf("convert: %s: a mixture every %d layers "+
-					"(nomic-bert-moe) is not implemented: %w", name, n, ErrNotImplemented)
-			}
-		} else {
-			// A learned position table in the input rows and no rotary.
-			c.Flags |= jlm.FlagGELU | jlm.FlagNoPosEnc
-		}
 	case ArchModernBERT:
 		if err := modernBERTConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
+	}
+
+	// A mixture on every n'th block, the rest dense, is no graph this
+	// converter states.
+	if n := f.UintKey("moe_every_n_layers", 0); n > 0 {
+		return nil, fmt.Errorf("convert: %s: a mixture every %d layers: %w", name, n, ErrNotImplemented)
+	}
+	// A learned position table is added to the input rows: as wide as they
+	// are, and bounding the context, since a position past its rows has no
+	// embedding.
+	if t, ok := f.Get("position_embd.weight"); ok {
+		if len(t.Dims) < 2 || uint32(t.Dims[0]) != c.NEmbd {
+			return nil, fmt.Errorf("convert: %s: position_embd is %v, the model %d wide", name, t.Dims, c.NEmbd)
+		}
+		c.NCtx = min(c.NCtx, uint32(t.Dims[1]))
 	}
 
 	// A per-head q/k norm under LayerNorm blocks (command-r-plus, StableLM 2

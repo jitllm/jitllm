@@ -14,7 +14,17 @@
     "starcoder2": {"flags": {"layer_norm": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
                    "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
     "falcon": {"flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
-               "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"}
+               "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
+    "starcoder": {"flags": {"layer_norm": "true", "no_pos_enc": "true"}, "activation": "gelu_pytorch_tanh",
+                  "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
+                  "require": [{"that": "'position_embd.weight' in tensors",
+                               "else": "no position_embd.weight, which the graph adds to the input rows"}]},
+    "stablelm": {"flags": {"layer_norm": "true", "rope_neox": "true", "parallel": "'blk.0.ffn_norm.weight' not in tensors"},
+                 "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
+    "bert": {"flags": {"layer_norm": "true", "non_causal": "true", "no_pos_enc": "true"}, "activation": "gelu_pytorch_tanh",
+             "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-12)"},
+    "nomic-bert": {"flags": {"layer_norm": "true", "non_causal": "true", "rope_neox": "true"},
+                   "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-12)"}
   },
   "graph": {
     "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],

@@ -42,11 +42,24 @@ func fixtureSource(path string) string { return strings.TrimSuffix(path, q8Suffi
 // converts with (modelConfigs), "" for none. It is exported for the external
 // test package's jlmOf.
 func ModelConfigForTest(path string) string {
-	rel, err := filepath.Rel(testmodels.Dir(), path)
-	if err != nil || modelConfigs()[rel] == "" {
+	if c := keyConfigs()[filepath.Base(path)]; c != "" {
+		if abs, err := filepath.Abs(c); err == nil {
+			return abs
+		}
+	}
+	if !DivergesFromLlamaCppForTest(path) {
 		return ""
 	}
+	rel, _ := filepath.Rel(testmodels.Dir(), path)
 	return testmodels.Path(modelConfigs()[rel])
+}
+
+// DivergesFromLlamaCppForTest is whether the GGUF at path converts with a
+// config.json stating what llama.cpp runs without (modelConfigs), a
+// different model than llama.cpp's.
+func DivergesFromLlamaCppForTest(path string) bool {
+	rel, err := filepath.Rel(testmodels.Dir(), path)
+	return err == nil && modelConfigs()[rel] != ""
 }
 
 // BuildIDForTest identifies this test binary by its bytes; it is what

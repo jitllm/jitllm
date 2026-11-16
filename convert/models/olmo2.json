@@ -1,6 +1,12 @@
 {
   "classes": ["Olmo2ForCausalLM"],
   "gguf": ["olmo2"],
+  "container": {
+    "olmo2": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_wide": "true"},
+              "window": {"size": "src['attention.sliding_window'] | default(0)", "pattern": "4",
+                         "rope_base": "src['rope.freq_base_swa'] | default(src['rope.freq_base'] | default(10000))",
+                         "rope_scale": "1"}}
+  },
   "config": {
     "arch": "olmo2",
     "keys": {

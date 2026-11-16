@@ -952,6 +952,14 @@ func modelConfigs() map[string]string {
 	}
 }
 
+// keyConfigs are the publisher's config.json files, under testdata, each
+// GGUF by its name converts with because it does not state a key the
+// converter reads (a sliding window) and llama.cpp assumes what the config
+// states: the same model as llama.cpp's.
+func keyConfigs() map[string]string {
+	return map[string]string{"EXAONE-4.0-1.2B-Q4_K_M.gguf": "testdata/configs/EXAONE-4.0-1.2B/config.json"}
+}
+
 // notTowers are text GGUFs whose mmproj-<file> beside them is no tower: the
 // converter refuses it as input. tinyopenjev-for-testing's is a loader test
 // file whose block MLP reads 160 wide and writes 144 (fc1 160x288, fc2

@@ -1,6 +1,9 @@
 {
   "classes": ["SeedOssForCausalLM"],
   "gguf": ["seed_oss"],
+  "container": {
+    "seed_oss": {"flags": {"rope_neox": "true"}}
+  },
   "config": {
     "defaults": {"num_key_value_heads": 8, "head_dim": 128},
     "arch": "seed_oss",

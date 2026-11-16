@@ -1,6 +1,10 @@
 {
   "classes": ["ArceeForCausalLM"],
   "gguf": ["arcee"],
+  "container": {
+    "arcee": {"activation": "relu2",
+              "require": [{"that": "'blk.0.ffn_gate.weight' not in tensors", "else": "a block with a gate tensor; its FFN is ungated"}]}
+  },
   "config": {
     "arch": "arcee",
     "keys": {

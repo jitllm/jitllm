@@ -1,6 +1,11 @@
 {
   "classes": ["Exaone4ForCausalLM"],
   "gguf": ["exaone4"],
+  "container": {
+    "exaone4": {"flags": {"rope_neox": "true", "qk_norm": "true", "no_pe_global": "(src['attention.sliding_window'] | default(0)) > 0"},
+                "window": {"size": "src['attention.sliding_window']", "pattern": "4",
+                           "rope_base": "src['rope.freq_base_swa'] if src['rope.freq_base_swa'] is defined and src['rope.freq_base_swa'] != (src['rope.freq_base'] | default(10000)) else 0"}}
+  },
   "config": {
     "defaults": {"sliding_window": 4096, "sliding_window_pattern": 4},
     "arch": "exaone4",

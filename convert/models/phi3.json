@@ -1,6 +1,11 @@
 {
   "classes": ["Phi3ForCausalLM"],
   "gguf": ["phi3"],
+  "container": {
+    "phi3": {"flags": {"rope_neox": "true"},
+             "window": {"size": "src['attention.sliding_window']",
+                        "period": "src['block_count'] + 1 if src['attention.sliding_window'] > 0 else 0"}}
+  },
   "config": {
     "arch": "phi3",
     "keys": {

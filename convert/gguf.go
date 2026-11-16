@@ -77,6 +77,9 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 // buildGGUF is the container's source for a text model f and, when vf is
 // not nil, its vision tower, named src and mmproj in messages.
 func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, error) {
+	if err := o.stateAbsentKeys(f); err != nil {
+		return nil, err
+	}
 	s, err := sourceOf(f)
 	if err != nil {
 		return nil, err

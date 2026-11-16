@@ -158,7 +158,7 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 		// factors, which llama.cpp runs without: a different model
 		// (docs/divergences.md, "MiniCPM-V's text rotary"). Its oracle is
 		// transformers (TestStatedTowerMatchesTransformersEndToEnd).
-		if engine.ModelConfigForTest(path) != "" {
+		if engine.DivergesFromLlamaCppForTest(path) {
 			continue
 		}
 		if testing.Short() && !strings.Contains(name, "Qwen") {
