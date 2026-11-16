@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jitllm/jitllm/convert/gather"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
@@ -125,24 +124,33 @@ type mjPreStep struct {
 	Floats []string `json:"floats"`
 }
 
-// mjTowerOp is one op of a tower program, by its name (towerOps): In its
-// operands by the values earlier ops name with Out (the program's input is
-// "in"), W its tensors by container role name
-// (one ending in ? bound where the tower holds it; an op of no In reads the
-// op before, and one of "in": [] reads nothing), If the condition the op
-// is the program's under, Fn a stated op's function by name (towerFns), and
-// its numbers.
+// mjTowerOp is one op of a stated program, by its name (towerOps): In its
+// operands by the values earlier ops name with Out (the program's inputs are
+// "in", "in1", ...; "@" and an expression is the value of that index), W its
+// tensors by container role name (one ending in ? bound where the tower
+// holds it; an op of no In reads the op before, and one of "in": [] reads
+// nothing), If the condition the op is the program's under, Fn a stated op's
+// function by name (towerFns) or Expr its expression over its operands x, y
+// and z, and its numbers. An each op runs Ops once for each Var from Start
+// below Count, a name its ops give rebound from one run to the next.
 type mjTowerOp struct {
-	Op     string  `json:"op"`
-	If     string  `json:"if"`
-	In     mjNames `json:"in"`
-	W      mjNames `json:"w"`
-	Out    string  `json:"out"`
-	Fn     string  `json:"fn"`
-	Span   string  `json:"span"`
-	Offset string  `json:"offset"`
-	Width  string  `json:"width"`
-	Eps    string  `json:"eps"`
+	Op    string      `json:"op"`
+	If    string      `json:"if"`
+	In    mjNames     `json:"in"`
+	W     mjNames     `json:"w"`
+	Out   string      `json:"out"`
+	Fn    string      `json:"fn"`
+	Expr  string      `json:"expr"`
+	Var   string      `json:"var"`
+	Start string      `json:"start"`
+	Count string      `json:"count"`
+	Ops   []mjTowerOp `json:"ops"`
+	// Def is the op list a call runs (stateProg.defs).
+	Def    string `json:"def"`
+	Span   string `json:"span"`
+	Offset string `json:"offset"`
+	Width  string `json:"width"`
+	Eps    string `json:"eps"`
 	// Chain and Taps are a position resample's, by name (towerChains,
 	// towerTaps).
 	Chain string `json:"chain"`
@@ -386,28 +394,11 @@ func (t *mjTower) check() error {
 		}
 		srcs = append(append(srcs, p.Ints...), p.Floats...)
 	}
-	for _, prog := range progs {
-		for _, o := range prog {
-			if _, ok := towerOps()[o.Op]; !ok && o.Op != "untile" && o.Op != "clip_mask" {
-				return fmt.Errorf("op %q is not one a tower program runs", o.Op)
-			}
-			if _, ok := towerFns()[o.Fn]; o.Fn != "" && !ok {
-				return fmt.Errorf("function %q is not one a stated op runs", o.Fn)
-			}
-			if _, ok := towerChains()[o.Chain]; o.Chain != "" && !ok {
-				return fmt.Errorf("resample chain %q is not aligned or half_pixel", o.Chain)
-			}
-			if _, ok := towerTaps()[o.Taps]; o.Taps != "" && !ok {
-				return fmt.Errorf("resample taps %q are not ones the container names", o.Taps)
-			}
-			for _, w := range o.W {
-				if err := role(w); err != nil {
-					return err
-				}
-			}
-			srcs = append(srcs, o.If, o.Span, o.Offset, o.Width, o.Eps, o.Const, o.GridW, o.Stride)
-		}
+	read, _, err := progsCheck(progs, []string{"untile", "clip_mask"}, nil, role)
+	if err != nil {
+		return err
 	}
+	srcs = append(srcs, read...)
 	b := t.Block
 	if _, ok := towerNorms()[b.Norm]; !ok && (t.Chain == nil || b.Norm != "") {
 		return fmt.Errorf("norm %q is not layer or rms", b.Norm)
@@ -674,106 +665,12 @@ func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jin
 		return nil, err
 	}
 	roles := rolesByName()
-	prog := func(ops []mjTowerOp, nin int, held func(string) bool) (jlm.Program, error) {
-		p := jlm.Program{NIn: uint16(nin)}
-		named := map[string]uint16{"in": 0, "in1": 1}
-		last := uint16(0)
-		for _, o := range ops {
-			if o.If != "" {
-				on, err := value(o.If)
-				if err != nil {
-					return p, err
-				}
-				if !on.IsTruthy() {
-					continue
-				}
-			}
-			op := jlm.TowerOp{Code: towerOps()[o.Op]}
-			if o.Op == "untile" {
-				merge, err := num(o.Span)
-				if err != nil {
-					return p, err
-				}
-				window, err := num(o.Width)
-				if err != nil {
-					return p, err
-				}
-				if op, err = gather.Untile(int(merge), int(window)); err != nil {
-					return p, fmt.Errorf("convert: %s: %v: %w", by, proj, err)
-				}
-			}
-			// A clip mask's grid width, samples a frame and halvings.
-			if o.Op == "clip_mask" {
-				var w, st, h float64
-				for _, f := range []struct {
-					src string
-					to  *float64
-				}{{o.GridW, &w}, {o.Stride, &st}, {o.Span, &h}} {
-					x, err := num(f.src)
-					if err != nil {
-						return p, err
-					}
-					*f.to = x
-				}
-				var err error
-				if op, err = gather.ClipMask(int(w), int(st), int(h)); err != nil {
-					return p, fmt.Errorf("convert: %s: %v: %w", by, proj, err)
-				}
-			}
-			for _, n := range o.In {
-				i, ok := named[n]
-				if !ok {
-					return p, fmt.Errorf("convert: %s: %v: op %s reads %q, which no earlier op names", by, proj, o.Op, n)
-				}
-				op.In = append(op.In, i)
-			}
-			if o.In == nil {
-				op.In = []uint16{last}
-			}
-			for _, w := range o.W {
-				n, optional := strings.CutSuffix(w, "?")
-				if optional && !held(n) {
-					continue
-				}
-				op.Bind = append(op.Bind, roles[n])
-			}
-			for _, f := range []struct {
-				src string
-				to  *int32
-			}{{o.Span, &op.Span}, {o.Offset, &op.Offset}, {o.Width, &op.Width}, {o.GridW, &op.GridW}, {o.Stride, &op.Stride}} {
-				if o.Op == "untile" || o.Op == "clip_mask" {
-					break
-				}
-				x, err := num(f.src)
-				if err != nil {
-					return p, err
-				}
-				*f.to = int32(x)
-			}
-			eps, err := num(o.Eps)
-			if err != nil {
-				return p, err
-			}
-			op.Eps = float32(eps)
-			op.Chain, op.Filter = towerChains()[o.Chain], towerTaps()[o.Taps]
-			if o.Fn != "" {
-				c, err := num(o.Const)
-				if err != nil {
-					return p, err
-				}
-				var e jlm.ExprBuilder
-				towerFns()[o.Fn](&e, float32(c))
-				op.Expr = &jlm.Expr{Terms: e.T}
-			}
-			p.Ops = append(p.Ops, op)
-			last = uint16(nin + len(p.Ops) - 1)
-			if o.Out != "" {
-				named[o.Out] = last
-			}
-		}
-		p.Out = last
-		return p, nil
-	}
+	pb := &stateProg{where: fmt.Sprintf("%s: %v", by, proj), value: value, num: num, facts: facts,
+		role: func(n string) (jlm.Role, bool) {
+			r, ok := roles[n]
+			return r, ok
+		}}
+	prog := pb.prog
 	steps := func(sts []mjPreStep) ([]jlm.PreStep, error) {
 		var out []jlm.PreStep
 		for _, st := range sts {

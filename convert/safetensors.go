@@ -566,7 +566,16 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	if err := StateActivations(cfg, s); err != nil {
 		return nil, err
 	}
-	StateStreams(cfg.Config, sourceStores(s))
+	g := ha.graph
+	if g == nil {
+		var err error
+		if g, err = classGraph(ha); err != nil {
+			return nil, err
+		}
+	}
+	if err := stateGraphStreams(cfg.Config, s, g, hfKeys(hc)); err != nil {
+		return nil, err
+	}
 	storeRowTables(cfg.Config, s)
 	if err := StateSelection(cfg.Config, sourceStores(s)); err != nil {
 		return nil, err
@@ -586,13 +595,6 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	StateDelta(cfg.Config, sourceStores(s))
 	if err := StateRevision(cfg); err != nil {
 		return nil, err
-	}
-	g := ha.graph
-	if g == nil {
-		var err error
-		if g, err = classGraph(ha); err != nil {
-			return nil, err
-		}
 	}
 	if g != nil {
 		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc)); err != nil {

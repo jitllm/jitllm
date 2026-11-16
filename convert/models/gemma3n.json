@@ -42,6 +42,107 @@
       {"op": "norm",          "in": "d", "w": "post_ffw_norm", "out": "d"},
       {"op": "stream_writes", "of": "ffn", "streams": "xs", "in": "d", "ex": "f.ex", "out": "ys"},
       {"op": "out_streams",   "streams": "ys"}
-    ]
+    ],
+    "streams": {
+      "count": "src['altup.num_inputs']",
+      "defs": {
+        "mag": [
+          {"op": "stated", "in": ["in1", "in1"], "width": "embd", "expr": "x * y", "out": "rr"},
+          {"op": "sum",    "in": ["rr"], "out": "sr"},
+          {"op": "stated", "in": ["in", "in"], "width": "embd", "expr": "x * y", "out": "pp"},
+          {"op": "sum",    "in": ["pp"], "out": "sp"},
+          {"op": "stated", "in": ["sr", "sp"], "width": "1",
+           "expr": "sqrt(x * (1 / embd)) / sqrt(max(y * (1 / embd), 1e-5))", "out": "k"},
+          {"op": "stated", "in": ["k", "in"], "width": "embd", "expr": "x * y"}
+        ],
+        "router": [
+          {"op": "rms_norm", "in": ["in"], "span": "embd", "eps": "eps"},
+          {"op": "scale",    "w": ["altup_router_norm"]},
+          {"op": "stated",   "width": "embd", "expr": "x * (1 / embd)"},
+          {"op": "linear",   "w": ["altup_router"]},
+          {"op": "stated",   "width": "streams", "expr": "tanh(x)"}
+        ]
+      },
+      "expand": {"var": "k", "ops": [
+        {"op": "linear", "in": ["in"], "w": ["altup_proj"]},
+        {"op": "slice",  "offset": "(k - 1) * embd", "width": "embd", "out": "e"},
+        {"op": "call",   "def": "mag", "in": ["e", "in"]}
+      ]},
+      "block": {
+        "pre": {
+          "from": ["@range(streams)"],
+          "read": [
+            {"op": "call",   "def": "router", "in": ["in"]},
+            {"op": "linear", "w": ["altup_predict_coef"]}
+          ],
+          "exports": ["@range(streams)"],
+          "writes": {"var": "k", "ops": [
+            {"op": "let",  "in": ["in"], "out": "acc"},
+            {"op": "each", "var": "j", "count": "streams", "ops": [
+              {"op": "slice",  "in": ["in1"], "offset": "k * streams + j", "width": "1", "out": "c"},
+              {"op": "stated", "in": ["c", "@2 + j"], "width": "embd", "expr": "x * y", "out": "t"},
+              {"op": "add",    "in": ["acc", "t"], "out": "acc"}
+            ]}
+          ]}
+        },
+        "attn": {
+          "join": [
+            {"op": "rms_norm", "in": ["in"], "span": "embd", "eps": "eps"},
+            {"op": "scale",    "w": ["attn_norm"], "out": "n"},
+            {"op": "linear",   "w": ["laurel_l"]},
+            {"op": "linear",   "w": ["laurel_r"]},
+            {"op": "rms_norm", "span": "embd", "eps": "eps"},
+            {"op": "scale",    "w": ["laurel_post_norm"], "out": "lr"},
+            {"op": "add",      "in": ["n", "lr"], "out": "side"},
+            {"op": "add",      "in": ["in", "in1"], "out": "o"},
+            {"op": "add",      "in": ["o", "side"]},
+            {"op": "stated",   "width": "embd", "expr": "x * (1 / sqrt(2))"}
+          ]
+        },
+        "ffn": {
+          "from": ["run", "in", "side"],
+          "read": [],
+          "exports": ["in", "in1", "in2"],
+          "post": [
+            {"op": "add",      "in": ["in1", "in"], "out": "o"},
+            {"op": "call",     "def": "router", "in": ["o"]},
+            {"op": "linear",   "w": ["altup_correct_coef"]},
+            {"op": "stated",   "width": "streams", "expr": "x + 1", "out": "cc"},
+            {"op": "stated",   "in": ["o", "in2"], "width": "embd", "expr": "x - y", "out": "innov"},
+            {"op": "slice",    "in": ["cc"], "offset": "0", "width": "1", "out": "c0"},
+            {"op": "stated",   "in": ["c0", "innov"], "width": "embd", "expr": "x * y", "out": "ci"},
+            {"op": "add",      "in": ["in2", "ci"]},
+            {"op": "scale",    "w": ["altup_correct_scale"]},
+            {"op": "linear",   "w": ["inp_gate"], "out": "gate"},
+            {"op": "slice",    "in": ["in3"], "offset": "layer * ple_dim", "width": "ple_dim", "out": "pin"},
+            {"op": "stated",   "in": ["gate", "pin"], "width": "ple_dim", "expr": "gelu_tanh(x) * y"},
+            {"op": "linear",   "w": ["proj"]},
+            {"op": "rms_norm", "span": "embd", "eps": "eps"},
+            {"op": "scale",    "w": ["post_norm"], "out": "ple"},
+            {"op": "concat",   "in": ["cc", "innov", "ple"]}
+          ],
+          "writes": {"var": "k", "ops": [
+            {"op": "slice",  "in": ["in5"], "offset": "k", "width": "1", "out": "c"},
+            {"op": "slice",  "in": ["in5"], "offset": "streams", "width": "embd", "out": "i"},
+            {"op": "stated", "in": ["c", "i"], "width": "embd", "expr": "x * y", "out": "m"},
+            {"op": "add",    "in": ["in", "m"], "out": "x"},
+            {"op": "slice",  "if": "k > 0", "in": ["in5"], "offset": "streams + embd", "width": "embd", "out": "pl"},
+            {"op": "add",    "if": "k > 0", "in": ["x", "pl"]}
+          ]}
+        }
+      },
+      "head": {
+        "from": ["@range(streams)"],
+        "read": [
+          {"op": "let",  "in": ["in"], "out": "acc"},
+          {"op": "each", "var": "k", "start": "1", "count": "streams", "ops": [
+            {"op": "linear", "in": ["@k"], "w": ["@'stream_collapse.' ~ k"], "out": "u"},
+            {"op": "call",   "def": "mag", "in": ["u", "in"], "out": "m"},
+            {"op": "add",    "in": ["acc", "m"], "out": "acc"}
+          ]},
+          {"op": "stated", "in": ["acc"], "width": "embd", "expr": "x * (1 / streams)"}
+        ]
+      }
+    }
   }
 }

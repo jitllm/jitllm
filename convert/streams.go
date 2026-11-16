@@ -16,11 +16,6 @@ import (
 // attention's output is the running residual rather than added to it.
 // stores says block li (-1 the dense tensors) stores role.
 func StateStreams(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
-	if c.PredStreams > 1 && c.NLayer > 0 {
-		stateAltUp(&Config{Config: c})
-		c.PredStreams = 0
-		return
-	}
 	if c.HCLowRank > 0 && c.HCMult > 1 && c.NLayer > 0 {
 		stateHyper(c)
 		return

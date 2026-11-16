@@ -227,7 +227,7 @@ type Instance struct {
 	// chunk's, one row each (plerun.go).
 	ple, bple []float32
 	// xa is the one-row residual's streams (x is its stream 0), on a model of
-	// several (altup.go).
+	// several (the container's Streams).
 	xa  []float32
 	tok int32
 	// tok1 hands a decode step's token to the device (tokenIDs) without an

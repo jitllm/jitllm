@@ -26,6 +26,8 @@ type mjGraph struct {
 	// first whose If holds, Block where none does.
 	Use   []mjUse     `json:"use"`
 	Block []mjBlockOp `json:"block"`
+	// Streams is the residual's streams the blocks mix (streamstates.go).
+	Streams *mjStreams `json:"streams"`
 	// exprs are its expressions compiled, by their text (check).
 	exprs map[string]*jinja.Expr
 }
@@ -279,6 +281,9 @@ func (g *mjGraph) check(names tensorNames) error {
 	if last := g.Block[len(g.Block)-1].Op; last != "out" && last != "out_streams" {
 		return fmt.Errorf("a block's graph ends in an out")
 	}
+	if g.Streams != nil {
+		return g.Streams.check(g, names)
+	}
 	return nil
 }
 
@@ -521,7 +526,8 @@ func (g *mjGraph) compile(src string, runs ...string) error {
 	}
 	known := (&blockFacts{c: &jlm.Config{}}).vars()
 	for _, n := range x.Names() {
-		if _, ok := known[n]; !ok && !slices.Contains(runs, n) {
+		// range is the expression language's own.
+		if _, ok := known[n]; !ok && !slices.Contains(runs, n) && n != "range" {
 			return fmt.Errorf("expression %q reads %q, which is not a fact of a block", src, n)
 		}
 	}

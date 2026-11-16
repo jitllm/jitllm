@@ -535,7 +535,13 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 	}
-	StateStreams(c.Config, sourceStores(s))
+	g, err := ggufGraph(f.Arch())
+	if err != nil {
+		return nil, err
+	}
+	if err := stateGraphStreams(c.Config, s, g, ggufKeys(f)); err != nil {
+		return nil, err
+	}
 	storeRowTables(c.Config, s)
 	if err := StateSelection(c.Config, sourceStores(s)); err != nil {
 		return nil, err
