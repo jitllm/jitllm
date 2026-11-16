@@ -834,16 +834,11 @@ func widenBF16(src []byte) []byte {
 // ---------------------------------------------------------------------------
 // config.json
 
-// hfConfig is the subset of config.json this converter reads, plus every field
-// it must refuse on. The refusals are declared rather than implied, since an
-// absent field here is a key nobody read.
+// hfConfig is the subset of config.json the converter's Go reads; a class's
+// statement reads the rest through keys.
 type hfConfig struct {
 	Architectures         []string        `json:"architectures"`
 	ModelType             string          `json:"model_type"`
-	HiddenSize            uint32          `json:"hidden_size"`
-	IntermediateSize      uint32          `json:"intermediate_size"`
-	NumHiddenLayers       uint32          `json:"num_hidden_layers"`
-	NumAttentionHeads     uint32          `json:"num_attention_heads"`
 	NumKeyValueHeads      *uint32         `json:"num_key_value_heads"`
 	HeadDim               *uint32         `json:"head_dim"`
 	MaxPositionEmbeddings uint32          `json:"max_position_embeddings"`
@@ -851,14 +846,8 @@ type hfConfig struct {
 	RopeTheta             float64         `json:"rope_theta"`
 	RopeScaling           json.RawMessage `json:"rope_scaling"`
 	TieWordEmbeddings     *bool           `json:"tie_word_embeddings"`
-	VocabSize             uint32          `json:"vocab_size"`
 	HiddenAct             string          `json:"hidden_act"`
-	AttentionBias         bool            `json:"attention_bias"`
-	MLPBias               bool            `json:"mlp_bias"`
 	PartialRotaryFactor   *float64        `json:"partial_rotary_factor"`
-	SlidingWindow         *uint32         `json:"sliding_window"`
-	UseSlidingWindow      *bool           `json:"use_sliding_window"`
-	TorchDtype            string          `json:"torch_dtype"`
 	HiddenActivation      string          `json:"hidden_activation"`
 	// transformers 5 carries rope_theta (and any scaling) here instead.
 	RopeParameters json.RawMessage `json:"rope_parameters"`
@@ -866,51 +855,11 @@ type hfConfig struct {
 	// (LongRoPE's factor vectors); the arch's config reader fills it.
 	extra []jlm.Tensor
 
-	// A mixture. num_experts is qwen3moe/olmoe's spelling, num_local_experts
-	// mixtral's.
-	NumExperts                   uint32   `json:"num_experts"`
-	NumLocalExperts              uint32   `json:"num_local_experts"`
-	NumExpertsPerTok             uint32   `json:"num_experts_per_tok"`
-	MoEIntermediateSize          hfUint   `json:"moe_intermediate_size"`
-	NormTopKProb                 *bool    `json:"norm_topk_prob"`
-	DecoderSparseStep            *uint32  `json:"decoder_sparse_step"`
-	MLPOnlyLayers                []uint32 `json:"mlp_only_layers"`
-	SharedExpertIntermediateSize uint32   `json:"shared_expert_intermediate_size"`
-
 	// Multi-head Latent Attention (DeepSeek-V2/V3). See jlm.Config's MLA block.
 	// q_lora_rank is a plain uint32: V2-Lite's "q_lora_rank": null means a
 	// one-step query projection, which jlm.Config.QLoraRank spells as zero too.
-	QLoraRank     uint32 `json:"q_lora_rank"`
-	KVLoraRank    uint32 `json:"kv_lora_rank"`
-	QKNopeHeadDim uint32 `json:"qk_nope_head_dim"`
-	QKRopeHeadDim uint32 `json:"qk_rope_head_dim"`
-	VHeadDim      uint32 `json:"v_head_dim"`
-
-	// DeepSeek's mixture. Its expert count is n_routed_experts (a third
-	// spelling), plus a leading dense run, a shared expert sized as a multiple
-	// of the routed width, grouped selection, and a scale on the weights.
-	FirstKDenseReplace  uint32  `json:"first_k_dense_replace"`
-	NRoutedExperts      uint32  `json:"n_routed_experts"`
-	NSharedExperts      uint32  `json:"n_shared_experts"`
-	NGroup              uint32  `json:"n_group"`
-	TopkGroup           uint32  `json:"topk_group"`
-	RoutedScalingFactor float64 `json:"routed_scaling_factor"`
-	ScoringFunc         string  `json:"scoring_func"`
-
-	// ERNIE 4.5's mixture, under its own names (Ernie4_5_MoeConfig).
-	MoENumExperts       uint32 `json:"moe_num_experts"`
-	MoEK                uint32 `json:"moe_k"`
-	MoENumSharedExperts uint32 `json:"moe_num_shared_experts"`
-	MoELayerStartIndex  *int   `json:"moe_layer_start_index"`
-	MoELayerEndIndex    *int   `json:"moe_layer_end_index"`
-	MoELayerInterval    uint32 `json:"moe_layer_interval"`
-
-	// SmolLM3's NoPE layers, and EXAONE 4's window pattern (an int, or a
-	// string transformers cannot read without layer_types). See
-	// convert/safetensors_dense.go.
-	NoRopeLayers         []int           `json:"no_rope_layers"`
-	NoRopeLayerInterval  *uint32         `json:"no_rope_layer_interval"`
-	SlidingWindowPattern json.RawMessage `json:"sliding_window_pattern"`
+	QLoraRank  uint32 `json:"q_lora_rank"`
+	KVLoraRank uint32 `json:"kv_lora_rank"`
 
 	// keys is every top-level key config.json carries. An absent key takes
 	// its CLASS's default, which differs per class (SeedOssConfig's head_dim

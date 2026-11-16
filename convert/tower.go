@@ -190,17 +190,6 @@ func towerFFNByShape(s *jlm.Source) error {
 	return nil
 }
 
-// towerRoles is the roles of s's tower tensors outside its blocks.
-func towerRoles(s *jlm.Source) map[jlm.Role]bool {
-	has := map[jlm.Role]bool{}
-	for i := range s.Tensors {
-		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role.Vision() {
-			has[t.Role] = true
-		}
-	}
-	return has
-}
-
 // markerIDs is each marker's id in s's vocabulary, found by its decoded piece.
 func markerIDs(s *jlm.Source, pieces ...string) ([]int32, error) {
 	v, err := tok.New(s.Vocab)

@@ -1,9 +1,5 @@
 package convert
 
-import (
-	"github.com/jitllm/jitllm/format/jlm"
-)
-
 // The dense llama family from HuggingFace safetensors: the same containers
 // convert/dense.go writes from a GGUF, read off transformers' own classes
 // (models/<arch>/modeling_*.py and configuration_*.py).
@@ -51,22 +47,5 @@ func (d hfClassDefaults) apply(c *hfConfig) {
 	}
 	if c.absent("max_position_embeddings") {
 		c.MaxPositionEmbeddings = d.nCtx
-	}
-}
-
-// hfLlamaBlockNoBias is llama's block for a class whose attention has no
-// bias parameter at all (bias=False in the class): a bias in the file would be
-// a tensor the reference never loads.
-func hfLlamaBlockNoBias() map[string]jlm.Role {
-	return map[string]jlm.Role{
-		"input_layernorm.weight":          jlm.RoleAttnNorm,
-		"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-		"self_attn.q_proj.weight":         jlm.RoleAttnQ,
-		"self_attn.k_proj.weight":         jlm.RoleAttnK,
-		"self_attn.v_proj.weight":         jlm.RoleAttnV,
-		"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-		"mlp.gate_proj.weight":            jlm.RoleFFNGate,
-		"mlp.up_proj.weight":              jlm.RoleFFNUp,
-		"mlp.down_proj.weight":            jlm.RoleFFNDown,
 	}
 }

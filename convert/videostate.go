@@ -21,7 +21,6 @@ func (e *sizes) less(a, b jlm.Arg) jlm.Arg      { return e.Fn(jlm.FnLess, a, b) 
 func (e *sizes) where(c, a, b jlm.Arg) jlm.Arg  { return e.Fn(jlm.FnWhere, c, a, b) }
 func (e *sizes) fn(f jlm.Fn, a jlm.Arg) jlm.Arg { return e.Fn(f, a) }
 func (e *sizes) expr() jlm.Expr                 { return jlm.Expr{Terms: e.T} }
-func opExpr(i int) jlm.Expr                     { var e sizes; e.add(e.op(i), num(0)); return e.expr() }
 func constant(v float32) jlm.Expr               { var e sizes; e.add(num(v), num(0)); return e.expr() }
 func idsPiece(ids []int32) jlm.VideoPiece       { return jlm.VideoPiece{Kind: jlm.PieceIDs, IDs: ids} }
 func textPiece(s string) jlm.VideoPiece         { return jlm.VideoPiece{Kind: jlm.PieceText, Text: s} }
@@ -29,9 +28,6 @@ func spanPiece() jlm.VideoPiece                 { return jlm.VideoPiece{Kind: jl
 func valuePiece(e jlm.Expr, f jlm.ValueFormat) jlm.VideoPiece {
 	return jlm.VideoPiece{Kind: jlm.PieceValue, Value: e, Format: f}
 }
-
-// everyFrame samples every frame of a video: its count N, frame i at i.
-func everyFrame() (count, index jlm.Expr) { return opExpr(jlm.VideoN), opExpr(jlm.VideoAt) }
 
 // pictureSpan is a group's rows between the picture's markers, as the tower
 // span states them.
