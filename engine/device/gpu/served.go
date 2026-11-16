@@ -3152,8 +3152,8 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableAngles): cs, tableKey(composer.TableKeys): kk, tableKey(composer.TableValues): kv, tableKey(composer.TablePages): tab, tableKey(composer.TableRows): rows,
 				tableKey(composer.TableWindows): rowsW, tableKey(composer.TableQOff): qOff, tableKey(composer.TableCall): calls},
-			history: poolHistory(geom),
-			keys:    keys, page: page, seqs: seqs, paged: l.paged(), context: context}
+			history: poolHistory(geom), rowTabs: l.rowTabs,
+			keys: keys, page: page, seqs: seqs, paged: l.paged(), context: context}
 		for h := 1; h < nh; h++ {
 			var eh composer.History
 			if pe := g.kvp.layers[histKey(l.kvSrc, h)]; pe != nil {
