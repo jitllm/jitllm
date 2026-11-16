@@ -1,7 +1,9 @@
 {
   "gguf": ["kimi-k3"],
   "container": {
-    "kimi-k3": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)"}}
+    "kimi-k3": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)"},
+      "attn_res_block": "src['attn_res.block_size'] | default(0)", "expert_latent": "src['expert_latent_length'] | default(0)",
+      "situ": {"beta": "src['activation.situ_beta'] | default(0)", "linear_beta": "src['activation.situ_linear_beta'] | default(0)"}}
   },
   "archs": ["kimilinear"],
   "graph": {

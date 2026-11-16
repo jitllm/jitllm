@@ -76,8 +76,10 @@ const ds4SwiGLULimit = 10
 // compressed blocks), a window and sinks on every block, compressed blocks
 // (CompKinds, CompRateCSA, CompRateHCA) with the indexer, a grouped low-rank
 // output, the sqrt(softplus) mixture with hash-routed lead blocks, and a
-// SwiGLU clamped at each block's stated limit (ds4Clamp). The q LoRA's rank
-// and the indexer are compressed.json's container statement.
+// SwiGLU clamped at each block's stated limit (ds4Clamp). The q LoRA's rank,
+// the indexer, the window, the compressed blocks' rotary base, the streams,
+// the output groups and the hash-routed blocks are compressed.json's
+// container statement.
 //
 // Refused: any gate but sqrt-softplus, the renormalisation off, a block
 // whose routed and shared clamps differ, and a window that does not cover the HCA rate and two CSA windows
@@ -102,35 +104,6 @@ func deepseek4Config(f *meta.File, c *Config) error {
 	}
 	if c.QLoraRank == 0 || c.SWAWindow == 0 {
 		return fmt.Errorf("q_lora_rank %d, sliding_window %d: DeepSeek V4 has both", c.QLoraRank, c.SWAWindow)
-	}
-	// The two rotaries: the plain one at rope.freq_base on the sliding
-	// blocks (the window compressed.json states), the compressed blocks' at
-	// their own base, where the YaRN keys read below apply (Config's global
-	// rotary carries them).
-	comp, ok := f.Key("attention.compress_rope_freq_base")
-	if !ok {
-		return fmt.Errorf("no attention.compress_rope_freq_base")
-	}
-	cb, _ := comp.Float()
-	if !(cb > 0) {
-		return fmt.Errorf("attention.compress_rope_freq_base %g", cb)
-	}
-	c.RopeBase = float32(cb)
-
-	c.HCMult = uint32(f.UintKey("hyper_connection.count", 0))
-	c.HCIters = uint32(f.UintKey("hyper_connection.sinkhorn_iterations", 0))
-	c.HCEps = float32(f.FloatKey("hyper_connection.epsilon", 0))
-	if c.HCMult < 2 || c.HCIters == 0 || !(c.HCEps > 0) {
-		return fmt.Errorf("hyper-connections %d streams, %d Sinkhorn rounds at %g", c.HCMult, c.HCIters, c.HCEps)
-	}
-	c.OGroups = uint32(f.UintKey("attention.output_group_count", 0))
-	c.OLoraRank = uint32(f.UintKey("attention.output_lora_rank", 0))
-	if c.OGroups == 0 || c.OLoraRank == 0 || c.NHead%c.OGroups != 0 {
-		return fmt.Errorf("%d output groups of rank %d over %d heads", c.OGroups, c.OLoraRank, c.NHead)
-	}
-	c.NHashLayers = uint32(f.UintKey("hash_layer_count", 0))
-	if c.NHashLayers > c.NLayer {
-		return fmt.Errorf("%d hash-routed blocks of %d", c.NHashLayers, c.NLayer)
 	}
 	if err := ds4Clamp(f, c); err != nil {
 		return err

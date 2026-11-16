@@ -1,6 +1,8 @@
 package convert
 
 import (
+	"errors"
+	"maps"
 	"math"
 	"strings"
 	"testing"
@@ -70,7 +72,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "gemma3", keys: with(with(gemma, "attention.sliding_window", meta.MakeUint(512)),
 			"attention.sliding_window_pattern", meta.MakeUint(4)),
 			flags: qk | jlm.FlagGELU, scale: float32(math.Sqrt(2048)), win: 512, period: 4, ropeSWA: 10000},
-		{arch: "deepseek4", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
 			win: 128, period: 5, ropeSWA: 10000},
 		{arch: "gpt-oss", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128)},
 			flags: neox | jlm.FlagSwiGLUOAI | jlm.FlagYarnExact, win: 128, period: 2},
@@ -106,10 +108,10 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "deepseek2", keys: map[string]meta.Value{"attention.value_length": u(512)}, kv: 512},
 		{arch: "deepseek2", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.value_length": u(80),
 			"attention.q_lora_rank": u(96)}, kv: 64, q: 96},
-		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64)}, kv: 64},
-		{arch: "kimi-k3", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64)}, kv: 64},
-		{arch: "deepseek4", keys: map[string]meta.Value{"attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
-		{arch: "deepseek4", keys: map[string]meta.Value{"attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
+		{arch: "kimi-k3", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "activation.situ_beta": meta.MakeFloat(3),
+			"activation.situ_linear_beta": meta.MakeFloat(5)}, kv: 64},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
 			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)}, q: 96, heads: 4, w: 32, k: 8},
 		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
 			"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
@@ -128,22 +130,107 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 				c.KVLoraRank, c.QLoraRank, c.IdxHeads, c.IdxHeadDim, c.IdxTopK, tc.kv, tc.q, tc.heads, tc.w, tc.k)
 		}
 	}
-	for want, keys := range map[string]map[string]meta.Value{
-		"an indexer of 0 heads": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
-			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
-		"no key-value rank": {"attention.q_lora_rank": u(96)},
-		"no query latent": {"attention.kv_lora_rank": u(64), "attention.indexer.head_count": u(4),
-			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
-		"with a 64-wide rotary": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
-			"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(36), "attention.indexer.top_k": u(8)},
+	ds32 := map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
+		"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(64), "attention.indexer.top_k": u(8)}
+	ds4 := map[string]meta.Value{"attention.compress_rope_freq_base": meta.MakeFloat(16e4), "hyper_connection.count": meta.MakeUint(4), "hyper_connection.sinkhorn_iterations": meta.MakeUint(20), "hyper_connection.epsilon": meta.MakeFloat(1e-6), "attention.output_group_count": meta.MakeUint(2), "attention.output_lora_rank": meta.MakeUint(8), "attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4),
+		"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(64), "attention.indexer.top_k": u(8)}
+	without := func(m map[string]meta.Value, k string) map[string]meta.Value {
+		n := maps.Clone(m)
+		delete(n, k)
+		return n
+	}
+	set := func(m map[string]meta.Value, k string, v meta.Value) map[string]meta.Value {
+		n := maps.Clone(m)
+		n[k] = v
+		return n
+	}
+	for _, tc := range []struct {
+		arch, want string
+		keys       map[string]meta.Value
+	}{
+		{"deepseek32", "attention.indexer.head_count", without(ds32, "attention.indexer.head_count")},
+		{"deepseek32", "attention.indexer.top_k", without(ds32, "attention.indexer.top_k")},
+		{"deepseek4", "an indexer of 0 heads", without(ds4, "attention.indexer.head_count")},
+		{"deepseek32", "no key-value rank", map[string]meta.Value{"attention.q_lora_rank": u(96)}},
+		{"deepseek32", "no query latent", without(ds32, "attention.q_lora_rank")},
+		{"deepseek32", "not whole groups of eight", set(ds32, "attention.indexer.key_length", u(68))},
+		{"deepseek4", "not whole groups of eight", set(ds4, "attention.indexer.key_length", u(68))},
+		{"deepseek32", "with a 64-wide rotary", set(ds32, "attention.indexer.key_length", u(32))},
+		{"deepseek4", "with a 64-wide rotary", set(ds4, "attention.indexer.key_length", u(32))},
+		{"deepseek4", "attention.sliding_window", without(ds4, "attention.sliding_window")},
+		{"deepseek4", "a window period over a window of 0", set(ds4, "attention.sliding_window", u(0))},
+		{"deepseek4", "attention.compress_rope_freq_base", without(ds4, "attention.compress_rope_freq_base")},
+		{"deepseek4", "rope_base is 0", set(ds4, "attention.compress_rope_freq_base", meta.MakeFloat(0))},
+		{"deepseek4", "1 residual streams", set(ds4, "hyper_connection.count", u(1))},
+		{"deepseek4", "0 residual streams", without(ds4, "hyper_connection.count")},
+		{"deepseek4", "20 Sinkhorn rounds at 0", without(ds4, "hyper_connection.epsilon")},
+		{"deepseek4", "0 Sinkhorn rounds", set(ds4, "hyper_connection.sinkhorn_iterations", u(0))},
+		{"deepseek4", "3 output groups of rank 8 over 4 heads", set(ds4, "attention.output_group_count", u(3))},
+		{"deepseek4", "2 output groups of rank 0", without(ds4, "attention.output_lora_rank")},
+		{"deepseek4", "5 hash-routed blocks of 4", set(ds4, "hash_layer_count", u(5))},
 	} {
-		kv := map[string]meta.Value{"general.architecture": meta.MakeString("deepseek32")}
-		for k, v := range keys {
-			kv["deepseek32."+k] = v
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString(tc.arch)}
+		for k, v := range tc.keys {
+			kv[tc.arch+"."+k] = v
 		}
-		err := stateContainer(meta.New("deepseek32.gguf", kv, nil), &Config{Config: &jlm.Config{NRot: 64}})
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("deepseek32 with %v: %v, want an error naming %q", keys, err, want)
+		err := stateContainer(meta.New(tc.arch+".gguf", kv, nil), &Config{Config: &jlm.Config{NRot: 64, NHead: 4, NLayer: 4}})
+		if err == nil || !strings.Contains(err.Error(), tc.want) || errors.Is(err, ErrNotImplemented) {
+			t.Errorf("%s with %v: %v, want a malformed-file error naming %q", tc.arch, tc.keys, err, tc.want)
+		}
+	}
+	k3 := map[string]meta.Value{"attention.kv_lora_rank": u(64), "activation.situ_beta": meta.MakeFloat(3),
+		"activation.situ_linear_beta": meta.MakeFloat(5), "attn_res.block_size": u(2), "expert_latent_length": u(16)}
+	for _, tc := range []struct {
+		want string
+		keys map[string]meta.Value
+	}{
+		{"situ bounds 0 and 5", without(k3, "activation.situ_beta")},
+		{"situ bounds 3 and -1", set(k3, "activation.situ_linear_beta", meta.MakeFloat(-1))},
+	} {
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString("kimi-k3")}
+		for k, v := range tc.keys {
+			kv["kimi-k3."+k] = v
+		}
+		err := stateContainer(meta.New("kimi-k3.gguf", kv, nil), &Config{Config: &jlm.Config{}})
+		if err == nil || !strings.Contains(err.Error(), tc.want) || errors.Is(err, ErrNotImplemented) {
+			t.Errorf("kimi-k3 with %v: %v, want a malformed-file error naming %q", tc.keys, err, tc.want)
+		}
+	}
+	for _, width := range []uint32{32, 16} {
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString("kimi-k3")}
+		for k, v := range k3 {
+			kv["kimi-k3."+k] = v
+		}
+		c := &Config{Config: &jlm.Config{NEmbd: width}}
+		if err := stateContainer(meta.New("kimi-k3.gguf", kv, nil), c); err != nil {
+			t.Fatalf("kimi-k3: %v", err)
+		}
+		want := map[uint32]uint32{32: 16, 16: 0}[width]
+		if c.AttnResBlock != 2 || c.ExpertLatent != want || c.SituBeta != 3 || c.SituLinearBeta != 5 {
+			t.Errorf("kimi-k3 at width %d: residual-attention block %d, expert latent %d, situ %g %g; want 2, %d, 3 5",
+				width, c.AttnResBlock, c.ExpertLatent, c.SituBeta, c.SituLinearBeta, want)
+		}
+	}
+	for _, arch := range []string{"deepseek32", "deepseek4"} {
+		keys := map[string]map[string]meta.Value{"deepseek32": ds32, "deepseek4": ds4}[arch]
+		kv := map[string]meta.Value{"general.architecture": meta.MakeString(arch)}
+		for k, v := range keys {
+			kv[arch+"."+k] = v
+		}
+		c := &Config{Config: &jlm.Config{NRot: 64, NHead: 4, NLayer: 4, RopeBase: 1e4}}
+		if arch == "deepseek4" {
+			kv[arch+".hash_layer_count"] = u(3)
+		}
+		if err := stateContainer(meta.New(arch+".gguf", kv, nil), c); err != nil {
+			t.Errorf("%s: the base of the refusals above is refused: %v", arch, err)
+		}
+		if want := map[string]float32{"deepseek32": 1e4, "deepseek4": 16e4}[arch]; c.RopeBase != want {
+			t.Errorf("%s: rotary base %g, want %g", arch, c.RopeBase, want)
+		}
+		got := [6]float32{float32(c.HCMult), float32(c.HCIters), c.HCEps, float32(c.OGroups), float32(c.OLoraRank),
+			float32(c.NHashLayers)}
+		if want := map[string][6]float32{"deepseek4": {4, 20, 1e-6, 2, 8, 3}}[arch]; got != want {
+			t.Errorf("%s: streams, rounds, eps, output groups, rank, hash blocks %v; want %v", arch, got, want)
 		}
 	}
 	kv := map[string]meta.Value{"general.architecture": meta.MakeString("command-r"), "command-r.logit_scale": meta.MakeFloat(-2)}
@@ -152,16 +239,16 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		t.Errorf("a negative logit scale: %v, want it refused", err)
 	}
 	for want, keys := range map[string]map[string]meta.Value{
-		"is undefined":                {},
-		"no attention.sliding_window": {"attention.sliding_window": meta.MakeUint(0)},
+		"is undefined":                       {},
+		"a window period over a window of 0": {"attention.sliding_window": meta.MakeUint(0)},
 	} {
 		kv := map[string]meta.Value{"general.architecture": meta.MakeString("gpt-oss")}
 		for k, v := range keys {
 			kv["gpt-oss."+k] = v
 		}
 		err := stateContainer(meta.New("gpt-oss.gguf", kv, nil), &Config{Config: &jlm.Config{}})
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("gpt-oss with %v: %v, want an error naming %q", keys, err, want)
+		if err == nil || !strings.Contains(err.Error(), want) || errors.Is(err, ErrNotImplemented) {
+			t.Errorf("gpt-oss with %v: %v, want a malformed-file error naming %q", keys, err, want)
 		}
 	}
 }
@@ -183,6 +270,12 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"norm_eps": "src[["}`, "jinja expression"},
 		{`"x": {"window": {"period": "2"}}`, "states its size"},
 		{`"x": {"window": {"size": "8", "period": "2", "pattern": "2"}}`, "not both"},
+		{`"x": {"rope_base": "y"}`, "is not the keys"},
+		{`"x": {"streams": {"count": "4", "eps": "1e-6"}}`, "sinkhorn_iterations with eps"},
+		{`"x": {"output_groups": {"groups": "2"}}`, "their groups and rank"},
+		{`"x": {"hash_layers": "n"}`, "is not the keys"},
+		{`"x": {"situ": {"beta": "3"}}`, "its beta and linear_beta"},
+		{`"x": {"expert_latent": "n"}`, "is not the keys"},
 		{`"x": {"latent": {"kv": "64"}}`, "states its query rank"},
 		{`"x": {"indexer": {"heads": "4", "top_k": "8"}}`, "states its heads, key_width and top_k"},
 		{`"x": {"indexer": {"heads": "n", "key_width": "32", "top_k": "8"}}`, "is not the keys"},

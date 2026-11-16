@@ -140,18 +140,31 @@ schema; `convert/modeljson.go` reads it. Its sections:
   | default(1e-5)`): `flags` (the `mjFlags` names, each true or false),
   `activation` (an `mjActivations` name), `norm_eps` and `embd_scale`
   (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
-  `attn_softcap` and `final_softcap`, and `window`: `size` (0 states no
+  `attn_softcap` and `final_softcap`, `rope_base` (the rotary base of the
+  layers no window states one for, refused unless positive), and `window`: `size` (0 states no
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
   state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. `latent` states latent attention's
+  period over no window is refused as a malformed file. An expression that
+  reads a key the file does not carry, with no `default`, refuses the file:
+  deepseek32's indexer counts are read so, since its reference always has
+  one, while deepseek4's default to 0. `latent` states latent attention's
   ranks, `kv` and `q` (0 where the query is projected in one step; a file
   whose keys and values are no latent states `q` alone), and `indexer` the
   indexer selecting the positions attention reads: `heads`, `key_width` and
   `top_k`, each a count, all three 0 for none. A stated `kv` of 0, and an
   indexer missing a count, with a key that is not whole groups of eight or
   narrower than the rotary, or over a key-value latent with no query latent
-  are refused (`indexerFits`). It replaces `configOfFile`'s case for
+  are refused (`indexerFits`). `streams` states the residual streams a block
+  mixes, `count` (refused under two), with `sinkhorn_iterations` and `eps`
+  where a Sinkhorn normalisation mixes them (refused at 0); `output_groups`
+  the attention output's grouped low-rank projection, `groups` and `rank`
+  (refused at 0 or where the groups do not divide the heads); `hash_layers`
+  how many lead blocks route by token id (refused past the block count);
+  `attn_res_block` how many blocks a residual-attention block spans;
+  `expert_latent` the width a mixture's routed experts run at (the model's
+  width states none); `situ` the situ activation's `beta` and `linear_beta`,
+  each refused unless positive and finite. It replaces `configOfFile`'s case for
   the architecture; one statement per architecture, and an expression
   reading anything but `src` is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name

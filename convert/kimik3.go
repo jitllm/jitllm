@@ -68,19 +68,13 @@ const k3LatentNormEps = 1e-6
 //	                                               lb*sigmoid(exp(A_log)*(f+dt))
 //	                                               in place of -exp(A_log)*
 //	                                               softplus(f+dt)
-//	MLA with no rotary (mla_use_nope)              -> FlagNoPosEnc (the ranks
-//	                                               are latent_delta.json's
-//	                                               container statement)
-//	attn_res.block_size                            -> AttnResBlock
-//	expert_latent_length                           -> ExpertLatent
-//	activation.situ_beta, situ_linear_beta         -> SituBeta, SituLinearBeta
+//	MLA with no rotary (mla_use_nope)              -> FlagNoPosEnc
 //	the MLA latent norms' eps                      -> LatentNormEps (1e-6)
 //
-// The router is a sigmoid with the selection bias (llama.cpp's converter
-// asserts it; KimiMoEGate would honour softmax, which no K3 states). The situ
-// bounds are the file's, stated as numbers in the activation (Activation);
-// each is a b in b*tanh(x/b), so a bound that is not positive and finite is
-// refused.
+// The ranks, the residual-attention block, the experts' latent and the situ
+// bounds are latent_delta.json's container statement. The router is a sigmoid
+// with the selection bias (llama.cpp's converter asserts it; KimiMoEGate would
+// honour softmax, which no K3 states).
 func kimiK3Config(f *meta.File, c *Config) error {
 	kinds, err := k3Kinds(f, c.NLayer)
 	if err != nil {
@@ -111,18 +105,6 @@ func kimiK3Config(f *meta.File, c *Config) error {
 		c.DeltaDecay = jlm.DeltaDecayBounded(float32(lb))
 	}
 
-	c.AttnResBlock = uint32(f.UintKey("attn_res.block_size", 0))
-	c.ExpertLatent = uint32(f.UintKey("expert_latent_length", 0))
-	if c.ExpertLatent == c.NEmbd {
-		c.ExpertLatent = 0
-	}
-	beta, linear := f.FloatKey("activation.situ_beta", 0), f.FloatKey("activation.situ_linear_beta", 0)
-	for _, b := range []float64{beta, linear} {
-		if !(b > 0) || math.IsInf(b, 0) {
-			return fmt.Errorf("situ bounds %g and %g: each bounds b*tanh(x/b), so it is positive and finite", beta, linear)
-		}
-	}
-	c.SituBeta, c.SituLinearBeta = float32(beta), float32(linear)
 	c.LatentNormEps = k3LatentNormEps
 	if kv, ok := f.Key("expert_gating_func"); ok {
 		if v, _ := kv.Uint(); v != 2 {
