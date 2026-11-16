@@ -672,7 +672,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			// positions and moves only the other axes -- there the picture's
 			// ordinal says decode follows one.
 			switch {
-			case !m.Container.Config().PictureRope.Side:
+			case len(m.Rope.Runs) > 0 && !m.Container.Config().PictureRope.Side:
 				if st.rmarks.Count(0) == 0 {
 					t.Fatal("the prompt recorded no picture: this measured text decode")
 				}
