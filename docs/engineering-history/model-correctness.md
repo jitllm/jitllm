@@ -8140,8 +8140,8 @@ own `PhimoeDecoderLayer` on the GGUF's dequantized weights
 twelve positions).
 
 **Two numbers a GGUF does not carry.** `router_jitter_noise` (0.01 on every
-published Phi-3.5-MoE and `PhimoeConfig`'s default) rides the arch code
-(`jlm.PhiMoEJitter`). `short_mscale` (1.243163 on Phi-3.5-MoE) is the class's
+published Phi-3.5-MoE and `PhimoeConfig`'s default) is phimoe's router
+statement (`"jitter"` in `convert/models/classic.json`). `short_mscale` (1.243163 on Phi-3.5-MoE) is the class's
 cos/sin scale; llama.cpp's converter writes its own
 `sqrt(1 + ln(max/orig)/ln(orig))` = 1.190 as `rope.scaling.attn_factor`, so the
 GGUF path carries the file's number and the two engines agree there while both

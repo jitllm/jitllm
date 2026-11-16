@@ -312,7 +312,7 @@ func RouterWeight(c *Config) (jlm.Expr, error) {
 	if c.NExpert == 0 || c.Stated.routerGate != "sparsemixer" {
 		return jlm.Expr{}, nil
 	}
-	return SparseMixerWeight(PhiMoEJitter), nil
+	return SparseMixerWeight(c.Stated.routerJitter), nil
 }
 
 // SparseMixerWeight is sparsemixer's routed weight at jitter eps

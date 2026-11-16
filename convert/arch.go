@@ -295,7 +295,7 @@ const (
 	// LayerNorm with biases, biased q/k/v/o, a biased head behind a biased
 	// LayerNorm -- with phi3's NEOX LongRoPE, and a mixture routed by
 	// SPARSEMIXER's inference path: the top two logits, each weighted by a
-	// softmax over the logits within a relative 2*PhiMoEJitter of it, not
+	// softmax over the logits within a relative twice its jitter of it, not
 	// renormalised. The code carries the router: a GGUF states no gating key
 	// for it, and llama.cpp runs a renormalised softmax top-2 there.
 	ArchPhiMoE Arch = 40
@@ -782,9 +782,3 @@ func archGroups() []func(Arch) (string, bool) {
 // Valid reports whether a is an architecture this format defines: a code
 // with a name, so a gap between two ranges of codes is not one.
 func (a Arch) Valid() bool { return a != ArchNone && (a <= archMax || a.name() != "") }
-
-// PhiMoEJitter is sparsemixer's jitter_eps: router_jitter_noise, which every
-// published Phi-3.5-MoE (and PhimoeConfig's default) sets to 0.01. A GGUF does
-// not carry it, so the architecture does; the safetensors converter refuses a
-// config that states another value.
-const PhiMoEJitter = 0.01

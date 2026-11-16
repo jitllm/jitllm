@@ -65,16 +65,21 @@ func TestPhiMoEThroughTheLibrary(t *testing.T) {
 	}
 }
 
-// TestPhiMoEJitterIsTheArchs: the threshold phimoe.json holds a config to is
-// the one the arch's router runs at (PhiMoEJitter), a config that states
+// TestPhiMoEJitterIsTheStatements: the threshold phimoe.json holds a config
+// to is the one phimoe's router statement runs at, a config that states
 // another is refused, an absent router_jitter_noise reads as the class's
 // default, and a null one is refused: PhimoeConfig keeps it None, and
 // sparsemixer's threshold 2 * None does not compute.
-func TestPhiMoEJitterIsTheArchs(t *testing.T) {
+func TestPhiMoEJitterIsTheStatements(t *testing.T) {
 	lib, err := modelLibrary()
 	if err != nil {
 		t.Fatal(err)
 	}
+	st, _, err := ggufStates("phimoe")
+	if err != nil || st == nil || st.Router == nil || st.Router.Jitter == 0 {
+		t.Fatalf("phimoe's statement states no router jitter: %v", err)
+	}
+	jitter := st.Router.Jitter
 	mj := lib["PhimoeForCausalLM"]
 	js := `{"architectures": ["PhiMoEForCausalLM"], "vocab_size": 100, "hidden_size": 64, "intermediate_size": 32,
 	  "num_hidden_layers": 3, "num_attention_heads": 4, "num_key_value_heads": 2, "num_local_experts": 8,
@@ -83,8 +88,8 @@ func TestPhiMoEJitterIsTheArchs(t *testing.T) {
 		name, key string
 		ok        bool
 	}{
-		{"the arch's", fmt.Sprintf(`, "router_jitter_noise": %v`, PhiMoEJitter), true},
-		{"another", fmt.Sprintf(`, "router_jitter_noise": %v`, 2*PhiMoEJitter), false},
+		{"the statement's", fmt.Sprintf(`, "router_jitter_noise": %v`, jitter), true},
+		{"another", fmt.Sprintf(`, "router_jitter_noise": %v`, 2*jitter), false},
 		{"zero", `, "router_jitter_noise": 0`, false},
 		{"absent", ``, true},
 		{"null", `, "router_jitter_noise": null`, false},

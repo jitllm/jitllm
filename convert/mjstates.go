@@ -221,17 +221,18 @@ type mjStatesTemp struct {
 
 // mjRouter is a mixture's router as its class computes it: Gate the
 // function its scores go through (mjGates; sparsemixer ranks the raw logits
-// and weighs each pick by sparsemixer at the jitter PhiMoEJitter, RouterScore
+// and weighs each pick by sparsemixer at Jitter, its jitter_eps, RouterScore
 // and RouterWeight), Renormalise "always" or
 // "never" for the chosen weights, Unscaled for no routed scale, Selects the
 // number of experts it picks (0 for the file's).
 type mjRouter struct {
-	Gate        string `json:"gate"`
-	Renormalise string `json:"renormalise"`
-	Unscaled    bool   `json:"unscaled"`
-	Selects     uint32 `json:"selects"`
-	Shared      uint32 `json:"shared"`
-	Ungrouped   bool   `json:"ungrouped"`
+	Gate        string  `json:"gate"`
+	Renormalise string  `json:"renormalise"`
+	Unscaled    bool    `json:"unscaled"`
+	Selects     uint32  `json:"selects"`
+	Shared      uint32  `json:"shared"`
+	Ungrouped   bool    `json:"ungrouped"`
+	Jitter      float32 `json:"jitter"`
 }
 
 // mjGates is each gate a router states by name, with the expert_gating_func
@@ -330,6 +331,7 @@ type Statement struct {
 	activation, ropeLayout              string
 	yarnMagnitude                       string
 	routerGate                          string
+	routerJitter                        float32
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
 	compressedBlocks, plePadded         bool
@@ -375,6 +377,9 @@ func (mj *modelJSON) checkStates() error {
 			}
 			if r.Renormalise != "" && r.Renormalise != "always" && r.Renormalise != "never" {
 				return fmt.Errorf("convert: %s: %s: router renormalise %q, not always or never", mj.name, arch, r.Renormalise)
+			}
+			if (r.Gate == "sparsemixer") != (r.Jitter > 0) {
+				return fmt.Errorf("convert: %s: %s: a sparsemixer router states its jitter, and no other router has one", mj.name, arch)
 			}
 		}
 		if w := st.Window; w != nil {
@@ -650,7 +655,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 	}
 	if r := st.Router; r != nil {
-		c.Stated.routerGate, c.Stated.routerUngrouped = r.Gate, r.Ungrouped
+		c.Stated.routerGate, c.Stated.routerUngrouped, c.Stated.routerJitter = r.Gate, r.Ungrouped, r.Jitter
 	}
 	c.Stated.compressedBlocks, c.Stated.plePadded, c.Stated.readouts = st.CompressedBlocks, st.PLEPadded, st.Readouts
 	if st.MergeMixers {

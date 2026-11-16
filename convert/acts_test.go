@@ -358,7 +358,8 @@ func TestRouterWeightIsSparsemixers(t *testing.T) {
 	if e, err := RouterWeight(Unstated(&jlm.Config{NExpert: 16})); err != nil || len(e.Terms) != 0 {
 		t.Fatalf("a softmax mixture states a weight of %d terms, want none", len(e.Terms))
 	}
-	e, err := RouterWeight(statedBy(t, "phimoe", &jlm.Config{NExpert: 16}))
+	pc := statedBy(t, "phimoe", &jlm.Config{NExpert: 16})
+	e, err := RouterWeight(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +396,7 @@ func TestRouterWeightIsSparsemixers(t *testing.T) {
 	far := map[oracle.SparseMixerFault]float64{}
 	for _, s := range rows {
 		got := weights(s)
-		want := oracle.SparseMixer(s, PhiMoEJitter, oracle.SparseMixerFaultNone).Wt
+		want := oracle.SparseMixer(s, pc.Stated.routerJitter, oracle.SparseMixerFaultNone).Wt
 		for k := range want {
 			if d := math.Abs(float64(got[k] - want[k])); !(d <= 1e-6) {
 				t.Fatalf("logits %v: pick %d weighs %v, the oracle %v", s, k, got[k], want[k])
@@ -403,7 +404,7 @@ func TestRouterWeightIsSparsemixers(t *testing.T) {
 		}
 		for _, f := range []oracle.SparseMixerFault{oracle.SparseMixerFaultNoMask, oracle.SparseMixerFaultKeepFirst,
 			oracle.SparseMixerFaultRenormalised, oracle.SparseMixerFaultAbsFactor} {
-			bad := oracle.SparseMixer(s, PhiMoEJitter, f).Wt
+			bad := oracle.SparseMixer(s, pc.Stated.routerJitter, f).Wt
 			for k := range bad {
 				far[f] = max(far[f], math.Abs(float64(got[k]-bad[k])))
 			}
