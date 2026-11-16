@@ -131,11 +131,15 @@ func TestComposedCPUUntile(t *testing.T) {
 	for _, c := range []struct{ gh, gw, win int }{{3, 4, 4}, {6, 8, 4}, {7, 5, 4}, {9, 9, 2}, {1, 1, 4}} {
 		n := c.gh * c.gw
 		form := func(win int) []Code {
+			op, err := gather.Untile(M, win)
+			if err != nil {
+				t.Fatal(err)
+			}
 			b := graph.NewBlock(-1)
 			x := b.In("cells", E)
 			b.G.Values[x].Rows = n
 			b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "raster", Width: E, Rows: n}}, nil,
-				statedGather(gather.Untile(M, win)), nil, nil)[0])
+				statedGather(op), nil, nil)[0])
 			if err := graph.Verify(b.G, graph.Facts{}); err != nil {
 				t.Fatal(err)
 			}
