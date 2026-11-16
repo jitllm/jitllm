@@ -213,8 +213,8 @@ func unwindowed(t *testing.T) func(*graph.Graph) *graph.Graph {
 // post-norm block the norm after the attention residual (an encoder's, or
 // Gemma's where it has no pre-norm).
 func attnNormOf(l *model.Layer) []float32 {
-	if l.AttnNorm != nil {
-		return l.AttnNorm
+	if l.Vector(jlm.RoleAttnNorm) != nil {
+		return l.Vector(jlm.RoleAttnNorm)
 	}
 	if w := l.Vector(jlm.RoleAttnOutNorm); w != nil {
 		return w

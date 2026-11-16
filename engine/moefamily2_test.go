@@ -34,9 +34,9 @@ func moe2Fixtures() []struct {
 				c.NExpert == 16 && c.NExpertUsed == 4 && c.NExpertGroup == 4 && c.NExpertGroupUsed == 2 &&
 				c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd &&
-				dense.Router.E == nil && dense.Gate.E != nil &&
-				moe.Router.E != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
-				moe.Vector(jlm.RoleShRouter) == nil && moe.QNorm != nil && moe.KNorm != nil &&
+				dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
+				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
+				moe.Vector(jlm.RoleShRouter) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil && moe.Vector(jlm.RoleAttnKNorm) != nil &&
 				moe.Vector(jlm.RoleAttnQBias) == nil && moe.Vector(jlm.RoleAttnKBias) == nil && moe.Vector(jlm.RoleAttnVBias) == nil && moe.Vector(jlm.RoleAttnOutBias) == nil &&
 				moe.Wq.E != nil && moe.Wk.E != nil && moe.Wv.E != nil
 		}},
@@ -47,9 +47,9 @@ func moe2Fixtures() []struct {
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*c.NFFNExp &&
 				c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
-				c.SWAWindow == 0 && dense.Router.E == nil && dense.Gate.E != nil &&
-				moe.Router.E != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
-				moe.Vector(jlm.RoleShRouter) == nil && moe.QNorm != nil && moe.KNorm != nil &&
+				c.SWAWindow == 0 && dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
+				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
+				moe.Vector(jlm.RoleShRouter) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil && moe.Vector(jlm.RoleAttnKNorm) != nil &&
 				moe.Vector(jlm.RoleAttnQBias) == nil && moe.Vector(jlm.RoleAttnKBias) == nil && moe.Vector(jlm.RoleAttnVBias) == nil && moe.Vector(jlm.RoleAttnOutBias) == nil
 		}},
 		{"synth-phimoe", func(m *model.Model) bool {
@@ -62,8 +62,8 @@ func moe2Fixtures() []struct {
 				len(m.Rope.Freqs) == c.NRot/2 && m.Vector(jlm.RoleOutputBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 			for i := range m.Layers {
 				l = &m.Layers[i]
-				ok = ok && l.Router.E != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E == nil &&
-					l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil
+				ok = ok && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E == nil &&
+					l.Vector(jlm.RoleAttnNormBias) != nil && l.Vector(jlm.RoleFFNNormBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil
 			}
 			return ok
 		}},
@@ -121,7 +121,7 @@ func moe2Violations() map[string][]c6Violation {
 			{"a threshold ten times wider", mixerEps(0.1)},
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
 			{"no norm biases", func(m *model.Model) func() {
-				undoL := eachLayer(m, func(l *model.Layer) { l.AttnNormB, l.FfnNormB = nil, nil })
+				undoL := eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleAttnNormBias, nil); addVec(l, jlm.RoleFFNNormBias, nil) })
 				undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
 				return func() { undoR(); undoL() }
 			}},

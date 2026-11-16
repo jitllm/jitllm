@@ -41,8 +41,8 @@ func gemma4Fixtures() []struct {
 				len(m.Rope.Freqs) == c.HeadDim/2 && m.Ropes[0].Freqs == nil
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.VFromK == !c.SWA(i) && len(l.OutScaleRow) == 1 && l.OutScaleRow[0] != 0 && l.OutScaleRow[0] != 1 &&
-					len(l.QNorm) == c.HeadDimAt(i) && l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil
+				ok = ok && l.VFromK == !c.SWA(i) && len(l.Vector(jlm.RoleLayerOutScale)) == 1 && l.Vector(jlm.RoleLayerOutScale)[0] != 0 && l.Vector(jlm.RoleLayerOutScale)[0] != 1 &&
+					len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDimAt(i) && l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil
 			}
 			return ok
 		}},
@@ -72,7 +72,7 @@ func gemma4Fixtures() []struct {
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && matRows(l, jlm.RolePLEGate) == 32 && matK(l, jlm.RolePLEProj) == 32 && len(l.Vector(jlm.RolePLEPostNorm)) == c.NEmbd &&
-					(l.Wk.Rows == 0) == c.KVShared(i) && (l.KNorm == nil) == c.KVShared(i) && !l.VFromK
+					(l.Wk.Rows == 0) == c.KVShared(i) && (l.Vector(jlm.RoleAttnKNorm) == nil) == c.KVShared(i) && !l.VFromK
 			}
 			return ok
 		}},
@@ -93,7 +93,7 @@ func gemma4Fixtures() []struct {
 				c.NExpertUsed == 2 && c.NFFNExp == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && c.MoEAt(i) && l.Router.Rows == c.NExpert && l.ShGate.Rows == c.NFFN &&
+				ok = ok && c.MoEAt(i) && matRows(l, jlm.RoleRouter) == c.NExpert && l.ShGate.Rows == c.NFFN &&
 					l.Vector(jlm.RoleShRouter) == nil && len(l.Vector(jlm.RoleExpScale)) == c.NExpert && len(l.Vector(jlm.RoleRouterNorm)) == c.NEmbd &&
 					l.Vector(jlm.RoleFFNNorm2) != nil && l.Vector(jlm.RolePostFFNNorm1) != nil && l.Vector(jlm.RolePostFFNNorm2) != nil
 			}
@@ -174,7 +174,9 @@ func gemma4MoEViolations() []c6Violation {
 			})
 		}},
 		{"the experts on the dense MLP's input", func(m *model.Model) func() {
-			return eachLayer(m, func(l *model.Layer) { setVec(l, jlm.RoleFFNNorm2, func([]float32) []float32 { return l.FfnNorm }) })
+			return eachLayer(m, func(l *model.Layer) {
+				setVec(l, jlm.RoleFFNNorm2, func([]float32) []float32 { return l.Vector(jlm.RoleFFNNorm) })
+			})
 		}},
 		{"the dense MLP's post-norm on the experts", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {

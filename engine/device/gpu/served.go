@@ -2306,9 +2306,6 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 	if jlm.RowTableRole(r) && l.rowTab != nil && len(l.rowTab.ranges) > 0 {
 		return &l.rowTab.ranges[0].rows
 	}
-	if r == jlm.RoleRouter {
-		return l.router
-	}
 	for _, x := range l.mats {
 		if x.role == r {
 			return x.r

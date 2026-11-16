@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 
 	"github.com/jitllm/jitllm/model"
@@ -31,7 +32,7 @@ func TestBlockReadBytesIsNotBlockSize(t *testing.T) {
 			}
 			l := &m.Layers[0]
 			size := model.TensorBytes(l.Wq) + model.TensorBytes(l.Wk) + model.TensorBytes(l.Wv) +
-				model.TensorBytes(l.Wo) + model.TensorBytes(l.Router) +
+				model.TensorBytes(l.Wo) + roleBytes(l, jlm.RoleRouter) +
 				model.TensorBytes(l.Gate) + model.TensorBytes(l.Up) + model.TensorBytes(l.Down)
 			read := m.BlockReadBytes(0)
 			if read == 0 || size == 0 {
@@ -136,7 +137,7 @@ func TestMoEDiscountBuysMoreBlocks(t *testing.T) {
 	}
 	l := &m.Layers[0]
 	full := model.TensorBytes(l.Wq) + model.TensorBytes(l.Wk) + model.TensorBytes(l.Wv) + model.TensorBytes(l.Wo) +
-		model.TensorBytes(l.Router) + model.TensorBytes(l.Gate) + model.TensorBytes(l.Up) + model.TensorBytes(l.Down)
+		roleBytes(l, jlm.RoleRouter) + model.TensorBytes(l.Gate) + model.TensorBytes(l.Up) + model.TensorBytes(l.Down)
 	head := m.HeadReadBytes()
 	// headReadBytes is zero on a tied embedding, and `head - seamCrossBytes` on
 	// uint64 would underflow to an astronomical budget, so refuse explicitly.
@@ -158,4 +159,12 @@ func TestMoEDiscountBuysMoreBlocks(t *testing.T) {
 	if got <= naive {
 		t.Errorf("read-priced %d blocks, size-priced %d: discounting the banks must buy more", got, naive)
 	}
+}
+
+// roleBytes is the bytes of block l's matrix under r, 0 for none.
+func roleBytes(l *model.Layer, r jlm.Role) uint64 {
+	if t := l.Matrix(r); t != nil {
+		return model.TensorBytes(*t)
+	}
+	return 0
 }

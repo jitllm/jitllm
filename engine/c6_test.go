@@ -130,64 +130,64 @@ func c6BaseFixtures() []struct {
 		{"synth-phi2", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && c.Parallel && c.RopeNeox &&
-				c.NRot < c.HeadDim && l.FfnNorm == nil && l.Gate.E == nil &&
-				l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
+				c.NRot < c.HeadDim && l.Vector(jlm.RoleFFNNorm) == nil && l.Gate.E == nil &&
+				l.Vector(jlm.RoleAttnNormBias) != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
 				l.Vector(jlm.RoleAttnOutBias) != nil && m.Vector(jlm.RoleOutputBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 		}},
 		{"synth-starcoder", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.NoPosEnc &&
-				c.NKVHead == 1 && c.NHead > 1 && m.PosEmbd.E != nil && l.FfnNorm != nil &&
-				l.Gate.E == nil && l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil &&
+				c.NKVHead == 1 && c.NHead > 1 && m.PosEmbd.E != nil && l.Vector(jlm.RoleFFNNorm) != nil &&
+				l.Gate.E == nil && l.Vector(jlm.RoleAttnNormBias) != nil && l.Vector(jlm.RoleFFNNormBias) != nil && l.Vector(jlm.RoleFFNUpBias) != nil &&
 				l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil &&
 				m.Vector(jlm.RoleOutputNormBias) != nil && c.TiedEmbd
 		}},
 		{"synth-stablelm", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
-				c.NRot*4 == c.HeadDim && l.FfnNorm != nil && l.Gate.E != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
-				l.Vector(jlm.RoleAttnOutBias) == nil && l.AttnNormB != nil && m.Vector(jlm.RoleOutputNormBias) != nil && !c.TiedEmbd
+				c.NRot*4 == c.HeadDim && l.Vector(jlm.RoleFFNNorm) != nil && l.Gate.E != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
+				l.Vector(jlm.RoleAttnOutBias) == nil && l.Vector(jlm.RoleAttnNormBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil && !c.TiedEmbd
 		}},
 		{"synth-stablelm-par", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.LayerNorm && c.Parallel && l.FfnNorm == nil && l.Gate.E != nil
+			return c.LayerNorm && c.Parallel && l.Vector(jlm.RoleFFNNorm) == nil && l.Gate.E != nil
 		}},
 		{"synth-starcoder2", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
-				c.NRot == c.HeadDim && c.NKVHead < c.NHead && l.Gate.E == nil && l.FfnNorm != nil &&
-				l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
+				c.NRot == c.HeadDim && c.NKVHead < c.NHead && l.Gate.E == nil && l.Vector(jlm.RoleFFNNorm) != nil &&
+				l.Vector(jlm.RoleAttnNormBias) != nil && l.Vector(jlm.RoleFFNNormBias) != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
 				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 		}},
 		{"synth-falcon", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && c.Parallel && c.RopeNeox && c.NKVHead == 1 &&
-				l.FfnNorm == nil && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil && l.Vector(jlm.RoleAttnQBias) == nil && l.AttnNormB != nil
+				l.Vector(jlm.RoleFFNNorm) == nil && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil && l.Vector(jlm.RoleAttnQBias) == nil && l.Vector(jlm.RoleAttnNormBias) != nil
 		}},
 		{"synth-falcon40", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Parallel && c.NKVHead == 2 && l.FfnNorm != nil &&
-				l.FfnNormB != nil && l.AttnNormB != nil && l.Gate.E == nil
+			return c.Parallel && c.NKVHead == 2 && l.Vector(jlm.RoleFFNNorm) != nil &&
+				l.Vector(jlm.RoleFFNNormBias) != nil && l.Vector(jlm.RoleAttnNormBias) != nil && l.Gate.E == nil
 		}},
 		{"synth-nemotron", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				2*c.NRot == c.HeadDim && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
-				l.FfnNorm != nil && l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
+				l.Vector(jlm.RoleFFNNorm) != nil && l.Vector(jlm.RoleAttnNormBias) != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
 				m.Vector(jlm.RoleOutputNormBias) != nil && !c.TiedEmbd
 		}},
 		{"synth-commandr", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && c.Parallel && !c.RopeNeox &&
-				c.LogitScale == 16 && c.TiedEmbd && l.FfnNorm == nil && l.Gate.E != nil &&
-				l.AttnNormB == nil && m.Vector(jlm.RoleOutputNormBias) == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
+				c.LogitScale == 16 && c.TiedEmbd && l.Vector(jlm.RoleFFNNorm) == nil && l.Gate.E != nil &&
+				l.Vector(jlm.RoleAttnNormBias) == nil && m.Vector(jlm.RoleOutputNormBias) == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
 		}},
 		{"synth-dbrx", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
 				m.Container.Config().ClampKQV == 1.5 && c.QKVAct != nil && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
-				c.NKVHead < c.NHead && l.Router.E != nil && l.FfnNorm != nil && l.AttnNormB == nil &&
-				l.FfnNormB == nil && l.Vector(jlm.RoleAttnQBias) == nil && m.Vector(jlm.RoleOutputNormBias) == nil && !c.TiedEmbd
+				c.NKVHead < c.NHead && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleFFNNorm) != nil && l.Vector(jlm.RoleAttnNormBias) == nil &&
+				l.Vector(jlm.RoleFFNNormBias) == nil && l.Vector(jlm.RoleAttnQBias) == nil && m.Vector(jlm.RoleOutputNormBias) == nil && !c.TiedEmbd
 		}},
 		{"synth-cohere2", func(m *model.Model) bool {
 			c := m.Cfg
@@ -202,8 +202,12 @@ func c6BaseFixtures() []struct {
 // Falcon-40B's GGUF names them the other way round from their use.
 func swapNorms(m *model.Model) func() {
 	return eachLayer(m, func(l *model.Layer) {
-		l.AttnNorm, l.FfnNorm = l.FfnNorm, l.AttnNorm
-		l.AttnNormB, l.FfnNormB = l.FfnNormB, l.AttnNormB
+		a, f := l.Vector(jlm.RoleAttnNorm), l.Vector(jlm.RoleFFNNorm)
+		ab, fb := l.Vector(jlm.RoleAttnNormBias), l.Vector(jlm.RoleFFNNormBias)
+		addVec(l, jlm.RoleAttnNorm, f)
+		addVec(l, jlm.RoleFFNNorm, a)
+		addVec(l, jlm.RoleAttnNormBias, fb)
+		addVec(l, jlm.RoleFFNNormBias, ab)
 	})
 }
 
@@ -220,7 +224,7 @@ func onePlusAgain(m *model.Model) func() {
 	}
 	was := m.OutNorm
 	m.OutNorm = plus(was)
-	undo := eachLayer(m, func(l *model.Layer) { l.AttnNorm, l.FfnNorm = plus(l.AttnNorm), plus(l.FfnNorm) })
+	undo := eachLayer(m, func(l *model.Layer) { setVec(l, jlm.RoleAttnNorm, plus); setVec(l, jlm.RoleFFNNorm, plus) })
 	return func() { undo(); m.OutNorm = was }
 }
 
@@ -231,7 +235,10 @@ func logitScale(m *model.Model) func() { return cfgMut(m, func(c *model.Config) 
 // with that norm on both branches.
 func serialFromShared(m *model.Model) func() {
 	undo := cfgMut(m, func(c *model.Config) { c.Parallel = false })
-	undoL := eachLayer(m, func(l *model.Layer) { l.FfnNorm, l.FfnNormB = l.AttnNorm, l.AttnNormB })
+	undoL := eachLayer(m, func(l *model.Layer) {
+		addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RoleAttnNorm))
+		addVec(l, jlm.RoleFFNNormBias, l.Vector(jlm.RoleAttnNormBias))
+	})
 	undoR := restate(m, func(inv map[jlm.Role]graph.Shape) {
 		for _, r := range [][2]jlm.Role{{jlm.RoleAttnNorm, jlm.RoleFFNNorm}, {jlm.RoleAttnNormBias, jlm.RoleFFNNormBias}} {
 			if s, ok := inv[r[0]]; ok {
@@ -246,7 +253,7 @@ func serialFromShared(m *model.Model) func() {
 // the composer reads the container; rmsForLayerNorm is the config's
 // mean-centring off with them.
 func noNormBiases(m *model.Model) func() {
-	undoL := eachLayer(m, func(l *model.Layer) { l.AttnNormB, l.FfnNormB = nil, nil })
+	undoL := eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleAttnNormBias, nil); addVec(l, jlm.RoleFFNNormBias, nil) })
 	undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
 	return func() { undoR(); undoL() }
 }
@@ -267,7 +274,7 @@ func noFFNBiases(m *model.Model) func() {
 
 // oneNormForBoth makes a two-norm parallel block share its attention's norm.
 func oneNormForBoth(m *model.Model) func() {
-	undoL := eachLayer(m, func(l *model.Layer) { l.FfnNorm, l.FfnNormB = nil, nil })
+	undoL := eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleFFNNorm, nil); addVec(l, jlm.RoleFFNNormBias, nil) })
 	undoR := dropStored(m, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	return func() { undoR(); undoL() }
 }
@@ -380,10 +387,12 @@ func setVec(l *model.Layer, r jlm.Role, f func(v []float32) []float32) {
 }
 
 // addVec gives block l a vector under r in a table of l's own: one the file
-// does not store, or in place of the one it does.
+// does not store, or in place of the one it does; nil takes it out.
 func addVec(l *model.Layer, r jlm.Role, v []float32) {
 	setVec(l, r, func([]float32) []float32 { return nil })
-	l.Vecs = append(l.Vecs, nn.RoleVector{Role: r, V: v})
+	if v != nil {
+		l.Vecs = append(l.Vecs, nn.RoleVector{Role: r, V: v})
+	}
 }
 
 // dropVecs takes roles out of every block's table and out of the
@@ -528,7 +537,7 @@ func c6BaseViolations() map[string][]c6Violation {
 		"synth-phi2": {
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
 			{"no attn_norm bias", func(m *model.Model) func() {
-				undoL := eachLayer(m, func(l *model.Layer) { l.AttnNormB = nil })
+				undoL := eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleAttnNormBias, nil) })
 				undoR := dropStored(m, jlm.RoleAttnNormBias)
 				return func() { undoR(); undoL() }
 			}},
@@ -546,7 +555,10 @@ func c6BaseViolations() map[string][]c6Violation {
 			}},
 			{"serial residual", func(m *model.Model) func() {
 				undo := cfgMut(m, func(c *model.Config) { c.Parallel = false })
-				undoL := eachLayer(m, func(l *model.Layer) { l.FfnNorm, l.FfnNormB = l.AttnNorm, l.AttnNormB })
+				undoL := eachLayer(m, func(l *model.Layer) {
+					addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RoleAttnNorm))
+					addVec(l, jlm.RoleFFNNormBias, l.Vector(jlm.RoleAttnNormBias))
+				})
 				return func() { undoL(); undo() }
 			}},
 			{"NORM rotary for NEOX", hostNormRotary},
@@ -556,7 +568,7 @@ func c6BaseViolations() map[string][]c6Violation {
 			{"rotary instead of none", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPosEnc = false }) }},
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
 			{"no norm biases", func(m *model.Model) func() {
-				undoL := eachLayer(m, func(l *model.Layer) { l.AttnNormB, l.FfnNormB = nil, nil })
+				undoL := eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleAttnNormBias, nil); addVec(l, jlm.RoleFFNNormBias, nil) })
 				undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
 				return func() { undoR(); undoL() }
 			}},

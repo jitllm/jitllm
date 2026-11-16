@@ -1930,7 +1930,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	l := &s.m.Layers[li]
 	// An ungated FFN has no gate tensor, which build() recorded without a
 	// page-in: the entry is bound at load whether or not the block is resident.
-	plan.UngatedFFN = l.Gate.E == nil && (l.Router.E == nil || l.UngatedExp)
+	plan.UngatedFFN = l.Gate.E == nil && (l.Matrix(jlm.RoleRouter) == nil || l.UngatedExp)
 	plan.NoFFN = l.NoFFN
 	// AttnScale is carried for every architecture: it includes YaRN's
 	// magnitude correction (DeepSeek), and under MLA HeadDim is the wrong

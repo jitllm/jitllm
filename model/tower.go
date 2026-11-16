@@ -196,12 +196,6 @@ func (m *Model) bindTower(c *jlm.File) error {
 			if err != nil {
 				return err
 			}
-			if e.Role == jlm.RoleVClamp {
-				// The block's named vector (Layer.NamedVector), as every
-				// device reads it.
-				l.Clamp = x
-				continue
-			}
 			l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: x})
 			continue
 		}

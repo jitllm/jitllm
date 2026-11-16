@@ -33,7 +33,7 @@ func granitehybridFixtures() []struct {
 			c := m.Cfg
 			return c.SSD() && c.NoPosEnc && c.NExpert == 8 && c.NExpertUsed == 2 &&
 				c.NFFNShExp > 0 && !c.LayerKind(2).Recurrent() && c.LayerKind(3).Recurrent() &&
-				m.Layers[0].Router.E != nil && m.Layers[0].ShGate.E != nil && m.Layers[0].Vector(jlm.RoleShRouter) == nil &&
+				m.Layers[0].Matrix(jlm.RoleRouter) != nil && m.Layers[0].ShGate.E != nil && m.Layers[0].Vector(jlm.RoleShRouter) == nil &&
 				c.TiedEmbd
 		}},
 	}

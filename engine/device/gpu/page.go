@@ -15,11 +15,11 @@ import (
 //
 // A block's weights have a backing store (the packed arena, or the container),
 // so they can leave the card and come back byte-identical. Its KV cache is this
-// session's own history and nothing else holds a copy; norms, biases and the
-// router are kilobytes. So:
+// session's own history and nothing else holds a copy; norms and biases are
+// kilobytes. So:
 //
-//	pageable    the quantised matrices
-//	permanent   the KV cache, the norms, the biases, the router
+//	pageable    every matrix the block's graph binds, by role
+//	permanent   the KV cache, the norms, the biases
 //
 // The permanent part bounds how many blocks a device can own; the pageable part
 // is what the slots hold. Both come out of the same budget, so admitting a

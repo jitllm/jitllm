@@ -39,7 +39,7 @@ func lfm2Fixtures() []struct {
 			ok := c.ShortConv() && c.NExpert == 8 && c.NExpertUsed == 2 && c.ExpertSigmoid &&
 				c.NDenseLead == 1 && m.ExpSelBias() != nil && c.TiedEmbd
 			for i, conv := range []bool{true, false, true, true} {
-				ok = ok && c.LayerKind(i).Recurrent() == conv && (i == 0) != (m.Layers[i].Router.E != nil)
+				ok = ok && c.LayerKind(i).Recurrent() == conv && (i == 0) != (m.Layers[i].Matrix(jlm.RoleRouter) != nil)
 			}
 			return ok
 		}},

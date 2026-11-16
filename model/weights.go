@@ -258,40 +258,6 @@ func (m *Model) RopeFor(ctx int) *nn.Rope {
 	return &m.Rope
 }
 
-// namedVector is the vector a field of block l holds under r, and whether a
-// field holds r at all: a role a field holds is read from it, nil or not (a
-// gate's violation takes a vector out through its field), and every other
-// role from the block's table (layer.vecs).
-func (l *Layer) NamedVector(r jlm.Role) ([]float32, bool) {
-	switch r {
-	case jlm.RoleNextnENorm, jlm.RoleNextnHNorm:
-		if l.Mtp == nil {
-			return nil, true
-		}
-		if r == jlm.RoleNextnENorm {
-			return l.Mtp.Enorm, true
-		}
-		return l.Mtp.Hnorm, true
-	case jlm.RoleAttnNorm:
-		return l.AttnNorm, true
-	case jlm.RoleFFNNorm:
-		return l.FfnNorm, true
-	case jlm.RoleAttnNormBias:
-		return l.AttnNormB, true
-	case jlm.RoleFFNNormBias:
-		return l.FfnNormB, true
-	case jlm.RoleAttnQNorm:
-		return l.QNorm, true
-	case jlm.RoleAttnKNorm:
-		return l.KNorm, true
-	case jlm.RoleVClamp:
-		return l.Clamp, true
-	case jlm.RoleLayerOutScale:
-		return l.OutScaleRow, true
-	}
-	return nil, false
-}
-
 // Held is block l's matrix of role r, nil for one it does not hold: what
 // the loader bound under no role of its own -- a prediction block's
 // matrices -- held under the role a graph reads it by.
@@ -319,31 +285,10 @@ func (l *Layer) Held(r jlm.Role) *Tensor {
 func (l *Layer) Bytes(r jlm.Role) ([]byte, *nn.Packed, int) { return l.Held(r).Bytes() }
 
 // Floats is block l's vector of role r, nil for one it does not hold.
-func (l *Layer) Floats(r jlm.Role) []float32 {
-	if v, ok := l.NamedVector(r); ok {
-		return v
-	}
-	return nn.VectorOf(l.Vecs, r)
-}
+func (l *Layer) Floats(r jlm.Role) []float32 { return nn.VectorOf(l.Vecs, r) }
 
-// Vectors is every vector block l holds, by role, appended to out: its
-// table's, each as Floats reads it, then the ones a field holds that its
-// table does not.
-func (l *Layer) Vectors(out []nn.RoleVector) []nn.RoleVector {
-	for _, v := range l.Vecs {
-		if x := l.Floats(v.Role); x != nil {
-			out = append(out, nn.RoleVector{Role: v.Role, V: x})
-		}
-	}
-	for _, r := range [...]jlm.Role{jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleAttnNorm, jlm.RoleFFNNorm,
-		jlm.RoleAttnNormBias, jlm.RoleFFNNormBias, jlm.RoleAttnQNorm, jlm.RoleAttnKNorm,
-		jlm.RoleVClamp, jlm.RoleLayerOutScale} {
-		if v, _ := l.NamedVector(r); v != nil && nn.VectorOf(l.Vecs, r) == nil {
-			out = append(out, nn.RoleVector{Role: r, V: v})
-		}
-	}
-	return out
-}
+// Vectors is every vector block l holds, by role, appended to out.
+func (l *Layer) Vectors(out []nn.RoleVector) []nn.RoleVector { return append(out, l.Vecs...) }
 
 // Bytes is t's bytes, its planes where it is packed, and its rows; nil for
 // no tensor.

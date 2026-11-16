@@ -1041,36 +1041,19 @@ func (l *Layer) Matrix(r jlm.Role) *Tensor {
 }
 
 type Layer struct {
-	// vecs is every vector the file stores for the block, by role
-	// (jlm.Role.Expanded), read once at load. The named vectors below are
-	// these slices, not copies.
+	// Vecs is every vector the file stores for the block, by role
+	// (jlm.Role.Expanded), read once at load.
 	Vecs []nn.RoleVector
 	// mats is every matrix of the block's the loader bound, by the role it
 	// was loaded under, pointing at the field that holds it: one role can
 	// land in different fields by block kind (RoleAttnQKV in wq or ssmIn).
 	Mats []roleTensor
 
-	AttnNorm, FfnNorm []float32 // norms are tiny and always F32; kept expanded
-	// attnNormB and ffnNormB are a LayerNorm's biases (C6), nil for RMSNorm
-	// and for a bias-free LayerNorm. ffnNorm itself is nil on a parallel block
-	// that shares one norm between its two branches (phi-2): the FFN reads the
-	// attention's normed row.
-	AttnNormB, FfnNormB []float32
-	// clamp is a vision block's clipped-linear bounds (jlm.RoleVClamp): for
-	// q, k, v, o, gate, up and down, the input's and the output's minimum
-	// and maximum. nil everywhere but Gemma 4's tower.
-	Clamp []float32
-	// qNorm and kNorm are head_dim wide and nil unless the architecture has
-	// them (qwen3). nil is the llama case, not an error path.
-	QNorm, KNorm   []float32
 	Wq, Wk, Wv, Wo Tensor
 	// vFromK says the block has no v projection and v is k's (Gemma 4's
 	// global layers): wv is unbound and every path copies k's projection
 	// before k's norm and rotary run.
 	VFromK bool
-	// outScaleRow multiplies the block's output row after its last residual
-	// add, as the container stores it: the vector a composed block binds.
-	OutScaleRow []float32
 	// Multi-head Latent Attention, all nil unless Config.KVLoraRank is set.
 	// wq is then the one-step query (DeepSeek-V2-Lite, q_lora_rank null) and
 	// wqa/wqb the two-step one; exactly one of those is populated.
@@ -1083,10 +1066,8 @@ type Layer struct {
 	// nn.Packed per view and a resident block is rebound every token.
 	banksFrom      [3]bankSpans
 	Gate, Up, Down Tensor
-	// router is nil unless this layer's FFN is a mixture of experts, in which
-	// case gate/up/down hold the three 3-D banks and experts the per-expert
-	// views of them. The router tensor's presence is the graph's branch.
-	Router  Tensor
+	// On a mixture block (a matrix under jlm.RoleRouter) gate/up/down hold
+	// the three 3-D banks and experts the per-expert views of them.
 	Experts []expert
 	// ungatedExp is a mixture whose experts have no gate bank (Nemotron 3):
 	// each is down(act(up(h))), the activation alone, as an ungated FFN is.
@@ -1129,15 +1110,16 @@ type Layer struct {
 }
 
 // mtpWeights is what a prediction block has beyond an ordinary block: the two
-// input norms and eh_proj that make its residual from the next token's
-// embedding and the trunk's hidden state, and its head norm. head and embd are
+// eh_proj that makes its residual from the next token's embedding and the
+// trunk's hidden state (its two input norms are the block's vectors), and its
+// head norm. head and embd are
 // the block's own copies where the container kept them (they differed from the
 // trunk's); otherwise they are the trunk's, as headNorm is the trunk's output
 // norm where the block has none.
 type mtpWeights struct {
-	EhProj                 Tensor
-	Enorm, Hnorm, HeadNorm []float32
-	Head, Embd             Tensor
+	EhProj     Tensor
+	HeadNorm   []float32
+	Head, Embd Tensor
 	// ownEmbd says embd is the block's own table, not the trunk's.
 	ownEmbd bool
 }
@@ -2898,7 +2880,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				role jlm.Role
 				dst  *Tensor
 			}{
-				{jlm.RoleRouter, &l.Router},
+				{jlm.RoleRouter, new(Tensor)},
 				{jlm.RoleExpGateBank, &l.Gate},
 				{jlm.RoleExpUpBank, &l.Up},
 				{jlm.RoleExpDownBank, &l.Down},
@@ -2979,26 +2961,11 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// A block stores the pre-norms it has: none on a post-norm block (OLMo
 		// 2's, an encoder's norms after each residual add), no FFN norm on a
 		// parallel block sharing one; the front end states the norms stored.
-		if l.AttnNorm, err = optVec(jlm.RoleAttnNorm, bi); err != nil {
-			return nil, err
-		}
-		if l.FfnNorm, err = optVec(jlm.RoleFFNNorm, bi); err != nil {
-			return nil, err
-		}
-		for _, b := range []struct {
-			role jlm.Role
-			dst  *[]float32
-		}{
-			{jlm.RoleAttnNormBias, &l.AttnNormB}, {jlm.RoleFFNNormBias, &l.FfnNormB},
-		} {
-			if *b.dst, err = optVec(b.role, bi); err != nil {
-				return nil, err
-			}
-		}
-		if (l.AttnNormB != nil || l.FfnNormB != nil) && !cfg.at(i).LayerNorm {
+		attnNormB, ffnNormB := l.Vector(jlm.RoleAttnNormBias), l.Vector(jlm.RoleFFNNormBias)
+		if (attnNormB != nil || ffnNormB != nil) && !cfg.at(i).LayerNorm {
 			return nil, fmt.Errorf("model: block %d has a norm bias on an RMSNorm model", bi)
 		}
-		if l.FfnNormB != nil && l.FfnNorm == nil {
+		if ffnNormB != nil && l.Vector(jlm.RoleFFNNorm) == nil {
 			return nil, fmt.Errorf("model: block %d has an FFN norm bias and no FFN norm", bi)
 		}
 		// FFN biases belong only to a dense ungated FFN; a mixture's are the
@@ -3025,14 +2992,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				"attention %d wide, per-token activations %v)", bi, len(l.Vector(jlm.RoleAttnSubNorm)), len(l.Vector(jlm.RoleFFNSubNorm)),
 				cfg.NFFNAt(i), cfg.QDimAt(i), cfg.TokenAct)
 		}
-		// Gemma 4's per-block output scalar, when the file carries one.
-		if sc, err := optVec(jlm.RoleLayerOutScale, bi); err != nil {
-			return nil, err
-		} else if sc != nil {
-			if len(sc) != 1 {
-				return nil, fmt.Errorf("model: block %d's output scale has %d values, want 1", bi, len(sc))
-			}
-			l.OutScaleRow = sc
+		if sc := l.Vector(jlm.RoleLayerOutScale); sc != nil && len(sc) != 1 {
+			return nil, fmt.Errorf("model: block %d's output scale has %d values, want 1", bi, len(sc))
 		}
 		if _, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
 			return nil, err
@@ -3059,7 +3020,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 						bi, v.role, len(got), v.want)
 				}
 			}
-			if l.Vector(jlm.RolePostFFNNorm) == nil || l.FfnNorm == nil {
+			if l.Vector(jlm.RolePostFFNNorm) == nil || l.Vector(jlm.RoleFFNNorm) == nil {
 				return nil, fmt.Errorf("model: block %d is a dense-and-mixture block with no "+
 					"ffn_norm or post_ffw_norm", bi)
 			}
@@ -3077,8 +3038,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			{"expert gate bias", l.Vector(jlm.RoleExpGateBias), cfg.NExpert * cfg.NFFNExp},
 			{"expert up bias", l.Vector(jlm.RoleExpUpBias), cfg.NExpert * cfg.NFFNExp},
 			{"expert down bias", l.Vector(jlm.RoleExpDownBias), cfg.NExpert * cfg.NEmbd},
-			{"attn_norm bias", l.AttnNormB, cfg.NEmbd},
-			{"ffn_norm bias", l.FfnNormB, cfg.NEmbd},
+			{"attn_norm bias", attnNormB, cfg.NEmbd},
+			{"ffn_norm bias", ffnNormB, cfg.NEmbd},
 			{"ffn_up bias", l.Vector(jlm.RoleFFNUpBias), cfg.NFFNAt(i)},
 			{"ffn_down bias", l.Vector(jlm.RoleFFNDownBias), cfg.NEmbd},
 		} {
@@ -3245,12 +3206,14 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			l.Mats = append(l.Mats, roleTensor{rv.Role, &t})
 		}
 		if cfg.QKNormAt(i) {
-			if l.QNorm, err = vec(jlm.RoleAttnQNorm, bi); err != nil {
+			qn, err := vec(jlm.RoleAttnQNorm, bi)
+			if err != nil {
 				return nil, err
 			}
 			// A KV-sharing block norms only q: it caches nothing.
+			var kn []float32
 			if !cfg.KVShared(i) {
-				if l.KNorm, err = vec(jlm.RoleAttnKNorm, bi); err != nil {
+				if kn, err = vec(jlm.RoleAttnKNorm, bi); err != nil {
 					return nil, err
 				}
 			}
@@ -3260,15 +3223,15 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if cfg.KVShared(i) {
 				wk = 0
 			}
-			if len(l.QNorm) != wq || len(l.KNorm) != wk {
+			if len(qn) != wq || len(kn) != wk {
 				return nil, fmt.Errorf("model: block %d's q/k norms are %d and %d wide, want %d and %d",
-					i, len(l.QNorm), len(l.KNorm), wq, wk)
+					i, len(qn), len(kn), wq, wk)
 			}
 		}
 		if cfg.MoEAt(i) {
-			if l.Router.Rows != cfg.NExpert || l.Router.K != cfg.NEmbd {
+			if r := l.Matrix(jlm.RoleRouter); r.Rows != cfg.NExpert || r.K != cfg.NEmbd {
 				return nil, fmt.Errorf("model: block %d router is %dx%d, want %dx%d",
-					bi, l.Router.K, l.Router.Rows, cfg.NEmbd, cfg.NExpert)
+					bi, r.K, r.Rows, cfg.NEmbd, cfg.NExpert)
 			}
 			l.Experts = make([]expert, cfg.NExpert)
 			for e := range l.Experts {
@@ -3312,10 +3275,12 @@ func buildMTP(c *jlm.File, m *Model,
 			return fmt.Errorf("model: prediction block %d eh_proj is %dx%d, want %dx%d",
 				i, w.EhProj.K, w.EhProj.Rows, 2*cfg.NEmbd, cfg.NEmbd)
 		}
-		if w.Enorm, err = vec(jlm.RoleNextnENorm, bi); err != nil {
+		enorm, err := vec(jlm.RoleNextnENorm, bi)
+		if err != nil {
 			return err
 		}
-		if w.Hnorm, err = vec(jlm.RoleNextnHNorm, bi); err != nil {
+		hnorm, err := vec(jlm.RoleNextnHNorm, bi)
+		if err != nil {
 			return err
 		}
 		if hn, err := optVec(jlm.RoleNextnHeadNorm, bi); err != nil {
@@ -3333,7 +3298,7 @@ func buildMTP(c *jlm.File, m *Model,
 		for _, v := range []struct {
 			name    string
 			n, want int
-		}{{"enorm", len(w.Enorm), cfg.NEmbd}, {"hnorm", len(w.Hnorm), hw},
+		}{{"enorm", len(enorm), cfg.NEmbd}, {"hnorm", len(hnorm), hw},
 			{"shared_head_norm", len(w.HeadNorm), hn}} {
 			if v.n != v.want {
 				return fmt.Errorf("model: prediction block %d %s is %d wide, want %d", i, v.name, v.n, v.want)
@@ -3564,8 +3529,11 @@ func (m *Model) MaxMatVec() (rows, k int) {
 func (m *Model) BlockReadBytes(li int) uint64 {
 	l := &m.Layers[li]
 	var n uint64
-	for _, t := range []Tensor{l.Wq, l.Wk, l.Wv, l.Wo, l.Router} {
+	for _, t := range []Tensor{l.Wq, l.Wk, l.Wv, l.Wo} {
 		n += TensorBytes(t)
+	}
+	if r := l.Matrix(jlm.RoleRouter); r != nil {
+		n += TensorBytes(*r)
 	}
 	dense := TensorBytes(l.Gate) + TensorBytes(l.Up) + TensorBytes(l.Down)
 	if c := m.Cfg; c.MoE() && c.NExpert > 0 {
