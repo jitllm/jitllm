@@ -129,10 +129,8 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 			s.Vision.Audio = aud
 			s.Tensors = append(s.Tensors, ats...)
 		}
-		if s.Vision.Projector == jlm.ProjPixtral {
-			if err := imgBreakRow(s); err != nil {
-				return nil, err
-			}
+		if err := transformTower(s, nil, "joined"); err != nil {
+			return nil, err
 		}
 		if err := towerFFNByShape(s); err != nil {
 			return nil, err
@@ -492,11 +490,8 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err := checkDeepstack(f, s); err != nil {
 			return nil, err
 		}
-		if s.Vision.Projector == jlm.ProjGemma3nV {
-			mobilenetGeom(s, mobilenetPlaces(f))
-			if err := prepareGemma3nV(s); err != nil {
-				return nil, err
-			}
+		if err := transformTower(s, f, "source"); err != nil {
+			return nil, err
 		}
 		if err := prepareTower(s); err != nil {
 			return nil, err
@@ -667,23 +662,8 @@ func prepareTower(s *jlm.Source) error {
 	if err := foldPatchPlanes(s); err != nil {
 		return err
 	}
-	if v.Projector == jlm.ProjGemma3 {
-		if err := transposeGemma3Projection(s); err != nil {
-			return err
-		}
-	}
-	if v.Projector == jlm.ProjPixtral {
-		if err := permuteMerger(s); err != nil {
-			return err
-		}
-	}
-	if v.Projector == jlm.ProjGemma4V {
-		if err := halfNeoxToNeox(s); err != nil {
-			return err
-		}
-		if err := negateRole(s, jlm.RoleVStdBias); err != nil {
-			return err
-		}
+	if err := transformTower(s, nil, "prepare"); err != nil {
+		return err
 	}
 	if err := padFFN(s); err != nil {
 		return err
@@ -698,18 +678,10 @@ func prepareTower(s *jlm.Source) error {
 			if err := reshapeMergeConv(&s.Tensors[i], int(v.NEmbd)); err != nil {
 				return err
 			}
-		case jlm.RoleVProj:
-			if v.Projector == jlm.ProjHunyuanVL {
-				if err := reshapePointConv(&s.Tensors[i]); err != nil {
-					return err
-				}
-			}
 		}
 	}
-	if v.Projector == jlm.ProjHunyuanVL {
-		if err := normFrameRows(s, v.Eps); err != nil {
-			return err
-		}
+	if err := transformTower(s, nil, "finish"); err != nil {
+		return err
 	}
 	return quantizeTower(s.Tensors)
 }

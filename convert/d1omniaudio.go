@@ -24,10 +24,6 @@ import (
 // flattens them channel-major, and each block's linear_pos becomes the
 // product with the sinusoids its attention reads.
 
-// AudioProjectors is the list of audio towers (clip.audio.projector_type)
-// that convert, as Projectors is the vision towers'.
-func AudioProjectors() []string { return []string{"d1omni_a"} }
-
 // d1OmniAudioNames is every per-block audio tensor's role, by its name after
 // "a.blk.N.".
 func d1OmniAudioNames(name string) (jlm.Role, bool) {

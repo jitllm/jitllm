@@ -139,7 +139,7 @@ func TestGemma3ProjectionIsTransposed(t *testing.T) {
 	src := randVals(r, tower*text) // ggml [text, tower]: tower rows of text values
 	s := &jlm.Source{Vision: &jlm.Vision{NEmbd: tower, ProjDim: text, Projector: jlm.ProjGemma3}}
 	s.Tensors = []jlm.Tensor{f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, text, tower)}
-	if err := transposeGemma3Projection(s); err != nil {
+	if err := transposeProjection(s); err != nil {
 		t.Fatal(err)
 	}
 	got, err := vecOf(&s.Tensors[0])

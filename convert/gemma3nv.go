@@ -133,10 +133,14 @@ func mobilenetPlaces(f *meta.File) [][2]int {
 }
 
 // towerNames is the renames a tower file's tensors take before the name
-// table: Gemma 3n's double-indexed blocks become one index. nil for every
-// other tower. sourceOf and the role gate both read it.
+// table: blocks named by (stage, place) pairs (a projector whose entry
+// states blocks "pairs", Gemma 3n's) become one index. nil for every other
+// tower. sourceOf and the role gate both read it.
 func towerNames(f *meta.File, v *jlm.Vision) map[string]string {
-	if v == nil || v.Projector != jlm.ProjGemma3nV {
+	if v == nil {
+		return nil
+	}
+	if p, err := projectorStates(v.Projector); err != nil || p == nil || p.Blocks != "pairs" {
 		return nil
 	}
 	flat := map[[2]int]int{}

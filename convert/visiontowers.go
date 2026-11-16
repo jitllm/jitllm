@@ -31,7 +31,10 @@ func familyTowerTensors(f *meta.File, v *jlm.Vision, t *meta.Tensor) (out []jlm.
 		if !known {
 			return nil, true, fmt.Errorf("convert: %s: a deepstack tensor this engine does not know", t.Name)
 		}
-		if v.Projector != jlm.ProjQwen3VL {
+		switch taps, err := tapsBlocks(v); {
+		case err != nil:
+			return nil, true, err
+		case !taps:
 			return nil, true, fmt.Errorf("convert: %s: deepstack on a %v tower", t.Name, v.Projector)
 		}
 		if uint32(b) >= v.NLayer {
@@ -163,8 +166,11 @@ func rowBytes(t quant.Type, k uint64) uint64 {
 // with itself, and either way a text block would add the wrong rows.
 func checkDeepstack(f *meta.File, s *jlm.Source) error {
 	v := s.Vision
-	if v == nil || v.Projector != jlm.ProjQwen3VL {
+	if v == nil {
 		return nil
+	}
+	if taps, err := tapsBlocks(v); err != nil || !taps {
+		return err
 	}
 	have := map[int32]int{}
 	for i := range s.Tensors {

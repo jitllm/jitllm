@@ -2,7 +2,9 @@ package convert
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1052,45 +1054,6 @@ func mropeSectionsOf(f *meta.File, name string, c *Config) error {
 	return nil
 }
 
-// projectorOf is the list of vision projectors (clip.projector_type) the
-// converter implements: an unknown one is refused, as an unknown
-// tokenizer.ggml.pre is. visionOf has a case for each.
-func projectorOf() map[string]jlm.Projector {
-	return map[string]jlm.Projector{
-		"idefics3":         jlm.ProjIdefics3,
-		"mlp":              jlm.ProjMLP,
-		"qwen2vl_merger":   jlm.ProjQwen2VL,
-		"gemma3":           jlm.ProjGemma3,
-		"internvl":         jlm.ProjInternVL,
-		"resampler":        jlm.ProjResampler,
-		"janus_pro":        jlm.ProjJanus,
-		"qwen2.5vl_merger": jlm.ProjQwen25VL,
-		"pixtral":          jlm.ProjPixtral,
-		"phi4":             jlm.ProjPhi4,
-		"gemma4v":          jlm.ProjGemma4V,
-		"gemma3nv":         jlm.ProjGemma3nV,
-		"llama4":           jlm.ProjLlama4,
-		"glm4v":            jlm.ProjGLM4V,
-		"hunyuanvl":        jlm.ProjHunyuanVL,
-		"kimivl":           jlm.ProjKimiVL,
-		"qwen3vl_merger":   jlm.ProjQwen3VL,
-		"lfm2":             jlm.ProjLFM2,
-		// d1-omni's vision half: LFM2-VL's tower and projector with no input
-		// norm, resampled bilinear (its vision.py).
-		"d1omni_v": jlm.ProjLFM2,
-	}
-}
-
-// Projectors is every name in that list, sorted.
-func Projectors() []string {
-	out := make([]string, 0, len(projectorOf()))
-	for name := range projectorOf() {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // visionOf reads a vision tower's description. A tower is its own container.
 func visionOf(f *meta.File) (*jlm.Vision, error) {
 	if f.Arch() != "clip" {
@@ -1113,244 +1076,17 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		// A vision-and-audio mmproj (Gemma 4's) names each side's projector.
 		name, _ = f.KV["clip.vision.projector_type"].String()
 	}
-	last := "mm.model.fc.weight"
-	p, ok := projectorOf()[name]
+	lib, err := projectorLibrary()
+	if err != nil {
+		return nil, err
+	}
+	p, ok := lib[name]
 	if !ok {
 		return nil, fmt.Errorf("convert: projector_type %q unsupported (only %s): %w",
-			name, strings.Join(Projectors(), ", "), ErrNotImplemented)
+			name, strings.Join(slices.Sorted(maps.Keys(lib)), ", "), ErrNotImplemented)
 	}
-	v.Projector = p
-	switch v.Projector {
-	case jlm.ProjIdefics3:
-	case jlm.ProjMLP:
-		// llava's: linear, GELU, linear, and no pixel shuffle at all.
-		last = "mm.2.weight"
-	case jlm.ProjQwen2VL:
-		// Qwen2-VL: the shuffle and the two-matrix MLP. The file does not state
-		// the merge factor, so it is derived below from mm.0's k rather than
-		// defaulted: a wrong one reshapes the sequence without faulting. The tower
-		// has no v.position_embd: position is 2-D rotary over the patch grid.
-		last = "mm.2.weight"
-		v.Flags |= jlm.FlagVisionRope
-	case jlm.ProjGemma3:
-		// SigLIP, then average-pool Scale x Scale, RMSNorm and one matrix.
-		// The pool is 4 when the file does not say (llama.cpp's default; only
-		// a test model writes another). The matrix is stored [text, tower],
-		// x @ W in the reference, and transposeGemma3Projection lays it out k
-		// first; its row count before that is therefore the TEXT width.
-		last = "mm.input_projection.weight"
-		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 4))
-	case jlm.ProjInternVL:
-		// InternViT, the shuffle, then LayerNorm, linear, GELU, linear. The
-		// image is cut into up to 12 tiles plus a thumbnail when the file does
-		// not say (llama.cpp's defaults for an older conversion).
-		last = "mm.model.mlp.3.weight"
-		v.MinTiles = uint32(f.UintKey("vision.preproc_min_tiles", 1))
-		v.MaxTiles = uint32(f.UintKey("vision.preproc_max_tiles", 12))
-		if v.MinTiles == 0 || v.MinTiles > v.MaxTiles {
-			return nil, fmt.Errorf("convert: clip: internvl tiles %d..%d", v.MinTiles, v.MaxTiles)
-		}
-		// InternViT-6B (InternVL 26B and up) is RMSNorm with a q/k norm, a
-		// different block; refused by name rather than run as the 300M one.
-		if _, ok := f.Get("v.blk.0.attn_q_norm.weight"); ok {
-			return nil, fmt.Errorf("convert: clip: this InternViT has a q/k norm (the 6B tower); "+
-				"only InternViT-300M is implemented: %w", ErrNotImplemented)
-		}
-	case jlm.ProjResampler:
-		// MiniCPM-V's perceiver. Versions 3 to 6 (2.6, o-2.6, 4.0, 4.5) share
-		// one graph and one token layout; 2 (Llama3-V 2.5) wraps its slices
-		// differently and asks for 96 queries, so it is refused by name rather
-		// than run with the wrong markers.
-		ver := f.UintKey("minicpmv_version", 2)
-		if ver < 3 || ver > 6 {
-			return nil, fmt.Errorf("convert: resampler minicpmv_version %d is not implemented "+
-				"(3 to 6 are: MiniCPM-V 2.6, o-2.6, 4.0, 4.5): %w", ver, ErrNotImplemented)
-		}
-		last = "resampler.proj.weight"
-	case jlm.ProjJanus:
-		// Janus-Pro's aligner is llava's two matrices with a GELU between, and
-		// the file names the second one mm.1 (llama.cpp's clip.cpp reads
-		// TN_LLAVA_PROJ 0 and 1); sourceOf renames it.
-		last = "mm.1.weight"
-	case jlm.ProjQwen25VL:
-		// Qwen2.5-VL: Qwen2-VL's merger and 2-D rotary behind an RMSNorm,
-		// gated-SiLU tower with window attention. The window is in pixels and
-		// the file states only the pattern; llama.cpp's clip loader defaults the
-		// size to 112 (transformers' window_size) when the key is absent, as
-		// every published mmproj leaves it.
-		last = "mm.2.weight"
-		v.Flags |= jlm.FlagVisionRope
-		v.WinPattern = uint32(f.UintKey("vision.n_wa_pattern", 0))
-		v.WinSize = uint32(f.UintKey("vision.window_size", 112))
-		if v.WinPattern == 0 {
-			return nil, fmt.Errorf("convert: clip: qwen2.5vl_merger with no n_wa_pattern, so which " +
-				"blocks attend inside windows is unknown")
-		}
-	case jlm.ProjPixtral:
-		// Mistral's ViT and llava's MLP, with Mistral 3's patch merger when
-		// the file states a merge size (Pixtral-12B states none: 1). The
-		// picture is read at its own size, the longest side at most
-		// image_size; the rotary's base is 10000, which llama.cpp's loader
-		// sets for this projector and every published config states.
-		last = "mm.2.weight"
-		v.Flags |= jlm.FlagVisionRope
-		v.Scale = uint32(f.UintKey("vision.spatial_merge_size", 1))
-		if v.Scale == 0 {
-			return nil, fmt.Errorf("convert: clip: pixtral states a spatial merge of 0")
-		}
-	case jlm.ProjPhi4:
-		// Phi-4-reasoning-vision: the picture is read at its own size between
-		// two pixel counts the file states; without them a picture has no
-		// size. The converter already dropped the last block and the
-		// post-LayerNorm (the reference reads hidden_states[-2]).
-		last = "mm.2.weight"
-		v.MinPixels = uint32(f.UintKey("vision.image_min_pixels", 0))
-		v.MaxPixels = uint32(f.UintKey("vision.image_max_pixels", 0))
-		if v.MinPixels == 0 || v.MaxPixels < v.MinPixels {
-			return nil, fmt.Errorf("convert: clip: phi4 states image_min_pixels %d and "+
-				"image_max_pixels %d; a picture read at its own size needs both", v.MinPixels, v.MaxPixels)
-		}
-	case jlm.ProjLFM2:
-		// LFM2-VL's (and d1's): SigLIP2's NaFlex tower with its
-		// post-LayerNorm, the pixel unshuffle the file states, an optional
-		// LayerNorm and mm.1, GELU, mm.2. The tiling is Lfm2VlImageProcessor's,
-		// which the file does not state and llama.cpp hardcodes: the class's
-		// defaults, 64 to 256 tokens a piece, 2 to 10 tiles of 512 pixels
-		// past twice the token budget. The resampling filter is the file's
-		// image_resize_algo, bilinear (the class default) when absent.
-		last = "mm.2.weight"
-		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 2))
-		if v.Scale == 0 || v.PatchSize == 0 || v.ImageSize%v.PatchSize != 0 {
-			return nil, fmt.Errorf("convert: clip: lfm2 with a %d merge over %d-pixel patches of a %d table",
-				v.Scale, v.PatchSize, v.ImageSize)
-		}
-		unit := v.PatchSize * v.Scale * v.PatchSize * v.Scale
-		v.MinTiles, v.MaxTiles = 2, 10
-		v.MinPixels, v.MaxPixels = 64*unit, 256*unit
-		v.TileSize, v.Tolerance = 512, 2
-		switch algo, _ := f.KV["clip.vision.image_resize_algo"].String(); algo {
-		case "", "bilinear":
-		case "bicubic":
-			v.Flags |= jlm.FlagVisionBicubic
-		default:
-			return nil, fmt.Errorf("convert: clip: lfm2 resamples %q, which is not implemented: %w", algo, ErrNotImplemented)
-		}
-	case jlm.ProjGemma4V:
-		// Gemma 4's tower. llama.cpp's graph scales the [0, 1] pixels to
-		// 2x - 1 in place of a normalisation, which is mean 0.5 and std 0.5;
-		// the MLP is gelu_pytorch_tanh, which the file does not state; the
-		// pool is 3x3 unless the file says. The rotary's base (100) is the
-		// loader's constant, as llama.cpp's is.
-		last = "mm.input_projection.weight"
-		v.Flags |= jlm.FlagVisionRope | jlm.FlagGELU
-		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 3))
-	case jlm.ProjGemma3nV:
-		// Gemma 3n's MobileNet-V5: llama.cpp's converter writes a block count
-		// of 128 and a patch of image_size/256 for its own loader, neither
-		// the tower's. The blocks are the file's (stage, place) pairs, one
-		// container block each, and a "patch" is the fusion adapter's output
-		// cell, 16 to a side, so the tower's token count is its 256 soft
-		// tokens. GELU is timm's tanh form; the pixels are [0, 1].
-		last = "mm.input_projection.weight"
-		v.Flags |= jlm.FlagGELU
-		v.NLayer = uint32(len(mobilenetPlaces(f)))
-		if v.NLayer == 0 || v.ImageSize%16 != 0 {
-			return nil, fmt.Errorf("convert: clip: gemma3nv with %d blocks and a %d-pixel picture", v.NLayer, v.ImageSize)
-		}
-		v.PatchSize, v.Scale = v.ImageSize/16, 1
-	case jlm.ProjLlama4:
-		// Llama 4's ViT and its adapter: the pixel shuffle the file states,
-		// two matrices each followed by a GELU, then the projector's matrix.
-		// The file states neither tile bound; the processor's are one tile
-		// and max_patches 16.
-		last = "mm.model.fc.weight"
-		v.Flags |= jlm.FlagVisionRope
-		v.MinTiles, v.MaxTiles = 1, 16
-	case jlm.ProjGLM4V:
-		// GLM-4.1V / 4.5V / 4.6V: an RMSNorm, gated-SiLU tower with the 2-D
-		// rotary and a learned table resampled BICUBIC, an RMSNorm after the
-		// patch embedding, a 2x2 merging convolution, then linear, LayerNorm,
-		// GELU and a gated MLP. See jlm.ProjGLM4V.
-		last = "mm.down.weight"
-		v.Flags |= jlm.FlagVisionRope
-		mc, ok := f.Get("mm.patch_merger.weight")
-		if !ok || len(mc.Dims) != 4 || mc.Dims[0] != mc.Dims[1] {
-			return nil, fmt.Errorf("convert: clip: glm4v with no square mm.patch_merger.weight kernel")
-		}
-		v.Scale = uint32(mc.Dims[0])
-		if _, ok := f.Get("v.position_embd.weight"); !ok {
-			return nil, fmt.Errorf("convert: clip: glm4v with no v.position_embd")
-		}
-	case jlm.ProjHunyuanVL:
-		// HunyuanVL's tower and merger. See jlm.ProjHunyuanVL. The picture is
-		// read at its own size between the two pixel counts the file states,
-		// to whole merge units; the table's class row is already gone
-		// (llama.cpp's converter drops it).
-		last = "mm.model.fc.weight"
-		v.Scale = uint32(f.UintKey("vision.spatial_merge_size", 2))
-		v.MinPixels = uint32(f.UintKey("vision.image_min_pixels", 0))
-		v.MaxPixels = uint32(f.UintKey("vision.image_max_pixels", 0))
-		if v.MinPixels == 0 || v.MaxPixels < v.MinPixels {
-			return nil, fmt.Errorf("convert: clip: hunyuanvl states image_min_pixels %d and "+
-				"image_max_pixels %d; a picture read at its own size needs both", v.MinPixels, v.MaxPixels)
-		}
-		if _, ok := f.Get("v.position_embd.weight"); !ok {
-			return nil, fmt.Errorf("convert: clip: hunyuanvl with no v.position_embd")
-		}
-	case jlm.ProjKimiVL:
-		// Kimi-VL's MoonViT and its projector. See jlm.ProjKimiVL. The file
-		// states the 2x2 merge (projector.scale_factor) and names the
-		// projector's matrices mm.1 and mm.2 (towerName).
-		last = "mm.2.weight"
-		v.Flags |= jlm.FlagVisionRope
-		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 2))
-		if _, ok := f.Get("v.position_embd.weight"); !ok {
-			return nil, fmt.Errorf("convert: clip: kimivl with no v.position_embd")
-		}
-	case jlm.ProjQwen3VL:
-		// Qwen3-VL: Qwen2-VL's merger and 2-D rotary behind a LayerNorm,
-		// GELU-tanh tower that also adds a learned position table, resampled
-		// to each picture's grid; and deepstack mergers on some blocks
-		// (v.deepstack.N.*, which deepstackOf reads). See jlm.ProjQwen3VL.
-		last = "mm.2.weight"
-		v.Flags |= jlm.FlagVisionRope
-		if _, ok := f.Get("v.position_embd.weight"); !ok {
-			return nil, fmt.Errorf("convert: clip: qwen3vl_merger with no v.position_embd")
-		}
-	default:
-		// A projector in projectorOf with no case here would convert with
-		// another projector's tensor names; refuse it instead.
-		return nil, fmt.Errorf("convert: projector_type %q has no conversion case", name)
-	}
-	// projection_dim is not the projector's output width: llava-phi-3 carries
-	// CLIP's contrastive projection dim (768) there while mm.2 emits 3072. The
-	// last projector matrix's row count is the fact.
-	lt, ok := f.Get(last)
-	if !ok || len(lt.Dims) < 2 {
-		return nil, fmt.Errorf("convert: clip: %s is missing or not a matrix, so the "+
-			"projector's output width cannot be derived", last)
-	}
-	v.ProjDim = uint32(lt.Dims[1])
-	if v.Projector == jlm.ProjGemma3 {
-		v.ProjDim = uint32(lt.Dims[0]) // stored transposed; see the case above
-	}
-	if v.Projector == jlm.ProjQwen2VL || v.Projector == jlm.ProjQwen25VL || v.Projector == jlm.ProjQwen3VL {
-		// The merger consumes Scale*Scale patches at once, so mm.0's k is
-		// NEmbd*Scale^2 (Qwen2-VL-2B: 5120 over 1280, a 2x2 merge).
-		mm0, ok := f.Get("mm.0.weight")
-		if !ok || len(mm0.Dims) < 2 {
-			return nil, fmt.Errorf("convert: clip: qwen2vl_merger has no mm.0.weight matrix")
-		}
-		k := uint32(mm0.Dims[0])
-		if k == 0 || v.NEmbd == 0 || k%v.NEmbd != 0 {
-			return nil, fmt.Errorf("convert: clip: mm.0.weight k=%d is not a multiple of NEmbd=%d", k, v.NEmbd)
-		}
-		sq := k / v.NEmbd
-		v.Scale = uint32(math.Sqrt(float64(sq)))
-		if v.Scale*v.Scale != sq {
-			return nil, fmt.Errorf("convert: clip: the merger takes %d patches at once, "+
-				"which is not a square grouping", sq)
-		}
+	if err := p.state(name, f, v); err != nil {
+		return nil, err
 	}
 	// Three activations, matching llama.cpp's clip loader: GELU for use_gelu,
 	// SiLU for use_silu, and quick-GELU when neither is set (openai CLIP,
@@ -1398,17 +1134,7 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 	if v.NFFN == 0 {
 		return nil, fmt.Errorf("convert: clip: no feed-forward width")
 	}
-	if v.Projector == jlm.ProjGemma4V {
-		// The file's mean 0 and std 1 stand beside a graph that scales to
-		// 2x - 1; the container states the normalisation that is, and the
-		// activation the file leaves out (gelu_pytorch_tanh).
-		v.Mean, v.Std = [3]float32{0.5, 0.5, 0.5}, [3]float32{0.5, 0.5, 0.5}
-		v.Flags = v.Flags&^jlm.FlagQuickGELU | jlm.FlagGELU
-	}
-	if v.Projector == jlm.ProjGemma3nV {
-		// timm's GELU is the tanh form, which the file does not state.
-		v.Flags = v.Flags&^jlm.FlagQuickGELU | jlm.FlagGELU
-	}
+	p.restate(v)
 	return v, nil
 }
 

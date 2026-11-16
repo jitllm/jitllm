@@ -1,0 +1,129 @@
+{
+ "audio": ["d1omni_a"],
+ "projectors": {
+  "idefics3": {
+   "code": 1,
+   "output": {"tensor": "mm.model.fc.weight", "dim": 1}
+  },
+  "mlp": {
+   "code": 2,
+   "output": {"tensor": "mm.2.weight", "dim": 1}
+  },
+  "qwen2vl_merger": {
+   "code": 3,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "merge_of": "mm.0.weight"
+  },
+  "gemma3": {
+   "code": 4,
+   "output": {"tensor": "mm.input_projection.weight", "dim": 0},
+   "scale": "src['vision.projector.scale_factor'] | default(4)",
+   "transforms": {"prepare": ["transpose_projection"]}
+  },
+  "internvl": {
+   "code": 5,
+   "when": "'v.blk.0.attn_q_norm.weight' not in shape",
+   "states": "InternViT-300M; a q/k norm in the blocks is the 6B tower's",
+   "output": {"tensor": "mm.model.mlp.3.weight", "dim": 1},
+   "tiles": {"min": "src['vision.preproc_min_tiles'] | default(1)", "max": "src['vision.preproc_max_tiles'] | default(12)"}
+  },
+  "qwen2.5vl_merger": {
+   "code": 6,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "merge_of": "mm.0.weight",
+   "window": {"size": "src['vision.window_size'] | default(112)", "pattern": "src['vision.n_wa_pattern'] | default(0)"}
+  },
+  "resampler": {
+   "code": 32,
+   "when": "(src['minicpmv_version'] | default(2)) in [3, 4, 5, 6]",
+   "states": "minicpmv_version 3 to 6: MiniCPM-V 2.6, o-2.6, 4.0, 4.5",
+   "output": {"tensor": "resampler.proj.weight", "dim": 1}
+  },
+  "janus_pro": {
+   "code": 33,
+   "output": {"tensor": "mm.1.weight", "dim": 1}
+  },
+  "qwen3vl_merger": {
+   "code": 48,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "requires": ["v.position_embd.weight"],
+   "merge_of": "mm.0.weight",
+   "taps": true
+  },
+  "glm4v": {
+   "code": 49,
+   "output": {"tensor": "mm.down.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "requires": ["mm.patch_merger.weight", "v.position_embd.weight"],
+   "scale": "shape['mm.patch_merger.weight'][0] if (shape['mm.patch_merger.weight'] | length) == 4 and shape['mm.patch_merger.weight'][0] == shape['mm.patch_merger.weight'][1] else 0"
+  },
+  "kimivl": {
+   "code": 50,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "requires": ["v.position_embd.weight"],
+   "scale": "src['vision.projector.scale_factor'] | default(2)"
+  },
+  "hunyuanvl": {
+   "code": 51,
+   "output": {"tensor": "mm.model.fc.weight", "dim": 1},
+   "requires": ["v.position_embd.weight"],
+   "scale": "src['vision.spatial_merge_size'] | default(2)",
+   "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"},
+   "transforms": {"finish": ["point_conv_projection", "norm_frame_rows"]}
+  },
+  "lfm2": {
+   "code": 65530,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "scale": "src['vision.projector.scale_factor'] | default(2)",
+   "tiles": {"min": "2", "max": "10"},
+   "pixels": {"min": "64 * tower.patch_size * tower.scale * tower.patch_size * tower.scale", "max": "256 * tower.patch_size * tower.scale * tower.patch_size * tower.scale"},
+   "tile": {"size": "512", "tolerance": "2"},
+   "resize": "src['vision.image_resize_algo'] | default('bilinear')"
+  },
+  "d1omni_v": {
+   "as": "lfm2"
+  },
+  "gemma3nv": {
+   "code": 65531,
+   "output": {"tensor": "mm.input_projection.weight", "dim": 1},
+   "flags": ["gelu"],
+   "blocks": "pairs",
+   "patch_size": "src['vision.image_size'] / 16",
+   "scale": "1",
+   "activation": "gelu",
+   "transforms": {"source": ["stage_place_blocks"]}
+  },
+  "phi4": {
+   "code": 65532,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"}
+  },
+  "gemma4v": {
+   "code": 65533,
+   "output": {"tensor": "mm.input_projection.weight", "dim": 1},
+   "flags": ["vision_rope", "gelu"],
+   "scale": "src['vision.projector.scale_factor'] | default(3)",
+   "mean": [0.5, 0.5, 0.5],
+   "std": [0.5, 0.5, 0.5],
+   "activation": "gelu",
+   "transforms": {"prepare": ["half_neox_to_neox", "negate_std_bias"]}
+  },
+  "llama4": {
+   "code": 65534,
+   "output": {"tensor": "mm.model.fc.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "tiles": {"min": "1", "max": "16"}
+  },
+  "pixtral": {
+   "code": 65535,
+   "output": {"tensor": "mm.2.weight", "dim": 1},
+   "flags": ["vision_rope"],
+   "scale": "src['vision.spatial_merge_size'] | default(1)",
+   "transforms": {"joined": ["image_break_row"], "prepare": ["permute_merger"]}
+  }
+ }
+}

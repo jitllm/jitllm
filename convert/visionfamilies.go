@@ -160,11 +160,11 @@ func foldLayerScales(s *jlm.Source, scales map[int32][2][]float32) error {
 	return nil
 }
 
-// transposeGemma3Projection lays gemma3's input projection out as every other
-// matrix in the container is: k first. The source stores it as HF does,
-// [n_embd_text, n_embd_vision] in ggml order, because the reference computes
-// x @ W; llama.cpp transposes it inside its graph on every image.
-func transposeGemma3Projection(s *jlm.Source) error {
+// transposeProjection lays an input projection stored [text, tower] out as
+// every other matrix in the container is: k first. The source stores it as
+// HF does (Gemma 3's), [n_embd_text, n_embd_vision] in ggml order, because
+// the reference computes x @ W; llama.cpp transposes it inside its graph on every image.
+func transposeProjection(s *jlm.Source) error {
 	for i := range s.Tensors {
 		t := &s.Tensors[i]
 		if t.Role != jlm.RoleVProj {

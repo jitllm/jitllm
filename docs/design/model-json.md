@@ -15,7 +15,7 @@ converter still reads each source through Go written per family:
 |---|---|---|
 | GGUF architecture names | `convert.archOf` | 70 names onto 48 `configOf` cases |
 | safetensors classes | `hfArchTable` | 32 classes, each a name map, a config reader and hooks |
-| projectors | `convert.projectorOf` and each `visionOf` case | 19 |
+| projectors | the tower staters (`convert.towerStater`); the list and `visionOf`'s cases are `convert/projectors.json` | 18 staters |
 | name ambiguities | `retarget` | a role per architecture |
 
 Each safetensors entry is the same five things: a tensor-name-to-role map,
@@ -231,7 +231,26 @@ model.json is mostly the config section and the `retarget` it needs.
    file converts is byte-identical to the one the Go entry converted, on that
    entry's fixture (`engine.TestSafetensorsMatchTransformers`' fixtures); then
    the Go entry is deleted.
-3. The GGUF names, then the projectors' staters, the same way.
+3. The GGUF names, then the projectors' staters, the same way. The
+   projector list and what `visionOf` read per projector are
+   `convert/projectors.json`: per `clip.projector_type`, the container's
+   projector code, the output matrix (tensor and dimension), the tower's
+   features (`vision_rope`, `gelu`), the tensors it requires, and its
+   geometry -- `patch_size`, `scale`, `merge_of` (the matrix taking
+   Scale*Scale patches), `tiles`, `pixels`, `tile`, `window`, `resize`
+   -- each an expression over the keys (`src`), the tensors' shapes
+   (`shape`) and the tower's patch, picture and merge (`tower`); `mean`,
+   `std` and `activation` replace the file's; `when` is the condition an
+   entry holds under (`states` what it covers), outside which the file is
+   refused, and `as` takes another entry's statements; `transforms` names,
+   per phase of conversion (`joined`, `source`, `prepare`, `finish`), the
+   tensor transforms the tower's tensors take (`convert.towerTransforms`);
+   `taps` says the projector reads taps off the tower's blocks
+   (`v.deepstack.N.*`), and `blocks` "pairs" that the file names its blocks
+   by (stage, place).
+   The file also lists the audio towers that convert (`audio`). Each check is one
+   rule for every entry (a merge of 0, a tile range or a pixel range that is
+   empty, a window with no pattern).
 4. `srcgate.TestNoFamilyCode` extends to `convert/`: no architecture constant
    or family name in its Go. The `Arch` codes of pre-v31 containers stay, as
    the opaque numbers `jlm.Stating` already treats them as.
