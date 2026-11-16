@@ -19,7 +19,10 @@ func TestAudioTowerRoundTrips(t *testing.T) {
 			{Code: TOpLinear, In: []uint16{0}, Bind: []Role{RoleADFTCos}},
 			{Code: TOpStated, In: []uint16{1}, Expr: logx},
 			{Code: TOpFeatureNorm, In: []uint16{2}, Offset: 1, Eps: 1e-5},
-			{Code: TOpClipMask, In: []uint16{3}, GridW: 64, Stride: 160, Span: 1},
+			{Code: TOpGather, In: []uint16{3}, Expr: &Expr{Terms: []Term{
+				{Fn: FnLess, Args: [3]Arg{{Kind: ArgIn, Index: GatherSamples}, {Kind: ArgIn, Index: GatherRow}}},
+				{Fn: FnWhere, Args: [3]Arg{{Kind: ArgTerm, Index: 0}, ExactNum(GatherNone), {Kind: ArgIn, Index: GatherRow}}},
+			}}},
 		}},
 		Chain: []ChainBlock{{Rows: 376, Width: 8, Prog: Program{NIn: 1, Out: 2, Ops: []TowerOp{
 			{Code: TOpRowsAttend, In: []uint16{0, 0, 0, 0}, Bind: []Role{RoleAPos}, Span: 2},
