@@ -1,0 +1,136 @@
+{
+ "bands": {"2": [0, 2], "3_5": [3, 5], "6_10": [6, 10], "11": [11, 0], "small": [0, 8], "mid": [9, 26], "large": [27, 0]},
+ "readouts": {
+  "lev": {
+   "labels": {"codes": [{"letters": "AZ"}, {"pairs": "AZ"}], "max_options": 255, "show_codes": true, "noul_ratings": 9, "reversed": true, "sort_keys": true, "id_instructions": true}
+  },
+  "vllm-d3": {
+   "labels": {"codes": [{"letters": "AZ"}, {"pairs": "AZ"}], "max_options": 255, "show_codes": true, "entropy_confidence": true, "sorted_legend": true}
+  },
+  "lfm2-d1": {
+   "labels": {"codes": [{"letters": "AZ"}], "wide_codes": [{"format": "%02d", "count": 255}], "pool": [{"letters": "AZ"}, {"format": "%02d", "count": 100}, {"letters": "az"}, {"format": "#%d", "count": 200}, {"pairs": "AZ"}], "max_options": 255, "key_codes": true, "spaced": true, "show_codes": true, "noul_true": ["yes", "Yes", "YES"], "noul_false": ["no", "No", "NO"], "noul_true_first": true, "score_by_key": true, "id_instructions": true}
+  },
+  "openjev": {
+   "labels": {"codes": [{"letters": "AZ"}, {"letters": "az"}], "max_options": 52, "noul_true_first": true, "id_instructions": true}
+  },
+  "laya": {
+   "head": {"heads": "src['decision.head_count'] | default([1, c.embd // 64] | max)", "tokens": "src['decision.max_head_tokens'] | default(0)", "eps": "0.00001"},
+   "require": [
+    {"that": "c.non_causal", "else": "a laya readout reads an encoder's rows, and this model's attention is causal"},
+    {"that": "head.blocks != 0", "else": "a laya readout is its head blocks after the encoder's, and this file states none"},
+    {"that": "head.tokens != 0", "else": "a laya readout needs decision.max_head_tokens, the budget its prompt is cut to"},
+    {"that": "head.heads != 0 and c.embd % head.heads == 0", "else": "its decision heads do not divide the residual"}
+   ],
+   "flags": ["head_blocks"],
+   "prompt": {
+    "max_len": 512,
+    "tokens": {"cls": {"special": "bos"}, "sep": {"special": "sep"}, "mask": {"special": "mask"}},
+    "let": [
+     ["space", "' '"],
+     ["colon", "': '"],
+     ["no_mask", "text_of(mask)"],
+     ["key", "option_key()"],
+     ["desc", "option_text('pystr')"],
+     ["empty", "option_empty('falsy')"],
+     ["idx", "option_index()"],
+     ["choice", "empty ? key : concat(key, colon, desc)"],
+     ["score", "concat('level ', format(idx), colon, desc)"],
+     ["noul_default", "idx < 1 ? 'no, the statement does not hold' : 'yes, the statement holds'"],
+     ["noul", "concat(key, colon, empty ? noul_default : desc)"],
+     ["opt", "pick(type_index(), choice, score, noul)"],
+     ["opt_ids", "cat(marked(mask), cut(encode(concat(space, replace(opt, no_mask, space))), 48))"],
+     ["head", "head_tokens"],
+     ["budget", "head - sum(len(opt_ids))"],
+     ["per", "max(4, (head - 16) / options())"],
+     ["opts", "budget < 16 ? cut(opt_ids, per) : opt_ids"],
+     ["left", "head - sum(len(opts))"],
+     ["question", "concat(type(), ' question: ', replace(instructions('json_ascii'), no_mask, space))"],
+     ["q_ids", "cut(encode(question), max(8, left))"],
+     ["sep_ids", "ids(sep)"],
+     ["pre", "cat(ids(cls), q_ids, sep_ids, flatten(opts), sep_ids)"],
+     ["ctx", "min(context(), max_len)"],
+     ["room", "max(0, ctx - len(pre) - 1)"],
+     ["state_ids", "cut(encode(replace(state('json'), no_mask, space)), room)"]
+    ],
+    "out": "cut(cat(pre, state_ids, sep_ids), ctx)",
+    "confidence": "entropy"
+   }
+  },
+  "clef": {
+   "backbone": true,
+   "head": {"routing": "src['decision.routing_block_count'] | default(0)", "heads": "src['decision.head_count'] | default(0)", "eps": "src['attention.layer_norm_epsilon'] | default(0)"},
+   "require": [
+    {"that": "head.blocks != 0 and head.heads != 0", "else": "a clef head needs its joint blocks and its heads"},
+    {"that": "head.routing <= 64 and head.blocks <= 64", "else": "a clef head of more than 64 routing or joint blocks"},
+    {"that": "head.eps > 0", "else": "a clef head needs attention.layer_norm_epsilon, its LayerNorms' epsilon, above zero"}
+   ],
+   "joint": {"type_rows": [1, 2, 0], "sort_keys": true, "sort_choices": true, "noul_true_first": true, "id_instructions": true, "confidence": "pmax"}
+  },
+  "lfm2-d1-omni": {
+   "backbone": true,
+   "head": {"heads": "src['decision.head_count'] | default([1, c.embd // 64] | max)", "eps": "0.00001"},
+   "require": [
+    {"that": "head.blocks != 0", "else": "an lfm2-d1-omni readout needs its head blocks"},
+    {"that": "head.heads != 0 and c.embd % head.heads == 0", "else": "its decision heads do not divide the residual"}
+   ],
+   "flags": ["head_blocks", "media_prefix", "media_uncalibrated"],
+   "prompt": {
+    "max_len": 16384,
+    "tokens": {"bos": {"special": "bos"}, "state_open": {"name": "<|reserved_7|>"}, "question_open": {"name": "<|reserved_8|>"}, "option_open": {"name": "<|reserved_9|>"}, "option_close": {"name": "<|reserved_10|>"}, "decide": {"name": "<|reserved_11|>"}, "mask": {"name": "<|mask|>"}},
+    "let": [
+     ["colon", "': '"],
+     ["key", "option_key()"],
+     ["desc", "option_text('json')"],
+     ["empty", "option_empty('none_or_empty')"],
+     ["idx", "option_index()"],
+     ["pictured", "0 < pictures()"],
+     ["spoken", "0 < clips()"],
+     ["pad", "idx < 10 ? '00' : (idx < 100 ? '0' : '')"],
+     ["numbered", "concat('option_', pad, format(idx), colon, empty ? key : desc)"],
+     ["choice", "spoken ? numbered : (empty ? key : concat(key, colon, desc))"],
+     ["score", "concat('level ', format(idx), colon, desc)"],
+     ["media", "0 < pictures() + clips()"],
+     ["noul_default", "idx < 1 ? (media ? 'no' : 'no, the statement does not hold') : (media ? 'yes' : 'yes, the statement holds')"],
+     ["noul", "concat(key, colon, empty + spoken ? noul_default : desc)"],
+     ["opt", "pick(type_index(), choice, score, noul)"],
+     ["k", "options()"],
+     ["ctx", "min(context(), spoken ? 15360 : (pictured ? 896 : max_len))"],
+     ["budget", "max(96, min(k * 24 + 32, ctx / 2))"],
+     ["per", "max(2, (budget - 3 * k) / k)"],
+     ["text", "cut(encode(regexp(concat(' ', opt), '<¦${1}¦>', '<\\|([A-Za-z0-9_]+)\\|>')), per)"],
+     ["opts", "cat(ids(option_open), marked(mask), text, ids(option_close))"],
+     ["ins", "regexp(instructions('pystr'), '<¦${1}¦>', '<\\|([A-Za-z0-9_]+)\\|>')"],
+     ["question", "cut(cat(ids(question_open), encode(ins)), max(16, budget))"],
+     ["asked", "cat(question, flatten(opts), ids(decide))"],
+     ["room", "max(0, ctx - len(asked) - 2)"],
+     ["state0", "encode(regexp(state('json_or_empty'), '<¦${1}¦>', '<\\|([A-Za-z0-9_]+)\\|>'))"],
+     ["state_ids", "len(state0) < spoken ? encode('{}') : state0"],
+     ["stated", "cat(ids(state_open), cut(state_ids, room))"]
+    ],
+    "out": "cut(cat(ids(bos), stated, asked), ctx)",
+    "confidence": "pmax"
+   },
+   "trunk": {"require": [{"that": "src['attention.causal'] is defined and not src['attention.causal']", "else": "an lfm2-d1-omni trunk is an encoder, and this file does not state attention.causal false"}], "context": "src['decision.max_length'] | default(16384)", "arch": "lfm2enc", "non_causal": true}
+  },
+  "kev": {
+   "flags": ["marker_pointer"],
+   "prompt": {
+    "tokens": {"fim_prefix": {"name": "<|fim_prefix|>"}, "fim_middle": {"name": "<|fim_middle|>"}, "box_start": {"name": "<|box_start|>"}, "box_end": {"name": "<|box_end|>"}, "fim_suffix": {"name": "<|fim_suffix|>"}},
+    "let": [
+     ["none", "''"],
+     ["desc", "option_text('template')"],
+     ["empty", "option_empty('falsy')"],
+     ["described", "empty ? none : concat(': ', desc)"],
+     ["choice", "concat(option_key(), described)"],
+     ["score", "empty ? none : desc"],
+     ["noul", "concat(option_index() < 1 ? 'no' : 'yes', described)"],
+     ["opt", "pick(type_index(), choice, score, noul)"],
+     ["opts", "cat(ids(box_start), encode(opt), marked(box_end))"],
+     ["state_ids", "encode(state('json'))"],
+     ["ins", "encode(instructions('template'))"]
+    ],
+    "out": "cut(cat(ids(fim_prefix), state_ids, ids(fim_middle), ins, flatten(opts), ids(fim_suffix)), context())"
+   }
+  }
+ }
+}

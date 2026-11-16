@@ -555,3 +555,22 @@ func (l *audioLay) frontTables(a *jlm.Audio) []jlm.Tensor {
 	}
 	return out
 }
+
+// withoutAudio is an mmproj with its audio encoder's tensors (a.*, mm.a.*)
+// set aside, for the vision half's reading; audioOf reads them. A file with
+// no audio encoder comes back as it is.
+func withoutAudio(f *meta.File) *meta.File {
+	if v, ok := f.KV["clip.has_audio_encoder"]; !ok || v.Type != meta.Bool || len(v.Raw) != 1 || v.Raw[0] == 0 {
+		return f
+	}
+	var ts []meta.Tensor
+	for _, t := range f.Tensors {
+		if !strings.HasPrefix(t.Name, "a.") && !strings.HasPrefix(t.Name, "mm.a.") {
+			ts = append(ts, t)
+		}
+	}
+	g := *f
+	g.Tensors = ts
+	g.Reindex()
+	return &g
+}

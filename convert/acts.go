@@ -30,11 +30,11 @@ func (e *expr) relu2(a jlm.Arg) jlm.Arg {
 func (e *expr) relu(a jlm.Arg) jlm.Arg { return e.Fn(jlm.FnMax, a, num(0)) }
 
 // statedLayers is how many of c's blocks the converter states an activation
-// for: the trunk's, and a marker head's blocks after it (Laya's and
-// d1-omni's, pre-norm blocks with a ReLU feed-forward).
+// for: the trunk's, and a marker head's blocks after it (pre-norm blocks with
+// a ReLU feed-forward).
 func statedLayers(c *jlm.Config) int {
 	n := int(c.NLayer)
-	if c.Decision == jlm.DecisionLaya || c.Decision == jlm.DecisionD1Omni {
+	if c.Flags2.Has(jlm.Flag2HeadBlocks) {
 		n += int(c.DecisionBlocks)
 	}
 	return n

@@ -214,10 +214,13 @@ func ArchitectureGraph(name string) (Arch, bool) {
 }
 
 func configOf(f *meta.File) (*Config, error) {
+	name, t, err := trunkOf(f)
+	if err != nil {
+		return nil, err
+	}
 	var c *Config
-	var err error
-	if head, ok := d1OmniHead(f); ok {
-		c, err = d1OmniConfig(f, head)
+	if t != nil {
+		c, err = t.config(name, f)
 	} else {
 		c, err = configOfFile(f)
 	}
@@ -244,7 +247,7 @@ func localAxes(c *Config) error {
 }
 
 // configOfFile is configOf for every file but the ones read through a view
-// (d1OmniConfig).
+// (a readout's trunk, trunk.go).
 func configOfFile(f *meta.File) (*Config, error) {
 	name := f.Arch()
 	if name == towerArch {

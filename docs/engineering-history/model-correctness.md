@@ -10797,3 +10797,82 @@ inputs channel-last (frequency-major), the layout the grid's rows take where the
 channel-major, each block's depthwise bias folds into its BatchNorm shift, and each block's linear_pos becomes the
 product with the sinusoids its attention reads. The depthwise filter's taps, the subsampling's first convolution and
 the adapter's residual matrix state the geometry's kernel, channels and residual width (`widths`).
+
+## Readout statements: the reference each transcribes
+
+Each decision readout is stated in the readout library (`convert/readouts.json`, read by `convert/readouts.go`): its
+label rules, its head's geometry and what the head must satisfy, a joint head, and the container flags it sets. What
+each statement transcribes, as the Go it replaced said it:
+
+- **`lev`** (interfaze-ai/lev) and **`vllm-d3`** (vllm-sr/d3): codes A..Z then AA..ZZ, those that are one token, up to
+  255 options; lev reads a noul at its nine rating levels, asks a choice again in reversed order and was trained on
+  sorted keys; d3 asks its own default question where the instructions are absent, and gives a choice's and a score's
+  confidence as one minus the normalised entropy, and a score's legend with each description that is not text as
+  sorted-key JSON.
+- **`lfm2-d1`** (LiquidAI/d1-3B): a choice's own keys where each is one letter, else A..Z, or two digits past 26
+  options, falling back through a pool of letters, digits and pairs; each code with its " "+code token; a noul's yes
+  and no forms, true shown first; a score read at its keys' own tokens.
+- **`openjev`** (openjev/openjev): one letter per option, A..Z then a..z, which its template writes itself; a noul
+  shown true first.
+- **`laya`**: rl_common.DecisionModel builds its head with max(1, d // 64) heads, whatever the encoder's count;
+  llama.cpp's graph runs the encoder's, which agrees on every published checkpoint (1024 wide, 16 heads) and on no
+  smaller one, so a file that states it is taken at its word. rl_common's nn.TransformerEncoderLayer and the scorer's
+  nn.LayerNorm run at torch's default epsilon, which rl_common never sets.
+- **`clef`**: Clef's head as llama.cpp's converter states it (conversion/clef.py from joint_head_config.json):
+  routing blocks, then joint blocks, the heads they attend with, and the head's LayerNorm epsilon -- torch's default,
+  which the reference never sets and the converter writes as layer_norm_epsilon. The backbone is the one whose
+  statement names the readout (qwen35 under another name). joint_schema_model.py: QUESTION_TYPES {noul: 0, choice: 1,
+  score: 2}, render's sort_keys, question_options' sorted choices and its noul read true then false;
+  systemone_answer's confidence the largest probability.
+- **`lfm2-d1-omni`**: Laya's head, which d1-omni's encoder.py builds the same way (nn.TransformerEncoderLayer at
+  d // 64 heads, on the trunk's rows). modeling_d1.py: media go before the text, the encoder's media queries masked
+  from the text keys and its convolution's right tap stopped at the prefix (keep_right); a media request is not
+  calibrated.
+- **`kev`** (jaredpalmer/kev): a pointer readout over the final rows.
+
+A marker head's prompt is its readout's statement too (`prompt`: the tokens it names, the cut its sequence takes
+where the file states none, its program as expressions of prompt operations, `convert/promptstates.go` lowering
+them node for node in the order the Go builders wrote them). What each transcribes, as the builder said it:
+
+**`laya`.** rl_common.build_sequence as a program:
+
+	[CLS] "<type> question: <ins>" [SEP] ([MASK] " <option>")* [SEP] <state> [SEP]
+
+each option's text cut to 48 tokens; where the options leave the question
+fewer than 16 of the head's headMax, every option sequence cut to
+max(4, (headMax-16)/k); the question cut to max(8, what the options leave);
+the state to the room maxLen leaves (or the instance, the smaller); the
+whole to it. The question's instructions are a string or their JSON
+(ASCII-escaped, _to_internal's json.dumps), the state its JSON
+(serialize_state's, unescaped), an option's description Python's str() of
+it, and the mask's text is a space in every piece. Its confidence is one
+minus the normalised entropy (confidence_from_probs).
+
+**`kev`.** Kev's systemone template as a program, d its delimiters
+(fim_prefix, fim_middle, box_start, box_end, fim_suffix):
+
+	<|fim_prefix|>state<|fim_middle|>instructions(<|box_start|>option<|box_end|>)*<|fim_suffix|>
+
+each piece encoded alone, as the template's specials part them; a choice's
+option is its key, a noul's no or yes (false then true), each with ": " and
+its description where it has one, a score's its description alone; a
+value printed as the template prints it, the state as llama.cpp's
+template engine prints an object, its JSON (Jinja2 prints Python's str()
+of it; Kev's goldens are llama.cpp's). An option's <|box_end|> is its
+marker, the prompt's last row the pointer's query.
+
+**`lfm2-d1-omni`.** d1-omni's prompt.encode as a program, d its delimiters (the
+state's, the question's, an option's opening and closing, the decision's)
+and its marker:
+
+	<bos> <state> state <q> instructions (<opt> <mask> option </opt>)* <decide>
+
+the options' block budget = max(96, min(24k+32, maxLen/2)) tokens, each
+option's text cut to max(2, (budget-3k)/k); the question to max(16,
+budget); the state to the room maxLen leaves (or the instance, the
+smaller); the whole to it. Caller text has every <|name|> rewritten to
+<¦name¦> before it is encoded; the instructions are Python's str() of
+theirs, a description its string or its JSON, empty where None or "".
+Its confidence is the largest probability (prompt.answer).
+
+A readout whose head's blocks the file counts after the trunk's is its statement's `trunk` (read by `convert/trunk.go`). **`lfm2-d1-omni`, its trunk**, as the Go it replaced said it: d1-omni (LiquidAI/d1-omni-600M) as llama.cpp's converter writes it (conversion/lfm2.py): an lfm2 file whose attention.causal is false -- the LFM2.5-Encoder trunk -- and whose block_count counts the trunk's blocks and the decision head's after them (decision.block_count of them, Laya's head: LayerNorm blocks with a fused, biased q|k|v and a ReLU MLP). Every per-layer key is written for all of them. The trunk is read as the lfm2 it is, through a view of the file cut to its blocks, and stated as ArchLFM2Enc; the head's blocks convert after it, as Laya's do. The trunk's context is the reference's max_length (D1OmniConfig's default, 16384), not the base model's 128000 the file states: a state is cut to it, and a picture prefix comes off it. The prompt's 896 and 15360 are config.json's image_text_length and audio_text_length, D1OmniConfig's defaults: the GGUF carries neither.

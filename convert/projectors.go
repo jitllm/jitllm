@@ -540,14 +540,15 @@ func audioFields(a *jlm.Audio) map[string]*uint32 {
 		"sub_channels": &a.SubChannels, "res_width": &a.ResWidth}
 }
 
-// audioEval is expr of audio statement name over vars, the mmproj's keys
-// (src) and, once it is read, the geometry (a).
-func audioEval(name, what, expr string, vars map[string]jinja.Value) (jinja.Value, error) {
+// libraryEval is expr of the library statement by over vars, refusing a
+// name vars does not hold.
+func libraryEval(by, what, expr string, vars map[string]jinja.Value) (jinja.Value, error) {
 	x, err := jinja.CompileExpr(expr)
 	if err == nil {
 		for _, n := range x.Names() {
-			if n != "src" && n != "a" {
-				return jinja.Undefined(), fmt.Errorf("%q reads %q, which is not the keys (src) or the geometry (a)", expr, n)
+			if _, ok := vars[n]; !ok {
+				err = fmt.Errorf("%q reads %q, which is none of %v", expr, n, slices.Sorted(maps.Keys(vars)))
+				break
 			}
 		}
 	}
@@ -559,7 +560,7 @@ func audioEval(name, what, expr string, vars map[string]jinja.Value) (jinja.Valu
 		err = fmt.Errorf("%q is undefined", expr)
 	}
 	if err != nil {
-		return jinja.Undefined(), fmt.Errorf("convert: projectors.json: audio %s: %s: %w", name, what, err)
+		return jinja.Undefined(), fmt.Errorf("convert: %s: %s: %w", by, what, err)
 	}
 	return v, nil
 }
@@ -571,7 +572,7 @@ func (st *audioStates) geometry(name string, src jinja.Value) (*jlm.Audio, error
 	fields := audioFields(a)
 	vars := map[string]jinja.Value{"src": src}
 	for _, k := range slices.Sorted(maps.Keys(st.Geometry)) {
-		v, err := audioEval(name, k, st.Geometry[k], vars)
+		v, err := libraryEval("projectors.json: audio "+name, k, st.Geometry[k], vars)
 		if err != nil {
 			return nil, err
 		}
@@ -610,7 +611,7 @@ func (st *audioStates) holds(name string, src jinja.Value, a *jlm.Audio, reqs []
 	geom.AsDict().Set("eps", jinja.NewFloat(float64(a.Eps)))
 	vars := map[string]jinja.Value{"src": src, "a": geom}
 	for _, r := range reqs {
-		v, err := audioEval(name, "require", r.That, vars)
+		v, err := libraryEval("projectors.json: audio "+name, "require", r.That, vars)
 		if err != nil {
 			return err
 		}
