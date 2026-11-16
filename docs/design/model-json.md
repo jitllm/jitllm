@@ -131,7 +131,9 @@ schema; `convert/modeljson.go` reads it. Its sections:
   mixture some block of which carries no experts, and a config key that
   changes the graph (`mjGraphKeys`: a partial rotary, a window, `clip_qkv`,
   `use_bidirectional_attention`) present with
-  another value than its neutral one and not read by the file.
+  another value than its neutral one and not read by the file. A file
+  states what its class computes (a router's gate, a whole-head rotary);
+  the one rule that refuses a key contradicting a statement is Go's.
 - `container`: what the container states for each GGUF architecture the
   file names (`gguf`), read by `configOfFile` for a GGUF and for a
   config.json the file has mapped onto the keys alike (`mjStates`,
@@ -143,18 +145,26 @@ schema; `convert/modeljson.go` reads it. Its sections:
   `attn_softcap` and `final_softcap`, and `window`: `size` (0 states no
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
-  state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. `rope_base` (the rotary base),
-  `residual_scale` and `moe_step` (the mixture blocks' interleave) are
+  state one, or `from`, the first layer that slides (every layer from it
+  on; none at or past the last, and a first layer between them follows no
+  period and is refused), and `rope_base`, the windowed layers' rotary
+  base. A fixed period over no window, and a chunked window over none, are
+  refused. `logit_div` and `clamp_kqv` (the bound on q, k and v) are
+  numbers, 0 for none; an expression over a key the file lacks, with no
+  default, is refused, which is how a class whose every file states a key
+  holds a file to it. `rope_base` (the rotary base),
+  `residual_scale` and `moe_step` (the mixture blocks' interleave, at least 1) are
   numbers; `mrope`, true, reads the rotary's sections off
-  `rope.dimension_sections`; `whole_rotary: true` refuses a rotary narrower
-  than the head. `router` is what the class's router does whatever the
-  keys say: `gate` (softmax, sigmoid, or sparsemixer, which reads no gating
-  key), `renormalise` (always or never), `unscaled`, `selects` (the experts
-  it picks); a key contradicting it is refused. `requires` and `lacks` name
-  the keys and tensors the class always or never has (a key of zero is
-  not had; `blk.*.` names every block's tensor), each absence or presence
-  refused. An expression may read the tensors' names too
+  `rope.dimension_sections`; `whole_rotary: true` states that the class
+  turns the whole head, and a file whose rotary is narrower contradicts it.
+  `router` is what the class's router does whatever the keys say: `gate`
+  (softmax, sigmoid, or sparsemixer, which reads no gating key),
+  `renormalise` (always or never), `unscaled`, `selects` (the experts it
+  picks); a key contradicting it is refused. Every file is held to its
+  tensors alike: a router over no `expert_count` is refused
+  (`statedTensorsAgree`), as is `rope.scaling.finetuned` false where the
+  graph states a rotary, and a tensor the stated block graph binds and the
+  block does not store (a stated q/k norm with no norm). An expression may read the tensors' names too
   (`'blk.0.attn_q_norm.weight' in tensors`). It replaces `configOfFile`'s
   case for the architecture; one statement per architecture, and an
   expression reading anything but `src` and `tensors` is refused.

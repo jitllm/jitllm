@@ -3,7 +3,7 @@
   "gguf": ["ernie4_5-moe"],
   "container": {
     "ernie4_5-moe": {"router": {"gate": "softmax", "renormalise": "always"},
-                     "moe_step": "src['interleave_moe_layer_step'] | default(0)", "requires": ["interleave_moe_layer_step"]}
+                     "moe_step": "src['interleave_moe_layer_step']"}
   },
   "config": {
     "arch": "ernie4_5-moe",

@@ -5,7 +5,6 @@ import (
 	"maps"
 	"math"
 	"slices"
-	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -31,8 +30,10 @@ type mjStates struct {
 	Window       *mjStatesWindow `json:"window"`
 	AttnSoftcap  string          `json:"attn_softcap"`
 	FinalSoftcap string          `json:"final_softcap"`
-	// LogitDiv divides the logits (0 for none).
+	// LogitDiv divides the logits and ClampKQV bounds q, k and v (0 for
+	// none).
 	LogitDiv string `json:"logit_div"`
+	ClampKQV string `json:"clamp_kqv"`
 	// RopeBase is the rotary base, ResidualScale the factor each block's
 	// attention and FFN output is scaled by (0 for none), and MoEStep the
 	// mixture blocks' interleave (jlm.Config.MoEStep), each a number.
@@ -47,14 +48,9 @@ type mjStates struct {
 	// WholeRotary states that the class turns every dimension of a head.
 	WholeRotary bool `json:"whole_rotary"`
 	// Router is what the class's router does whatever a file's keys say.
-	Router *mjRouter `json:"router"`
-	// Requires names the keys and tensors the class always has, Lacks the
-	// ones it never has; a key is had when it is stated and not zero, and
-	// "blk.*." names a tensor of every block.
-	Requires []string `json:"requires"`
-	Lacks    []string `json:"lacks"`
-	exprs    map[string]*jinja.Expr
-	tensors  bool
+	Router  *mjRouter `json:"router"`
+	exprs   map[string]*jinja.Expr
+	tensors bool
 }
 
 // mjStatesTemp is the queries' temperature by position: Scale, Floor and
@@ -85,11 +81,13 @@ func mjGates() map[string]int64 {
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
 // nothing else of it applies); every Period'th layer attends globally, or
 // Pattern's where the file's attention.sliding_window_pattern does not say
-// (swaPatternOf); RopeBase the windowed layers' rotary base.
+// (swaPatternOf), or every layer from From on slides; RopeBase the windowed
+// layers' rotary base.
 type mjStatesWindow struct {
 	Size     string `json:"size"`
 	Period   string `json:"period"`
 	Pattern  string `json:"pattern"`
+	From     string `json:"from"`
 	RopeBase string `json:"rope_base"`
 }
 
@@ -102,7 +100,7 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s states the container of %s, which it names no GGUF architecture", mj.name, arch)
 		}
 		st := mj.Container[arch]
-		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv,
+		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv, st.ClampKQV,
 			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope}
 		if tp := st.AttnTemp; tp != nil {
 			if tp.Scale == "" || tp.Floor == "" || tp.Offset == "" {
@@ -118,16 +116,11 @@ func (mj *modelJSON) checkStates() error {
 				return fmt.Errorf("convert: %s: %s: router renormalise %q, not always or never", mj.name, arch, r.Renormalise)
 			}
 		}
-		for _, n := range slices.Concat(st.Requires, st.Lacks) {
-			if n == "" {
-				return fmt.Errorf("convert: %s: %s: an empty key or tensor name", mj.name, arch)
-			}
-		}
 		if w := st.Window; w != nil {
-			if w.Size == "" || w.Period != "" && w.Pattern != "" {
-				return fmt.Errorf("convert: %s: %s: a window states its size, and a period or a pattern, not both", mj.name, arch)
+			if n := min(len(w.Period), 1) + min(len(w.Pattern), 1) + min(len(w.From), 1); w.Size == "" || n > 1 {
+				return fmt.Errorf("convert: %s: %s: a window states its size, and one of a period, a pattern or a first layer (not both of any two)", mj.name, arch)
 			}
-			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase)
+			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.From, w.RopeBase)
 		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
@@ -195,10 +188,28 @@ func ggufStates(arch string) (*mjStates, string, error) {
 // GGUF architecture to c.
 func stateContainer(f *meta.File, c *Config) error {
 	st, by, err := ggufStates(f.Arch())
-	if err != nil || st == nil {
+	if err != nil {
 		return err
 	}
-	return st.apply(by, f, c)
+	if st != nil {
+		if err := st.apply(by, f, c); err != nil {
+			return err
+		}
+	}
+	return statedTensorsAgree(f, c)
+}
+
+// statedTensorsAgree refuses a file storing a router over no expert_count.
+func statedTensorsAgree(f *meta.File, c *Config) error {
+	if f.UintKey("expert_count", 0) != 0 {
+		return nil
+	}
+	for i := range c.NLayer {
+		if _, ok := f.Get("blk." + itoa(int(i)) + ".ffn_gate_inp.weight"); ok {
+			return fmt.Errorf("convert: %s: block %d stores a router, and the file states no expert_count", f.Arch(), i)
+		}
+	}
+	return nil
 }
 
 // apply sets what st states, read off f's keys, in c; by names the file.
@@ -260,16 +271,12 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return err
 		}
 	}
-	if st.EmbdScale != "" {
-		if c.EmbdScale, err = number("embd_scale", st.EmbdScale); err != nil {
-			return err
-		}
-	}
 	for _, s := range []struct {
 		what, src string
 		to        *float32
-	}{{"attn_softcap", st.AttnSoftcap, &c.AttnSoftcap}, {"final_softcap", st.FinalSoftcap, &c.FinalSoftcap},
-		{"logit_div", st.LogitDiv, &c.LogitScale}} {
+	}{{"embd_scale", st.EmbdScale, &c.EmbdScale}, {"attn_softcap", st.AttnSoftcap, &c.AttnSoftcap},
+		{"final_softcap", st.FinalSoftcap, &c.FinalSoftcap}, {"logit_div", st.LogitDiv, &c.LogitScale},
+		{"clamp_kqv", st.ClampKQV, &c.ClampKQV}} {
 		if s.src == "" {
 			continue
 		}
@@ -315,13 +322,10 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		if err != nil {
 			return err
 		}
-		if x < 0 || x != float32(uint32(x)) {
-			return fmt.Errorf("convert: %s: %s: moe_step is %g, not a count", by, arch, x)
+		if x < 1 || x != float32(uint32(x)) {
+			return fmt.Errorf("convert: %s: %s: moe_step is %g, not a step", by, arch, x)
 		}
 		c.MoEStep = uint32(x)
-	}
-	if err := st.have(by, f, c); err != nil {
-		return err
 	}
 	if err := st.Router.apply(f, c); err != nil {
 		return fmt.Errorf("convert: %s: %w", arch, err)
@@ -360,13 +364,25 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		return err
 	}
 	if size == 0 && c.Flags.Has(jlm.FlagSWAChunked) {
-		return fmt.Errorf("convert: %s: chunked attention over no chunk", arch)
+		return fmt.Errorf("convert: %s: chunked attention over no chunk, every layer attending globally: %w", arch, ErrNotImplemented)
 	}
 	if size == 0 {
 		if w.Period != "" {
 			return fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
 		}
 		return nil
+	}
+	if w.From != "" {
+		from, err := whole("window.from", w.From)
+		switch {
+		case err != nil:
+			return err
+		case from >= c.NLayer:
+			return nil
+		case from > 0:
+			return fmt.Errorf("convert: %s: the layers from %d on slide, which follows no period the container states: %w",
+				arch, from, ErrNotImplemented)
+		}
 	}
 	c.SWAWindow = size
 	switch {
@@ -386,49 +402,6 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if w.RopeBase != "" {
 		if c.RopeBaseSWA, err = number("window.rope_base", w.RopeBase); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-// have refuses a file lacking a key or tensor st requires, or carrying one
-// it lacks.
-func (st *mjStates) have(by string, f *meta.File, c *Config) error {
-	missing := -1
-	has := func(n string) bool {
-		if rel, ok := strings.CutPrefix(n, "blk.*."); ok {
-			for i := range int(c.NLayer) {
-				if _, ok := f.Get("blk." + itoa(i) + "." + rel); !ok {
-					missing = i
-					return false
-				}
-			}
-			return c.NLayer > 0
-		}
-		if _, ok := f.Get(n); ok {
-			return true
-		}
-		kv, ok := f.Key(n)
-		if !ok {
-			return false
-		}
-		if v, ok := kv.Float(); ok && kv.Len() == 0 {
-			return v != 0
-		}
-		return true
-	}
-	for _, n := range st.Requires {
-		missing = -1
-		if !has(n) {
-			if rel, ok := strings.CutPrefix(n, "blk.*."); ok && missing >= 0 {
-				return fmt.Errorf("convert: %s: block %d has no %s, which %s's class always has", f.Arch(), missing, rel, by)
-			}
-			return fmt.Errorf("convert: %s: no %s, which %s's class always has", f.Arch(), n, by)
-		}
-	}
-	for _, n := range st.Lacks {
-		if has(n) {
-			return fmt.Errorf("convert: %s: %s, which %s's class does not have: %w", f.Arch(), n, by, ErrNotImplemented)
 		}
 	}
 	return nil
