@@ -56,6 +56,9 @@ type Tensor struct {
 	// sheet's SC -- as a migration reads it out of a container (migrate.go);
 	// the writer places it without packing.
 	Stored bool
+	// RowTable stores a model-level 2-D verbatim tensor as a row table
+	// (File.RowTable), after every page array.
+	RowTable bool
 }
 
 // Bytes is the tensor's source bytes, from Data or from Load.
@@ -152,7 +155,7 @@ func ExpertBank(r Role) bool {
 
 // expertPaged is ExpertBank for an entry that actually has sheets to split.
 func expertPaged(e *Entry) bool {
-	return ExpertBank(e.Role) && e.Block != DenseBlock && !alwaysResident(e) && e.NDim >= 3
+	return ExpertBank(e.Role) && e.Block != DenseBlock && !e.Role.Expanded() && e.NDim >= 3
 }
 
 // sheetPlanes is one sheet's unaligned length in each plane, packed or not. A
@@ -337,19 +340,9 @@ func StoredBytes(t Type, dims [4]uint64, ndim uint8) (uint64, error) {
 // Role.Expanded: a tensor read into a fresh slice at load may live anywhere,
 // and a tensor a matvec reads in place must stay a page. See Role.Expanded for
 // why the MoE router is not here. The
-func alwaysResident(e *Entry) bool {
-	return !RowTable(e) && (e.Block == DenseBlock || e.Role.Expanded())
+func alwaysResident(e *Entry, rows bool) bool {
+	return !rows && (e.Block == DenseBlock || e.Role.Expanded())
 }
-
-// RowTable says a tensor is a row table: rows read one at a time from the
-// file, never resident whole and never in the dense region or a page. It
-// sits after every page array, verbatim and row-major, so row r is
-// RowBytes(e) bytes at QSOff + r*RowBytes(e). Qwen3.8-Flash-Next's n-gram
-// table is one: 320 million rows, of which a token reads sixteen.
-func RowTable(e *Entry) bool { return RowTableRole(e.Role) }
-
-// RowTableRole says role r is stored as a row table (RowTable).
-func RowTableRole(r Role) bool { return r == RoleNGramTable }
 
 // RowBytes is one row of a row table: Dims[0] elements of its type.
 func RowBytes(e *Entry) (uint64, error) { return verbatimBytes(e.Type, e.Dims[0]) }
@@ -439,7 +432,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 		} else if e.Block > maxBlock {
 			maxBlock = e.Block
 		}
-		if !alwaysResident(&e) && !expertPaged(&e) && !RowTable(&e) {
+		if !alwaysResident(&e, t.RowTable) && !expertPaged(&e) && !t.RowTable {
 			if e.Role.Vision() {
 				perVis[e.Block] += qs + d + sc
 			} else {
@@ -567,7 +560,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 
 	dense := h.DenseOff
 	for i := range es {
-		if !alwaysResident(&es[i]) {
+		if !alwaysResident(&es[i], src.Tensors[i].RowTable) {
 			continue
 		}
 		qs, d, sc, _ := spans(es[i].Type, es[i].Dims, es[i].NDim)
@@ -596,7 +589,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 	for i := range es {
 		// Same predicate as the dense pass above, or this one overwrites the
 		// offsets it just assigned and a norm ends up inside a page again.
-		if alwaysResident(&es[i]) || RowTable(&es[i]) {
+		if alwaysResident(&es[i], src.Tensors[i].RowTable) || src.Tensors[i].RowTable {
 			continue
 		}
 		if po, ok := inner[i]; ok {
@@ -626,7 +619,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 	}
 	// The row tables, after everything a pager reads.
 	for i := range es {
-		if !RowTable(&es[i]) {
+		if !src.Tensors[i].RowTable {
 			continue
 		}
 		if es[i].Block != DenseBlock || es[i].NDim != 2 || Packed(es[i].Type) {

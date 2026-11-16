@@ -487,6 +487,15 @@ type RowTable struct {
 	RowBytes int
 }
 
+// RowTableRoles is the roles of tables ts, in their order.
+func RowTableRoles(ts []RowTable) []jlm.Role {
+	rs := make([]jlm.Role, len(ts))
+	for i, t := range ts {
+		rs[i] = t.Entry.Role
+	}
+	return rs
+}
+
 // BlockSpec is what a block is composed from, as the instance states it for
 // whichever device takes the block: the graph its front end states (Source)
 // and the one its forms are composed from (Graph), its weights' formats and

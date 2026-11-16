@@ -34,7 +34,7 @@ func loadNGramTable(m *Model, cfg *Config, f *jlm.File) error {
 	h := op.Hash
 	rowDim := int(op.Width) / (int(op.Span-1) * int(h.HeadsPer))
 	e, ok := f.Find(op.Bind[0], jlm.DenseBlock, -1)
-	if !ok || !jlm.RowTable(e) || e.NDim != 2 || int(e.Dims[0]) != rowDim {
+	if !ok || !f.RowTable(e) || e.NDim != 2 || int(e.Dims[0]) != rowDim {
 		return fmt.Errorf("model: an n-gram block and no n-gram table %d wide", rowDim)
 	}
 	t, ok := jlm.SourceType(e.Type)

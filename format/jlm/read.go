@@ -609,6 +609,15 @@ func (f *File) InDense(e *Entry) bool {
 	return e.QSOff >= f.H.DenseOff && e.QSOff < f.H.DenseOff+f.H.DenseLen
 }
 
+// RowTable says e is a row table, as its converter stored it
+// (Tensor.RowTable): rows read one at a time from the file, never resident
+// whole and never in the dense region or a page. A model-level tensor is
+// in the dense region unless it is one, which sits after every page array,
+// verbatim and row-major, so row r is RowBytes(e) bytes at
+// QSOff + r*RowBytes(e). Qwen3.8-Flash-Next's n-gram table is one: 320
+// million rows, of which a token reads sixteen.
+func (f *File) RowTable(e *Entry) bool { return e.Block == DenseBlock && !f.InDense(e) }
+
 // NPages is how many block pages this container has, both arrays together, and
 // PageBytes how big one of them is.
 func (f *File) NPages() int { return int(f.H.NBlocks) + int(f.H.NVisBlocks) + int(f.H.NExpPages) }

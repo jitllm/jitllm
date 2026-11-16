@@ -202,7 +202,7 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 		History: composer.History{ValuesInKeys: p.ValuesInKeys,
 			Keys:   composer.Pool{Row: p.KVRow, Block: p.KVBlock, Half: p.KVBF16, BF16: p.KVBF16},
 			Values: composer.Pool{Row: p.KVRow, Block: p.KVBlock, Half: p.KVBF16, BF16: p.KVBF16}},
-		Rotaries: p.Rotaries, More: composer.MoreOfKept(p.Hists)}
+		Rotaries: p.Rotaries, More: composer.MoreOfKept(p.Hists), Tables: nn.RowTableRoles(p.Tables)}
 	req.Graph, req.Step.Rows, req.Device = &gr, rows, e.comp.Device()
 	return e.comp.Form(req, &gr, rows, p.Cut > 0, false, p.F32)
 }
@@ -272,7 +272,7 @@ func (e *Exec) specOf(li int, p *nn.LayerPlan) (nn.BlockSpec, bool) {
 	}
 	s := *p.Spec
 	if s.Why == nn.DeclineServes {
-		for _, t := range s.Graph.TableRows() {
+		for _, t := range s.Graph.TableRows(nn.RowTableRoles(s.Tables)) {
 			i := slices.IndexFunc(s.Tables, func(rt nn.RowTable) bool { return rt.Entry.Role == t.Role })
 			if i < 0 {
 				continue

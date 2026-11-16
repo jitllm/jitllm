@@ -506,6 +506,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	StateStreams(c.Config, sourceStores(s))
+	storeRowTables(c.Config, s)
 	if err := StateSelection(c.Config, sourceStores(s)); err != nil {
 		return nil, err
 	}

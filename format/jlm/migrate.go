@@ -301,7 +301,7 @@ func Restate(path string, state func(f *File, c *Config) (bool, error)) (bool, e
 // writer reaches it, placed without packing.
 func (f *File) carried(e *Entry) Tensor {
 	return Tensor{Role: e.Role, Block: e.Block, Index: e.Index, Type: e.Type, NDim: e.NDim,
-		Dims: e.Dims, Name: e.Name, Stored: true, Load: func() ([]byte, error) { return f.storedBytes(e) }}
+		Dims: e.Dims, Name: e.Name, Stored: true, RowTable: f.RowTable(e), Load: func() ([]byte, error) { return f.storedBytes(e) }}
 }
 
 // publish writes src as a version ver container in place of the one f was opened from,

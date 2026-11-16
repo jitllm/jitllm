@@ -188,10 +188,11 @@ type TableRow struct {
 	Rows ValueID
 }
 
-// TableRows is each row table g gathers from, in the order g first gathers
-// it, any number of them; a table whose gathers read rows from two rows is
-// left out, so no view is opened for it and a form binding it is declined.
-func (g *Graph) TableRows() []TableRow {
+// TableRows is each row table of tables g gathers from, in the order g
+// first gathers it, any number of them; a table whose gathers read rows
+// from two rows is left out, so no view is opened for it and a form binding
+// it is declined.
+func (g *Graph) TableRows(tables []jlm.Role) []TableRow {
 	from := map[ValueID]ValueID{}
 	for _, o := range g.Ops {
 		if o.Kind == OpSlice && len(o.In) == 1 && len(o.Out) == 1 {
@@ -201,7 +202,7 @@ func (g *Graph) TableRows() []TableRow {
 	var ts []TableRow
 	two := map[jlm.Role]bool{}
 	for _, o := range g.Ops {
-		if o.Kind != OpEmbed || len(o.In) != 1 || len(o.Weight) != 1 || !jlm.RowTableRole(o.Weight[0].Role) {
+		if o.Kind != OpEmbed || len(o.In) != 1 || len(o.Weight) != 1 || !slices.Contains(tables, o.Weight[0].Role) {
 			continue
 		}
 		v, ok := from[o.In[0]]

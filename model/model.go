@@ -2718,7 +2718,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
 		if e.Block != jlm.DenseBlock || e.Index != -1 || e.Role.Expanded() || e.Role.Vision() || e.NDim < 2 ||
-			jlm.RowTable(e) || denseNamed(e.Role) {
+			c.RowTable(e) || denseNamed(e.Role) {
 			continue
 		}
 		t, err := get(e.Role, jlm.DenseBlock, -1)

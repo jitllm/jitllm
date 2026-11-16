@@ -104,7 +104,8 @@ func (c *Context) weight(w graph.Binding) (Operand, error) {
 	if !ok {
 		return Operand{}, fmt.Errorf("no format for %s", w.Role)
 	}
-	return Operand{Kind: OperandWeight, Role: w.Role, Format: f, Name: w.Role.String(), Instance: w.From}, nil
+	return Operand{Kind: OperandWeight, Role: w.Role, Format: f, Name: w.Role.String(), Instance: w.From,
+		Rows: slices.Contains(c.Tables, w.Role)}, nil
 }
 
 // decomposeNorm is an RMS norm: each row's sum of squares, then each element

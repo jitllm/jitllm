@@ -1626,7 +1626,7 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
 	for _, t := range s.Tensors {
 		if t.Block == jlm.DenseBlock {
 			bf.dense[t.Role] = true
-			if jlm.RowTableRole(t.Role) && t.NDim >= 2 {
+			if t.RowTable && t.NDim >= 2 {
 				tables[t.Role] = graph.Shape{K: int(t.Dims[0]), Rows: int(t.Dims[1])}
 			}
 			continue

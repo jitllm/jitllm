@@ -229,7 +229,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 			break
 		}
 		for _, w := range o.Weight {
-			if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok && jlm.RowTable(e) {
+			if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok && s.m.Container.RowTable(e) {
 				formats[w.Role] = e.Type
 				// A table with no row size has no view, which the device
 				// names when its form binds it.

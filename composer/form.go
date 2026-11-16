@@ -33,6 +33,10 @@ type Request struct {
 	// the words from one sheet's start to the next's, the same in every
 	// plane (a bank in the host's expert pages, a page apart).
 	Strides map[jlm.Role]int
+	// Tables is each weight the call site holds as a row table: its rows
+	// are read in for the indices the launches before its first reader
+	// wrote, between those launches.
+	Tables []jlm.Role
 	// Apart says the graph's inputs and outputs are buffers of their own,
 	// each the caller's: no output takes another value's storage, and no
 	// value an input's. A block's residual is one buffer, its input's and
@@ -173,7 +177,7 @@ func (r *Registry) formWith(req Request, prof Profile, untailed map[KernelAt]boo
 	var ks []*Kernel
 	for {
 		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
-		c.History, c.More, c.split, c.Paged, c.Strides = req.History, req.More, sp, req.Paged, req.Strides
+		c.History, c.More, c.split, c.Paged, c.Strides, c.Tables = req.History, req.More, sp, req.Paged, req.Strides, req.Tables
 		prims, err := r.decomposeOps(c, 0)
 		if err != nil {
 			return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)

@@ -154,7 +154,9 @@ type Context struct {
 	// Strides is Request.Strides: the words from one sheet of a bank to the
 	// next where they lie further apart than they pack.
 	Strides map[jlm.Role]int
-	formed  map[graph.ValueID]bool
+	// Tables is Request.Tables.
+	Tables []jlm.Role
+	formed map[graph.ValueID]bool
 	// grouped holds the groupings of a selection's pairs by expert formed
 	// (expertGrouped), by their scratch's name: the projections a
 	// selection routes share one.

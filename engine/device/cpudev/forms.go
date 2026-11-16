@@ -93,7 +93,7 @@ func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole
 	c.m[key] = b
 	c.mu.Unlock()
 	defer close(b.done)
-	if b.f, b.err = BuildForm(c.Target, gr, codes, rows, apart, whole); b.err == nil {
+	if b.f, b.err = BuildForm(c.Target, gr, req.Tables, codes, rows, apart, whole); b.err == nil {
 		b.f.Keys = req.Step.Keys
 	}
 	return b.f, b.err
