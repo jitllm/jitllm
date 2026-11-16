@@ -191,6 +191,7 @@
  "shortconv.conv.weight": "ssm_conv1d",
  "shortconv.out_proj.weight": "ssm_out",
  "ssm_a": "ssm_a",
+ "ssm_alpha.weight": "ssm_ba",
  "ssm_b_norm.weight": "ssm_b_norm",
  "ssm_ba.weight": "ssm_ba",
  "ssm_beta.weight": "ssm_ba",

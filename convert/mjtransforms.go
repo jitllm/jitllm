@@ -330,21 +330,38 @@ func mjTranspose(v mjVal, perm []int64) (mjVal, error) {
 	}
 	seen := make([]bool, r)
 	shape := make([]uint64, r)
+	axes := make([]int64, r)
 	for i, a := range perm {
 		ax, err := mjAxis(a, r)
 		if err != nil || seen[ax] {
 			return mjVal{}, fmt.Errorf("transpose %v is not a permutation of %d axes", perm, r)
 		}
-		seen[ax], shape[i] = true, v.shape[ax]
-	}
-	es, err := mjElemSize(v.typ)
-	if err != nil {
-		return mjVal{}, err
+		seen[ax], shape[i], axes[i] = true, v.shape[ax], int64(ax)
 	}
 	out := mjVal{shape: shape, typ: v.typ}
+	dims := v.shape
+	es, err := mjElemSize(v.typ)
+	if err != nil {
+		// A packed type moves by whole rows of its blocks: its fastest axis
+		// stays, and a row is the element the others permute.
+		last := r - 1
+		if axes[last] != int64(last) {
+			return mjVal{}, fmt.Errorf("a %v tensor moves by whole rows of its blocks, and transpose %v moves its last axis", v.typ, perm)
+		}
+		if v.dry() {
+			return out, nil
+		}
+		rows := mjProd(v.shape[:last])
+		if rows == 0 || uint64(len(v.data))%rows != 0 {
+			return mjVal{}, fmt.Errorf("a %v tensor %v of %d bytes is not whole rows", v.typ, v.shape, len(v.data))
+		}
+		es, dims, axes, shape, r = uint64(len(v.data))/rows, v.shape[:last], axes[:last], shape[:last], last
+	}
 	if v.dry() {
 		return out, nil
 	}
+	perm = axes
+	v = mjVal{shape: dims, typ: v.typ, data: v.data}
 	// in strides, slowest first, in elements
 	stride := make([]uint64, r)
 	s := uint64(1)
@@ -375,7 +392,6 @@ func mjTranspose(v mjVal, perm []int64) (mjVal, error) {
 	return out, nil
 }
 
-// mjSpan is the elements before an axis, and the bytes of one index of it.
 // mjSpan is v's slabs along axis ax: how many lie outside it, and the bytes
 // of each index. A packed type's fastest axis is its blocks, so it is spanned
 // only above that axis, a row's bytes read off the data.

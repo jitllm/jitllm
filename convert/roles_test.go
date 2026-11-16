@@ -73,12 +73,6 @@ func TestEveryTensorHasARole(t *testing.T) {
 				n = r
 			}
 			tensors++
-			// A split beta and alpha never reach the name table: sourceOf
-			// fuses them into ssm_ba first wherever the block stores the pair
-			// (fuseBetaAlpha, gated by its own test).
-			if splitBetaAlpha(n) && pairedBetaAlpha(f, n) {
-				continue
-			}
 			// A tower's tensors are named as conversion names them
 			// (towerRoleOf), and the ones it reads into another or not at all
 			// are accounted for by the same predicates sourceOf uses. The

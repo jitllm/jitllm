@@ -349,6 +349,7 @@ type Statement struct {
 	keys                                []string
 	linearTensors                       map[string][]statedCut
 	fuse                                map[jlm.Role][]string
+	joined                              map[jlm.Role]mjPipe
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -471,6 +472,14 @@ func (mj *modelJSON) checkStates() error {
 				if _, ok := mj.names.roleOf(r); !ok || len(srcs) < 2 {
 					return fmt.Errorf("convert: %s: %s: tensors: %s is joined from %d sources, and is no role the "+
 						"container knows or fewer than two", mj.name, arch, r, len(srcs))
+				}
+			}
+			for r, p := range t.Joined {
+				if _, ok := t.Fuse[r]; !ok {
+					return fmt.Errorf("convert: %s: %s: tensors: joined %s is no role the table joins", mj.name, arch, r)
+				}
+				if err := p.check(); err != nil {
+					return fmt.Errorf("convert: %s: %s: tensors: joined %s: %w", mj.name, arch, r, err)
 				}
 			}
 			for _, table := range []map[string]mjTargets{t.Model, t.Block, t.BlockLinear} {
@@ -757,6 +766,12 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 				c.Stated.fuse = map[jlm.Role][]string{}
 			}
 			c.Stated.fuse[role] = srcs
+			if p := t.Joined[r]; len(p) > 0 {
+				if c.Stated.joined == nil {
+					c.Stated.joined = map[jlm.Role]mjPipe{}
+				}
+				c.Stated.joined[role] = p
+			}
 		}
 	}
 	if st.MergeMixers {

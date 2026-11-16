@@ -21,7 +21,9 @@
       "retarget": [
                  {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
       "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]},
-    "qwen35": {"tensors": {"sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "qwen35": {"tensors": {"fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]},
+                  "sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [
@@ -32,11 +34,13 @@
                      {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
                      {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
                      {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]},
-                  "block_linear": {"attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+                  "block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight", "attn_qkv.weight": {"role": "attn_qkv.weight"}}},
       "retarget": [
                  {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
       "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]},
-    "qwen35moe": {"tensors": {"sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "qwen35moe": {"tensors": {"fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]},
+                  "sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "ff_exp": "expert_feed_forward_length"},
@@ -51,11 +55,13 @@
                             "ffn_gate_up_exps.weight": [
                      {"role": "ffn_gate_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "0", "size.ff_exp"]}]},
                      {"role": "ffn_up_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "size.ff_exp", "size.ff_exp"]}]}]},
-                  "block_linear": {"attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+                  "block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight", "attn_qkv.weight": {"role": "attn_qkv.weight"}}},
       "retarget": [
                  {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
       "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]},
-    "qwen4exp": {"tensors": {"sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "qwen4exp": {"tensors": {"fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]},
+                  "sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "ff_exp": "expert_feed_forward_length"},
@@ -70,7 +76,7 @@
                             "ffn_gate_up_exps.weight": [
                      {"role": "ffn_gate_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "0", "size.ff_exp"]}]},
                      {"role": "ffn_up_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "size.ff_exp", "size.ff_exp"]}]}]},
-                  "block_linear": {"attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+                  "block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight", "attn_qkv.weight": {"role": "attn_qkv.weight"}}},
       "retarget": [
                  {"from": "per_layer_token_embd", "to": "ngram_token_embd", "why": "its n-gram table carries Gemma's per-layer table name and is a row table of hashed n-grams"}],
       "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}],
@@ -78,7 +84,10 @@
       "streams": {"count": "src['hyper_connection.count'] | default(0)", "low_rank": "src['hyper_connection.low_rank'] | default(0)"},
       "indexer": {"heads": "src['attention.indexer.head_count'] | default(0)", "key_width": "src['attention.indexer.key_length'] | default(0)", "top_k": "src['attention.indexer.top_k'] | default(0)"},
       "qsa_ratios": "src['attention.compress_ratios'] | default(none)", "ngram": true},
-    "clef": {"readouts": ["clef"], "retarget": [
+    "clef": {"tensors": {"block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight"},
+                  "fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]}},
+      "readouts": ["clef"], "retarget": [
                  {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
       "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]}
   },

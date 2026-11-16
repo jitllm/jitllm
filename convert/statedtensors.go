@@ -332,6 +332,20 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 		if err != nil {
 			return err
 		}
+		if p := st.joined[k.role]; len(p) > 0 {
+			var fail error
+			v, err := p.run(tensorEnv(&e, &fail), []mjVal{{shape: mjTorch(&e), typ: e.Type, data: e.Data}})
+			if fail != nil {
+				err = fail
+			}
+			if err != nil {
+				return fmt.Errorf("convert: block %d's joined %v: %w", k.block, k.role, err)
+			}
+			if err := mjSetShape(&e, v); err != nil {
+				return err
+			}
+			e.Data, e.Load = v.data, nil
+		}
 		out = append(out, e)
 	}
 	s.Tensors = out

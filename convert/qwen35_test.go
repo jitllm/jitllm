@@ -46,9 +46,14 @@ func qwen35File(arch string) *meta.File {
 	add("blk.0.post_attention_norm.weight", small, embd)
 	add("blk.0.attn_qkv.weight", small, embd, uint64(chans))
 	add("blk.0.attn_gate.weight", small, embd, nv*vdim)
-	// Row vh of beta is the constant 100+vh, of alpha 200+vh.
-	add("blk.0.ssm_beta.weight", func(i int) float32 { return float32(100 + i/embd) }, embd, nv)
-	add("blk.0.ssm_alpha.weight", func(i int) float32 { return float32(200 + i/embd) }, embd, nv)
+	// Row vh of beta is the constant 100+vh, of alpha 200+vh. qwen3next's
+	// loader reads them joined (ssm_ba), as its files store them.
+	if arch == "qwen3next" {
+		add("blk.0.ssm_ba.weight", small, embd, 2*nv)
+	} else {
+		add("blk.0.ssm_beta.weight", func(i int) float32 { return float32(100 + i/embd) }, embd, nv)
+		add("blk.0.ssm_alpha.weight", func(i int) float32 { return float32(200 + i/embd) }, embd, nv)
+	}
 	add("blk.0.ssm_conv1d.weight", small, conv, uint64(chans))
 	add("blk.0.ssm_a", small, nv)
 	add("blk.0.ssm_dt.bias", small, nv)
@@ -165,19 +170,22 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 	}
 }
 
-// TestQwen35RefusesAnUnpairedGate: an alpha with no beta was skipped by the
-// fuse and must not vanish silently.
+// TestQwen35RefusesAnUnpairedGate: a block storing beta or alpha without the
+// other is refused by the join, naming the one it lacks, rather than losing a
+// layer's decay gate.
 func TestQwen35RefusesAnUnpairedGate(t *testing.T) {
-	f := qwen35File("qwen35")
-	var keep []meta.Tensor
-	for _, tt := range f.Tensors {
-		if tt.Name != "blk.0.ssm_beta.weight" {
-			keep = append(keep, tt)
+	for _, gone := range []string{"ssm_beta", "ssm_alpha"} {
+		f := qwen35File("qwen35")
+		var keep []meta.Tensor
+		for _, tt := range f.Tensors {
+			if tt.Name != "blk.0."+gone+".weight" {
+				keep = append(keep, tt)
+			}
 		}
-	}
-	f.Tensors = keep
-	f.Reindex()
-	if _, err := sourceOf(f); err == nil || !strings.Contains(err.Error(), "ssm_alpha") {
-		t.Fatalf("an alpha without its beta converted (err %v)", err)
+		f.Tensors = keep
+		f.Reindex()
+		if _, err := sourceOf(f); err == nil || !strings.Contains(err.Error(), gone) {
+			t.Errorf("a block without its %s converted (err %v)", gone, err)
+		}
 	}
 }

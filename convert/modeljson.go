@@ -244,13 +244,16 @@ type mjTensors struct {
 	// BlockLinear is what a recurrent block's (Config.LayerKinds) names
 	// are, where they are not Block's; Fuse states each role several sources
 	// are concatenated into, by its name, the sources in row order.
-	BlockLinear  map[string]mjTargets `json:"block_linear"`
-	Fuse         map[string][]string  `json:"fuse"`
-	Gather       []mjGather           `json:"gather"`
-	Ignore       []string             `json:"ignore"`
-	IgnorePrefix []string             `json:"ignore_prefix"`
-	Experts      *mjExperts           `json:"experts"`
-	Ternary      *mjTernary           `json:"ternary"`
+	BlockLinear map[string]mjTargets `json:"block_linear"`
+	Fuse        map[string][]string  `json:"fuse"`
+	// Joined, a GGUF table's, is the primitives a joined role takes once its
+	// sources are joined.
+	Joined       map[string]mjPipe `json:"joined"`
+	Gather       []mjGather        `json:"gather"`
+	Ignore       []string          `json:"ignore"`
+	IgnorePrefix []string          `json:"ignore_prefix"`
+	Experts      *mjExperts        `json:"experts"`
+	Ternary      *mjTernary        `json:"ternary"`
 	// Present states a block tensor the config says every trunk block has or
 	// lacks: Tensor, relative to the block, is shipped exactly where If holds.
 	// Drop, a GGUF table's, drops a block tensor where If, over the GGUF's
@@ -696,8 +699,8 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			a.expert[n] = role
 		}
 	}
-	if len(mj.Tensors.Drop)+len(mj.Tensors.Keys)+len(mj.Tensors.Sizes) > 0 {
-		return nil, fmt.Errorf("convert: %s: a class's table states no drop, keys or sizes, which are a GGUF table's", mj.name)
+	if len(mj.Tensors.Drop)+len(mj.Tensors.Keys)+len(mj.Tensors.Sizes)+len(mj.Tensors.Joined) > 0 {
+		return nil, fmt.Errorf("convert: %s: a class's table states no drop, keys, sizes or joined, which are a GGUF table's", mj.name)
 	}
 	st := &mjState{src: map[string]mjVal{}}
 	pipes := map[string]mjPipe{}

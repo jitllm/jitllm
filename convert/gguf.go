@@ -238,7 +238,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	experts := map[bankKey][]*jlm.Tensor{}
 	lscales := map[int32][2][]float32{}
 	clamps := map[int32]*[28]float32{}
-	var alphas, fused int
 	scales := map[string]float32{}
 	renames := towerNames(f, proj)
 	stored := func(n string) bool { _, ok := f.Get(n); return ok }
@@ -255,26 +254,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		if len(t.Dims) == 0 || len(t.Dims) > 4 {
 			return nil, fmt.Errorf("convert: %s has %d dimensions", t.Name, len(t.Dims))
-		}
-		// A block storing beta and alpha apart (Qwen3.5's re-cut of qwen3next's
-		// file) has them fused back into ssm_ba before the name table sees
-		// them (fuseBetaAlpha); a block storing beta alone keeps it.
-		if !tower && splitBetaAlpha(t.Name) && pairedBetaAlpha(f, t.Name) {
-			if strings.HasSuffix(t.Name, ".ssm_alpha.weight") {
-				alphas++
-				continue // fused into its layer's ssm_beta below
-			}
-			b, ok := textBlock(t.Name)
-			if !ok {
-				return nil, fmt.Errorf("convert: %q: no block index", t.Name)
-			}
-			e, err := fuseBetaAlpha(f, t, c, b)
-			if err != nil {
-				return nil, err
-			}
-			fused++
-			s.Tensors = append(s.Tensors, e)
-			continue
 		}
 		if tower && names.unreadName(t.Name) {
 			continue
@@ -451,12 +430,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	}
 	if err := ternaryTensors(c, s, scales); err != nil {
 		return nil, err
-	}
-	// An alpha with no beta was skipped above and never fused: a layer whose
-	// decay gate silently vanished. Every one must have been consumed.
-	if alphas != fused {
-		return nil, fmt.Errorf("convert: %d ssm_alpha tensors and %d ssm_beta tensors fused them; "+
-			"every layer needs both", alphas, fused)
 	}
 	if tower {
 		// The tower's two transforms: a 4-D conv kernel whose stride equals its
