@@ -36,11 +36,15 @@ type projStates struct {
 	Requires []string `json:"requires"`
 	// Taps is whether the projector reads taps off the tower's blocks.
 	Taps bool `json:"taps"`
-	// Blocks "pairs" names the blocks by (stage, place) pairs, one container
-	// block each, counted in place of the file's block count.
-	Blocks    string `json:"blocks"`
-	PatchSize string `json:"patch_size"`
-	Scale     string `json:"scale"`
+	// Blocks "staged" names the file's blocks by a stage and a place in it
+	// (stagedBlocks), one container block each in that order, counted in place
+	// of the file's block count.
+	Blocks string `json:"blocks"`
+	// HardTokens is the first id of the token table the projector embeds
+	// (hard_token_embeddings): the ids from it on are the tower's own markers.
+	HardTokens float32 `json:"hard_tokens"`
+	PatchSize  string  `json:"patch_size"`
+	Scale      string  `json:"scale"`
 	// MergeOf is the matrix that takes Scale*Scale patches at once, so its
 	// k over the tower's width states the merge.
 	MergeOf string           `json:"merge_of"`
@@ -75,14 +79,16 @@ func towerPhases() []string { return []string{"joined", "source", "prepare", "fi
 
 // towerTransforms is every tensor transform a projector's entry may name.
 // f is the tower's file, nil outside the source phase.
-func towerTransforms() map[string]func(s *jlm.Source, f *meta.File) error {
-	return map[string]func(*jlm.Source, *meta.File) error{
-		"image_break_row":      func(s *jlm.Source, _ *meta.File) error { return imgBreakRow(s) },
-		"transpose_projection": func(s *jlm.Source, _ *meta.File) error { return transposeProjection(s) },
-		"permute_merger":       func(s *jlm.Source, _ *meta.File) error { return permuteMerger(s) },
-		"half_neox_to_neox":    func(s *jlm.Source, _ *meta.File) error { return halfNeoxToNeox(s) },
-		"negate_std_bias":      func(s *jlm.Source, _ *meta.File) error { return negateRole(s, jlm.RoleVStdBias) },
-		"point_conv_projection": func(s *jlm.Source, _ *meta.File) error {
+func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projStates) error {
+	return map[string]func(*jlm.Source, *meta.File, *projStates) error{
+		"image_break_row":      func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
+		"transpose_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return transposeProjection(s) },
+		"permute_merger":       func(s *jlm.Source, _ *meta.File, _ *projStates) error { return permuteMerger(s) },
+		"half_neox_to_neox":    func(s *jlm.Source, _ *meta.File, _ *projStates) error { return halfNeoxToNeox(s) },
+		"negate_std_bias": func(s *jlm.Source, _ *meta.File, _ *projStates) error {
+			return negateRole(s, jlm.RoleVStdBias)
+		},
+		"point_conv_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error {
 			for i := range s.Tensors {
 				if s.Tensors[i].Role == jlm.RoleVProj {
 					if err := reshapePointConv(&s.Tensors[i]); err != nil {
@@ -92,17 +98,25 @@ func towerTransforms() map[string]func(s *jlm.Source, f *meta.File) error {
 			}
 			return nil
 		},
-		"norm_frame_rows": func(s *jlm.Source, _ *meta.File) error { return normFrameRows(s, s.Vision.Eps) },
-		"stage_place_blocks": func(s *jlm.Source, f *meta.File) error {
-			mobilenetGeom(s, mobilenetPlaces(f))
-			return prepareGemma3nV(s)
+		"norm_frame_rows": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return normFrameRows(s, s.Vision.Eps) },
+		"stage_places": func(s *jlm.Source, f *meta.File, _ *projStates) error {
+			if f == nil {
+				return fmt.Errorf("convert: stage_places reads the tower's file, which only the source phase has")
+			}
+			stagePlaces(s, stagedBlocks(f))
+			return nil
 		},
+		"hard_token_embeddings": func(s *jlm.Source, _ *meta.File, p *projStates) error {
+			return hardTokenEmbeddings(s, p.HardTokens)
+		},
+		"conv_layouts":        func(s *jlm.Source, _ *meta.File, _ *projStates) error { return convLayouts(s) },
+		"fold_channel_scales": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return foldChannelScales(s) },
 	}
 }
 
-// projectorStates is what the library states for the container's projector
+// projectorFor is what the library states for the container's projector
 // code, nil for a code no entry states.
-func projectorStates(code jlm.Projector) (*projStates, error) {
+func projectorFor(code jlm.Projector) (*projStates, error) {
 	lib, err := projectorLibrary()
 	if err != nil {
 		return nil, err
@@ -115,25 +129,19 @@ func projectorStates(code jlm.Projector) (*projStates, error) {
 	return nil, nil
 }
 
-// transformTower runs the transforms s's projector names for phase.
-func transformTower(s *jlm.Source, f *meta.File, phase string) error {
-	p, err := projectorStates(s.Vision.Projector)
-	if err != nil || p == nil {
-		return err
+// transformTower runs the transforms p names for phase; p is nil for a
+// source with no tower.
+func transformTower(s *jlm.Source, f *meta.File, p *projStates, phase string) error {
+	if p == nil {
+		return nil
 	}
+	ts := towerTransforms()
 	for _, t := range p.Transforms[phase] {
-		if err := towerTransforms()[t](s, f); err != nil {
+		if err := ts[t](s, f, p); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// tapsBlocks reports whether v's projector reads taps off the tower's blocks
-// (v.deepstack.N.*), merged and added to the text model's rows.
-func tapsBlocks(v *jlm.Vision) (bool, error) {
-	p, err := projectorStates(v.Projector)
-	return err == nil && p != nil && p.Taps, err
 }
 
 // projOutput is the matrix whose rows are the projector's output width, and
@@ -197,21 +205,29 @@ func (p *projStates) check() error {
 			return fmt.Errorf("flag %q is no tower feature", f)
 		}
 	}
-	if p.Blocks != "" && p.Blocks != "pairs" {
-		return fmt.Errorf("blocks %q: only \"pairs\" is read", p.Blocks)
+	if p.Blocks != "" && p.Blocks != "staged" {
+		return fmt.Errorf("blocks %q: only \"staged\" is read", p.Blocks)
 	}
 	if p.Activation != "" && p.Activation != "gelu" {
 		return fmt.Errorf("activation %q: only \"gelu\" is stated", p.Activation)
 	}
+	ts := towerTransforms()
 	for _, phase := range slices.Sorted(maps.Keys(p.Transforms)) {
 		if !slices.Contains(towerPhases(), phase) {
 			return fmt.Errorf("transforms at %q, which is no phase of conversion", phase)
 		}
 		for _, t := range p.Transforms[phase] {
-			if _, ok := towerTransforms()[t]; !ok {
+			if _, ok := ts[t]; !ok {
 				return fmt.Errorf("transform %q is no tower transform", t)
 			}
 		}
+	}
+	embeds := false
+	for _, phase := range p.Transforms {
+		embeds = embeds || slices.Contains(phase, "hard_token_embeddings")
+	}
+	if embeds != (p.HardTokens > 0) {
+		return fmt.Errorf("hard_tokens %g and the hard_token_embeddings transform go together", p.HardTokens)
 	}
 	if (p.When == "") != (p.States == "") {
 		return fmt.Errorf("a condition states what it covers")
@@ -312,8 +328,8 @@ func (p *projStates) state(name string, f *meta.File, v *jlm.Vision) error {
 	for _, fl := range p.Flags {
 		v.Flags |= projFlags()[fl]
 	}
-	if p.Blocks == "pairs" {
-		v.NLayer = uint32(len(mobilenetPlaces(f)))
+	if p.Blocks == "staged" {
+		v.NLayer = uint32(len(stagedBlocks(f)))
 	}
 	if p.PatchSize != "" {
 		if err := whole("patch_size", p.PatchSize, &v.PatchSize); err != nil {

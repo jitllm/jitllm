@@ -51,11 +51,12 @@ func TestEveryTensorHasARole(t *testing.T) {
 		// is a scope decision (ErrNotImplemented), not a missing role.
 		supported := cfgErr == nil
 		var vis *jlm.Vision
+		var proj *projStates
 		if f.Arch() == "clip" {
 			// A bare mmproj has no text config: visionOf is where the projector
 			// list lives and where an unimplemented one is refused.
 			var visErr error
-			vis, visErr = visionOf(f)
+			vis, proj, visErr = visionOf(f)
 			supported = !errors.Is(visErr, ErrNotImplemented)
 		}
 		var names *towerVocab
@@ -64,7 +65,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 				t.Fatalf("%s: %v", filepath.Base(p), err)
 			}
 		}
-		renames := towerNames(f, vis)
+		renames := towerNames(f, proj)
 		for i := range f.Tensors {
 			n := f.Tensors[i].Name
 			if r, ok := renames[n]; ok {

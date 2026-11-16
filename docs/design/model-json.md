@@ -246,9 +246,14 @@ model.json is mostly the config section and the `retarget` it needs.
    per phase of conversion (`joined`, `source`, `prepare`, `finish`), the
    tensor transforms the tower's tensors take (`convert.towerTransforms`);
    `taps` says the projector reads taps off the tower's blocks
-   (`v.deepstack.N.*`), and `blocks` "pairs" that the file names its blocks
-   by (stage, place).
-   The file also lists the audio towers that convert (`audio`). Each check is one
+   (`v.deepstack.N.*`), `blocks` "staged" that the file names its blocks
+   by a stage and a place in it (`v.blk.S.I.*`, numbered stage by stage),
+   and `hard_tokens` the first id of a token table the tower embeds itself
+   (read by the `hard_token_embeddings` transform). The transforms are
+   named primitives (`stage_places`, `conv_layouts`, `fold_channel_scales`,
+   `point_conv_projection`, ...), each usable by any entry.
+   The file also lists the audio towers that convert (`audio`); a tower
+   converted alone carries its audio half as a joined one does. Each check is one
    rule for every entry (a merge of 0, a tile range or a pixel range that is
    empty, a window with no pattern).
 4. `srcgate.TestNoFamilyCode` extends to `convert/`: no architecture constant

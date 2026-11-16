@@ -18,7 +18,7 @@ import (
 
 // familyTowerTensors is the container's tensors for the tower tensor t, or
 // ok=false when t is not one of the names above.
-func familyTowerTensors(f *meta.File, v *jlm.Vision, t *meta.Tensor) (out []jlm.Tensor, ok bool, err error) {
+func familyTowerTensors(f *meta.File, v *jlm.Vision, p *projStates, t *meta.Tensor) (out []jlm.Tensor, ok bool, err error) {
 	if v == nil {
 		return nil, false, nil
 	}
@@ -31,10 +31,7 @@ func familyTowerTensors(f *meta.File, v *jlm.Vision, t *meta.Tensor) (out []jlm.
 		if !known {
 			return nil, true, fmt.Errorf("convert: %s: a deepstack tensor this engine does not know", t.Name)
 		}
-		switch taps, err := tapsBlocks(v); {
-		case err != nil:
-			return nil, true, err
-		case !taps:
+		if p == nil || !p.Taps {
 			return nil, true, fmt.Errorf("convert: %s: deepstack on a %v tower", t.Name, v.Projector)
 		}
 		if uint32(b) >= v.NLayer {
@@ -164,13 +161,13 @@ func rowBytes(t quant.Type, k uint64) uint64 {
 // list of tapped blocks (clip.vision.is_deepstack_layers): a merger the list
 // does not name, or a named block with no merger, is a file that disagrees
 // with itself, and either way a text block would add the wrong rows.
-func checkDeepstack(f *meta.File, s *jlm.Source) error {
+func checkDeepstack(f *meta.File, s *jlm.Source, p *projStates) error {
 	v := s.Vision
 	if v == nil {
 		return nil
 	}
-	if taps, err := tapsBlocks(v); err != nil || !taps {
-		return err
+	if p == nil || !p.Taps {
+		return nil
 	}
 	have := map[int32]int{}
 	for i := range s.Tensors {

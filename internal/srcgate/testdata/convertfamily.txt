@@ -17,7 +17,7 @@
 1 convert/bitnet.go:bitnetTensors
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
-85 convert/config.go:configOfFile
+71 convert/config.go:configOfFile
 4 convert/config.go:ropeScalingOf
 1 convert/config.go:visionOf
 1 convert/d1omni.go:d1OmniConfig
@@ -46,7 +46,7 @@
 4 convert/revision.go:StateRevision
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
-8 convert/safetensors.go:hfArchTable
+2 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
 4 convert/ssm.go:ssdArch

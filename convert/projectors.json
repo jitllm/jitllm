@@ -91,11 +91,12 @@
    "code": 65531,
    "output": {"tensor": "mm.input_projection.weight", "dim": 1},
    "flags": ["gelu"],
-   "blocks": "pairs",
+   "blocks": "staged",
+   "hard_tokens": 262144,
    "patch_size": "src['vision.image_size'] / 16",
    "scale": "1",
    "activation": "gelu",
-   "transforms": {"source": ["stage_place_blocks"]}
+   "transforms": {"source": ["stage_places", "hard_token_embeddings", "conv_layouts", "fold_channel_scales"]}
   },
   "phi4": {
    "code": 65532,

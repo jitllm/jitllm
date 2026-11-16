@@ -1055,9 +1055,9 @@ func mropeSectionsOf(f *meta.File, name string, c *Config) error {
 }
 
 // visionOf reads a vision tower's description. A tower is its own container.
-func visionOf(f *meta.File) (*jlm.Vision, error) {
+func visionOf(f *meta.File) (*jlm.Vision, *projStates, error) {
 	if f.Arch() != "clip" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	v := &jlm.Vision{
 		NLayer:    uint32(f.UintKey("vision.block_count", 0)),
@@ -1078,15 +1078,15 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 	}
 	lib, err := projectorLibrary()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	p, ok := lib[name]
 	if !ok {
-		return nil, fmt.Errorf("convert: projector_type %q unsupported (only %s): %w",
+		return nil, nil, fmt.Errorf("convert: projector_type %q unsupported (only %s): %w",
 			name, strings.Join(slices.Sorted(maps.Keys(lib)), ", "), ErrNotImplemented)
 	}
 	if err := p.state(name, f, v); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Three activations, matching llama.cpp's clip loader: GELU for use_gelu,
 	// SiLU for use_silu, and quick-GELU when neither is set (openai CLIP,
@@ -1095,7 +1095,7 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 	silu, _ := f.KV["clip.use_silu"].Uint()
 	switch {
 	case gelu != 0 && silu != 0:
-		return nil, fmt.Errorf("convert: clip: use_gelu and use_silu are both set")
+		return nil, nil, fmt.Errorf("convert: clip: use_gelu and use_silu are both set")
 	case gelu != 0:
 		v.Flags |= jlm.FlagGELU
 	case silu != 0:
@@ -1106,7 +1106,7 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 	for i, key := range []string{"clip.vision.image_mean", "clip.vision.image_std"} {
 		fs, err := f.KV[key].Float32s()
 		if err != nil || len(fs) < 3 {
-			return nil, fmt.Errorf("convert: %s must have at least 3 elements", key)
+			return nil, nil, fmt.Errorf("convert: %s must have at least 3 elements", key)
 		}
 		if i == 0 {
 			copy(v.Mean[:], fs)
@@ -1115,7 +1115,7 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		}
 	}
 	if v.NLayer == 0 || v.NEmbd == 0 || v.NHead == 0 {
-		return nil, fmt.Errorf("convert: clip: missing block_count/embedding_length/head_count")
+		return nil, nil, fmt.Errorf("convert: clip: missing block_count/embedding_length/head_count")
 	}
 	// The FFN width comes from the matrix, not the key: mmproj-Qwen2-VL-2B
 	// carries feed_forward_length 1536 (the text model's width) while its blocks
@@ -1132,10 +1132,10 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		}
 	}
 	if v.NFFN == 0 {
-		return nil, fmt.Errorf("convert: clip: no feed-forward width")
+		return nil, nil, fmt.Errorf("convert: clip: no feed-forward width")
 	}
 	p.restate(v)
-	return v, nil
+	return v, p, nil
 }
 
 func itoa(v int) string {
