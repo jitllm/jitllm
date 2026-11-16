@@ -209,7 +209,11 @@ schema; `convert/modeljson.go` reads it. Its sections:
   of a class stated `ffn_ungated` (arcee's), and no `position_embd.weight`
   where `learned_positions` states the input rows add one (a starcoder's);
   each of those two is true or false. A learned position table is as wide
-  as the rows and bounds the context. An expression may read the tensors' names too
+  as the rows and bounds the context. `retarget` is the roles whose name in
+  the source means what another role does, a list of `{"from", "to",
+  "why"}` by role name, with `when` naming the tensor that marks a layout
+  (Falcon-40B's two norms) where it holds of one (`retargets`; qwen3next's
+  post_attention_norm is its FFN's input norm). An expression may read the tensors' names too
   (`'blk.0.attn_q_norm.weight' in tensors`). It replaces `configOfFile`'s
   case for the architecture; one statement per architecture, and an
   expression reading anything but `src`, `layer_tensors` and `tensors` is refused.

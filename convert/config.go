@@ -340,12 +340,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := qwen4expConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchGLM4MoE:
-		// GLM-4.5V / 4.6V: the same block under Qwen2-VL's M-RoPE, a code of
-		// its own (ArchGLM4VMoE).
-		if _, ok := f.Key("rope.dimension_sections"); ok {
-			c.Arch = ArchGLM4VMoE
-		}
 	case ArchGemma4:
 		if err := gemma4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)

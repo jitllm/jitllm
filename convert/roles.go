@@ -1,8 +1,6 @@
 package convert
 
 import (
-	"embed"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -370,46 +368,26 @@ func indexedRole(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-//go:embed rolemaps.json
-var roleMapsFS embed.FS
-
-// retargets is the roles whose name, in arch's source, means what another
-// role does (rolemaps.json, each with its reason): gemma2/gemma3's
-// post_attention_norm is applied to the attention output, qwen3next's tensor
-// of that name is the FFN's input norm. An entry that holds of one layout
-// names the tensor that marks it, and applies where stored says the source
-// holds it (nil: no source to ask). Resolving them here keeps the source's
-// ambiguity out of the container.
-func retargets(arch Arch, stored func(string) bool) (map[jlm.Role]jlm.Role, error) {
-	b, err := roleMapsFS.ReadFile("rolemaps.json")
-	if err != nil {
+// retargets is the roles whose name, in a source of the GGUF architecture
+// arch, means what another role does (the library's retarget statement,
+// each with its reason): qwen3next's post_attention_norm is the FFN's input
+// norm, where gemma2/gemma3's tensor of that name is applied to the
+// attention output. An entry that holds of one layout names the tensor that
+// marks it, and applies where stored says the source holds it (nil: no
+// source to ask). Resolving them here keeps the source's ambiguity out of
+// the container.
+func retargets(arch string, stored func(string) bool) (map[jlm.Role]jlm.Role, error) {
+	st, _, err := ggufStates(arch)
+	if err != nil || st == nil || len(st.Retarget) == 0 {
 		return nil, err
-	}
-	var all map[string][]struct {
-		From string `json:"from"`
-		To   string `json:"to"`
-		When string `json:"when"`
-		Why  string `json:"why"`
-	}
-	if err := json.Unmarshal(b, &all); err != nil {
-		return nil, fmt.Errorf("convert: rolemaps.json: %w", err)
-	}
-	ms := all[arch.String()]
-	if len(ms) == 0 {
-		return nil, nil
 	}
 	named := rolesByName()
 	out := map[jlm.Role]jlm.Role{}
-	for _, m := range ms {
-		from, ok := named[m.From]
-		to, ok2 := named[m.To]
-		if !ok || !ok2 || m.Why == "" {
-			return nil, fmt.Errorf("convert: rolemaps.json: %s maps %q to %q, which are not both container roles with a reason", arch, m.From, m.To)
-		}
+	for _, m := range st.Retarget {
 		if m.When != "" && (stored == nil || !stored(m.When)) {
 			continue
 		}
-		out[from] = to
+		out[named[m.From]] = named[m.To]
 	}
 	return out, nil
 }

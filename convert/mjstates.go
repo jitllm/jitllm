@@ -66,6 +66,9 @@ type mjStates struct {
 	// a file's tensors are held to them (statedTensorsAgree).
 	LearnedPositions string `json:"learned_positions"`
 	FFNUngated       string `json:"ffn_ungated"`
+	// Retarget is the roles whose name in the source means what another
+	// role does (retargets).
+	Retarget []mjRetarget `json:"retarget"`
 	// WholeRotary states that the class turns every dimension of a head.
 	WholeRotary bool `json:"whole_rotary"`
 	// Router is what the class's router does whatever a file's keys say.
@@ -139,6 +142,15 @@ func mjLayerKinds() map[string]jlm.LayerKind {
 		"short_conv":       jlm.LayerShortConv,
 		"scan":             jlm.LayerScan,
 	}
+}
+
+// mjRetarget reads a source's From role as To, Why being the reason; where
+// When names a tensor, only in a source storing it.
+type mjRetarget struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	When string `json:"when"`
+	Why  string `json:"why"`
 }
 
 // mjStatesTemp is the queries' temperature by position, 1 +
@@ -326,6 +338,15 @@ func (mj *modelJSON) checkStates() error {
 		}
 		if _, ok := pretok.PreOps(st.PreTokenizer); st.PreTokenizer != "" && !ok {
 			return fmt.Errorf("convert: %s: %s: pre-tokenizer %q is not one the tokenizer has", mj.name, arch, st.PreTokenizer)
+		}
+		for _, m := range st.Retarget {
+			named := rolesByName()
+			if _, ok := named[m.From]; !ok || m.Why == "" {
+				return fmt.Errorf("convert: %s: %s: retarget %+v: not a container role read with a reason", mj.name, arch, m)
+			}
+			if _, ok := named[m.To]; !ok {
+				return fmt.Errorf("convert: %s: %s: retarget %+v: %q is not a container role", mj.name, arch, m, m.To)
+			}
 		}
 		if st.RopeLayout != "" && !slices.Contains(mjRopeLayouts(), st.RopeLayout) {
 			return fmt.Errorf("convert: %s: %s: rotary layout %q is not one the container states", mj.name, arch, st.RopeLayout)

@@ -41,14 +41,14 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if _, err := configOf(headerOnly("llama", s)); err == nil || !strings.Contains(err.Error(), "clamp_kqv -8") {
 		t.Errorf("a negative clamp: %v, want it refused", err)
 	}
-	dbrx, err := retargets(ArchDBRX, nil)
+	dbrx, err := retargets("dbrx", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r := dbrx[jlm.RoleAttnOutNorm]; r != jlm.RoleFFNNorm {
 		t.Errorf("dbrx's attn_output_norm is %v, want the FFN norm", r)
 	}
-	bert, err := retargets(ArchBERT, nil)
+	bert, err := retargets("bert", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

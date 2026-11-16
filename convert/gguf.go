@@ -238,7 +238,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	scales := map[string]float32{}
 	renames := towerNames(f, proj)
 	stored := func(n string) bool { _, ok := f.Get(n); return ok }
-	moved, err := retargets(c.Arch, stored)
+	moved, err := retargets(f.Arch(), stored)
 	if err != nil {
 		return nil, err
 	}

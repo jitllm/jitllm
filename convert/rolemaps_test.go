@@ -11,7 +11,7 @@ import (
 // (block 0's attn_norm_2); a 7B file, or a reader with no file to ask, keeps
 // the names as they are.
 func TestARenameOfOneLayoutNeedsItsMarker(t *testing.T) {
-	two, err := retargets(ArchFalcon, func(n string) bool { return n == "blk.0.attn_norm_2.weight" })
+	two, err := retargets("falcon", func(n string) bool { return n == "blk.0.attn_norm_2.weight" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestARenameOfOneLayoutNeedsItsMarker(t *testing.T) {
 		}
 	}
 	for _, stored := range []func(string) bool{nil, func(string) bool { return false }} {
-		one, err := retargets(ArchFalcon, stored)
+		one, err := retargets("falcon", stored)
 		if err != nil {
 			t.Fatal(err)
 		}

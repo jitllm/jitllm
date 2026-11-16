@@ -1399,7 +1399,7 @@ func llamaHF() *hfArch {
 			"input_layernorm.weight": jlm.RoleAttnNorm,
 			// post_attention_layernorm is the FFN's input norm (ffn_norm), not a
 			// post-norm; gemma2/gemma3's similarly named tensor is a real post-norm.
-			// This is the trap rolemaps.json resolves on the GGUF side.
+			// This is the trap the library's retarget statements resolve on the GGUF side.
 			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
 
 			"self_attn.q_proj.weight": jlm.RoleAttnQ,

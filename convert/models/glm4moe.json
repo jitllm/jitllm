@@ -2,7 +2,9 @@
   "classes": ["Glm4MoeForCausalLM"],
   "gguf": ["glm4moe"],
   "container": {
-    "glm4moe": {"flags": {"rope_neox": "true", "qk_norm": "'blk.0.attn_q_norm.weight' in tensors"},
+    "glm4moe": {"retarget": [
+                 {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
+      "flags": {"rope_neox": "true", "qk_norm": "'blk.0.attn_q_norm.weight' in tensors"},
                 "router": {"gate": "sigmoid"}, "rope_sections": "src['rope.dimension_sections'] | default([])"}
   },
   "config": {
