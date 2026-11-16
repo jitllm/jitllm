@@ -140,11 +140,15 @@ schema; `convert/modeljson.go` reads it. Its sections:
   | default(1e-5)`): `flags` (the `mjFlags` names, each true or false),
   `activation` (an `mjActivations` name), `norm_eps` and `embd_scale`
   (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
-  `attn_softcap` and `final_softcap`, and `window`: `size` (0 states no
+  `attn_softcap` and `final_softcap`, `rope_base` (the rotary base of the
+  layers no window states one for, refused unless positive), and `window`: `size` (0 states no
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
   state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. `latent` states latent attention's
+  period over no window is refused as a malformed file. An expression that
+  reads a key the file does not carry, with no `default`, refuses the file:
+  deepseek32's indexer counts are read so, since its reference always has
+  one, while deepseek4's default to 0. `latent` states latent attention's
   ranks, `kv` and `q` (0 where the query is projected in one step; a file
   whose keys and values are no latent states `q` alone), and `indexer` the
   indexer selecting the positions attention reads: `heads`, `key_width` and
@@ -165,7 +169,6 @@ schema; `convert/modeljson.go` reads it. Its sections:
   does not apply. Besides `src`, an expression may read `layer_tensors`, the
   set of names the layers' tensors take past their "blk.N." prefix
   (`'attn_q_norm.weight' in layer_tensors`).
-  `rope_base` (the rotary base),
   `residual_scale` and `moe_step` (the mixture blocks' interleave) are
   numbers; `mrope`, true, reads the rotary's sections off
   `rope.dimension_sections`; `whole_rotary: true` refuses a rotary narrower
@@ -176,9 +179,20 @@ schema; `convert/modeljson.go` reads it. Its sections:
   the keys and tensors the class always or never has (a key of zero is
   not had; `blk.*.` names every block's tensor), each absence or presence
   refused. An expression may read the tensors' names too
-  (`'blk.0.attn_q_norm.weight' in tensors`). It replaces `configOfFile`'s
-  case for the architecture; one statement per architecture, and an
-  expression reading anything but `src`, `layer_tensors` and `tensors` is refused.
+  (`'blk.0.attn_q_norm.weight' in tensors`).
+  `streams` states the residual streams a block
+  mixes, `count` (refused under two), with `sinkhorn_iterations` and `eps`
+  where a Sinkhorn normalisation mixes them (refused at 0); `output_groups`
+  the attention output's grouped low-rank projection, `groups` and `rank`
+  (refused at 0 or where the groups do not divide the heads); `hash_layers`
+  how many lead blocks route by token id (refused past the block count);
+  `attn_res_block` how many blocks a residual-attention block spans;
+  `expert_latent` the width a mixture's routed experts run at (the model's
+  width states none); `situ` the situ activation's `beta` and `linear_beta`,
+  each refused unless positive and finite. `rope_base` is the rotary base of the layers no window states their own
+  for, refused unless positive. It replaces `configOfFile`'s case for the
+  architecture; one statement per architecture, and an expression reading
+  anything but `src`, `layer_tensors` and `tensors` is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform

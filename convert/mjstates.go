@@ -33,6 +33,8 @@ type mjStates struct {
 	FinalSoftcap string          `json:"final_softcap"`
 	// LogitDiv divides the logits (0 for none).
 	LogitDiv string `json:"logit_div"`
+	// RopeBase is the rotary base of the layers no window states its own for.
+	RopeBase string `json:"rope_base"`
 	// Latent is latent attention's two ranks, and Indexer the indexer that
 	// selects the positions attention reads.
 	Latent  *mjStatesLatent  `json:"latent"`
@@ -43,10 +45,9 @@ type mjStates struct {
 	// Layers is each layer's kind, read off the tensors it carries
 	// (stateLayers).
 	Layers []mjStatesLayer `json:"layers"`
-	// RopeBase is the rotary base, ResidualScale the factor each block's
-	// attention and FFN output is scaled by (0 for none), and MoEStep the
-	// mixture blocks' interleave (jlm.Config.MoEStep), each a number.
-	RopeBase      string `json:"rope_base"`
+	// ResidualScale is the factor each block's attention and FFN output is
+	// scaled by (0 for none), and MoEStep the mixture blocks' interleave
+	// (jlm.Config.MoEStep), each a number.
 	ResidualScale string `json:"residual_scale"`
 	MoEStep       string `json:"moe_step"`
 	// AttnTemp scales the queries by position (jlm.Config.AttnTempScale).
@@ -63,8 +64,20 @@ type mjStates struct {
 	// "blk.*." names a tensor of every block.
 	Requires []string `json:"requires"`
 	Lacks    []string `json:"lacks"`
-	exprs    map[string]*jinja.Expr
-	tensors  bool
+	// Streams is the residual streams a block mixes, OutputGroups the
+	// attention output's grouped low-rank projection, and HashLayers how many
+	// lead blocks route by token id.
+	Streams      *mjStatesStreams      `json:"streams"`
+	OutputGroups *mjStatesOutputGroups `json:"output_groups"`
+	HashLayers   string                `json:"hash_layers"`
+	// AttnResBlock is how many blocks a residual-attention block spans,
+	// ExpertLatent the width a mixture's routed experts run at (the model's
+	// width states none), and Situ the situ activation's bounds.
+	AttnResBlock string        `json:"attn_res_block"`
+	ExpertLatent string        `json:"expert_latent"`
+	Situ         *mjStatesSitu `json:"situ"`
+	exprs        map[string]*jinja.Expr
+	tensors      bool
 }
 
 // mjStatesLatent is latent attention's ranks: KV the key-value latent's, Q
@@ -139,8 +152,30 @@ func mjGates() map[string]int64 {
 	return map[string]int64{"softmax": 1, "sigmoid": 2, "sparsemixer": -1}
 }
 
+// mjStatesStreams is Count residual streams, each block's mix normalised by
+// Iterations Sinkhorn rounds at Eps where both are stated.
+type mjStatesStreams struct {
+	Count      string `json:"count"`
+	Iterations string `json:"sinkhorn_iterations"`
+	Eps        string `json:"eps"`
+}
+
+// mjStatesOutputGroups is the attention output projected through Groups
+// groups of heads, each to a Rank-row latent, each a count.
+type mjStatesOutputGroups struct {
+	Groups string `json:"groups"`
+	Rank   string `json:"rank"`
+}
+
+// mjStatesSitu is the situ activation's bounds, Beta the gate's and
+// LinearBeta the up projection's, each b in b*tanh(x/b).
+type mjStatesSitu struct {
+	Beta       string `json:"beta"`
+	LinearBeta string `json:"linear_beta"`
+}
+
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
-// nothing else of it applies); every Period'th layer attends globally, or
+// nothing else of it applies, but a Period over none is a malformed file); every Period'th layer attends globally, or
 // Pattern's where the file's attention.sliding_window_pattern does not say
 // (swaPatternOf); RopeBase the windowed layers' rotary base.
 type mjStatesWindow struct {
@@ -209,6 +244,25 @@ func (mj *modelJSON) checkStates() error {
 				return fmt.Errorf("convert: %s: %s: layer kind %q over tensors %v", mj.name, arch, l.Kind, l.Tensors)
 			}
 		}
+		if x := st.Streams; x != nil {
+			if x.Count == "" || (x.Iterations == "") != (x.Eps == "") {
+				return fmt.Errorf("convert: %s: %s: streams state their count, and sinkhorn_iterations with eps", mj.name, arch)
+			}
+			srcs = append(srcs, x.Count, x.Iterations, x.Eps)
+		}
+		if x := st.OutputGroups; x != nil {
+			if x.Groups == "" || x.Rank == "" {
+				return fmt.Errorf("convert: %s: %s: output groups state their groups and rank", mj.name, arch)
+			}
+			srcs = append(srcs, x.Groups, x.Rank)
+		}
+		if x := st.Situ; x != nil {
+			if x.Beta == "" || x.LinearBeta == "" {
+				return fmt.Errorf("convert: %s: %s: situ states its beta and linear_beta", mj.name, arch)
+			}
+			srcs = append(srcs, x.Beta, x.LinearBeta)
+		}
+		srcs = append(srcs, st.HashLayers, st.AttnResBlock, st.ExpertLatent)
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
 			if _, no := mjFlagsNotImplemented()[k]; !ok && !no {
@@ -364,7 +418,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	for _, s := range []struct {
 		what, src string
 		to        *float32
-	}{{"rope_base", st.RopeBase, &c.RopeBase}, {"residual_scale", st.ResidualScale, &c.ResidualScale}} {
+	}{{"residual_scale", st.ResidualScale, &c.ResidualScale}} {
 		if s.src == "" {
 			continue
 		}
@@ -424,6 +478,14 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if st.WholeRotary && c.NRot != c.HeadDim {
 		return fmt.Errorf("convert: %s: a rotary over %d of a head's %d dimensions, where the reference turns "+
 			"the whole head (%s): %w", arch, c.NRot, c.HeadDim, by, ErrNotImplemented)
+	}
+	if st.RopeBase != "" {
+		if c.RopeBase, err = number("rope_base", st.RopeBase); err != nil {
+			return err
+		}
+		if x := float64(c.RopeBase); !(x > 0) || math.IsInf(x, 0) {
+			return fmt.Errorf("convert: %s: %s: rope_base is %g", by, arch, x)
+		}
 	}
 	whole := func(what, src string) (uint32, error) {
 		x, err := number(what, src)
@@ -485,6 +547,71 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return fmt.Errorf("convert: %s: %w", arch, err)
 		}
 	}
+	if x := st.Streams; x != nil {
+		if c.HCMult, err = whole("streams.count", x.Count); err != nil {
+			return err
+		}
+		if c.HCMult < 2 {
+			return fmt.Errorf("convert: %s: %s: %d residual streams", by, arch, c.HCMult)
+		}
+		if x.Iterations != "" {
+			if c.HCIters, err = whole("streams.sinkhorn_iterations", x.Iterations); err != nil {
+				return err
+			}
+			if c.HCEps, err = number("streams.eps", x.Eps); err != nil {
+				return err
+			}
+			if c.HCIters == 0 || !(c.HCEps > 0) {
+				return fmt.Errorf("convert: %s: %s: %d streams, %d Sinkhorn rounds at %g", by, arch, c.HCMult,
+					c.HCIters, c.HCEps)
+			}
+		}
+	}
+	if x := st.OutputGroups; x != nil {
+		if err := counts(map[string]*uint32{"output_groups.groups": &c.OGroups, "output_groups.rank": &c.OLoraRank},
+			map[string]string{"output_groups.groups": x.Groups, "output_groups.rank": x.Rank}); err != nil {
+			return err
+		}
+		if c.OGroups == 0 || c.OLoraRank == 0 || c.NHead%c.OGroups != 0 {
+			return fmt.Errorf("convert: %s: %s: %d output groups of rank %d over %d heads", by, arch, c.OGroups,
+				c.OLoraRank, c.NHead)
+		}
+	}
+	if st.AttnResBlock != "" {
+		if c.AttnResBlock, err = whole("attn_res_block", st.AttnResBlock); err != nil {
+			return err
+		}
+	}
+	if st.ExpertLatent != "" {
+		if c.ExpertLatent, err = whole("expert_latent", st.ExpertLatent); err != nil {
+			return err
+		}
+		if c.ExpertLatent == c.NEmbd {
+			c.ExpertLatent = 0
+		}
+	}
+	if x := st.Situ; x != nil {
+		if c.SituBeta, err = number("situ.beta", x.Beta); err != nil {
+			return err
+		}
+		if c.SituLinearBeta, err = number("situ.linear_beta", x.LinearBeta); err != nil {
+			return err
+		}
+		for _, b := range []float64{float64(c.SituBeta), float64(c.SituLinearBeta)} {
+			if !(b > 0) || math.IsInf(b, 0) {
+				return fmt.Errorf("convert: %s: %s: situ bounds %g and %g: each bounds b*tanh(x/b), so it is "+
+					"positive and finite", by, arch, c.SituBeta, c.SituLinearBeta)
+			}
+		}
+	}
+	if st.HashLayers != "" {
+		if c.NHashLayers, err = whole("hash_layers", st.HashLayers); err != nil {
+			return err
+		}
+		if c.NHashLayers > c.NLayer {
+			return fmt.Errorf("convert: %s: %s: %d hash-routed blocks of %d", by, arch, c.NHashLayers, c.NLayer)
+		}
+	}
 	w := st.Window
 	if w == nil {
 		return nil
@@ -498,7 +625,7 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	}
 	if size == 0 {
 		if w.Period != "" {
-			return fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
+			return fmt.Errorf("convert: %s: %s: a window period over a window of 0", by, arch)
 		}
 		return nil
 	}
@@ -537,7 +664,9 @@ func indexerFits(c *Config) error {
 	case c.KVLoraRank != 0 && c.QLoraRank == 0:
 		return fmt.Errorf("an indexer with no query latent (q_lora_rank %d, kv_lora_rank %d)",
 			c.QLoraRank, c.KVLoraRank)
-	case c.IdxHeadDim%8 != 0 || c.NRot > c.IdxHeadDim:
+	case c.IdxHeadDim%8 != 0:
+		return fmt.Errorf("indexer keys of %d, not whole groups of eight", c.IdxHeadDim)
+	case c.NRot > c.IdxHeadDim:
 		return fmt.Errorf("indexer heads of %d with a %d-wide rotary", c.IdxHeadDim, c.NRot)
 	}
 	return nil
