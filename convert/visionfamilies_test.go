@@ -3,6 +3,7 @@ package convert
 import (
 	"math"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -131,22 +132,46 @@ func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	}
 }
 
+// towerTable runs projector name's tensor table from the library on in, its
+// sizes read off keys.
+func towerTable(t *testing.T, name string, in []jlm.Tensor, keys map[string]any) ([]jlm.Tensor, error) {
+	t.Helper()
+	lib, err := projectorLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := lib[name]
+	if !ok || p.Tensors == nil {
+		t.Fatalf("the library states no %s tensor table", name)
+	}
+	st, err := p.statement()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &jlm.Source{Tensors: slices.Clone(in)}
+	err = statedTensors(&Config{Config: &jlm.Config{}, Stated: st}, s, func(k string) any { return keys[k] })
+	return s.Tensors, err
+}
+
 // TestGemma3ProjectionIsTransposed lays the [text, tower] source matrix out k
-// first, element for element.
+// first, element for element, by gemma3's table; one already laid out so is
+// refused rather than turned back.
 func TestGemma3ProjectionIsTransposed(t *testing.T) {
 	r := rand.New(rand.NewSource(3))
 	const tower, text = 32, 48
 	src := randVals(r, tower*text) // ggml [text, tower]: tower rows of text values
-	s := &jlm.Source{Vision: &jlm.Vision{NEmbd: tower, ProjDim: text, Projector: jlm.ProjGemma3}}
-	s.Tensors = []jlm.Tensor{f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, text, tower)}
-	if err := transposeProjection(s); err != nil {
-		t.Fatal(err)
-	}
-	got, err := vecOf(&s.Tensors[0])
+	in := f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, text, tower)
+	in.Name = "mm.input_projection.weight"
+	keys := map[string]any{"vision.embedding_length": float64(tower)}
+	out, err := towerTable(t, "gemma3", []jlm.Tensor{in}, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := s.Tensors[0].Dims; d[0] != tower || d[1] != text {
+	got, err := vecOf(&out[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := out[0].Dims; d[0] != tower || d[1] != text {
 		t.Fatalf("dims %v, want k=%d rows=%d", d[:2], tower, text)
 	}
 	for row := 0; row < text; row++ {
@@ -156,10 +181,16 @@ func TestGemma3ProjectionIsTransposed(t *testing.T) {
 			}
 		}
 	}
+	laid := f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, tower, text)
+	laid.Name = in.Name
+	if _, err := towerTable(t, "gemma3", []jlm.Tensor{laid}, keys); err == nil {
+		t.Error("a projection already laid out k first was transposed")
+	}
 }
 
 // TestPermuteMergerIsTheSameFunction holds Mistral 3's merger, permuted into
-// the shuffle's order, to the reference's product on the reference's order:
+// the shuffle's order by pixtral's table, to the reference's product on the
+// reference's order:
 // the unfold's channel-major group read by the source matrix equals the
 // shuffle's patch-major group read by the permuted one, exactly. A merger
 // left unpermuted fails it.
@@ -167,17 +198,19 @@ func TestPermuteMergerIsTheSameFunction(t *testing.T) {
 	r := rand.New(rand.NewSource(3))
 	const d, s2 = 32, 4
 	w := randVals(r, d*d*s2)
+	keys := map[string]any{"vision.embedding_length": float64(d), "vision.spatial_merge_size": 2.0}
 	for _, permute := range []bool{true, false} {
-		src := &jlm.Source{Vision: &jlm.Vision{NEmbd: d, Scale: 2}}
-		src.Tensors = []jlm.Tensor{f32Tensor(t, jlm.RoleVMerge, jlm.DenseBlock, w, d*s2, d)}
+		pw := w
 		if permute {
-			if err := permuteMerger(src); err != nil {
+			in := f32Tensor(t, jlm.RoleVMerge, jlm.DenseBlock, w, d*s2, d)
+			in.Name = "mm.patch_merger.weight"
+			out, err := towerTable(t, "pixtral", []jlm.Tensor{in}, keys)
+			if err != nil {
 				t.Fatal(err)
 			}
-		}
-		pw, err := vecOf(&src.Tensors[0])
-		if err != nil {
-			t.Fatal(err)
+			if pw, err = vecOf(&out[0]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		patches := randVals(r, s2*d) // patch p's channels at p*d
 		exact := true

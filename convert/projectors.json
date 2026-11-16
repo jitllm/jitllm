@@ -260,7 +260,8 @@
    "code": 4,
    "output": {"tensor": "mm.input_projection.weight", "dim": 0},
    "scale": "src['vision.projector.scale_factor'] | default(4)",
-   "transforms": {"prepare": ["transpose_projection"]},
+   "tensors": {"model": {"mm.input_projection.weight": {"role": "v_proj", "do": [
+     {"shape": ["vision.embedding_length", -1]}, {"type": "f32"}, {"transpose": [1, 0]}]}}},
    "tower": {
     "requires": ["v_patch_embd", "v_pos_embd", "v_post_norm", "v_proj_norm", "v_proj"],
     "require": [
@@ -1115,7 +1116,11 @@
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
    "scale": "src['vision.spatial_merge_size'] | default(1)",
-   "transforms": {"joined": ["image_break_row"], "prepare": ["permute_merger"]},
+   "transforms": {"joined": ["image_break_row"]},
+   "tensors": {"sizes": {"sq": "(vision.spatial_merge_size ?? 1) ** 2"},
+     "model": {"mm.patch_merger.weight": {"role": "mm.patch_merger", "do": [
+       {"shape": ["vision.embedding_length", "vision.embedding_length * size.sq"]}, {"type": "f32"},
+       {"reshape": [-1, "vision.embedding_length", "size.sq"]}, {"transpose": [0, 2, 1]}, {"reshape": ["vision.embedding_length", -1]}]}}},
    "tower": {
     "requires": ["v_patch_embd", "v_post_norm", "v_proj", "v_proj2", "v.token_embd.img_break"],
     "require": [

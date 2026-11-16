@@ -342,7 +342,11 @@ The primitives, each a step of a `do` list with exactly one field:
 | `{"slice": [axis, start, length]}` | a range of one axis |
 | `{"concat": axis}`, `{"stack": axis}` | the tensors in hand joined along an existing axis, or a new one |
 | `{"repeat": [axis, times]}` | each index of an axis, times times over in place |
-| `{"type": "f32"}` | the storage type, f32 or f16 |
+| `{"pick": [axis, start, length, ...]}` | ranges of one axis joined in order |
+| `{"trim": [axis, keep]}` | an axis's first keep indices, the rest refused unless every byte is zero |
+| `{"trim_zero": true}` | the slowest axis's trailing indices whose bytes are all zero, one at least kept |
+| `{"shape": [a, -1]}` | the shape the tensor in hand has, slowest axis first, -1 any size; another is refused; no byte moves |
+| `{"type": "f32"}` | the storage type, f32, f16 or q8 |
 
 Every size and axis is a number or an expression over config.json. Each
 primitive has its definition and its violations in
@@ -404,7 +408,11 @@ model.json is mostly the config section and the `retarget` it needs.
    and `hard_tokens` the first id of a token table the tower embeds itself
    (read by the `hard_token_embeddings` transform). The transforms are
    named primitives (`stage_places`, `conv_layouts`, `fold_channel_scales`,
-   `point_conv_projection`, ...), each usable by any entry.
+   `point_conv_projection`, ...), each usable by any entry. A projector's
+   `tensors` is the GGUF table over the tower's names (model entries by
+   name, block entries past `v.blk.N.` as `v.<name>`, and sizes): Gemma 3's
+   input projection transposed, Mistral 3's merger permuted into the
+   shuffle's order, Gemma 4's quarters swapped, a fused q|k|v cut.
    The file also lists the audio towers that convert (`audio`); a tower
    converted alone carries its audio half as a joined one does. Each check is one
    rule for every entry (a merge of 0, a tile range or a pixel range that is

@@ -104,6 +104,9 @@ type mjOp struct {
 	// are all zero, one at least kept: a converter's padding, of any storage
 	// type, sized by the bytes it reads.
 	TrimZero bool `json:"trim_zero"`
+	// Shape is the shape the tensor in hand has, slowest axis first, -1 any
+	// size; another is refused. No byte moves.
+	Shape []mjSize `json:"shape"`
 }
 
 func (o mjOp) name() string {
@@ -140,6 +143,9 @@ func (o mjOp) name() string {
 	}
 	if o.Pick != nil {
 		set = append(set, "pick")
+	}
+	if o.Shape != nil {
+		set = append(set, "shape")
 	}
 	if len(set) != 1 {
 		return strings.Join(set, "+")
@@ -184,7 +190,7 @@ func (p mjPipe) check() error {
 			if n := len(o.Pick); n < 3 || n%2 != 1 {
 				return fmt.Errorf("pick takes an axis and pairs of start and length, not %d values", n)
 			}
-		case "reshape", "transpose", "concat", "stack", "trim_zero":
+		case "reshape", "transpose", "concat", "stack", "trim_zero", "shape":
 		default:
 			return fmt.Errorf("step %d names %q; one primitive a step is the rule", i, n)
 		}
@@ -211,6 +217,8 @@ func argsOf(o mjOp) []mjSize {
 		return o.Trim
 	case o.Pick != nil:
 		return o.Pick
+	case o.Shape != nil:
+		return o.Shape
 	case o.Concat != nil:
 		return []mjSize{*o.Concat}
 	case o.Stack != nil:
@@ -273,6 +281,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjTrimZero(vs[0])
 			case "pick":
 				out, err = mjPick(vs[0], args)
+			case "shape":
+				out, err = mjShape(vs[0], args)
 			}
 		}
 		if err != nil {
@@ -291,6 +301,17 @@ func mjAxis(axis int64, rank int) (int, error) {
 		return 0, fmt.Errorf("axis %d of a %d-axis tensor", axis, rank)
 	}
 	return int(axis), nil
+}
+
+func mjShape(v mjVal, sizes []int64) (mjVal, error) {
+	ok := len(sizes) == len(v.shape)
+	for i := 0; ok && i < len(sizes); i++ {
+		ok = sizes[i] == -1 || sizes[i] >= 0 && uint64(sizes[i]) == v.shape[i]
+	}
+	if !ok {
+		return mjVal{}, fmt.Errorf("shape %v of a %v tensor", sizes, v.shape)
+	}
+	return v, nil
 }
 
 func mjReshape(v mjVal, sizes []int64) (mjVal, error) {

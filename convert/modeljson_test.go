@@ -792,6 +792,7 @@ func TestModelJSONPrimitives(t *testing.T) {
 		{"stack", `[{"stack": 0}]`, []mjVal{mjF32([]uint64{2}, 0, 1), mjF32([]uint64{2}, 2, 3)}, []uint64{2, 2}, []float32{0, 1, 2, 3}},
 		{"stack inner", `[{"stack": 1}]`, []mjVal{mjF32([]uint64{2}, 0, 1), mjF32([]uint64{2}, 2, 3)}, []uint64{2, 2}, []float32{0, 2, 1, 3}},
 		{"repeat", `[{"repeat": [0, "heads"]}]`, []mjVal{mjF32([]uint64{2, 1}, 7, 8)}, []uint64{4, 1}, []float32{7, 7, 8, 8}},
+		{"shape", `[{"shape": ["heads", -1]}]`, []mjVal{mjF32([]uint64{2, 3}, 0, 1, 2, 3, 4, 5)}, []uint64{2, 3}, []float32{0, 1, 2, 3, 4, 5}},
 		// Four value heads over two key heads, rows of two (Qwen3.5's beta
 		// and alpha): per key head, its two heads' first rows, then their
 		// second's.
@@ -863,6 +864,8 @@ func TestModelJSONPrimitives(t *testing.T) {
 		{"a slice of two values", `[{"slice": [0, 1]}]`, two[:1], "takes 3 values"},
 		{"a size that is no count", `[{"reshape": ["kernel / 2", -1]}]`, two[:1], "not a whole number"},
 		{"a size of an absent key", `[{"reshape": ["missing", -1]}]`, two[:1], "is absent"},
+		{"a shape of another size", `[{"shape": [3]}]`, two[:1], "shape [3]"},
+		{"a shape of another rank", `[{"shape": [2, -1]}]`, two[:1], "shape [2 -1]"},
 	} {
 		if _, err := mjRun(t, env, c.do, c.in...); err == nil || !strings.Contains(err.Error(), c.err) {
 			t.Errorf("%s: %v, want an error saying %q", c.name, err, c.err)

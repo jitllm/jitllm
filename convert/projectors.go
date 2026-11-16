@@ -87,9 +87,7 @@ func towerPhases() []string { return []string{"joined", "source", "prepare", "fi
 // f is the tower's file, nil outside the source phase.
 func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projStates) error {
 	return map[string]func(*jlm.Source, *meta.File, *projStates) error{
-		"image_break_row":      func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
-		"transpose_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return transposeProjection(s) },
-		"permute_merger":       func(s *jlm.Source, _ *meta.File, _ *projStates) error { return permuteMerger(s) },
+		"image_break_row": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
 		"point_conv_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error {
 			for i := range s.Tensors {
 				if s.Tensors[i].Role == jlm.RoleVProj {
