@@ -708,7 +708,50 @@
    "patch_size": "src['vision.image_size'] / 16",
    "scale": "1",
    "activation": "gelu",
-   "transforms": {"source": ["stage_places", "hard_token_embeddings", "conv_layouts", "fold_channel_scales"]}
+   "transforms": {"source": ["stage_places", "hard_token_embeddings", "conv_layouts", "fold_channel_scales"]},
+   "tower": {
+    "requires": ["v.conv_stem.conv", "v.conv_stem.bn", "v.msfa.ffn.pw_exp.conv", "v.msfa.ffn.pw_exp.bn", "v.msfa.ffn.pw_proj.conv", "v.msfa.ffn.pw_proj.bn", "v.msfa.norm", "v_proj_norm", "v_proj", "mm.hard_embd", "mm.hard_offset"],
+    "let": [
+     ["first", "vec('mm.hard_offset')[0] | int"],
+     ["eoi", "vocab_index('<end_of_image>') if vocab_index('<end_of_image>') >= 0 else first"]
+    ],
+    "require": [
+     {"that": "vec('mm.hard_offset') | length == 1", "else": "the hard tokens' offset is not one number"},
+     {"that": "eoi >= first and eoi - first < kr['mm.hard_embd'][1]", "else": "<end_of_image> is not one of the hard tokens"},
+     {"that": "v.image_size >= 1 and kr['v.conv_stem.conv'][0] >= 27 and kr['v.conv_stem.conv'][1] >= 1", "else": "the picture or the stem is empty"}
+    ],
+    "pre": [
+     {"kind": "resize", "ints": ["v.image_size", "v.image_size", "filter.pil_bilinear", "prec.torch"]}
+    ],
+    "entry": [
+     {"op": "patchify", "span": "1"},
+     {"op": "unfold", "span": "3", "stride": "2", "grid_w": "v.image_size", "width": "kr['v.conv_stem.conv'][0]"},
+     {"op": "linear", "w": ["v.conv_stem.conv", "v.conv_stem.conv.bias?"]},
+     {"op": "rms_norm", "w": "v.conv_stem.bn", "eps": "v.eps"},
+     {"op": "stated", "fn": "gelu_tanh"}
+    ],
+    "block": {
+    },
+    "chain": {"count": "v.layers", "start": {"h": "(v.image_size + 1) // 2", "w": "(v.image_size + 1) // 2", "c": "kr['v.conv_stem.conv'][1]"}, "let": [["place", "blk.vec('v.mn_geom')"], ["stride", "2 if place[1] == 0 else 1"]], "stage": "place[0] | int", "kinds": [{"if": "'v.conv_exp' in blk.has", "requires": ["v.bn1", "v.conv_pwl", "v.bn2"], "require": [{"that": "blk.kr['v.conv_exp'][0] >= 9 * c", "else": "a full convolution reads less than a 3x3 window"}], "next": {"h": "(h + stride - 1) // stride", "w": "(w + stride - 1) // stride", "c": "blk.kr['v.conv_pwl'][1]"}, "ops": [{"op": "unfold", "span": "3", "stride": "stride", "grid_w": "w", "width": "blk.kr['v.conv_exp'][0]"}, {"op": "linear", "w": "v.conv_exp"}, {"op": "rms_norm", "w": "v.bn1", "eps": "v.eps"}, {"op": "stated", "fn": "gelu_tanh"}, {"op": "linear", "w": "v.conv_pwl"}, {"op": "rms_norm", "w": "v.bn2", "eps": "v.eps", "out": "o"}, {"op": "add", "if": "stride == 1 and next.c == c", "in": ["in", "o"]}]}, {"if": "'v_attn_q' in blk.has", "requires": ["v_attn_norm", "v_attn_k", "v_attn_v", "v_attn_out"], "let": [["qd", "blk.kr['v_attn_q'][1]"], ["kd", "blk.kr['v_attn_k'][1]"], ["down", "'v.attn.key.down_conv' in blk.has"]], "require": [{"that": "kd != 0 and qd % kd == 0", "else": "the attention's query is not whole key heads"}, {"that": "not down or ('v.attn.key.norm' in blk.has and 'v.attn.value.down_conv' in blk.has and 'v.attn.value.norm' in blk.has)", "else": "a downsampled attention has no value downsample or no norms"}, {"that": "not (down) or (blk.kr['v.attn.key.down_conv'][0] == c and (((blk.kr['v.attn.key.down_conv'][1]) ** 0.5) | round | int) * (((blk.kr['v.attn.key.down_conv'][1]) ** 0.5) | round | int) == blk.kr['v.attn.key.down_conv'][1] and (((blk.kr['v.attn.key.down_conv'][1]) ** 0.5) | round | int) % 2 == 1)", "else": "a depthwise filter is not an odd square over its block's channels"}, {"that": "not (down) or (blk.kr['v.attn.value.down_conv'][0] == c and (((blk.kr['v.attn.value.down_conv'][1]) ** 0.5) | round | int) * (((blk.kr['v.attn.value.down_conv'][1]) ** 0.5) | round | int) == blk.kr['v.attn.value.down_conv'][1] and (((blk.kr['v.attn.value.down_conv'][1]) ** 0.5) | round | int) % 2 == 1)", "else": "a depthwise filter is not an odd square over its block's channels"}], "next": {"h": "h", "w": "w", "c": "c"}, "ops": [{"op": "rms_norm", "w": "v_attn_norm", "eps": "v.eps", "out": "n"}, {"op": "linear", "in": "n", "w": "v_attn_q", "out": "q"}, {"op": "conv", "if": "down", "in": "n", "w": "v.attn.key.down_conv", "span": "((blk.kr['v.attn.key.down_conv'][1]) ** 0.5) | round | int", "stride": "2", "grid_w": "w"}, {"op": "rms_norm", "if": "down", "w": "v.attn.key.norm", "eps": "v.eps", "out": "kin"}, {"op": "conv", "if": "down", "in": "n", "w": "v.attn.value.down_conv", "span": "((blk.kr['v.attn.value.down_conv'][1]) ** 0.5) | round | int", "stride": "2", "grid_w": "w"}, {"op": "rms_norm", "if": "down", "w": "v.attn.value.norm", "eps": "v.eps", "out": "vin"}, {"op": "linear", "if": "down", "in": "kin", "w": "v_attn_k", "out": "k"}, {"op": "linear", "if": "not down", "in": "n", "w": "v_attn_k", "out": "k"}, {"op": "linear", "if": "down", "in": "vin", "w": "v_attn_v", "out": "vv"}, {"op": "linear", "if": "not down", "in": "n", "w": "v_attn_v", "out": "vv"}, {"op": "rows_attend", "in": ["q", "k", "vv"], "span": "qd // kd", "width": "1"}, {"op": "linear", "w": "v_attn_out", "out": "a"}, {"op": "add", "in": ["in", "a"]}]}, {"requires": ["v.pw_exp.conv", "v.pw_exp.bn", "v.pw_proj.conv", "v.pw_proj.bn"], "let": [["mid", "'v.dw_mid.conv' in blk.has"], ["start", "'v.dw_start.conv' in blk.has"], ["s_start", "1 if mid else stride"], ["s_mid", "stride if mid else 1"], ["hm", "(h + s_start - 1) // s_start if start else h"], ["wm", "(w + s_start - 1) // s_start if start else w"], ["cexp", "blk.kr['v.pw_exp.conv'][1]"]], "require": [{"that": "start or s_start == 1", "else": "a block downsamples and has no depthwise filter to do it"}, {"that": "not (start) or (blk.kr['v.dw_start.conv'][0] == c and (((blk.kr['v.dw_start.conv'][1]) ** 0.5) | round | int) * (((blk.kr['v.dw_start.conv'][1]) ** 0.5) | round | int) == blk.kr['v.dw_start.conv'][1] and (((blk.kr['v.dw_start.conv'][1]) ** 0.5) | round | int) % 2 == 1)", "else": "a depthwise filter is not an odd square over its block's channels"}, {"that": "not (mid) or (blk.kr['v.dw_mid.conv'][0] == cexp and (((blk.kr['v.dw_mid.conv'][1]) ** 0.5) | round | int) * (((blk.kr['v.dw_mid.conv'][1]) ** 0.5) | round | int) == blk.kr['v.dw_mid.conv'][1] and (((blk.kr['v.dw_mid.conv'][1]) ** 0.5) | round | int) % 2 == 1)", "else": "a depthwise filter is not an odd square over its block's channels"}], "next": {"h": "(hm + s_mid - 1) // s_mid if mid else hm", "w": "(wm + s_mid - 1) // s_mid if mid else wm", "c": "blk.kr['v.pw_proj.conv'][1]"}, "ops": [{"op": "conv", "if": "start", "in": "in", "w": "v.dw_start.conv", "span": "((blk.kr['v.dw_start.conv'][1]) ** 0.5) | round | int", "stride": "s_start", "grid_w": "w"}, {"op": "rms_norm", "if": "start", "w": "v.dw_start.bn", "eps": "v.eps", "out": "x0"}, {"op": "linear", "if": "start", "in": "x0", "w": "v.pw_exp.conv"}, {"op": "linear", "if": "not start", "in": "in", "w": "v.pw_exp.conv"}, {"op": "rms_norm", "w": "v.pw_exp.bn", "eps": "v.eps"}, {"op": "stated", "fn": "gelu_tanh", "out": "e"}, {"op": "conv", "if": "mid", "in": "e", "w": "v.dw_mid.conv", "span": "((blk.kr['v.dw_mid.conv'][1]) ** 0.5) | round | int", "stride": "s_mid", "grid_w": "wm"}, {"op": "rms_norm", "if": "mid", "w": "v.dw_mid.bn", "eps": "v.eps"}, {"op": "stated", "if": "mid", "fn": "gelu_tanh", "out": "m"}, {"op": "linear", "if": "mid", "in": "m", "w": "v.pw_proj.conv"}, {"op": "linear", "if": "not mid", "in": "e", "w": "v.pw_proj.conv"}, {"op": "rms_norm", "w": "v.pw_proj.bn", "eps": "v.eps", "out": "o"}, {"op": "add", "if": "next.h == h and next.w == w and next.c == c", "in": ["in", "o"]}]}], "head_from": ["last_of_stage[outs[last].stage - 1] if outs[last].stage >= 1 and outs[last].stage - 1 < (last_of_stage | length) else -1"], "require": [{"that": "outs[from].h % outs[last].h == 0 and outs[from].w % outs[last].w == 0 and outs[from].h // outs[last].h == outs[from].w // outs[last].w and outs[from].h == outs[from].w and (v.image_size // (v.patch_size if v.patch_size >= 1 else 1)) >= 1 and outs[from].h % (v.image_size // (v.patch_size if v.patch_size >= 1 else 1)) == 0", "else": "the adapter cannot fuse the last two stages' grids into the tower's"}, {"that": "kr['v.msfa.ffn.pw_exp.conv'][0] == outs[from].c + outs[last].c", "else": "the adapter reads another count of channels than the two stages leave"}]},
+    "head": [
+     {"op": "upsample", "in": "in", "span": "outs[from].h // outs[last].h", "grid_w": "outs[last].w", "out": "up"},
+     {"op": "concat", "in": ["in1", "up"]},
+     {"op": "linear", "w": "v.msfa.ffn.pw_exp.conv"},
+     {"op": "rms_norm", "w": "v.msfa.ffn.pw_exp.bn", "eps": "v.eps"},
+     {"op": "stated", "fn": "gelu_tanh"},
+     {"op": "linear", "w": "v.msfa.ffn.pw_proj.conv"},
+     {"op": "rms_norm", "w": "v.msfa.ffn.pw_proj.bn", "eps": "v.eps"},
+     {"op": "pool", "span": "outs[from].h // (v.image_size // (v.patch_size if v.patch_size >= 1 else 1))", "grid_w": "outs[from].w"},
+     {"op": "rms_norm", "w": "v.msfa.norm", "eps": "v.eps"},
+     {"op": "stated", "fn": "scale", "const": "kr['v_proj_norm'][0] ** 0.5"},
+     {"op": "rms_norm", "w": "v_proj_norm", "eps": "v.eps"},
+     {"op": "linear", "w": "v_proj"},
+     {"op": "rms_norm", "eps": "v.eps"},
+     {"op": "append_row", "w": "mm.hard_embd", "offset": "eoi - first"}
+    ],
+    "span": {"before": "\n\n<start_of_image>", "after": "\n\n"},
+    "drops": ["v.mn_geom", "mm.hard_offset"]
+   }
   },
   "phi4": {
    "code": 65532,

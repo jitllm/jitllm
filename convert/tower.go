@@ -9,29 +9,20 @@ import (
 )
 
 // statedTower is the tower s carries written down as its reference runs it
-// (jlm.Tower): the converter knows the family, so the engine need not. A
-// family whose statement is not written yet states none, and the engine
-// refuses its container by name until it is.
+// (jlm.Tower), as the projector library states it (libraryTower), so the
+// engine knows no family. A projector the library states no tower for gets
+// none, and the engine refuses its container by name.
 func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	if s.Vision == nil {
 		return nil, nil
 	}
 	lt, by, err := libraryTower(s.Vision.Projector)
-	if err != nil {
+	if err != nil || lt == nil {
 		return nil, err
 	}
-	f := towerStater(s.Vision.Projector)
-	var t *jlm.Tower
-	switch {
-	case lt != nil:
-		t, err = lt.state(by, s)
-	case f != nil:
-		t, err = f(s)
-	default:
-		return nil, nil
-	}
-	if err != nil || t == nil {
-		return t, err
+	t, err := lt.state(by, s)
+	if err != nil {
+		return nil, err
 	}
 	if o.longestEdge > 0 {
 		steps := [][]jlm.PreStep{t.Pre}
@@ -89,21 +80,11 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	return t, nil
 }
 
-// towerStater is what states projector p's tower, nil for a projector whose
-// tower is not stated yet.
-func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
-	switch p {
-	case jlm.ProjGemma3nV:
-		return gemma3nvTower
-	}
-	return nil
-}
-
 // StatesTower reports whether the converter states projector p's tower, so a
 // container of p written without one is a stale conversion.
 func StatesTower(p jlm.Projector) bool {
 	t, _, err := libraryTower(p)
-	return err == nil && t != nil || towerStater(p) != nil
+	return err == nil && t != nil
 }
 
 // StatesVideo reports whether the converter states how a projector's tower

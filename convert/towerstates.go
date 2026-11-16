@@ -28,7 +28,50 @@ type mjTower struct {
 	Marks    *mjMarks     `json:"marks"`
 	Video    *mjVideo     `json:"video"`
 	Taps     *mjTaps      `json:"taps"`
-	exprs    map[string]*jinja.Expr
+	Chain    *mjChain     `json:"chain"`
+	// Let is values the rest reads, each named and evaluated in order once
+	// the required tensors are found; Drops the tensors the statement
+	// states, by role name, which then leave the container.
+	Let   [][2]string `json:"let"`
+	Drops []string    `json:"drops"`
+	exprs map[string]*jinja.Expr
+}
+
+// mjChain is a tower whose blocks are each a program of its own
+// (jlm.Tower.Chain): Count blocks, block i reading the grid the block before
+// it left (Start's for the first: h, w and c), Let's values evaluated for
+// it, its kind the first of Kinds whose If holds, the kind's Next the grid
+// it leaves, and Stage its stage. Its expressions read blk (the block's
+// tensors: has, kr as a k and rows, vec a vector's values), i, h, w, c and
+// next. Require is checked once the blocks are stated, reading outs (each
+// block's grid and stage), last and last_of_stage (each stage's last block,
+// -1 for none); HeadFrom is the blocks whose rows the head reads beside the
+// last block's (in1, ...), the first of them from.
+type mjChain struct {
+	Count    string      `json:"count"`
+	Start    mjGrid      `json:"start"`
+	Let      [][2]string `json:"let"`
+	Kinds    []mjKind    `json:"kinds"`
+	Stage    string      `json:"stage"`
+	Require  []mjRequire `json:"require"`
+	HeadFrom []string    `json:"head_from"`
+}
+
+type mjGrid struct {
+	H string `json:"h"`
+	W string `json:"w"`
+	C string `json:"c"`
+}
+
+// mjKind is a chain block's kind: the tensors it holds beyond the one If
+// tests, its lets, what they must satisfy, the grid it leaves and its ops.
+type mjKind struct {
+	If       string      `json:"if"`
+	Requires []string    `json:"requires"`
+	Let      [][2]string `json:"let"`
+	Require  []mjRequire `json:"require"`
+	Next     mjGrid      `json:"next"`
+	Ops      []mjTowerOp `json:"ops"`
 }
 
 // mjTaps is a tower's taps (jlm.TowerTap): one program for each index the
@@ -106,6 +149,9 @@ type mjTowerOp struct {
 	Taps  string `json:"taps"`
 	// Const is the constant a stated op's function reads (scale).
 	Const string `json:"const"`
+	// GridW is a grid op's input grid's width in rows and Stride its step.
+	GridW  string `json:"grid_w"`
+	Stride string `json:"stride"`
 }
 
 // mjTowerBlock is the tower block's attributes: its heads, their width, its
@@ -244,6 +290,43 @@ func (t *mjTower) check() error {
 		srcs = append(srcs, r.That)
 	}
 	pre, progs := t.Pre, [][]mjTowerOp{t.Entry, t.Head}
+	lets := map[string]bool{}
+	for _, l := range t.Let {
+		lets[l[0]] = true
+		srcs = append(srcs, l[1])
+	}
+	for _, n := range t.Drops {
+		if err := role(n); err != nil {
+			return err
+		}
+	}
+	if ch := t.Chain; ch != nil {
+		srcs = append(srcs, ch.Count, ch.Start.H, ch.Start.W, ch.Start.C, ch.Stage)
+		srcs = append(srcs, ch.HeadFrom...)
+		for _, r := range ch.Require {
+			srcs = append(srcs, r.That)
+		}
+		for _, l := range ch.Let {
+			lets[l[0]] = true
+			srcs = append(srcs, l[1])
+		}
+		for _, k := range ch.Kinds {
+			for _, n := range k.Requires {
+				if err := role(n); err != nil {
+					return err
+				}
+			}
+			for _, l := range k.Let {
+				lets[l[0]] = true
+				srcs = append(srcs, l[1])
+			}
+			for _, r := range k.Require {
+				srcs = append(srcs, r.That)
+			}
+			srcs = append(srcs, k.If, k.Next.H, k.Next.W, k.Next.C)
+			progs = append(progs, k.Ops)
+		}
+	}
 	if tp := t.Taps; tp != nil {
 		if err := role(tp.Of); err != nil {
 			return err
@@ -310,11 +393,11 @@ func (t *mjTower) check() error {
 					return err
 				}
 			}
-			srcs = append(srcs, o.If, o.Span, o.Offset, o.Width, o.Eps, o.Const)
+			srcs = append(srcs, o.If, o.Span, o.Offset, o.Width, o.Eps, o.Const, o.GridW, o.Stride)
 		}
 	}
 	b := t.Block
-	if _, ok := towerNorms()[b.Norm]; !ok {
+	if _, ok := towerNorms()[b.Norm]; !ok && (t.Chain == nil || b.Norm != "") {
 		return fmt.Errorf("norm %q is not layer or rms", b.Norm)
 	}
 	if b.Act != "" && b.Act != "gelu_erf" {
@@ -362,7 +445,8 @@ func (t *mjTower) check() error {
 			return err
 		}
 		for _, n := range x.Names() {
-			if !slices.Contains([]string{"v", "has", "dims", "text", "filter", "prec", "j", "r", "c", "side", "i", "tap", "token", "tokens"}, n) {
+			if !lets[n] && !slices.Contains([]string{"v", "has", "dims", "kr", "vec", "vocab_index", "text", "filter", "prec", "j", "r", "c",
+				"side", "i", "tap", "token", "tokens", "blk", "h", "w", "next", "outs", "last", "last_of_stage", "from"}, n) {
 				return fmt.Errorf("%q reads %q, which is not the tower's facts (v, has, dims, text), a resize's names "+
 					"(filter, prec), a rotary run's place (j), a mark's cell (r, c, side), a block's place (i) or a tap's facts (tap)", src, n)
 			}
@@ -418,6 +502,25 @@ func towerFacts(s *jlm.Source) map[string]jinja.Value {
 	for k, p := range map[string]jlm.Precision{"float": jlm.PrecFloat, "pil": jlm.PrecPIL, "torch": jlm.PrecTorch} {
 		prec.AsDict().Set(k, jinja.NewInt(int64(p)))
 	}
+	kr := jinja.NewDict()
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role.Vision() {
+			kr.AsDict().Set(t.Role.String(), krOf(t))
+		}
+	}
+	vec := jinja.NewCallable("vec", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+		return vecFact(s, jlm.DenseBlock, args)
+	})
+	vocabIndex := jinja.NewCallable("vocab_index", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+		if len(args) != 1 || !args[0].IsString() {
+			return jinja.Undefined(), fmt.Errorf("vocab_index reads one token")
+		}
+		i := -1
+		if s.Vocab != nil {
+			i = slices.Index(s.Vocab.Tokens, args[0].AsString())
+		}
+		return jinja.NewInt(int64(i)), nil
+	})
 	text := jinja.NewDict()
 	if s.Config != nil {
 		text.AsDict().Set("bidir_layers", jinja.NewInt(int64(len(s.Config.BidirLayers))))
@@ -462,8 +565,8 @@ func towerFacts(s *jlm.Source) map[string]jinja.Value {
 		}
 		return jinja.NewList(out), nil
 	})
-	return map[string]jinja.Value{"v": geom, "has": has, "dims": dims, "text": text, "filter": filter, "prec": prec,
-		"token": token, "tokens": tokens}
+	return map[string]jinja.Value{"v": geom, "has": has, "dims": dims, "kr": kr, "vec": vec, "vocab_index": vocabIndex,
+		"text": text, "filter": filter, "prec": prec, "token": token, "tokens": tokens}
 }
 
 // state is the tower t states for s, refused where s lacks a tensor it
@@ -507,17 +610,36 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 			return nil, fmt.Errorf("convert: %s: %v: the tower has no %s", by, proj, n)
 		}
 	}
-	for _, r := range t.Require {
-		x, err := value(r.That)
-		if err != nil {
-			return nil, err
+	require := func(rs []mjRequire) error {
+		for _, r := range rs {
+			x, err := value(r.That)
+			if err != nil {
+				return err
+			}
+			if !x.IsTruthy() {
+				return fmt.Errorf("convert: %s: %v: %s", by, proj, r.Else)
+			}
 		}
-		if !x.IsTruthy() {
-			return nil, fmt.Errorf("convert: %s: %v: %s", by, proj, r.Else)
+		return nil
+	}
+	let := func(ls [][2]string) error {
+		for _, l := range ls {
+			x, err := value(l[1])
+			if err != nil {
+				return err
+			}
+			facts[l[0]] = x
 		}
+		return nil
+	}
+	if err := let(t.Let); err != nil {
+		return nil, err
+	}
+	if err := require(t.Require); err != nil {
+		return nil, err
 	}
 	roles := rolesByName()
-	prog := func(ops []mjTowerOp, nin int) (jlm.Program, error) {
+	prog := func(ops []mjTowerOp, nin int, held func(string) bool) (jlm.Program, error) {
 		p := jlm.Program{NIn: uint16(nin)}
 		named := map[string]uint16{"in": 0, "in1": 1}
 		last := uint16(0)
@@ -565,7 +687,7 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 			for _, f := range []struct {
 				src string
 				to  *int32
-			}{{o.Span, &op.Span}, {o.Offset, &op.Offset}, {o.Width, &op.Width}} {
+			}{{o.Span, &op.Span}, {o.Offset, &op.Offset}, {o.Width, &op.Width}, {o.GridW, &op.GridW}, {o.Stride, &op.Stride}} {
 				if o.Op == "untile" {
 					break
 				}
@@ -626,13 +748,21 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 	if out.Pre, err = steps(t.Pre); err != nil {
 		return nil, err
 	}
-	if out.Entry, err = prog(t.Entry, 1); err != nil {
+	if out.Entry, err = prog(t.Entry, 1, held); err != nil {
 		return nil, err
 	}
-	if out.Head, err = prog(t.Head, 1); err != nil {
+	if ch := t.Chain; ch != nil {
+		if err := t.chain(s, ch, out, facts, value, num, require, let, prog); err != nil {
+			return nil, err
+		}
+	}
+	if out.Head, err = prog(t.Head, 1+len(out.HeadFrom), held); err != nil {
 		return nil, err
 	}
 	b := t.Block
+	if t.Chain != nil {
+		b = mjTowerBlock{}
+	}
 	var heads, kv, hd, eps float64
 	for _, f := range []struct {
 		src string
@@ -642,7 +772,10 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 			return nil, err
 		}
 	}
-	act, err := s.Vision.Activation(b.Gated)
+	var act jlm.Expr
+	if t.Chain == nil {
+		act, err = s.Vision.Activation(b.Gated)
+	}
 	switch {
 	case b.Act == "gelu_erf":
 		act, err = erfGELU(s.Vision, by)
@@ -662,8 +795,10 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 	if err != nil {
 		return nil, err
 	}
-	out.Block = jlm.TowerBlock{NHead: uint32(heads), NKVHead: uint32(kv), HeadDim: uint32(hd), Norm: towerNorms()[b.Norm],
-		Eps: float32(eps), AttnScale: float32(attn), Act: act, VNorm: b.VNorm, Window: int32(window)}
+	if t.Chain == nil {
+		out.Block = jlm.TowerBlock{NHead: uint32(heads), NKVHead: uint32(kv), HeadDim: uint32(hd), Norm: towerNorms()[b.Norm],
+			Eps: float32(eps), AttnScale: float32(attn), Act: act, VNorm: b.VNorm, Window: int32(window)}
+	}
 	if f := b.Full; f != nil {
 		n, err := num(f.Count)
 		if err != nil {
@@ -776,7 +911,7 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 			return nil, err
 		}
 		if len(vd.Entry) != 0 {
-			if v.Entry, err = prog(vd.Entry, max(vd.Inputs, 1)); err != nil {
+			if v.Entry, err = prog(vd.Entry, max(vd.Inputs, 1), held); err != nil {
 				return nil, err
 			}
 		}
@@ -805,7 +940,7 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 			}
 			tap.AsDict().Set("dims", jinja.NewList(ds))
 			facts["tap"] = tap
-			p, err := prog(tp.Prog, 1)
+			p, err := prog(tp.Prog, 1, held)
 			if err != nil {
 				return nil, err
 			}
@@ -910,6 +1045,15 @@ func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
 			return nil, err
 		}
 	}
+	if len(t.Drops) > 0 {
+		kept := s.Tensors[:0]
+		for _, x := range s.Tensors {
+			if !slices.ContainsFunc(t.Drops, func(n string) bool { return roles[n] == x.Role }) {
+				kept = append(kept, x)
+			}
+		}
+		s.Tensors = kept
+	}
 	return out, nil
 }
 
@@ -924,4 +1068,182 @@ func libraryTower(p jlm.Projector) (*mjTower, string, error) {
 		return e.Tower, "convert/projectors.json", nil
 	}
 	return nil, "", nil
+}
+
+// chain states ch's blocks in out (out.Chain, out.HeadFrom), each block's
+// facts set while its kind and program are read.
+func (t *mjTower) chain(s *jlm.Source, ch *mjChain, out *jlm.Tower, facts map[string]jinja.Value,
+	value func(string) (jinja.Value, error), num func(string) (float64, error), require func([]mjRequire) error,
+	let func([][2]string) error, prog func([]mjTowerOp, int, func(string) bool) (jlm.Program, error)) error {
+	n, err := num(ch.Count)
+	if err != nil {
+		return err
+	}
+	var grid [3]float64
+	for k, src := range []string{ch.Start.H, ch.Start.W, ch.Start.C} {
+		if grid[k], err = num(src); err != nil {
+			return err
+		}
+	}
+	gridOf := func(g [3]float64) jinja.Value {
+		d := jinja.NewDict()
+		for k, name := range []string{"h", "w", "c"} {
+			d.AsDict().Set(name, jinja.NewInt(int64(g[k])))
+		}
+		return d
+	}
+	var outs []jinja.Value
+	var lastOf []int
+	for i := range int(n) {
+		blk, has := chainBlockFacts(s, int32(i))
+		facts["blk"], facts["i"] = blk, jinja.NewInt(int64(i))
+		facts["h"], facts["w"], facts["c"] = jinja.NewInt(int64(grid[0])), jinja.NewInt(int64(grid[1])), jinja.NewInt(int64(grid[2]))
+		if err := let(ch.Let); err != nil {
+			return err
+		}
+		var kind *mjKind
+		for k := range ch.Kinds {
+			if ch.Kinds[k].If == "" {
+				kind = &ch.Kinds[k]
+				break
+			}
+			on, err := value(ch.Kinds[k].If)
+			if err != nil {
+				return err
+			}
+			if on.IsTruthy() {
+				kind = &ch.Kinds[k]
+				break
+			}
+		}
+		if kind == nil {
+			return fmt.Errorf("convert: block %d is none of the kinds the tower states", i)
+		}
+		for _, r := range kind.Requires {
+			if !has[r] {
+				return fmt.Errorf("convert: block %d has no %s", i, r)
+			}
+		}
+		if err := let(kind.Let); err != nil {
+			return err
+		}
+		if err := require(kind.Require); err != nil {
+			return err
+		}
+		var next [3]float64
+		for k, src := range []string{kind.Next.H, kind.Next.W, kind.Next.C} {
+			if next[k], err = num(src); err != nil {
+				return err
+			}
+		}
+		facts["next"] = gridOf(next)
+		p, err := prog(kind.Ops, 1, func(r string) bool { return has[r] })
+		if err != nil {
+			return err
+		}
+		out.Chain = append(out.Chain, jlm.ChainBlock{Rows: int32(grid[0] * grid[1]), Width: int32(grid[2]), Prog: p})
+		stage, err := num(ch.Stage)
+		if err != nil {
+			return err
+		}
+		o := gridOf(next)
+		o.AsDict().Set("stage", jinja.NewInt(int64(stage)))
+		outs = append(outs, o)
+		for len(lastOf) <= int(stage) {
+			lastOf = append(lastOf, -1)
+		}
+		lastOf[int(stage)] = i
+		grid = next
+	}
+	for _, name := range []string{"blk", "i", "h", "w", "c", "next"} {
+		delete(facts, name)
+	}
+	for _, l := range ch.Let {
+		delete(facts, l[0])
+	}
+	for _, k := range ch.Kinds {
+		for _, l := range k.Let {
+			delete(facts, l[0])
+		}
+	}
+	if len(outs) == 0 {
+		return fmt.Errorf("convert: the tower has no blocks")
+	}
+	ls := make([]jinja.Value, len(lastOf))
+	for k, x := range lastOf {
+		ls[k] = jinja.NewInt(int64(x))
+	}
+	facts["outs"], facts["last"], facts["last_of_stage"] = jinja.NewList(outs), jinja.NewInt(int64(len(outs)-1)), jinja.NewList(ls)
+	for _, src := range ch.HeadFrom {
+		x, err := num(src)
+		if err != nil {
+			return err
+		}
+		if x < 0 || int(x) >= len(outs) {
+			return fmt.Errorf("convert: the head reads block %d of %d", int(x), len(outs))
+		}
+		out.HeadFrom = append(out.HeadFrom, int32(x))
+	}
+	if len(out.HeadFrom) > 0 {
+		facts["from"] = jinja.NewInt(int64(out.HeadFrom[0]))
+	}
+	return require(ch.Require)
+}
+
+// krOf is a tensor's k and rows as a reader counts them: its first
+// dimension, and the product of the rest.
+func krOf(t *jlm.Tensor) jinja.Value {
+	rows := uint64(1)
+	for d := 1; d < int(t.NDim); d++ {
+		rows *= t.Dims[d]
+	}
+	return jinja.NewList([]jinja.Value{jinja.NewInt(int64(t.Dims[0])), jinja.NewInt(int64(rows))})
+}
+
+// vecFact is the values of the vector of role args[0] stored at block b.
+func vecFact(s *jlm.Source, b int32, args []jinja.Value) (jinja.Value, error) {
+	if len(args) != 1 || !args[0].IsString() {
+		return jinja.Undefined(), fmt.Errorf("vec reads one role")
+	}
+	r, ok := rolesByName()[args[0].AsString()]
+	if !ok {
+		return jinja.Undefined(), fmt.Errorf("vec: %q is no role", args[0].AsString())
+	}
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == b && t.Role == r {
+			x, err := vecOf(t)
+			if err != nil {
+				return jinja.Undefined(), err
+			}
+			out := make([]jinja.Value, len(x))
+			for k, v := range x {
+				out[k] = jinja.NewFloat(float64(v))
+			}
+			return jinja.NewList(out), nil
+		}
+	}
+	return jinja.Undefined(), fmt.Errorf("vec: block %d has no %s", b, args[0].AsString())
+}
+
+// chainBlockFacts is block b's tensors as a chain's expressions read them (blk:
+// has, kr, vec), and which roles it holds.
+func chainBlockFacts(s *jlm.Source, b int32) (jinja.Value, map[string]bool) {
+	has, kr := jinja.NewDict(), jinja.NewDict()
+	held := map[string]bool{}
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == b && t.Role.Vision() {
+			n := t.Role.String()
+			has.AsDict().Set(n, jinja.NewBool(true))
+			kr.AsDict().Set(n, krOf(t))
+			held[n] = true
+		}
+	}
+	vec := jinja.NewCallable("vec", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+		return vecFact(s, b, args)
+	})
+	d := jinja.NewDict()
+	d.AsDict().Set("has", has)
+	d.AsDict().Set("kr", kr)
+	d.AsDict().Set("vec", vec)
+	return d, held
 }
