@@ -182,7 +182,7 @@ func TestRouterStatementsAreChecked(t *testing.T) {
 		{`"x": {"router": {"renormalise": "sometimes"}}`, "not always or never"},
 		{`"x": {"requires": ["expert_count"]}`, "requires"},
 		{`"x": {"window": {"size": "8", "period": "2", "from": "1"}}`, "one of a period, a pattern or a first layer"},
-		{`"x": {"mrope": "sections"}`, "is not the keys"},
+		{`"x": {"rope_sections": "sections"}`, "is not the keys"},
 		{`"x": {"attn_temp": {"scale": "0.1"}}`, "scale, floor and offset"},
 	} {
 		_, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {`+tc.states+`}}`), "test")

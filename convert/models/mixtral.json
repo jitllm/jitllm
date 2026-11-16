@@ -22,7 +22,7 @@
                    "router": {"gate": "sigmoid", "renormalise": "always"}},
     "hunyuan-dense": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}},
     "hunyuan-moe": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}},
-    "hunyuan_vl": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}, "mrope": "true", "rope_layout": "xd", "whole_rotary": true,
+    "hunyuan_vl": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_post_rope": "true"}, "router": {"gate": "softmax", "renormalise": "always", "unscaled": true}, "rope_sections": "src['rope.dimension_sections']", "rope_layout": "xd", "whole_rotary": true,
                    "rope_base": "(src['rope.freq_base'] | default(10000)) * src['rope.scaling.alpha'] ** ((src['rope.dimension_count'] | default(src['attention.key_length'] | default(src['embedding_length'] // src['attention.head_count']))) / ((src['rope.dimension_count'] | default(src['attention.key_length'] | default(src['embedding_length'] // src['attention.head_count']))) - 2)) if (src['rope.scaling.alpha'] | default(0)) > 0 else src['rope.freq_base'] | default(10000)"}
   },
   "config": {

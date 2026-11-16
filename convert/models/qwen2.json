@@ -3,7 +3,7 @@
   "gguf": ["qwen2", "qwen2vl"],
   "container": {
     "qwen2": {"flags": {"rope_neox": "true"}},
-    "qwen2vl": {"flags": {"rope_neox": "true"}}
+    "qwen2vl": {"flags": {"rope_neox": "true"}, "rope_sections": "src['rope.dimension_sections']"}
   },
   "config": {
     "arch": "qwen2",

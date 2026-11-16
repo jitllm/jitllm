@@ -6,7 +6,7 @@
                           "rope_base": "src['rope.freq_base_swa'] | default(src['rope.freq_base'] | default(10000))"},
                "attn_softcap": "src['attn_logit_softcapping'] | default(0)",
                "final_softcap": "src['final_logit_softcapping'] | default(0)"},
-    "glm4": {"flags": {"rope_neox": "src['rope.dimension_sections'] is defined"}, "mrope": "src['rope.dimension_sections'] is defined"}
+    "glm4": {"flags": {"rope_neox": "src['rope.dimension_sections'] is defined"}, "rope_sections": "src['rope.dimension_sections'] | default([])"}
   },
   "graph": {
     "block": [

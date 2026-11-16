@@ -3,7 +3,7 @@
   "gguf": ["glm4moe"],
   "container": {
     "glm4moe": {"flags": {"rope_neox": "true", "qk_norm": "'blk.0.attn_q_norm.weight' in tensors"},
-                "router": {"gate": "sigmoid"}, "mrope": "src['rope.dimension_sections'] is defined"}
+                "router": {"gate": "sigmoid"}, "rope_sections": "src['rope.dimension_sections'] | default([])"}
   },
   "config": {
     "arch": "glm4moe",

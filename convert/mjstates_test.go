@@ -18,6 +18,7 @@ import (
 // window and its pattern, the windowed layers' rotary base and the caps.
 func TestTheLibraryStatesTheContainer(t *testing.T) {
 	neox, qk := jlm.FlagRopeNeox, jlm.FlagRopeNeox|jlm.FlagQKNorm
+	noSections := map[string]meta.Value{"rope.dimension_sections": meta.MakeInt32s([]int32{})}
 	ln := jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagGELU
 	gemma := map[string]meta.Value{"embedding_length": meta.MakeUint(2048)}
 	with := func(m map[string]meta.Value, k string, v meta.Value) map[string]meta.Value {
@@ -39,11 +40,11 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		actq        jlm.ActQuant
 	}{
 		{arch: "qwen2", flags: neox},
-		{arch: "qwen2vl", flags: neox},
+		{arch: "qwen2vl", keys: noSections, flags: neox},
 		{arch: "qwen3", flags: qk},
-		{arch: "qwen3vl", flags: qk},
+		{arch: "qwen3vl", keys: noSections, flags: qk},
 		{arch: "qwen3moe", flags: qk},
-		{arch: "qwen3vlmoe", flags: qk},
+		{arch: "qwen3vlmoe", keys: noSections, flags: qk},
 		{arch: "bert", flags: jlm.FlagNonCausal},
 		{arch: "nomic-bert", flags: jlm.FlagNonCausal},
 		{arch: "modern-bert", flags: jlm.FlagNonCausal},

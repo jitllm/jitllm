@@ -12,7 +12,7 @@ import (
 )
 
 // TestQwen35SectionsAreReadAsEveryMRopes: Qwen3.5's rope sections are held to
-// the rule every interleaved M-RoPE is (mropeSectionsOf): a fourth section,
+// the rule every interleaved M-RoPE is (ropeSectionsFit): a fourth section,
 // and a split that leaves a pair to the axis ggml and transformers turn
 // differently, are refused; the file's own sections convert.
 func TestQwen35SectionsAreReadAsEveryMRopes(t *testing.T) {

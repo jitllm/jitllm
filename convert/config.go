@@ -337,15 +337,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := qwen4expConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchQwen2VL, ArchQwen3VL, ArchQwen3VLMoE:
-		// qwen2's, qwen3's and qwen3moe's blocks under a multimodal rope: the
-		// sections split each head's rotary pairs between the (t, h, w)
-		// components of a position (Qwen2-VL-2B is [16, 24, 24, 0], summing to
-		// NRot/2 = 64; Qwen3-VL-2B's INTERLEAVED [24, 20, 20, 0] of 64 pairs).
-		// See mropeSectionsOf.
-		if err := mropeSectionsOf(f, name, c); err != nil {
-			return nil, err
-		}
 	case ArchGLM4MoE:
 		// GLM-4.5V / 4.6V: the same block under Qwen2-VL's M-RoPE, a code of
 		// its own (ArchGLM4VMoE).
@@ -800,10 +791,10 @@ func ropeScalingOf(f *meta.File, c *Config) error {
 // no local layers in a newer container.
 func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 
-// mropeSectionsOf reads an M-RoPE model's split of a head's rotary pairs
-// between the (t, h, w) coordinates of a position. The sum is checked because a
-// short list leaves a tail of each head unrotated, which is fluent and which no
-// self-comparing tier can see.
+// ropeSectionsFit sets an M-RoPE model's split secs of a head's rotary pairs
+// between the (t, h, w) coordinates of a position in c (the rope_sections
+// statement). The sum is checked because a short list leaves a tail of each
+// head unrotated, which is fluent and which no self-comparing tier can see.
 //
 // An interleaved split (rope_layout "interleaved") is read as transformers
 // reads it: pair i turns by h when i%3 == 1 and i < 3*sections[1], by w when
@@ -811,21 +802,6 @@ func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 // pair with i%3 == 0 at or past 3*sections[0] to a fourth axis instead; no
 // published split reaches one, and one that would is refused rather than
 // resolved, since the two references would then rotate it differently.
-func mropeSectionsOf(f *meta.File, name string, c *Config) error {
-	kv, ok := f.Key("rope.dimension_sections")
-	if !ok {
-		return fmt.Errorf("convert: %s: no rope.dimension_sections, which "+
-			"an M-RoPE model must carry: %w", name, ErrNotImplemented)
-	}
-	secs, err := kv.Int32s()
-	if err != nil {
-		return fmt.Errorf("convert: %s: rope.dimension_sections: %w", name, err)
-	}
-	return ropeSectionsFit(name, secs, c)
-}
-
-// ropeSectionsFit sets the M-RoPE sections secs in c, refusing a split that
-// does not cover a head's rotary pairs (mropeSectionsOf).
 func ropeSectionsFit(name string, secs []int32, c *Config) error {
 	if len(secs) > len(c.RopeSections) {
 		return fmt.Errorf("convert: %s: %d rope sections, this format defines %d",

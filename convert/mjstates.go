@@ -66,9 +66,6 @@ type mjStates struct {
 	// a file's tensors are held to them (statedTensorsAgree).
 	LearnedPositions string `json:"learned_positions"`
 	FFNUngated       string `json:"ffn_ungated"`
-	// MRope, true, reads the rotary's sections off rope.dimension_sections
-	// (mropeSectionsOf).
-	MRope string `json:"mrope"`
 	// WholeRotary states that the class turns every dimension of a head.
 	WholeRotary bool `json:"whole_rotary"`
 	// Router is what the class's router does whatever a file's keys say.
@@ -257,7 +254,7 @@ func (mj *modelJSON) checkStates() error {
 		}
 		st := mj.Container[arch]
 		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv,
-			st.RopeBase, st.ResidualScale, st.MoEStep, st.MRope, st.RopeSections, st.ClampKQV, st.NoRopeEvery,
+			st.RopeBase, st.ResidualScale, st.MoEStep, st.RopeSections, st.ClampKQV, st.NoRopeEvery,
 			st.LearnedPositions, st.FFNUngated}
 		if tp := st.AttnTemp; tp != nil {
 			if tp.Scale == "" || tp.Floor == "" {
@@ -584,20 +581,6 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	}
 	if err := st.Router.apply(f, c); err != nil {
 		return fmt.Errorf("convert: %s: %w", arch, err)
-	}
-	if st.MRope != "" {
-		v, err := value("mrope", st.MRope)
-		if err != nil {
-			return err
-		}
-		if !v.IsBool() {
-			return fmt.Errorf("convert: %s: %s: mrope is %v, not true or false", by, arch, v)
-		}
-		if v.AsBool() {
-			if err := mropeSectionsOf(f, arch, c); err != nil {
-				return err
-			}
-		}
 	}
 	if st.WholeRotary && c.NRot != c.HeadDim {
 		return fmt.Errorf("convert: %s: a rotary over %d of a head's %d dimensions, where the reference turns "+

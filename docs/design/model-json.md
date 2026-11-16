@@ -188,14 +188,14 @@ schema; `convert/modeljson.go` reads it. Its sections:
   whose tensors it all carries and attention where none; a statement no
   layer meets is refused, and one a reader has already set the kinds for
   does not apply. `rope_sections` is the M-RoPE split of a head's rotary
-  pairs between a position's axes, a list of counts (`src['rope.dimension_sections']
-  | default([])`; empty states none); one that is not a list of counts, or
-  does not sum to the head's rotary pairs, is refused. Besides `src`, an expression may read `layer_tensors`, the
+  pairs between a position's axes, a list of counts (`src['rope.dimension_sections']`
+  where the class always has one, `| default([])` where a file may state
+  none; empty states none); one that is not a list of counts, or does not
+  sum to the head's rotary pairs, is refused. Besides `src`, an expression may read `layer_tensors`, the
   set of names the layers' tensors take past their "blk.N." prefix
   (`'attn_q_norm.weight' in layer_tensors`).
   `residual_scale` and `moe_step` (the mixture blocks' interleave, at least 1) are
-  numbers; `mrope`, true, reads the rotary's sections off
-  `rope.dimension_sections`; `whole_rotary: true` states that the class
+  numbers; `whole_rotary: true` states that the class
   turns the whole head, and a file whose rotary is narrower contradicts it.
   `router` is what the class's router does whatever the keys say: `gate`
   (softmax, sigmoid, or sparsemixer, which reads no gating key, ranks
