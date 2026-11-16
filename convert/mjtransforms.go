@@ -97,6 +97,10 @@ type mjOp struct {
 	Trim []mjSize `json:"trim"`
 	// Type is the storage type: "f32" or "f16".
 	Type string `json:"type"`
+	// TrimZero, true, cuts the slowest axis's trailing indices whose bytes
+	// are all zero, one at least kept: a converter's padding, of any storage
+	// type, sized by the bytes it reads.
+	TrimZero bool `json:"trim_zero"`
 }
 
 func (o mjOp) name() string {
@@ -128,6 +132,9 @@ func (o mjOp) name() string {
 	if o.Type != "" {
 		set = append(set, "type")
 	}
+	if o.TrimZero {
+		set = append(set, "trim_zero")
+	}
 	if len(set) != 1 {
 		return strings.Join(set, "+")
 	}
@@ -157,7 +164,7 @@ func (p mjPipe) check() error {
 			if o.Type != "f32" && o.Type != "f16" {
 				return fmt.Errorf("type %q is not f32 or f16", o.Type)
 			}
-		case "reshape", "transpose", "concat", "stack":
+		case "reshape", "transpose", "concat", "stack", "trim_zero":
 		default:
 			return fmt.Errorf("step %d names %q; one primitive a step is the rule", i, n)
 		}
@@ -240,6 +247,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjTrim(vs[0], args[0], args[1])
 			case "type":
 				out, err = mjRetype(vs[0], o.Type)
+			case "trim_zero":
+				out, err = mjTrimZero(vs[0])
 			}
 		}
 		if err != nil {
@@ -457,6 +466,26 @@ func mjTrim(v mjVal, axis, keep int64) (mjVal, error) {
 		}
 	}
 	return mjSlice(v, axis, 0, keep)
+}
+
+// mjTrimZero is v without the trailing indices of its slowest axis whose
+// bytes are all zero, one at least kept; a slab is v's bytes over the axis,
+// so any storage type trims.
+func mjTrimZero(v mjVal) (mjVal, error) {
+	if v.dry() {
+		return mjVal{}, fmt.Errorf("trim_zero is sized by the bytes it reads, and a dry value has none")
+	}
+	if len(v.shape) == 0 || v.shape[0] == 0 || uint64(len(v.data))%v.shape[0] != 0 {
+		return mjVal{}, fmt.Errorf("trim_zero of %d bytes over a shape of %v", len(v.data), v.shape)
+	}
+	slab := uint64(len(v.data)) / v.shape[0]
+	keep := v.shape[0]
+	for keep > 1 && !slices.ContainsFunc(v.data[(keep-1)*slab:keep*slab], func(b byte) bool { return b != 0 }) {
+		keep--
+	}
+	out := mjVal{shape: slices.Clone(v.shape), typ: v.typ, data: v.data[:keep*slab]}
+	out.shape[0] = keep
+	return out, nil
 }
 
 func mjRepeat(v mjVal, axis, times int64) (mjVal, error) {

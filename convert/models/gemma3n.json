@@ -1,14 +1,37 @@
 {
   "gguf": ["gemma3n"],
   "container": {
-    "gemma3n": {"ple_padded": true, "flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true"},
+    "gemma3n": {"flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true"},
                 "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5", "attn_scale": "1",
                 "final_softcap": "src['final_logit_softcapping'] | default(0)",
                 "kv_shared": "src['attention.shared_kv_layers'] | default(0)",
                 "ple_width": "src['embedding_length_per_layer_input']",
                 "window": {"size": "src['attention.sliding_window']", "pattern": "0", "rope_base": "src['rope.freq_base_swa'] | default(10000)"},
                 "whole_rotary": true, "value_key_width": true,
-                "altup": {"streams": "src['altup.num_inputs']", "active": "src['altup.active_idx'] | default(0)"}}
+                "altup": {"streams": "src['altup.num_inputs']", "active": "src['altup.active_idx'] | default(0)"},
+                "tensors": {
+                  "model": {
+                    "altup_unembd_proj.weight": [
+                      {"role": "stream_collapse.1", "do": [{"reshape": [3, "embedding_length", "embedding_length"]},
+                                                           {"slice": [0, 0, 1]}, {"reshape": ["embedding_length", "embedding_length"]}]},
+                      {"role": "stream_collapse.2", "do": [{"reshape": [3, "embedding_length", "embedding_length"]},
+                                                           {"slice": [0, 1, 1]}, {"reshape": ["embedding_length", "embedding_length"]}]},
+                      {"role": "stream_collapse.3", "do": [{"reshape": [3, "embedding_length", "embedding_length"]},
+                                                           {"slice": [0, 2, 1]}, {"reshape": ["embedding_length", "embedding_length"]}]}
+                    ],
+                    "altup_proj.weight": {"role": "altup_proj.weight", "do": [{"reshape": [3, "embedding_length", "embedding_length"]},
+                                                                              {"reshape": [-1, "embedding_length"]}]},
+                    "per_layer_token_embd.weight": {"role": "per_layer_token_embd.weight", "do": [{"trim_zero": true}]}
+                  },
+                  "block": {
+                    "altup_predict_coef.weight": {"role": "altup_predict_coef.weight", "do": [{"type": "f32"},
+                                                  {"reshape": ["altup.num_inputs * altup.num_inputs", "altup.num_inputs"]}]},
+                    "altup_correct_coef.weight": {"role": "altup_correct_coef.weight", "do": [{"type": "f32"},
+                                                  {"reshape": ["altup.num_inputs", "altup.num_inputs"]}]},
+                    "altup_router.weight": {"role": "altup_router.weight", "do": [{"type": "f32"},
+                                            {"reshape": ["altup.num_inputs", "embedding_length"]}]}
+                  }
+                }}
   },
   "graph": {
     "block": [

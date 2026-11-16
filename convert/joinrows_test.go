@@ -11,12 +11,12 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// TestK3JoinsAMixedQuantization joins a KDA block's q, k and v as a mixed
+// TestJoinRowsReStoresAMixedQuantization joins three matrices as a mixed
 // quantization stores them (Kimi-K3-0.40B's Q4_K_M: attn_q at Q4_K, attn_k
 // and attn_v at Q8_0; here q at F16): the join is Q8_0, the Q8_0 parts come
-// back bit for bit and the other within Q8_0's rounding. Refusing the mix,
-// as the join did, leaves every mixed quantization of Kimi-K3 unconvertible.
-func TestK3JoinsAMixedQuantization(t *testing.T) {
+// back bit for bit and the other within Q8_0's rounding. Refusing the mix
+// leaves every mixed quantization of such a join unconvertible.
+func TestJoinRowsReStoresAMixedQuantization(t *testing.T) {
 	const k, rows = 64, 8
 	r := rand.New(rand.NewSource(1))
 	draw := func() []float32 {
@@ -37,8 +37,8 @@ func TestK3JoinsAMixedQuantization(t *testing.T) {
 		e.Dims[0], e.Dims[1] = k, rows
 		return e
 	}
-	e, err := kdaJoinRows([]*jlm.Tensor{part(jlm.TypeF16, f16), part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb)},
-		jlm.RoleAttnQKV, k, rows)
+	e, err := joinRows([]*jlm.Tensor{part(jlm.TypeF16, f16), part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb)},
+		jlm.RoleAttnQKV)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +67,8 @@ func TestK3JoinsAMixedQuantization(t *testing.T) {
 	}
 
 	// One type stays bytes back to back.
-	e, err = kdaJoinRows([]*jlm.Tensor{part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb), part(jlm.TypeQ8, kb)},
-		jlm.RoleAttnQKV, k, rows)
+	e, err = joinRows([]*jlm.Tensor{part(jlm.TypeQ8, kb), part(jlm.TypeQ8, vb), part(jlm.TypeQ8, kb)},
+		jlm.RoleAttnQKV)
 	if err != nil {
 		t.Fatal(err)
 	}

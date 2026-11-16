@@ -29,6 +29,33 @@ func ggufKeys(f *meta.File) jinja.Value {
 	return d
 }
 
+// ggufEnv is f's architecture keys as a model.json expression reads them: a
+// path is the key past the architecture's prefix, a number a float64.
+func ggufEnv(f *meta.File) exprEnv {
+	pre := f.Arch() + "."
+	return func(path string) any {
+		v, ok := f.KV[pre+path]
+		if !ok {
+			return nil
+		}
+		x, ok := ggufValue(v)
+		if !ok {
+			return nil
+		}
+		switch {
+		case x.IsInt():
+			return float64(x.AsInt())
+		case x.IsFloat():
+			return x.AsFloat()
+		case x.IsString():
+			return x.AsString()
+		case x.IsBool():
+			return x.AsBool()
+		}
+		return nil
+	}
+}
+
 // ggufValue is one key's value, false for one a recipe does not read.
 func ggufValue(v meta.Value) (jinja.Value, bool) {
 	switch v.Type {

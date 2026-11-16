@@ -870,3 +870,38 @@ func itoa(v int) string {
 	}
 	return string(b[i:])
 }
+
+// sparsityOf reads activation_sparsity_scale: the standard normal's quantile
+// at each layer's target sparsity, which transformers computes as
+// Normal(0,1).icdf(p) and llama.cpp's converter writes per layer, -inf where a
+// layer has none (icdf(0)). The published pattern is one value on a leading
+// run of layers, which is what the container holds; any other shape is
+// refused rather than approximated. It is read for any file stating the key.
+func sparsityOf(f *meta.File, c *Config) error {
+	kv, ok := f.Key("activation_sparsity_scale")
+	if !ok {
+		return nil
+	}
+	vs, err := kv.Float32s()
+	if err != nil || len(vs) != int(c.NLayer) {
+		return fmt.Errorf("activation_sparsity_scale: %d values for %d layers (%v)", len(vs), c.NLayer, err)
+	}
+	n := 0
+	for n < len(vs) && !math.IsInf(float64(vs[n]), -1) {
+		if vs[n] != vs[0] || math.IsNaN(float64(vs[n])) {
+			return fmt.Errorf("activation_sparsity_scale %v: layer %d differs from layer 0: %w", vs, n, ErrNotImplemented)
+		}
+		n++
+	}
+	for i := n; i < len(vs); i++ {
+		if !math.IsInf(float64(vs[i]), -1) {
+			return fmt.Errorf("activation_sparsity_scale %v: layer %d is sparse after a dense one: %w",
+				vs, i, ErrNotImplemented)
+		}
+	}
+	c.NSparse = uint32(n)
+	if n > 0 {
+		c.SparseStd = vs[0]
+	}
+	return nil
+}

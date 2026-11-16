@@ -221,12 +221,16 @@ schema; `convert/modeljson.go` reads it. Its sections:
   `layers_by_kv_heads: true` reads each layer's kind off the per-layer kv
   head counts (zero on a linear layer, llama.cpp's is_recr), `delta_decay_bound`
   the delta rule's decay bound (KDA's lb*sigmoid, a negative number, `none`
-  for none), `latent.norm_eps` the latent norms' epsilon, and `split_kda:
-  true` that the source stores KDA's q, k, v and their convolutions apart,
-  joined at conversion (`kdaTensors`). A latent attention's key carries a
-  shared rotary part narrower than the head, for every file.
-  `ple_padded: true` states that the source pads its per-layer table with zero
-  rows past its own vocabulary (llama.cpp's Gemma 3n), which are cut.
+  for none) and `latent.norm_eps` the latent norms' epsilon. A latent
+  attention's key carries a shared rotary part narrower than the head, for
+  every file.
+  `tensors` is a class's tensor table over the GGUF's names (`model`,
+  `block`, `block_linear`, `fuse`; `statedTensors`): each name a role or
+  targets cut by the primitives, and the roles several are joined into by
+  rows, one type back to back and mixed types re-stored as Q8_0 (`joinRows`).
+  Kimi-K3 states its KDA blocks' q|k|v and convolution joins there, and
+  Gemma 3n its AltUp sheets and the cut of llama.cpp's zero-padded per-layer
+  table (`trim_zero`).
   `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
   feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,

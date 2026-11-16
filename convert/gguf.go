@@ -483,7 +483,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := sharedTensors(c, s); err != nil {
 		return nil, err
 	}
-	if err := altUpTensors(c, s); err != nil {
+	if err := statedTensors(c, s, ggufEnv(f)); err != nil {
 		return nil, err
 	}
 	if !tower {
@@ -498,9 +498,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	if err := groupedOutputTensors(c, s); err != nil {
-		return nil, err
-	}
-	if err := kdaTensors(c, s); err != nil {
 		return nil, err
 	}
 	// An alpha with no beta was skipped above and never fused: a layer whose

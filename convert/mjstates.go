@@ -95,18 +95,20 @@ type mjStates struct {
 	// LayersByKVHeads, true, reads each layer's kind off the per-layer kv
 	// head counts, zero on a linear layer (kindsByKVHeads); DeltaDecayBound is the
 	// delta rule's decay bound, lb*sigmoid(...) in place of softplus's, a
-	// negative number (none for none); SplitKDA, true, states that the
-	// source's linear blocks store q, k, v and their convolutions apart
-	// (kdaTensors).
+	// negative number (none for none).
 	LayersByKVHeads bool   `json:"layers_by_kv_heads"`
 	DeltaDecayBound string `json:"delta_decay_bound"`
-	SplitKDA        bool   `json:"split_kda"`
 	// Readouts is the decision readouts, by name, the backbone carries where
 	// a readout asks for its own (clefOf).
 	Readouts []string `json:"readouts"`
-	// PLEPadded, true, states that the source pads the per-layer table with
-	// zero rows past its own vocabulary (altUpTensors cuts them).
-	PLEPadded bool `json:"ple_padded"`
+	// Tensors is what the GGUF's tensors become past the vocabulary, as a
+	// class's tensor table states it over the GGUF's names: Model the
+	// model-level ones, Block a block's past its blk.N. prefix and BlockLinear
+	// a recurrent block's, each a role or targets cut by the primitives
+	// (mjTargets) laid out in its place, and Fuse the roles several are
+	// joined into by rows (statedTensors). The rest of a class's table is
+	// refused here.
+	Tensors *mjTensors `json:"tensors"`
 	// CompressedBlocks, true, reads each block's compression off the
 	// tensors and compress_ratios (compressionKinds).
 	CompressedBlocks bool `json:"compressed_blocks"`
@@ -334,10 +336,13 @@ type Statement struct {
 	routerJitter                        float32
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
-	compressedBlocks, plePadded         bool
-	splitKDA, ropeFreqs                 bool
+	compressedBlocks                    bool
+	ropeFreqs                           bool
 	sliding                             *jlm.Geom
 	readouts                            []string
+	modelTensors, blockTensors          map[string][]statedCut
+	linearTensors                       map[string][]statedCut
+	fuse                                map[jlm.Role][]string
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -438,6 +443,26 @@ func (mj *modelJSON) checkStates() error {
 		}
 		if _, ok := pretok.PreOps(st.PreTokenizer); st.PreTokenizer != "" && !ok {
 			return fmt.Errorf("convert: %s: %s: pre-tokenizer %q is not one the tokenizer has", mj.name, arch, st.PreTokenizer)
+		}
+		if t := st.Tensors; t != nil {
+			if t.BlockPrefix != "" || t.Gather != nil || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil ||
+				t.Ternary != nil || t.Present != nil {
+				return fmt.Errorf("convert: %s: %s: tensors: a GGUF's table states its model, block and recurrent "+
+					"block tensors and its joins: %w", mj.name, arch, ErrNotImplemented)
+			}
+			for r, srcs := range t.Fuse {
+				if _, ok := mj.names.roleOf(r); !ok || len(srcs) < 2 {
+					return fmt.Errorf("convert: %s: %s: tensors: %s is joined from %d sources, and is no role the "+
+						"container knows or fewer than two", mj.name, arch, r, len(srcs))
+				}
+			}
+			for _, table := range []map[string]mjTargets{t.Model, t.Block, t.BlockLinear} {
+				for _, n := range slices.Sorted(maps.Keys(table)) {
+					if _, err := statedCuts(mj.names, n, table[n]); err != nil {
+						return fmt.Errorf("convert: %s: %s: tensors: %w", mj.name, arch, err)
+					}
+				}
+			}
 		}
 		for _, m := range st.Retarget {
 			named := rolesByName()
@@ -657,7 +682,31 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if r := st.Router; r != nil {
 		c.Stated.routerGate, c.Stated.routerUngrouped, c.Stated.routerJitter = r.Gate, r.Ungrouped, r.Jitter
 	}
-	c.Stated.compressedBlocks, c.Stated.plePadded, c.Stated.readouts = st.CompressedBlocks, st.PLEPadded, st.Readouts
+	c.Stated.compressedBlocks, c.Stated.readouts = st.CompressedBlocks, st.Readouts
+	if t := st.Tensors; t != nil {
+		names, err := readTensorNames()
+		if err != nil {
+			return err
+		}
+		for _, x := range []struct {
+			table map[string]mjTargets
+			to    *map[string][]statedCut
+		}{{t.Model, &c.Stated.modelTensors}, {t.Block, &c.Stated.blockTensors}, {t.BlockLinear, &c.Stated.linearTensors}} {
+			*x.to = map[string][]statedCut{}
+			for n, ts := range x.table {
+				if (*x.to)[n], err = statedCuts(names, n, ts); err != nil {
+					return fmt.Errorf("convert: %s: %s: tensors: %w", by, arch, err)
+				}
+			}
+		}
+		for r, srcs := range t.Fuse {
+			role, _ := names.roleOf(r)
+			if c.Stated.fuse == nil {
+				c.Stated.fuse = map[jlm.Role][]string{}
+			}
+			c.Stated.fuse[role] = srcs
+		}
+	}
 	if st.MergeMixers {
 		c.Stated.mergeMixers = true
 		if err := mergeMixers(f, c); err != nil {
@@ -954,7 +1003,6 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if st.DeltaGate != "" {
 		c.DeltaGate = mjDeltaGates()[st.DeltaGate]()
 	}
-	c.Stated.splitKDA = st.SplitKDA
 	if st.AttnScale != "" {
 		if c.AttnScale, err = number("attn_scale", st.AttnScale); err != nil {
 			return err
@@ -1240,4 +1288,34 @@ func (r *mjRouter) apply(f *meta.File, c *Config) error {
 		}
 	}
 	return nil
+}
+
+// kindsByKVHeads is each layer's kind off head_count_kv, which llama.cpp's
+// converter writes per layer with zero on a KDA layer (its loader's own rule,
+// is_recr = n_head_kv == 0): the layers_by_kv_heads statement. A file with no
+// such layer, or only such layers, is no hybrid and refused.
+func kindsByKVHeads(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
+	kv, ok := f.Key("attention.head_count_kv")
+	if !ok {
+		return nil, fmt.Errorf("no attention.head_count_kv: the layer kinds are read off it")
+	}
+	vs, err := kv.Int32s()
+	if err != nil {
+		return nil, fmt.Errorf("attention.head_count_kv: %w (one count per layer, zero on a KDA layer)", err)
+	}
+	if uint32(len(vs)) != n {
+		return nil, fmt.Errorf("attention.head_count_kv has %d entries for %d layers", len(vs), n)
+	}
+	kinds := make([]jlm.LayerKind, n)
+	linear := 0
+	for i, v := range vs {
+		kinds[i] = jlm.LayerFullAttn
+		if v == 0 {
+			kinds[i], linear = jlm.LayerLinearAttn, linear+1
+		}
+	}
+	if linear == 0 || linear == len(vs) {
+		return nil, fmt.Errorf("%d of %d layers are linear: the statement states a hybrid", linear, len(vs))
+	}
+	return kinds, nil
 }

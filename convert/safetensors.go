@@ -2314,6 +2314,13 @@ func kimiNormalize(c *hfConfig) error {
 // first normalises the re-spelled mixture keys (see hfConfig); a checkpoint
 // carrying two spellings with different values is refused, since there is no
 // way to know which its weights were trained under (RULE 7m).
+// k3LatentNormEps is the epsilon of the MLA latent norms (q_a_layernorm,
+// kv_a_layernorm): Moonshot's KimiMLAAttention builds both as
+// KimiRMSNorm(rank) at its default 1e-6, and transformers' KimiLinearAttention
+// does the same; llama.cpp norms them at rms_norm_eps (RULE 7m, chosen: the
+// model's own code).
+const k3LatentNormEps = 1e-6
+
 func kimiLinearHFConfig(c *hfConfig, names []string) (*Config, error) {
 	bad := func(f string, a ...any) error {
 		return fmt.Errorf("convert: "+c.path+": "+f, a...)

@@ -706,6 +706,31 @@ func TestTrimTakesOnlyZeroPadding(t *testing.T) {
 	}
 }
 
+// TestTrimZeroCutsTrailingZeroRows holds trim_zero to the slowest axis's
+// trailing all-zero rows of any storage type: a zero row inside the table
+// stays, a table of zeros keeps one row, and a dry value is refused.
+func TestTrimZeroCutsTrailingZeroRows(t *testing.T) {
+	env := mjEnv(map[string]any{})
+	v, err := mjRun(t, env, `[{"trim_zero": true}]`, mjF32([]uint64{4, 2}, 1, 2, 0, 0, 3, 0, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mjFloats(v); !slices.Equal(got, []float32{1, 2, 0, 0, 3, 0}) || !slices.Equal(v.shape, []uint64{3, 2}) {
+		t.Fatalf("trimmed to %v %v", v.shape, got)
+	}
+	q := mjVal{shape: []uint64{3, 32}, typ: jlm.TypeQ8, data: make([]byte, 3*34)}
+	q.data[34] = 1
+	if v, err = mjRun(t, env, `[{"trim_zero": true}]`, q); err != nil || !slices.Equal(v.shape, []uint64{2, 32}) || len(v.data) != 2*34 {
+		t.Fatalf("a Q8 table trimmed to %v, %d bytes (%v)", v.shape, len(v.data), err)
+	}
+	if v, err = mjRun(t, env, `[{"trim_zero": true}]`, mjF32([]uint64{3}, 0, 0, 0)); err != nil || !slices.Equal(v.shape, []uint64{1}) {
+		t.Fatalf("a table of zeros trimmed to %v (%v)", v.shape, err)
+	}
+	if _, err := mjRun(t, env, `[{"trim_zero": true}]`, mjVal{shape: []uint64{3}, typ: jlm.TypeF32}); err == nil {
+		t.Fatal("a dry value was trimmed")
+	}
+}
+
 // TestLayerListsEvaluate holds each_layer and partitions to one-indexed
 // layer sets as a hybrid's config states them, and to their violations: a
 // layer in both lists, one in neither, one past the model.
