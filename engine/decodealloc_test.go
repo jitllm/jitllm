@@ -400,14 +400,8 @@ func stepAllocs(t *testing.T, m *model.Model, g *gpu.GPU, mode stepMode, io ...O
 				"the step it names; each run's refusal: %v", i, placed[i], got, w, why)
 		}
 	}
-	// A model of several streams reads their collapse before the head on
-	// the host: none of its steps takes the device's head.
-	wantOne := n
-	if m.Cfg.StreamHead() {
-		wantOne = 0
-	}
-	if one := c1.RagHeadOne - c0.RagHeadOne; mode == stepOneHead && one != wantOne {
-		t.Fatalf("%d of %d steps took the one-row head, want %d", one, n, wantOne)
+	if one := c1.RagHeadOne - c0.RagHeadOne; mode == stepOneHead && one != n {
+		t.Fatalf("%d of %d steps took the one-row head, want %d", one, n, n)
 	}
 	allocVerdict(t, fmt.Sprintf("%d run(s) of %d row(s) a step", len(runs), rows), w, n,
 		m.Container.Reads()-r0, g.Stats().Captures-c0.Captures)

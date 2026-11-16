@@ -3186,11 +3186,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	case pos >= bs.p.MaxSeq:
 		return refuse("position %d is past this device's capacity of %d (asked for %d)",
 			pos, bs.p.MaxSeq, g.maxSeqAsked)
-	case head != nil && lo < hi && bs.p.Streams() > 1:
-		// A folded head takes the chunk's last row of one plane alone
-		// (servedRowTake): over several the blocks and the head go as two
-		// calls.
-		return refuse("a head folded into %d blocks of %d streams", hi-lo, bs.p.Streams())
 	}
 	// The head reads one residual vector and writes one logit row. A ragged
 	// step's head is the decode scratch's; the batched one has none.
@@ -4128,14 +4123,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				err = g.ragTokens(lc, bs, hb, min(ragHead, bs.ragRows), sampleSrv)
 			}
 		} else if fold {
-			// The chunk's last row, into the decode scratch, and decode's
-			// head on it.
-			if tk, terr := g.servedRowTake(hb, p.NEmbd, R); terr != nil {
-				err = terr
-			} else {
-				g.rows.takeIn[0], g.rows.takeOut[0] = bs.x, hb.x
-				err = tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:])
-			}
+			// The chunk's last row of every plane, into the decode
+			// scratch's planes, and decode's head on them.
+			err = g.foldTake(lc, bs, hb, R)
 			out := hb.logits
 			in := hb.x
 			if g.rowsFaulted("foldrow") {
@@ -4147,9 +4137,16 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			} else {
 				sv, serr := g.servedHead(hb, headOf(head), hVecs, 1)
+				var ins []backend.Buf
 				if serr == nil {
-					g.rows.headX[0] = in
-					serr = sv.runHead(g, lc, g.rows.headX[:], out, hb.h)
+					ins, serr = g.headIns(hb, 1)
+				}
+				if serr == nil {
+					if in != hb.x {
+						g.rows.headX[0] = in
+						ins = g.rows.headX[:]
+					}
+					serr = sv.runHead(g, lc, ins, out, hb.h)
 				}
 				if err == nil {
 					err = serr

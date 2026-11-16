@@ -3081,10 +3081,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// With the last block on the device the projection rides the same
 	// submission (folded); otherwise it is its own call below. Device runs sit
 	// inside the block loop, and the residual crosses the seam once per run.
-	//
-	// AltUp's head reads the streams' mean, which the host takes, so the
-	// projection is never folded into the last run.
-	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !c.StreamHead() && !s.cutAt(s.hi-1)
+	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !s.wantsResidual() && !s.cutAt(s.hi-1)
 	// Not a defer inside the loop: one there takes every defer in this
 	// function off the open-coded path, and a heap defer record costs a decode
 	// token an allocation whenever the runtime's per-P pool runs dry.

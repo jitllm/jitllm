@@ -98,6 +98,11 @@ func (s *Instance) layDraft(x []float32, rows, base int) {
 	}
 }
 
+// wantsResidual says the step's rows want their residual of every plane
+// back as their hidden state (Config.ResidStreams), which a head folded into
+// the blocks' call keeps on the device.
+func (s *Instance) wantsResidual() bool { return s.rows != nil && s.c.ResidStreams() }
+
 // ownHead is the head the instance projects through, on every device: the
 // prediction block's own where the block it starts at states one (its graph
 // over that block's mix of the streams), the model's otherwise; block is the
