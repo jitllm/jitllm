@@ -372,6 +372,10 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if s.Tensors, err = nextnTensors(s.Tensors, c); err != nil {
 		return nil, err
 	}
+	// A tower's staged blocks carry their places, {stage, place in the stage}.
+	if tower && proj != nil && proj.Blocks == "staged" {
+		stagePlaces(s, stagedBlocks(f))
+	}
 	if err := statedTensors(c, s, ggufEnv(f)); err != nil {
 		return nil, err
 	}

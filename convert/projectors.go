@@ -38,13 +38,10 @@ type projStates struct {
 	Taps bool `json:"taps"`
 	// Blocks "staged" names the file's blocks by a stage and a place in it
 	// (stagedBlocks), one container block each in that order, counted in place
-	// of the file's block count.
-	Blocks string `json:"blocks"`
-	// HardTokens is the first id of the token table the projector embeds
-	// (hard_token_embeddings): the ids from it on are the tower's own markers.
-	HardTokens float32 `json:"hard_tokens"`
-	PatchSize  string  `json:"patch_size"`
-	Scale      string  `json:"scale"`
+	// of the file's block count, each carrying its place (stagePlaces).
+	Blocks    string `json:"blocks"`
+	PatchSize string `json:"patch_size"`
+	Scale     string `json:"scale"`
 	// MergeOf is the matrix that takes Scale*Scale patches at once, so its
 	// k over the tower's width states the merge.
 	MergeOf string           `json:"merge_of"`
@@ -89,18 +86,6 @@ func towerPhases() []string { return []string{"joined", "source", "prepare", "fi
 func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projStates) error {
 	return map[string]func(*jlm.Source, *meta.File, *projStates) error{
 		"image_break_row": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
-		"stage_places": func(s *jlm.Source, f *meta.File, _ *projStates) error {
-			if f == nil {
-				return fmt.Errorf("convert: stage_places reads the tower's file, which only the source phase has")
-			}
-			stagePlaces(s, stagedBlocks(f))
-			return nil
-		},
-		"hard_token_embeddings": func(s *jlm.Source, _ *meta.File, p *projStates) error {
-			return hardTokenEmbeddings(s, p.HardTokens)
-		},
-		"conv_layouts":        func(s *jlm.Source, _ *meta.File, _ *projStates) error { return convLayouts(s) },
-		"fold_channel_scales": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return foldChannelScales(s) },
 	}
 }
 
@@ -149,6 +134,9 @@ func (p *projStates) statement() (*Statement, error) {
 			return nil, fmt.Errorf("tensors: the gather of %s: %w", g.Role, err)
 		}
 		step := hfGatherStep{role: r, from: g.From, do: g.Do, model: g.Model, name: g.Name}
+		if step.f64, err = g.wide(); err != nil {
+			return nil, fmt.Errorf("tensors: %w", err)
+		}
 		if g.If != "" {
 			if step.cond, err = parseExpr(g.If); err != nil {
 				return nil, fmt.Errorf("tensors: the gather of %s: %w", g.Role, err)
@@ -282,13 +270,6 @@ func (p *projStates) check() error {
 				return fmt.Errorf("transform %q is no tower transform", t)
 			}
 		}
-	}
-	embeds := false
-	for _, phase := range p.Transforms {
-		embeds = embeds || slices.Contains(phase, "hard_token_embeddings")
-	}
-	if embeds != (p.HardTokens > 0) {
-		return fmt.Errorf("hard_tokens %g and the hard_token_embeddings transform go together", p.HardTokens)
 	}
 	if (p.When == "") != (p.States == "") {
 		return fmt.Errorf("a condition states what it covers")

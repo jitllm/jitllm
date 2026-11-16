@@ -735,6 +735,9 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 					"of a role the container knows", by, arch, g.Role)
 			}
 			step := hfGatherStep{role: r, from: g.From, do: g.Do, every: true}
+			if step.f64, err = g.wide(); err != nil {
+				return fmt.Errorf("convert: %s: %s: tensors: %w", by, arch, err)
+			}
 			if g.If != "" {
 				if step.cond, err = parseExpr(g.If); err != nil {
 					return fmt.Errorf("convert: %s: %s: tensors: the gather of %s: %w", by, arch, g.Role, err)

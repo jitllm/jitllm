@@ -346,7 +346,9 @@ The primitives, each a step of a `do` list with exactly one field:
 | `{"trim": [axis, keep]}` | an axis's first keep indices, the rest refused unless every byte is zero |
 | `{"trim_zero": true}` | the slowest axis's trailing indices whose bytes are all zero, one at least kept |
 | `{"shape": [a, -1]}` | the shape the tensor in hand has, slowest axis first, -1 any size; another is refused; no byte moves |
-| `{"rms": "eps"}` | each row over its root mean square at eps, in float64, rounded once to float32 |
+| `{"rms": "eps"}` | each row over its root mean square at eps, in float64, rounded once to float32; with a norm's weight second in hand, rows of its length times it |
+| `{"pad": [axis, m]}` | the axis extended with zero indices to a whole multiple of m |
+| `{"linear": true}` | the first tensor in hand, [.., k], through the second as a linear layer's [m][k] weight: [.., m], each sum in float64 |
 | `{"type": "f32"}` | the storage type, f32, f16 or q8 |
 
 Every size and axis is a number or an expression over config.json. Each
@@ -406,14 +408,16 @@ model.json is mostly the config section and the `retarget` it needs.
    mergers named by its vocabulary's `indexed` prefix in
    convert/towertensors.json, `v.deepstack.N.*`), `blocks` "staged" that the file names its blocks
    by a stage and a place in it (`v.blk.S.I.*`, numbered stage by stage),
-   and `hard_tokens` the first id of a token table the tower embeds itself
-   (read by the `hard_token_embeddings` transform). The transforms are
-   named primitives (`stage_places`, `conv_layouts`, `fold_channel_scales`,
-   ...), each usable by any entry. A projector's
+   each block carrying its place. The transforms are named primitives
+   (`image_break_row`), each usable by any entry. A projector's
    `tensors` is the GGUF table over the tower's names (model entries by
    name, block entries past `v.blk.N.` as `v.<name>`, and sizes): Gemma 3's
    input projection transposed, Mistral 3's merger permuted into the
-   shuffle's order, Gemma 4's quarters swapped, a fused q|k|v cut.
+   shuffle's order, Gemma 4's quarters swapped, a fused q|k|v cut, Gemma
+   3n's convolutions laid out tap-major, its layer scales folded into what
+   they follow, and its hard tokens' rows computed once (a gather of
+   `"precision": "f64"`, its table through its norm, its projection and an
+   unweighted norm, rounded once).
    The file also lists the audio towers that convert (`audio`); a tower
    converted alone carries its audio half as a joined one does. Each check is one
    rule for every entry (a merge of 0, a tile range or a pixel range that is

@@ -19,7 +19,7 @@ func TestAFilledOperandIsItsValueAtItsShape(t *testing.T) {
 	step := hfGatherStep{role: jlm.RoleSSMBNorm, from: from, every: true}
 	env := func(p string) any { return map[string]any{"ssm.state_size": 3.0}[p] }
 	read := func(string) ([]float32, error) { return nil, nil }
-	out, _, err := gatherBlocks(env, "blk.", []hfGatherStep{step}, nil, read, 2)
+	out, _, err := gatherBlocks(env, "blk.", []hfGatherStep{step}, nil, read, nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestAFilledOperandIsItsValueAtItsShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	step.from = from
-	if _, _, err := gatherBlocks(env, "blk.", []hfGatherStep{step}, nil, read, 2); err == nil {
+	if _, _, err := gatherBlocks(env, "blk.", []hfGatherStep{step}, nil, read, nil, 2); err == nil {
 		t.Error("a shape of -0.5 was filled")
 	}
 }

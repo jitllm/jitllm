@@ -43,8 +43,14 @@ func mjProd(s []uint64) uint64 {
 	return n
 }
 
+// mjF64 is a value a float64 gather computes (mjGather.Precision): a type no
+// container stores, rounded once to f32 by a type step.
+const mjF64 jlm.Type = 255
+
 func mjElemSize(t jlm.Type) (uint64, error) {
 	switch t {
+	case mjF64:
+		return 8, nil
 	case jlm.TypeF32:
 		return 4, nil
 	case jlm.TypeF16, jlm.TypeBF16:
@@ -110,8 +116,16 @@ type mjOp struct {
 	// RMS is an epsilon, an expression rounded to f32 as the container's
 	// epsilons are: each row (the fastest axis) over its root mean square,
 	// x / sqrt(mean(x^2) + eps), accumulated in float64 and rounded once to
-	// float32.
+	// float32. With a second tensor in hand, a norm's weight, each row is
+	// the weight's length and is multiplied by it, x * (w / sqrt(...)).
 	RMS string `json:"rms"`
+	// Pad is [axis, multiple]: the axis extended with zero indices to a
+	// whole multiple.
+	Pad []mjSize `json:"pad"`
+	// Linear, true, takes the two tensors in hand through a linear layer:
+	// the first, [.., k], by the second, its weight as torch's [m][k], to
+	// [.., m], each sum accumulated in float64 in k's order.
+	Linear bool `json:"linear"`
 }
 
 func (o mjOp) name() string {
@@ -155,6 +169,12 @@ func (o mjOp) name() string {
 	if o.RMS != "" {
 		set = append(set, "rms")
 	}
+	if o.Pad != nil {
+		set = append(set, "pad")
+	}
+	if o.Linear {
+		set = append(set, "linear")
+	}
 	if len(set) != 1 {
 		return strings.Join(set, "+")
 	}
@@ -186,8 +206,8 @@ func (p mjPipe) check() error {
 			if err := mjMapCheck(x); err != nil {
 				return fmt.Errorf("map %q: %w", o.Map, err)
 			}
-		case "slice", "repeat", "trim":
-			if want := map[string]int{"slice": 3, "repeat": 2, "trim": 2}[n]; len(argsOf(o)) != want {
+		case "slice", "repeat", "trim", "pad":
+			if want := map[string]int{"slice": 3, "repeat": 2, "trim": 2, "pad": 2}[n]; len(argsOf(o)) != want {
 				return fmt.Errorf("%s takes %d values, not %d", n, want, len(argsOf(o)))
 			}
 		case "type":
@@ -202,7 +222,7 @@ func (p mjPipe) check() error {
 			if _, err := parseExpr(o.RMS); err != nil {
 				return fmt.Errorf("rms %q: %w", o.RMS, err)
 			}
-		case "reshape", "transpose", "concat", "stack", "trim_zero", "shape":
+		case "reshape", "transpose", "concat", "stack", "trim_zero", "shape", "linear":
 		default:
 			return fmt.Errorf("step %d names %q; one primitive a step is the rule", i, n)
 		}
@@ -231,6 +251,8 @@ func argsOf(o mjOp) []mjSize {
 		return o.Pick
 	case o.Shape != nil:
 		return o.Shape
+	case o.Pad != nil:
+		return o.Pad
 	case o.Concat != nil:
 		return []mjSize{*o.Concat}
 	case o.Stack != nil:
@@ -272,6 +294,10 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 			out, err = mjConcat(vs, args[0])
 		case "stack":
 			out, err = mjStack(vs, args[0])
+		case "rms":
+			out, err = mjRMS(vs, o.RMS, env)
+		case "linear":
+			out, err = mjLinear(vs)
 		default:
 			if len(vs) != 1 {
 				return mjVal{}, fmt.Errorf("%s takes one tensor, and %d are in hand: stack, concat or map them first", n, len(vs))
@@ -295,8 +321,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjPick(vs[0], args)
 			case "shape":
 				out, err = mjShape(vs[0], args)
-			case "rms":
-				out, err = mjRMS(vs[0], o.RMS, env)
+			case "pad":
+				out, err = mjPad(vs[0], args[0], args[1])
 			}
 		}
 		if err != nil {
@@ -317,7 +343,10 @@ func mjAxis(axis int64, rank int) (int, error) {
 	return int(axis), nil
 }
 
-func mjRMS(v mjVal, src string, env exprEnv) (mjVal, error) {
+func mjRMS(vs []mjVal, src string, env exprEnv) (mjVal, error) {
+	if len(vs) != 1 && len(vs) != 2 {
+		return mjVal{}, fmt.Errorf("rms takes a tensor and at most its weight, and %d are in hand", len(vs))
+	}
 	x, err := parseExpr(src)
 	if err != nil {
 		return mjVal{}, err
@@ -326,30 +355,144 @@ func mjRMS(v mjVal, src string, env exprEnv) (mjVal, error) {
 	if err != nil {
 		return mjVal{}, fmt.Errorf("rms %q: %w", src, err)
 	}
-	if v.typ != jlm.TypeF32 && v.typ != jlm.TypeF16 && v.typ != jlm.TypeBF16 {
-		return mjVal{}, fmt.Errorf("rms of a %v tensor: take it to f32 first", v.typ)
+	for _, v := range vs {
+		if _, err := mjElemSize(v.typ); err != nil {
+			return mjVal{}, fmt.Errorf("rms of a %v tensor: take it to f32 first", v.typ)
+		}
 	}
-	out := mjVal{shape: v.shape, typ: jlm.TypeF32}
+	v := vs[0]
 	if len(v.shape) == 0 || v.shape[len(v.shape)-1] == 0 {
 		return mjVal{}, fmt.Errorf("rms of a %v tensor", v.shape)
 	}
+	n := v.shape[len(v.shape)-1]
+	if len(vs) == 2 {
+		if n = vs[1].count(); n == 0 || v.count()%n != 0 || vs[1].dry() != v.dry() {
+			return mjVal{}, fmt.Errorf("rms of a %v tensor by a weight of %v", v.shape, vs[1].shape)
+		}
+	}
+	out := mjVal{shape: v.shape, typ: mjPrecision(v)}
 	if v.dry() {
 		return out, nil
 	}
-	vals := mjFloats(v)
-	n := int(v.shape[len(v.shape)-1])
+	vals := mjFloats64(v)
+	var w []float64
+	if len(vs) == 2 {
+		w = mjFloats64(vs[1])
+	}
 	eps := float64(float32(e))
-	for r := 0; r+n <= len(vals); r += n {
+	for r := 0; r+int(n) <= len(vals); r += int(n) {
+		row := vals[r : r+int(n)]
 		var ss float64
-		for _, y := range vals[r : r+n] {
-			ss += float64(y) * float64(y)
+		for _, y := range row {
+			ss += y * y
 		}
 		k := 1 / math.Sqrt(ss/float64(n)+eps)
-		for j := r; j < r+n; j++ {
-			vals[j] = float32(float64(vals[j]) * k)
+		for j := range row {
+			if w != nil {
+				row[j] *= k * w[j]
+			} else {
+				row[j] *= k
+			}
 		}
 	}
-	out.data = f32AsBytes(vals)
+	out.data = mjStore(vals, out.typ)
+	return out, nil
+}
+
+// mjPrecision is the type an arithmetic primitive's result has: float64 where
+// one of its tensors is, float32 otherwise.
+func mjPrecision(vs ...mjVal) jlm.Type {
+	for _, v := range vs {
+		if v.typ == mjF64 {
+			return mjF64
+		}
+	}
+	return jlm.TypeF32
+}
+
+// mjStore is values as the bytes of typ, float32 rounded once.
+func mjStore(vals []float64, typ jlm.Type) []byte {
+	if typ == mjF64 {
+		b := make([]byte, 0, 8*len(vals))
+		for _, x := range vals {
+			b = binary.LittleEndian.AppendUint64(b, math.Float64bits(x))
+		}
+		return b
+	}
+	b := make([]byte, 0, 4*len(vals))
+	for _, x := range vals {
+		b = binary.LittleEndian.AppendUint32(b, math.Float32bits(float32(x)))
+	}
+	return b
+}
+
+// mjLinear is the first tensor in hand, [.., k], through the second, a linear
+// layer's weight of m rows of k, as [.., m]: each sum in float64, in k's order.
+func mjLinear(vs []mjVal) (mjVal, error) {
+	if len(vs) != 2 {
+		return mjVal{}, fmt.Errorf("linear takes a tensor and its weight, and %d are in hand", len(vs))
+	}
+	x, w := vs[0], vs[1]
+	for _, v := range vs {
+		if _, err := mjElemSize(v.typ); err != nil {
+			return mjVal{}, fmt.Errorf("linear of a %v tensor: take it to f32 first", v.typ)
+		}
+	}
+	if len(x.shape) == 0 || x.shape[len(x.shape)-1] == 0 || w.count()%x.shape[len(x.shape)-1] != 0 || x.dry() != w.dry() {
+		return mjVal{}, fmt.Errorf("linear of a %v tensor by a weight of %v", x.shape, w.shape)
+	}
+	k := x.shape[len(x.shape)-1]
+	m, n := w.count()/k, x.count()/k
+	if n*m > 1<<26 {
+		return mjVal{}, fmt.Errorf("linear of a %v tensor by a weight of %v is past %d values", x.shape, w.shape, 1<<26)
+	}
+	out := mjVal{shape: append(slices.Clone(x.shape[:len(x.shape)-1]), m), typ: mjPrecision(x, w)}
+	if x.dry() {
+		return out, nil
+	}
+	xv, wv := mjFloats64(x), mjFloats64(w)
+	res := make([]float64, n*m)
+	for i := range n {
+		row := xv[i*k : (i+1)*k]
+		for r := range m {
+			wr := wv[r*k : (r+1)*k]
+			acc := 0.0
+			for j := range row {
+				acc += wr[j] * row[j]
+			}
+			res[i*m+r] = acc
+		}
+	}
+	out.data = mjStore(res, out.typ)
+	return out, nil
+}
+
+// mjPad extends axis with zero indices to a whole multiple of m.
+func mjPad(v mjVal, axis, m int64) (mjVal, error) {
+	ax, err := mjAxis(axis, len(v.shape))
+	if err != nil {
+		return mjVal{}, err
+	}
+	es, err := mjElemSize(v.typ)
+	if err != nil {
+		return mjVal{}, err
+	}
+	if m <= 0 || m > 1<<16 {
+		return mjVal{}, fmt.Errorf("pad to a multiple of %d", m)
+	}
+	n := v.shape[ax]
+	p := (n + uint64(m) - 1) / uint64(m) * uint64(m)
+	out := mjVal{shape: slices.Clone(v.shape), typ: v.typ}
+	out.shape[ax] = p
+	if v.dry() || p == n {
+		out.data = v.data
+		return out, nil
+	}
+	outer, inner := mjProd(v.shape[:ax]), mjProd(v.shape[ax+1:])*es
+	out.data = make([]byte, outer*p*inner)
+	for o := range outer {
+		copy(out.data[o*p*inner:], v.data[o*n*inner:(o+1)*n*inner])
+	}
 	return out, nil
 }
 
@@ -705,6 +848,12 @@ func mjRetype(v mjVal, to string) (mjVal, error) {
 
 func mjFloats(v mjVal) []float32 {
 	out := make([]float32, 0, v.count())
+	if v.typ == mjF64 {
+		for _, x := range mjFloats64(v) {
+			out = append(out, float32(x))
+		}
+		return out
+	}
 	if v.typ == jlm.TypeF16 {
 		for i := 0; i+2 <= len(v.data); i += 2 {
 			out = append(out, float32(quant.DecodeHalf(binary.LittleEndian.Uint16(v.data[i:]))))
@@ -719,6 +868,23 @@ func mjFloats(v mjVal) []float32 {
 	}
 	for i := 0; i+4 <= len(v.data); i += 4 {
 		out = append(out, math.Float32frombits(binary.LittleEndian.Uint32(v.data[i:])))
+	}
+	return out
+}
+
+// mjFloats64 is v's values in float64, a float32 one's exactly.
+func mjFloats64(v mjVal) []float64 {
+	if v.typ != mjF64 {
+		f := mjFloats(v)
+		out := make([]float64, len(f))
+		for i, x := range f {
+			out[i] = float64(x)
+		}
+		return out
+	}
+	out := make([]float64, 0, v.count())
+	for i := 0; i+8 <= len(v.data); i += 8 {
+		out = append(out, math.Float64frombits(binary.LittleEndian.Uint64(v.data[i:])))
 	}
 	return out
 }
@@ -858,22 +1024,23 @@ func mjMap(src string, env exprEnv, vs []mjVal) (mjVal, error) {
 			return mjVal{}, fmt.Errorf("map %q over %v and %v", src, vs[0].shape, v.shape)
 		}
 	}
-	out := mjVal{shape: vs[0].shape, typ: jlm.TypeF32}
+	out := mjVal{shape: vs[0].shape, typ: mjPrecision(vs...)}
 	if vs[0].dry() {
 		return out, nil
 	}
-	vals := make([][]float32, len(vs))
+	vals := make([][]float64, len(vs))
 	for i, v := range vs {
-		vals[i] = mjFloats(v)
+		vals[i] = mjFloats64(v)
 	}
 	xs := make([]float64, len(vs))
-	out.data = make([]byte, 0, 4*vs[0].count())
+	res := make([]float64, len(vals[0]))
 	for j := range vals[0] {
 		for i := range vals {
-			xs[i] = float64(vals[i][j])
+			xs[i] = vals[i][j]
 		}
-		out.data = binary.LittleEndian.AppendUint32(out.data, math.Float32bits(float32(f(xs))))
+		res[j] = f(xs)
 	}
+	out.data = mjStore(res, out.typ)
 	return out, nil
 }
 
@@ -890,6 +1057,9 @@ func mjTorch(e *jlm.Tensor) []uint64 {
 func mjSetShape(e *jlm.Tensor, v mjVal) error {
 	if len(v.shape) == 0 || len(v.shape) > 4 {
 		return fmt.Errorf("convert: %s: a transform's result has %d axes", e.Name, len(v.shape))
+	}
+	if v.typ == mjF64 {
+		return fmt.Errorf("convert: %s: a float64 result is a computation's, and a type step stores it", e.Name)
 	}
 	e.NDim, e.Dims, e.Type = uint8(len(v.shape)), [4]uint64{}, v.typ
 	for i, d := range v.shape {
@@ -919,6 +1089,7 @@ type hfGatherStep struct {
 	cond, count  *exprNode
 	every, model bool
 	name         string
+	f64          bool
 }
 
 // mjOperand is one of a gather's inputs: a source by its block-relative name,
@@ -1040,7 +1211,7 @@ func mjActivationCover(act string, c *Config, out []jlm.Tensor) error {
 // source left over -- a second without its first, a step that did not run --
 // is left to identify, which refuses it by name.
 func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []string,
-	read func(string) ([]float32, error), nlayer int) ([]jlm.Tensor, map[string]bool, error) {
+	read func(string) ([]float32, error), shape func(string) []uint64, nlayer int) ([]jlm.Tensor, map[string]bool, error) {
 	var out []jlm.Tensor
 	used := map[string]bool{}
 	have := map[string]bool{}
@@ -1090,12 +1261,35 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 				if !keep {
 					used[bp+f] = true
 				}
+				if g.f64 {
+					w := make([]float64, len(v))
+					for i, x := range v {
+						w[i] = float64(x)
+					}
+					return mjVal{shape: []uint64{uint64(len(v))}, typ: mjF64, data: mjStore(w, mjF64)}, nil
+				}
 				return mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}, nil
 			}
 			src := make([]mjVal, len(g.from))
 			first := g.role.String()
+			env := env
 			if ns := g.from[0].names(); len(ns) > 0 {
 				first = bp + ns[0]
+				if shape != nil {
+					if s := shape(first); s != nil {
+						dims := make([]any, len(s))
+						for i, d := range s {
+							dims[i] = float64(d)
+						}
+						outer := env
+						env = func(p string) any {
+							if p == "shape" {
+								return dims
+							}
+							return outer(p)
+						}
+					}
+				}
 			}
 			for i, o := range g.from {
 				if o.Fill != nil {

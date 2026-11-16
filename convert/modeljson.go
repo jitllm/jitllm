@@ -376,15 +376,28 @@ func (ts *mjTargets) UnmarshalJSON(b []byte) error {
 // it holds. Every has each block carry the sources; Model gathers one tensor
 // of the model from sources named whole. Name is the result's name, {block}
 // its block's prefix; Count, where set, the values each source holds.
+// Precision "f64" computes in float64 from sources read exactly, until a type
+// step rounds the result once; its primitives read shape, the first source's
+// shape slowest axis first, where the source's reader knows it.
 type mjGather struct {
-	Role  string      `json:"role"`
-	From  []mjOperand `json:"from"`
-	Do    mjPipe      `json:"do"`
-	If    string      `json:"if"`
-	Every bool        `json:"every"`
-	Model bool        `json:"model"`
-	Name  string      `json:"name"`
-	Count string      `json:"count"`
+	Role      string      `json:"role"`
+	From      []mjOperand `json:"from"`
+	Do        mjPipe      `json:"do"`
+	If        string      `json:"if"`
+	Every     bool        `json:"every"`
+	Model     bool        `json:"model"`
+	Name      string      `json:"name"`
+	Count     string      `json:"count"`
+	Precision string      `json:"precision"`
+}
+
+// wide reports whether g computes in float64, refusing a precision that is
+// neither.
+func (g mjGather) wide() (bool, error) {
+	if g.Precision != "" && g.Precision != "f64" {
+		return false, fmt.Errorf("the gather of %s computes in %q, not f64", g.Role, g.Precision)
+	}
+	return g.Precision == "f64", nil
 }
 
 func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error) {
@@ -908,6 +921,9 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 					"filled operand", mj.name, g.Role)
 			}
 			step := hfGatherStep{role: retarget(r), from: g.From, do: g.Do, every: g.Every, model: g.Model, name: g.Name}
+			if step.f64, err = g.wide(); err != nil {
+				return nil, fmt.Errorf("convert: %s: %w", mj.name, err)
+			}
 			for _, x := range []struct {
 				src string
 				to  **exprNode
@@ -940,7 +956,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		st.mu.Lock()
 		env, act := st.env, st.act
 		st.mu.Unlock()
-		out, used, err := gatherBlocks(env, a.blockPrefix, steps, names, read, int(c.NLayer))
+		out, used, err := gatherBlocks(env, a.blockPrefix, steps, names, read, nil, int(c.NLayer))
 		if err != nil {
 			return nil, nil, err
 		}

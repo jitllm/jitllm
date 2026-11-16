@@ -144,7 +144,13 @@ func statedGathers(c *Config, s *jlm.Source, f *meta.File, prefix string) error 
 		vals := make([]float32, mjProd(mjTorch(t)))
 		return vals, quant.Dequant32(src, b, vals)
 	}
-	out, used, err := gatherBlocks(ggufEnv(f), prefix, st.gathers, names, read, n)
+	shape := func(name string) []uint64 {
+		if t := byName[name]; t != nil {
+			return mjTorch(t)
+		}
+		return nil
+	}
+	out, used, err := gatherBlocks(ggufEnv(f), prefix, st.gathers, names, read, shape, n)
 	if err != nil {
 		return err
 	}

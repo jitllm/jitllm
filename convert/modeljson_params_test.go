@@ -67,7 +67,7 @@ func TestModelJSONGatherOperands(t *testing.T) {
 		sort.Strings(ns)
 		return ns
 	}
-	out, used, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, 2)
+	out, used, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestModelJSONGatherOperands(t *testing.T) {
 		t.Errorf("one source read and kept, with no primitives, did not parse: %v", err)
 	}
 	delete(vals, "m.1.c")
-	if _, _, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, 2); err == nil {
+	if _, _, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, nil, 2); err == nil {
 		t.Error("a block without one of its sources gathered")
 	}
 }

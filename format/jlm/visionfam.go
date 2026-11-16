@@ -136,11 +136,6 @@ const (
 	RoleVMNFusionProj     Role = 65503
 	RoleVMNFusionProjNorm Role = 65502
 	RoleVMNFusionNorm     Role = 65501
-	// RoleVMNLayerScale is a block's layer scale as the source carries it.
-	// The converter folds it into the norm or the matrix it follows, so no
-	// container carries one; the code names the source tensor and stays
-	// reserved.
-	RoleVMNLayerScale Role = 65500
 	// RoleVMNHardEmbd is the text embedding of Gemma 3n's hard vision tokens
 	// (its end-of-image marker and the image placeholder), [128][text width]:
 	// the embedder's own table through its norm, its matrix and its
@@ -149,10 +144,6 @@ const (
 	// once; the reader takes those ids' rows from it, unscaled.
 	RoleVMNHardEmbd   Role = 65499
 	RoleVMNHardOffset Role = 65498
-	// RoleVMNHardTable and RoleVMNHardNorm are the embedder's table and norm
-	// as the source carries them, folded into RoleVMNHardEmbd at conversion:
-	// no container carries one.
-	RoleVMNHardTable Role = 65497
 	// RoleVTileMarks is a tiled picture's marker rows, [rows][text width]:
 	// the text table's rows of the tokens that stand before each tile and
 	// before its thumbnail (TOpMarkRow), copied at conversion.
@@ -167,7 +158,6 @@ const (
 	// RoleVPatchEmbd's layout, which holds the planes' sum: a video's pair of
 	// frames x0, x1 runs as x0*(W0+W1) + (x1-x0)*W1 (Video.Entry).
 	RoleVPatchEmbd2 Role = 65493
-	RoleVMNHardNorm Role = 65496
 )
 
 func visionFamRoleName(r Role) (string, bool) {
@@ -248,16 +238,10 @@ func visionFamRoleName(r Role) (string, bool) {
 		return "v.msfa.ffn.pw_proj.bn", true
 	case RoleVMNFusionNorm:
 		return "v.msfa.norm", true
-	case RoleVMNLayerScale:
-		return "v.layer_scale", true
 	case RoleVMNHardEmbd:
 		return "mm.hard_embd", true
 	case RoleVMNHardOffset:
 		return "mm.hard_offset", true
-	case RoleVMNHardTable:
-		return "mm.embedding", true
-	case RoleVMNHardNorm:
-		return "mm.hard_emb_norm", true
 	}
 	return "", false
 }

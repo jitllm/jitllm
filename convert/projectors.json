@@ -823,11 +823,33 @@
    "output": {"tensor": "mm.input_projection.weight", "dim": 1},
    "flags": ["gelu"],
    "blocks": "staged",
-   "hard_tokens": 262144,
    "patch_size": "src['vision.image_size'] / 16",
    "scale": "1",
    "activation": "gelu",
-   "transforms": {"source": ["stage_places", "hard_token_embeddings", "conv_layouts", "fold_channel_scales"]},
+   "tensors": {
+     "model": {
+       "v.conv_stem.conv.weight": {"role": "v.conv_stem.conv", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.conv_stem.conv.bias": {"role": "v.conv_stem.conv.bias", "do": [{"type": "f32"}, {"reshape": [-1]}]},
+       "v.msfa.ffn.pw_exp.conv.weight": {"role": "v.msfa.ffn.pw_exp.conv", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.msfa.ffn.pw_proj.conv.weight": {"role": "v.msfa.ffn.pw_proj.conv", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]}},
+     "block": {
+       "v.conv_exp.weight": {"role": "v.conv_exp", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.conv_pwl.weight": {"role": "v.conv_pwl", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.pw_exp.conv.weight": {"role": "v.pw_exp.conv", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.pw_proj.conv.weight": {"role": "v.pw_proj.conv", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.attn.query.proj.weight": {"role": "v_attn_q", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.attn.key.proj.weight": {"role": "v_attn_k", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.attn.value.proj.weight": {"role": "v_attn_v", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.attn.output.proj.weight": {"role": "v_attn_out", "do": [{"shape": [-1, -1, -1, -1]}, {"type": "f32"}, {"transpose": [0, 2, 3, 1]}, {"reshape": ["at(shape, 0)", -1]}, {"pad": [1, 32]}]},
+       "v.dw_start.conv.weight": {"role": "v.dw_start.conv", "do": [{"shape": [-1, 1, "at(shape, 3)", -1]}, {"type": "f32"}, {"reshape": ["at(shape, 0)", -1]}, {"transpose": [1, 0]}]},
+       "v.dw_mid.conv.weight": {"role": "v.dw_mid.conv", "do": [{"shape": [-1, 1, "at(shape, 3)", -1]}, {"type": "f32"}, {"reshape": ["at(shape, 0)", -1]}, {"transpose": [1, 0]}]},
+       "v.attn.key.down_conv.weight": {"role": "v.attn.key.down_conv", "do": [{"shape": [-1, 1, "at(shape, 3)", -1]}, {"type": "f32"}, {"reshape": ["at(shape, 0)", -1]}, {"transpose": [1, 0]}]},
+       "v.attn.value.down_conv.weight": {"role": "v.attn.value.down_conv", "do": [{"shape": [-1, 1, "at(shape, 3)", -1]}, {"type": "f32"}, {"reshape": ["at(shape, 0)", -1]}, {"transpose": [1, 0]}]}},
+     "gather": [
+       {"role": "v.pw_proj.bn", "from": ["pw_proj.bn.weight", "layer_scale.gamma"], "do": [{"map": "x * y"}], "name": "{block}pw_proj.bn.weight"},
+       {"role": "v_attn_out", "from": ["attn.output.proj.weight", {"from": ["layer_scale.gamma"], "do": [{"repeat": [0, "at(shape, 1)"]}]}], "do": [{"map": "x * y"}, {"reshape": [-1, "at(shape, 1)"]}], "name": "{block}attn.output.proj.weight"},
+       {"role": "mm.hard_embd", "model": true, "precision": "f64", "from": [{"from": ["mm.embedding.weight", "mm.hard_emb_norm.weight"], "do": [{"rms": "vision.attention.layer_norm_epsilon ?? 0.000001"}, {"reshape": [-1, "vision.embedding_length"]}]}, {"from": ["mm.input_projection.weight"], "keep": true}], "do": [{"linear": true}, {"rms": "vision.attention.layer_norm_epsilon ?? 0.000001"}, {"type": "f32"}], "name": "mm.hard_embd"},
+       {"role": "mm.hard_offset", "model": true, "from": [{"fill": 262144, "shape": ["1"]}], "name": "mm.hard_offset"}]},
    "tower": {
     "requires": ["v.conv_stem.conv", "v.conv_stem.bn", "v.msfa.ffn.pw_exp.conv", "v.msfa.ffn.pw_exp.bn", "v.msfa.ffn.pw_proj.conv", "v.msfa.ffn.pw_proj.bn", "v.msfa.norm", "v_proj_norm", "v_proj", "mm.hard_embd", "mm.hard_offset"],
     "let": [
