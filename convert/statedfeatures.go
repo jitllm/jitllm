@@ -1,14 +1,12 @@
 package convert
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/format/quant"
 )
 
 // swigluLimitDefault is transformers' default swiglu_limit, the published
@@ -168,36 +166,35 @@ func compressionKinds(f *meta.File, c *Config) error {
 	return nil
 }
 
-// hashExpertTable is a hash-routed block's token-id table, I32 in the file, as
-// the F32 the container stores (ids are exact well past any expert count).
-// Every id is checked against the expert count, since it indexes the banks.
-func hashExpertTable(t *meta.Tensor, data []byte, c *Config) ([]byte, error) {
-	if t.Type != quant.Type(26) {
-		return nil, fmt.Errorf("convert: %s is %s, want I32", t.Name, t.Type)
-	}
-	if len(t.Dims) != 2 || t.Dims[0] != uint64(c.NExpertUsed) || t.Dims[1] != uint64(c.NVocab) ||
-		uint64(len(data)) != 4*t.Dims[0]*t.Dims[1] {
-		return nil, fmt.Errorf("convert: %s is %v (%d bytes), want %d ids for each of %d tokens", t.Name,
-			t.Dims, len(data), c.NExpertUsed, c.NVocab)
-	}
-	// A token's ids must be distinct: the engine selects them as the top-k of
-	// a mask (model.ds4HashBias), which cannot select one expert twice, where
-	// both references would run it twice.
-	out := make([]byte, len(data))
-	k := int(c.NExpertUsed)
-	for i := 0; i < len(data); i += 4 {
-		id := int32(binary.LittleEndian.Uint32(data[i:]))
-		tok, j := i/4/k, i/4%k
-		if id < 0 || uint32(id) >= c.NExpert {
-			return nil, fmt.Errorf("convert: %s routes token %d to expert %d of %d", t.Name, tok, id, c.NExpert)
+// hashExpertsFit holds each hash-routed block's token-to-expert table to what
+// the banks it indexes take: one row of NExpertUsed ids per token, every id an
+// expert, and none twice for a token -- the engine selects them as the top-k
+// of a mask (model.ds4HashBias), which cannot select one expert twice, where
+// both references would run it twice.
+func hashExpertsFit(c *Config, s *jlm.Source) error {
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		if t.Role != jlm.RoleHashExperts {
+			continue
 		}
-		for p := 0; p < j; p++ {
-			if int32(binary.LittleEndian.Uint32(data[(tok*k+p)*4:])) == id {
-				return nil, fmt.Errorf("convert: %s routes token %d to expert %d twice: %w", t.Name, tok, id,
-					ErrNotImplemented)
+		if t.Type != jlm.TypeF32 || t.NDim != 2 || t.Dims[0] != uint64(c.NExpertUsed) || t.Dims[1] != uint64(c.NVocab) {
+			return fmt.Errorf("convert: %s is %v %v, want %d ids for each of %d tokens", t.Name, t.Type,
+				t.Dims[:t.NDim], c.NExpertUsed, c.NVocab)
+		}
+		ids, err := vecOf(t)
+		if err != nil {
+			return err
+		}
+		k := int(c.NExpertUsed)
+		for j, id := range ids {
+			tok, at := j/k, j%k
+			if id != float32(int32(id)) || id < 0 || uint32(id) >= c.NExpert {
+				return fmt.Errorf("convert: %s routes token %d to expert %v of %d", t.Name, tok, id, c.NExpert)
+			}
+			if slices.Contains(ids[tok*k:tok*k+at], id) {
+				return fmt.Errorf("convert: %s routes token %d to expert %v twice: %w", t.Name, tok, id, ErrNotImplemented)
 			}
 		}
-		binary.LittleEndian.PutUint32(out[i:], math.Float32bits(float32(id)))
 	}
-	return out, nil
+	return nil
 }

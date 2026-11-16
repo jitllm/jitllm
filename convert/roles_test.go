@@ -110,16 +110,18 @@ func TestEveryTensorHasARole(t *testing.T) {
 			// The type check is scoped the same way: an unsupported
 			// architecture may also carry a weight type this engine has no
 			// kernel for, and the refusal for that belongs to configOf.
-			// DeepSeek V4's token table is I32 ids in the file and F32 in the
-			// container: sourceOf rewrites it (hashExpertTable) rather than
-			// storing the file's type. A ternary type with no code is
-			// re-packed (ternaryGGUF), so the types it becomes are checked.
+			// An I32 tensor (DeepSeek V4's token table) is its values as F32
+			// (i32AsF32), and a ternary type with no code is re-packed
+			// (ternaryGGUF), so the types they become are checked.
 			stored := []quant.Type{f.Tensors[i].Type}
 			if repackedTernary(stored[0]) {
 				stored = ternaryPacked()
 			}
+			if stored[0] == quant.Type(26) {
+				stored = []quant.Type{quant.F32}
+			}
 			for _, st := range stored {
-				if _, err := typeOf(st); err != nil && supported && role != jlm.RoleHashExperts {
+				if _, err := typeOf(st); err != nil && supported {
 					t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
 				}
 			}

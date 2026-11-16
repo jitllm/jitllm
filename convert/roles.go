@@ -2,6 +2,7 @@ package convert
 
 import (
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -203,6 +204,23 @@ func typeOf(t quant.Type) (jlm.Type, error) {
 		return 0, fmt.Errorf("convert: weight type %s has no code in this container's vocabulary", t)
 	}
 	return ty, nil
+}
+
+// i32AsF32 is a GGUF integer tensor's values as the F32 the container stores
+// them in, exact below 2^24, the bound refused past.
+func i32AsF32(name string, data []byte) ([]byte, error) {
+	if len(data)%4 != 0 {
+		return nil, fmt.Errorf("convert: %s holds %d bytes, not whole I32 values", name, len(data))
+	}
+	out := make([]byte, len(data))
+	for i := 0; i < len(data); i += 4 {
+		v := int32(binary.LittleEndian.Uint32(data[i:]))
+		if v >= 1<<24 || v <= -(1<<24) {
+			return nil, fmt.Errorf("convert: %s holds %d, past what F32 holds exactly", name, v)
+		}
+		binary.LittleEndian.PutUint32(out[i:], math.Float32bits(float32(v)))
+	}
+	return out, nil
 }
 
 // sourceType is typeOf's inverse, for the gate below.

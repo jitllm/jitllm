@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/convert/gguf"
@@ -298,23 +297,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				continue
 			}
 		}
-		// DeepSeek V4's token-id tables are I32, which is not a weight type
-		// here: carried as F32 ids (hashExpertTable).
-		if !tower && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
-			_, block, _, err := vocab.identify(t.Name)
-			if err != nil {
-				return nil, err
-			}
-			b, err := hashExpertTable(t, f.Bytes(t), c)
-			if err != nil {
-				return nil, err
-			}
-			e := jlm.Tensor{Role: jlm.RoleHashExperts, Block: block, Index: -1, Type: jlm.TypeF32,
-				NDim: 2, Data: b, Name: t.Name}
-			copy(e.Dims[:], t.Dims)
-			s.Tensors = append(s.Tensors, e)
-			continue
-		}
 		// A ternary projection's optional per-tensor scale is folded into
 		// its weight's blocks (ternaryTensors).
 		if w, ok := c.Stated.ternaryScaleOf(t.Name); ok && !tower {
@@ -381,6 +363,12 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		} else if ok {
 			data, srcType = b, ty
 		}
+		if srcType == quant.Type(26) {
+			if data, err = i32AsF32(t.Name, data); err != nil {
+				return nil, err
+			}
+			srcType = quant.F32
+		}
 		ty, err := typeOf(srcType)
 		if err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
@@ -429,6 +417,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 	}
 	if err := ternaryTensors(c, s, scales); err != nil {
+		return nil, err
+	}
+	if err := hashExpertsFit(c, s); err != nil {
 		return nil, err
 	}
 	if tower {
