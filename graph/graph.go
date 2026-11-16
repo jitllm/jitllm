@@ -853,11 +853,11 @@ func (r StateRef) String() string {
 	return s
 }
 
-// ReadsHistoryOf is the block whose history g reads in place of its own (a
-// StateKV naming another block), -1 where it reads only its own. A block
-// either keeps its rows' history or reads one other block's: an error names
-// a graph reading another block's history past its rows', reading two
-// blocks', or reading another's beside any history of its own.
+// ReadsHistoryOf is the block whose histories g reads in place of its own (a
+// StateKV naming another block), any of them by index, -1 where it reads
+// only its own. A block either keeps its histories or reads one other
+// block's: an error names a graph reading two blocks', or reading another's
+// beside any history of its own.
 func (g *Graph) ReadsHistoryOf() (int, error) {
 	if g == nil {
 		return -1, nil
@@ -876,8 +876,6 @@ func (g *Graph) ReadsHistoryOf() (int, error) {
 				continue
 			}
 			switch b := int(r.From) - 1; {
-			case r.Hist != 0:
-				return -1, fmt.Errorf("block %d reads history %d of block %d: a block reads only another's rows' history", g.Block, r.Hist, b)
 			case n >= 0 && n != b:
 				return -1, fmt.Errorf("block %d reads the histories of blocks %d and %d: a block reads one other block's", g.Block, n, b)
 			default:

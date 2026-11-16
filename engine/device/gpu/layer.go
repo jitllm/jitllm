@@ -1844,15 +1844,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.LastErr = herr.Error()
 		return false
 	}
-	// A history past the rows' is held keys only, and the served and
-	// streamed forms bind one (histKey(li, 1)): a block keeping another is
-	// declined by name.
-	for _, k := range p.Graph.KeptHistories() {
-		if !k.ValuesInKeys || k.Hist > 1 {
-			g.LastErr = fmt.Sprintf("block %d keeps history %d (values in its keys: %v): the card holds one history past a block's rows, its values its keys", li, k.Hist, k.ValuesInKeys)
-			return false
-		}
-	}
 	if hsrc >= 0 {
 		// No history of its own: it reads block n's, which must be on this
 		// device already (blocks are offered in order).
@@ -4021,7 +4012,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case sv.f.split > 0:
 					serr = sv.pagedRun(g, lc, s, inst, kind, l, g.hostFns[sid][li].uses, in, outs)
 				case len(sv.f.sweeps) > 0:
-					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], g.kvp.layers[histKey(l.kvSrc, 1)], in, outs)
+					serr = sv.streamRun(g, lc, s, inst, kind, bs, l.kvSrc, in, outs)
 				default:
 					serr = sv.runAs(g, lc, inst, kind, in, outs)
 				}

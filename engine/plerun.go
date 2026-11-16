@@ -48,9 +48,7 @@ func (s *Instance) growPLE() {
 
 // historySources is, for each block below hi, the block whose history it
 // attends to as its graph reads it: its own, or the block its attention
-// names (graph.Graph.ReadsHistoryOf). A history past a block's rows' is
-// held keys only, its values its keys: one whose append states values of
-// their own is refused by name.
+// names (graph.Graph.ReadsHistoryOf).
 func historySources(m *model.Model, hi int) ([]int, error) {
 	src := make([]int, max(hi, 0))
 	for li := range src {
@@ -62,11 +60,6 @@ func historySources(m *model.Model, hi int) ([]int, error) {
 		src[li] = li
 		if n >= 0 {
 			src[li] = n
-		}
-		for _, k := range g.KeptHistories() {
-			if !k.ValuesInKeys {
-				return nil, fmt.Errorf("block %d's history %d appends values of their own: a history past a block's rows' holds its keys only", li, k.Hist)
-			}
 		}
 	}
 	return src, nil

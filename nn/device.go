@@ -516,9 +516,12 @@ type BlockSpec struct {
 	ActWindow    int
 	Seqs         int
 	ValuesInKeys bool
-	Rotaries     []graph.Rotary
-	Tables       []RowTable
-	F32          bool
+	// Hists are the histories past its rows' the block reads, as the block
+	// whose history it reads keeps them (graph.Graph.KeptHistories).
+	Hists    []graph.KeptHistory
+	Rotaries []graph.Rotary
+	Tables   []RowTable
+	F32      bool
 	// KVRow, past 0, is the head width of a quantized history's rows (F32
 	// is then true: no store narrows to halves): q8 rows, or KVBlock's
 	// blocks where it is set.

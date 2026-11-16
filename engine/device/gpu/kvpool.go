@@ -72,6 +72,8 @@ func (k kvGeom) vWords(p int) int {
 		return 0
 	case k.f16:
 		return p * k.kvRow / 2
+	case k.period > 1:
+		return composer.History{Period: k.period}.Slots(p) * k.kvRow
 	}
 	return p * k.kvRow
 }

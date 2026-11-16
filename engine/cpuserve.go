@@ -253,6 +253,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	p.Formats, p.Strides = formats, s.m.CpuStrides(s.fr, li, g)
 	p.Page, p.Keys, p.ActWindow, p.Seqs = page, max(pg.arenaSlots(), 1)*page, s.m.ActWindow, 1
 	p.ValuesInKeys = pg.latent
+	p.Hists = s.m.Composing().BlockGraph(s.histSrc(li)).KeptHistories()
 	// A block turns by the rotary its rope ops state, of the
 	// instance's (rotaries): each its own table, bound by instance.
 	p.Rotaries = s.rotaries()

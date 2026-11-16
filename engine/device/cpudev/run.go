@@ -361,12 +361,16 @@ func (d *Device) words(a *cpu.Args, b *Call, k *Code, at int) {
 			p = b.Rope[ar.inst]
 		case SrcPlanes:
 			p = b.Planes[ar.inst]
-		case SrcHistKeys, SrcHistPages:
+		case SrcHistKeys, SrcHistValues, SrcHistPages:
 			p = nil
 			if ar.inst < len(b.Hists) {
-				p = b.Hists[ar.inst].Keys
-				if ar.src == SrcHistPages {
-					p = ptr(b.Hists[ar.inst].Pages)
+				switch t := &b.Hists[ar.inst]; ar.src {
+				case SrcHistKeys:
+					p = t.Keys
+				case SrcHistValues:
+					p = t.Values
+				default:
+					p = ptr(t.Pages)
 				}
 			}
 		default:

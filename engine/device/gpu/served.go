@@ -2994,6 +2994,33 @@ func poolHistory(k kvGeom) composer.History {
 	return composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: k.f16}}
 }
 
+// entryHistory is how a pool of a history past a block's rows lays out its
+// pages for the composer: an entry's row a position, its values beside its
+// keys where they are not its keys, as historyMigrate reads them.
+func entryHistory(k kvGeom) composer.History {
+	return composer.History{ValuesInKeys: k.mla, Period: k.period}
+}
+
+// bindHists binds into t every history block src keeps past its rows,
+// history h's keys, values and pages as the composer's tables of instance h.
+// Callers hold g.mu.
+func (g *devTier) bindHists(t map[composer.TableKey]backend.Buf, src int) {
+	if g.kvp == nil {
+		return
+	}
+	for h := 1; ; h++ {
+		pe := g.kvp.layers[histKey(src, h)]
+		if pe == nil {
+			return
+		}
+		t[composer.TableKey{Table: composer.TableKeys, Instance: h}] = pe.k
+		t[composer.TableKey{Table: composer.TablePages, Instance: h}] = pe.tab
+		if !pe.geom.mla {
+			t[composer.TableKey{Table: composer.TableValues, Instance: h}] = pe.v
+		}
+	}
+}
+
 // servedBlock is block li served whole at a step of R rows: its graph formed
 // as one unit on the block's weights and vectors by role, its rotary table
 // cs and its history in the tier's pool layer pl, through the rows'
@@ -3032,13 +3059,11 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if pl != nil && (!l.linear || l.withAttn) {
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
-	// A block keeping a history past its rows reads it as its history 1.
-	var ek, etab backend.Buf
-	period := 0
+	// A block reads each history its history's block keeps past its rows
+	// as that history's index.
+	nh := 1
 	if g.kvp != nil {
-		if pe := g.kvp.layers[histKey(l.kvSrc, 1)]; pe != nil {
-			ek, etab, period = pe.k, pe.tab, pe.geom.period
-		}
+		nh = g.kvp.blockHists(l.kvSrc)
 	}
 	// A step that keeps its rows runs a linear block's keep form.
 	bg := l.graph
@@ -3059,11 +3084,10 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 				tableKey(composer.TableWindows): rowsW, tableKey(composer.TableQOff): qOff, tableKey(composer.TableCall): calls},
 			history: poolHistory(geom),
 			keys:    keys, page: page, seqs: seqs, paged: l.paged(), context: context}
-		if ek != nil {
-			sl.more = []composer.History{{ValuesInKeys: true, Period: period}}
-			sl.tables[composer.TableKey{Table: composer.TableKeys, Instance: 1}] = ek
-			sl.tables[composer.TableKey{Table: composer.TablePages, Instance: 1}] = etab
+		for h := 1; h < nh; h++ {
+			sl.more = append(sl.more, entryHistory(g.kvp.layers[histKey(l.kvSrc, h)].geom))
 		}
+		g.bindHists(sl.tables, l.kvSrc)
 		if run != nil {
 			sl.history.Passes = true
 			for i := range sl.more {
@@ -3148,10 +3172,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	t := sv.sl.tables
 	t[tableKey(composer.TableAngles)], t[tableKey(composer.TableKeys)], t[tableKey(composer.TableValues)], t[tableKey(composer.TablePages)], t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)], t[tableKey(composer.TableQOff)] = cs, kk, kv, tab, rows, rowsW, qOff
 	t[tableKey(composer.TableCall)] = calls
-	if ek != nil {
-		t[composer.TableKey{Table: composer.TableKeys, Instance: 1}] = ek
-		t[composer.TableKey{Table: composer.TablePages, Instance: 1}] = etab
-	}
+	g.bindHists(t, l.kvSrc)
 	if run != nil {
 		t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = run[0], run[1]
 		if context > 0 {
