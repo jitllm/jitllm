@@ -161,19 +161,19 @@ func TestDenseHFClassDefaults(t *testing.T) {
 		}},
 		{"Olmo3ForCausalLM", ``, head, func(c *Config) string {
 			// Window 4096 on three layers in four, base 5e5 for both kinds.
-			return denseOK(c.RopeScaleSWA == 1 && c.SWAWindow == 4096 && c.SWAPeriod == 4 &&
+			return denseOK(c.Stated.ropeScaleSWA == 1 && c.SWAWindow == 4096 && c.SWAPeriod == 4 &&
 				c.RopeBase == 5e5 && c.RopeBaseSWA == 5e5 && !c.Flags.Has(jlm.FlagNoPEGlobal))
 		}},
 		{"Olmo3ForCausalLM", `, "rope_theta": 10000.0`, head, func(c *Config) string {
 			// The class pops rope_theta for the full layers alone: the
 			// sliding ones keep 5e5.
-			return denseOK(c.RopeScaleSWA == 1 && c.RopeBase == 1e4 && c.RopeBaseSWA == 5e5)
+			return denseOK(c.Stated.ropeScaleSWA == 1 && c.RopeBase == 1e4 && c.RopeBaseSWA == 5e5)
 		}},
 		{"Olmo3ForCausalLM", `, "num_key_value_heads": 2, "rope_scaling": {"rope_type": "yarn", "factor": 8.0,
 			"original_max_position_embeddings": 8192}`, head, func(c *Config) string {
 			// YaRN on the full layers, with its magnitude; the sliding
 			// layers' plain rotary is the arch's (SWARopePlain).
-			return denseOK(c.RopeScaleSWA == 1 && c.NKVHead == 2 && c.YarnFactor == 8 &&
+			return denseOK(c.Stated.ropeScaleSWA == 1 && c.NKVHead == 2 && c.YarnFactor == 8 &&
 				c.YarnOrigCtx == 8192 && c.AttnFactor > 1.2 && c.AttnFactor < 1.21 && c.RopeBaseSWA == 5e5)
 		}},
 		{"Olmo2ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *Config) string {

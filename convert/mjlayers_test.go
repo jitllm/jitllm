@@ -45,7 +45,7 @@ func TestTheLibraryStatesTheRecurrentLayers(t *testing.T) {
 			flags: jlm.FlagNoPosEnc, ssm: jlm.SSMConfig{ConvKernel: 4, Groups: 1, Inner: 64, StateSize: 16, NHeadV: 64},
 			kinds: []jlm.LayerKind{jlm.LayerScan}},
 		{arch: "jamba", keys: ssmKeys, tensors: [][]string{{"attn_q.weight"}, {"ssm_conv1d.weight"}},
-			flags: jlm.FlagNoPosEnc, ssm: jlm.SSMConfig{ConvKernel: 4, Groups: 1, Inner: 64, StateSize: 16, NHeadV: 64},
+			flags: jlm.FlagNoPosEnc | jlm.FlagNoExpertNorm, ssm: jlm.SSMConfig{ConvKernel: 4, Groups: 1, Inner: 64, StateSize: 16, NHeadV: 64},
 			kinds: []jlm.LayerKind{full, jlm.LayerScan}},
 		{arch: "lfm2", keys: map[string]meta.Value{"shortconv.l_cache": meta.MakeUint(3), "embedding_length": meta.MakeUint(32)},
 			tensors: [][]string{{"shortconv.conv.weight"}, {"attn_q.weight", "attn_q_norm.weight"}},

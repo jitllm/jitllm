@@ -183,7 +183,7 @@ func TestRouterStatementsAreChecked(t *testing.T) {
 		{`"x": {"requires": ["expert_count"]}`, "requires"},
 		{`"x": {"window": {"size": "8", "period": "2", "from": "1"}}`, "one of a period, a pattern or a first layer"},
 		{`"x": {"rope_sections": "sections"}`, "is not the keys"},
-		{`"x": {"attn_temp": {"scale": "0.1"}}`, "scale, floor and offset"},
+		{`"x": {"attn_temp": {"scale": "0.1"}}`, "its scale and its floor"},
 	} {
 		_, err := parseModelJSON([]byte(`{"gguf": ["x"], "container": {`+tc.states+`}}`), "test")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
