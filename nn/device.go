@@ -447,12 +447,6 @@ func (p *LayerPlan) KeyHead() bool {
 	return !p.MLA() && p.HistRow != 0 && p.HistRow != p.NKVHead*p.HeadDim
 }
 
-// SelectPlan is a block's selection: at most Keep blocks of Block positions
-// are read.
-type SelectPlan struct {
-	Block, Keep int
-}
-
 // Scale is the attention score multiplier this block runs.
 func (p *LayerPlan) Scale() float64 {
 	if p.AttnScale != 0 {
@@ -619,9 +613,6 @@ type LayerPlan struct {
 	// row its graph appends (graph.OpKVAppend's In[0]), or its source's where
 	// it reads another block's; 0 where it reads none.
 	HistRow int
-	// Select is the block's selection of the history it reads (the
-	// container's jlm.Selection), nil where it reads every position.
-	Select *SelectPlan
 	// FFNWide says this block's NFFN is not the model's (its own geometry's),
 	// which a tier that bakes the FFN width into its scratch keeps apart.
 	FFNWide bool

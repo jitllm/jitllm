@@ -533,6 +533,24 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	return nil
 }
 
+// selectKeys is the most keys a gathered row attends: the call's, at most
+// the positions the block's selections (graph.OpSelect) keep, TopK blocks of
+// Span.
+func selectKeys(p *nn.LayerPlan, keys int) int {
+	kept := 0
+	if p.Graph != nil {
+		for _, o := range p.Graph.Ops {
+			if o.Kind == graph.OpSelect {
+				kept = max(kept, o.Attr.TopK*o.Attr.Span)
+			}
+		}
+	}
+	if kept == 0 {
+		return keys
+	}
+	return min(keys, (min(kept, max(p.MaxSeq, 1))+scoreGrain-1)/scoreGrain*scoreGrain)
+}
+
 // selectsBlocks says g selects its history's blocks (graph.OpSelect) -- by
 // their positions' keys (the lightning indexer) or their pooled keys
 // (MiniMax-M3's, QSA's): a form of it over passes ranks the whole history's

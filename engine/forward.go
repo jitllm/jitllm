@@ -1960,10 +1960,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.VFromK = l.VFromK
 	plan.SideW = c.SideWidth()
 	plan.HistRow = historyRow(s.m.Composing(), plan.Graph)
-	if c.SelectAt(li) {
-		s := c.Selection()
-		plan.Select = &nn.SelectPlan{Block: int(s.Block), Keep: int(s.Keep)}
-	}
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
 	if c.MLA() {
 		plan.KVLoraRank, plan.QLoraRank = c.KVLoraRank, c.QLoraRank
