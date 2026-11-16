@@ -917,7 +917,7 @@ func (l *layer) recOf(sid uint64) *recPair {
 func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 	var n uint64
 	for _, v := range w.Vectors {
-		if !heldAsMatrix(w, v) {
+		if !heldAsMatrix(p.Graph, w, v) {
 			n += uint64(4 * len(v.V))
 		}
 	}
@@ -1834,7 +1834,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	l.wide = p.NStreams > 1 || expertsOwnWidth(p.Graph, p.NEmbd)
 	for _, v := range w.Vectors {
-		if heldAsMatrix(w, v) {
+		if heldAsMatrix(p.Graph, w, v) {
 			continue
 		}
 		var b backend.Buf

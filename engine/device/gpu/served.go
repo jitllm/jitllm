@@ -2451,11 +2451,28 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 }
 
 // heldAsMatrix says w holds vector v as a float matrix too, the same floats
-// row by row, which the card uploads and charges once, as the matrix.
-func heldAsMatrix(w *nn.LayerWeights, v nn.RoleVector) bool {
+// row by row, and the block's graph g binds it as that matrix: the card
+// uploads and charges it once, as the matrix. A role the graph binds as a
+// vector keeps its vector.
+func heldAsMatrix(g *graph.Graph, w *nn.LayerWeights, v nn.RoleVector) bool {
 	m := w.Mat(v.Role)
 	q, ok := quantOf(m.T)
-	return ok && q == layout.Float32 && len(m.Data) != 0 && m.Rows*m.K == len(v.V)
+	return ok && q == layout.Float32 && len(m.Data) != 0 && m.Rows*m.K == len(v.V) && bindsMatrix(g, v.Role)
+}
+
+// bindsMatrix says graph g binds role r as a matrix: a weight of rows.
+func bindsMatrix(g *graph.Graph, r jlm.Role) bool {
+	if g == nil {
+		return false
+	}
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			if w.Role == r && w.Rows > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // blockServes is nil where the composer serves block li of this step whole,

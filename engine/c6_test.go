@@ -15,6 +15,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -363,6 +364,19 @@ func setVec(l *model.Layer, r jlm.Role, f func(v []float32) []float32) {
 		vs = append(vs, v)
 	}
 	l.Vecs = vs
+	// A vector the block stores 2-D is a float matrix too, over the same
+	// floats, and a card reads that view: it goes with the vector, in a table
+	// of l's own.
+	nv := nn.VectorOf(vs, r)
+	for i, m := range l.Mats {
+		if nv != nil && m.Role == r && m.T.Typ == quant.F32 && m.T.Rows*m.T.K == len(nv) {
+			ms := slices.Clone(l.Mats)
+			t := model.F32Tensor(nv, m.T.Rows, m.T.K)
+			ms[i].T = &t
+			l.Mats = ms
+			break
+		}
+	}
 }
 
 // addVec gives block l a vector under r in a table of l's own: one the file
