@@ -54,35 +54,6 @@ func gemmaAttnScale(c *Config) {
 	}
 }
 
-// perLayerCount reads a head count that a file may write per layer.
-//
-// An array read as a scalar would silently fall back to the default
-// (granite-4.0-micro writes head_count_kv per layer). An array whose entries
-// agree is that number; one whose entries differ is refused.
-func perLayerCount(f *meta.File, key string, def uint32) (uint32, error) {
-	kv, ok := f.Key(key)
-	if !ok {
-		return def, nil
-	}
-	if v, ok := kv.Uint(); ok {
-		return uint32(v), nil
-	}
-	vs, err := kv.Int32s()
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", key, err)
-	}
-	if len(vs) == 0 {
-		return def, nil
-	}
-	for i, v := range vs {
-		if v != vs[0] || v < 0 {
-			return 0, fmt.Errorf("%s differs by layer (%d at layer 0, %d at layer %d): %w",
-				key, vs[0], v, i, ErrNotImplemented)
-		}
-	}
-	return uint32(vs[0]), nil
-}
-
 // swaPatternOf reads which layers slide, into c.SWAPeriod, from the file's
 // attention.sliding_window_pattern or the architecture's period def.
 //

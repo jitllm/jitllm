@@ -3,7 +3,6 @@ package convert
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -16,89 +15,17 @@ import (
 // x | B | C, and unfuseSSD permutes their rows once here so that deltaGeom
 // slices a Mamba-2 block exactly as it slices qwen3next's.
 
-// ssdArch reports the architectures whose recurrent layers are Mamba-2's.
-func ssdArch(a Arch) bool {
-	switch a {
-	case ArchMamba2, ArchGraniteHybrid, ArchNemotronH, ArchFalconH1:
-		return true
+// blockIs reports whether block b's stated kind is one of kinds.
+func blockIs(c *Config, b int32, kinds ...jlm.LayerKind) bool {
+	if c == nil || b < 0 || int(b) >= len(c.LayerKinds) {
+		return false
+	}
+	for _, k := range kinds {
+		if c.LayerKinds[b] == k {
+			return true
+		}
 	}
 	return false
-}
-
-// attnLayerCount is perLayerCount for a hybrid, whose per-layer arrays carry
-// zeros on the recurrent layers (llama.cpp's is_recr test reads exactly that
-// zero): the attention layers' entries must agree, and an array of zeros --
-// a model with no attention at all -- is zero.
-func attnLayerCount(f *meta.File, key string, def uint32) (uint32, error) {
-	kv, ok := f.Key(key)
-	if !ok {
-		return def, nil
-	}
-	if v, ok := kv.Uint(); ok {
-		return uint32(v), nil
-	}
-	vs, err := kv.Int32s()
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", key, err)
-	}
-	var n int32
-	for i, v := range vs {
-		switch {
-		case v < 0:
-			return 0, fmt.Errorf("%s: %d at layer %d", key, v, i)
-		case v == 0:
-		case n == 0:
-			n = v
-		case v != n:
-			return 0, fmt.Errorf("%s differs between attention layers (%d and %d at layer %d): %w",
-				key, n, v, i, ErrNotImplemented)
-		}
-	}
-	return uint32(n), nil
-}
-
-// ssdConfig reads the Mamba-2 geometry and each family's switches into c.
-func ssdConfig(f *meta.File, c *Config) error {
-	c.SSM = jlm.SSMConfig{
-		ConvKernel: uint32(f.UintKey("ssm.conv_kernel", 0)),
-		Groups:     uint32(f.UintKey("ssm.group_count", 1)),
-		Inner:      uint32(f.UintKey("ssm.inner_size", 0)),
-		StateSize:  uint32(f.UintKey("ssm.state_size", 0)),
-		// llama.cpp writes Mamba-2's head count as the time-step rank: one dt
-		// per head, which is the delta rule's one decay per value head.
-		NHeadV: uint32(f.UintKey("ssm.time_step_rank", 0)),
-	}
-	s := c.SSM
-	switch {
-	case s.ConvKernel < 2 || s.Inner == 0 || s.StateSize == 0 || s.NHeadV == 0 || s.Groups == 0:
-		return fmt.Errorf("incomplete Mamba-2 geometry %+v", s)
-	case s.Inner%s.NHeadV != 0:
-		return fmt.Errorf("Mamba-2 inner size %d is not %d whole heads", s.Inner, s.NHeadV)
-	case s.NHeadV%s.Groups != 0:
-		return fmt.Errorf("Mamba-2's %d heads do not divide into %d groups", s.NHeadV, s.Groups)
-	case s.Inner%s.Groups != 0:
-		return fmt.Errorf("Mamba-2 inner size %d does not divide into %d norm groups", s.Inner, s.Groups)
-	}
-	// FalconMamba's dt/B/C norms are Mamba-1's; a Mamba-2 file has none.
-	if kv, ok := f.Key("ssm.dt_b_c_rms"); ok {
-		if v, ok := kv.Uint(); ok && v != 0 {
-			return fmt.Errorf("ssm.dt_b_c_rms on a Mamba-2 model: %w", ErrNotImplemented)
-		}
-	}
-	switch c.Arch {
-	case ArchMamba2:
-		// No layer attends; the placeholder head configOf set rotates nothing.
-		c.Flags |= jlm.FlagNoPosEnc
-	case ArchGraniteHybrid:
-		return graniteHybridConfig(f, c)
-	case ArchNemotronH:
-		return nemotronConfig(f, c)
-	case ArchFalconH1:
-		// llama.cpp's rope-type table puts falcon-h1 with NEOX; every muP
-		// multiplier is already in the weights (its converter folds them).
-		c.Flags |= jlm.FlagRopeNeox
-	}
-	return nil
 }
 
 // unfuseSSD splits Mamba-2's in_proj and puts its convolved channels in the
@@ -111,7 +38,7 @@ func ssdConfig(f *meta.File, c *Config) error {
 // same way, so the convolution runs over q | k | v. GGUF rows are byte ranges,
 // so all of it is copies; nothing is re-quantized.
 func unfuseSSD(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || !ssdArch(c.Arch) {
+	if !blockIs(c, e.Block, jlm.LayerSSD, jlm.LayerSSDAttn) {
 		return nil, false, nil
 	}
 	s := c.SSM

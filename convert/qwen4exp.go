@@ -59,9 +59,9 @@ func qwen4expRoleOf(name string) (jlm.Role, bool) {
 }
 
 // qwen4expConfig is llama.cpp's qwen4exp.cpp and transformers'
-// Qwen4ExpForCausalLM, text only, on top of what the qwen3next case reads
-// (the delta rule's geometry, the gated query, per-head q/k norms) and
-// qwen35Of (the tiled value heads, the M-RoPE sections):
+// Qwen4ExpForCausalLM, text only, on top of what convert/models/qwen3_5.json
+// states for it (the delta rule's geometry, the gated query, per-head q/k
+// norms, the tiled value heads) and the M-RoPE sections:
 //
 //   - HCMult streams mixed through a HCLowRank gate (hyper_connection.*);
 //   - the delta rule's output norm gated by sigmoid, not silu: llama.cpp's

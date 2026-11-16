@@ -1,5 +1,9 @@
 {
   "gguf": ["lfm2", "lfm2moe"],
+  "container": {
+    "lfm2": {"flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]},
+    "lfm2moe": {"flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]}
+  },
   "graph": {
     "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],
     "block": [

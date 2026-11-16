@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -35,7 +36,13 @@ type mjStates struct {
 	// selects the positions attention reads.
 	Latent  *mjStatesLatent  `json:"latent"`
 	Indexer *mjStatesIndexer `json:"indexer"`
-	exprs   map[string]*jinja.Expr
+	// Recurrent is the recurrent layers' geometry (jlm.SSMConfig), each a
+	// count.
+	Recurrent *mjStatesRecurrent `json:"recurrent"`
+	// Layers is each layer's kind, read off the tensors it carries
+	// (stateLayers).
+	Layers []mjStatesLayer `json:"layers"`
+	exprs  map[string]*jinja.Expr
 }
 
 // mjStatesLatent is latent attention's ranks: KV the key-value latent's, Q
@@ -53,6 +60,36 @@ type mjStatesIndexer struct {
 	Heads    string `json:"heads"`
 	KeyWidth string `json:"key_width"`
 	TopK     string `json:"top_k"`
+}
+
+// mjStatesRecurrent is a recurrent geometry: the convolution's taps, the key
+// heads (groups), the inner width, the state's size and the value heads. A
+// field left out is zero; one stated is at least one.
+type mjStatesRecurrent struct {
+	ConvKernel string `json:"conv_kernel"`
+	Groups     string `json:"groups"`
+	Inner      string `json:"inner"`
+	StateSize  string `json:"state_size"`
+	HeadsV     string `json:"heads_v"`
+}
+
+// mjStatesLayer is a layer kind (mjLayerKinds) for a layer carrying every
+// one of Tensors, named past its "blk.N." prefix.
+type mjStatesLayer struct {
+	Tensors []string `json:"tensors"`
+	Kind    string   `json:"kind"`
+}
+
+// mjLayerKinds is each layer kind a file may state by name.
+func mjLayerKinds() map[string]jlm.LayerKind {
+	return map[string]jlm.LayerKind{
+		"attention":        jlm.LayerFullAttn,
+		"linear_attention": jlm.LayerLinearAttn,
+		"ssd":              jlm.LayerSSD,
+		"ssd_attention":    jlm.LayerSSDAttn,
+		"short_conv":       jlm.LayerShortConv,
+		"scan":             jlm.LayerScan,
+	}
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -94,6 +131,17 @@ func (mj *modelJSON) checkStates() error {
 			}
 			srcs = append(srcs, x.Heads, x.KeyWidth, x.TopK)
 		}
+		if r := st.Recurrent; r != nil {
+			if r.ConvKernel == "" {
+				return fmt.Errorf("convert: %s: %s: a recurrent geometry states its convolution's taps", mj.name, arch)
+			}
+			srcs = append(srcs, r.ConvKernel, r.Groups, r.Inner, r.StateSize, r.HeadsV)
+		}
+		for _, l := range st.Layers {
+			if _, ok := mjLayerKinds()[l.Kind]; !ok || len(l.Tensors) == 0 {
+				return fmt.Errorf("convert: %s: %s: layer kind %q over tensors %v", mj.name, arch, l.Kind, l.Tensors)
+			}
+		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
 			if _, no := mjFlagsNotImplemented()[k]; !ok && !no {
@@ -116,7 +164,8 @@ func (mj *modelJSON) checkStates() error {
 }
 
 // compile compiles each of srcs, refusing one that reads anything but the
-// keys.
+// keys and the layers' tensors (layer_tensors: every name a layer's tensor
+// takes past its "blk.N." prefix).
 func (st *mjStates) compile(srcs []string) error {
 	st.exprs = map[string]*jinja.Expr{}
 	for _, src := range srcs {
@@ -128,8 +177,8 @@ func (st *mjStates) compile(srcs []string) error {
 			return err
 		}
 		for _, n := range x.Names() {
-			if n != "src" {
-				return fmt.Errorf("%q reads %q, which is not the keys (src)", src, n)
+			if n != "src" && n != "layer_tensors" {
+				return fmt.Errorf("%q reads %q, which is not the keys (src) or the layers' tensors (layer_tensors)", src, n)
 			}
 		}
 		st.exprs[src] = x
@@ -166,7 +215,7 @@ func stateContainer(f *meta.File, c *Config) error {
 func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	arch := f.Arch()
 	var err error
-	vars := map[string]jinja.Value{"src": ggufKeys(f)}
+	vars := map[string]jinja.Value{"src": ggufKeys(f), "layer_tensors": layerTensors(f)}
 	value := func(what, src string) (jinja.Value, error) {
 		v, err := st.exprs[src].Eval(vars, blockExprSteps)
 		if err == nil && v.IsUndefined() {
@@ -270,6 +319,28 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		if err := indexerFits(c); err != nil {
 			return fmt.Errorf("convert: %s: %s: %w", by, arch, err)
+		}
+	}
+	if r := st.Recurrent; r != nil {
+		c.SSM = jlm.SSMConfig{}
+		for _, s := range []struct {
+			what, src string
+			to        *uint32
+		}{{"conv_kernel", r.ConvKernel, &c.SSM.ConvKernel}, {"groups", r.Groups, &c.SSM.Groups},
+			{"inner", r.Inner, &c.SSM.Inner}, {"state_size", r.StateSize, &c.SSM.StateSize},
+			{"heads_v", r.HeadsV, &c.SSM.NHeadV}} {
+			if s.src == "" {
+				continue
+			}
+			if *s.to, err = whole("recurrent."+s.what, s.src); err != nil {
+				return err
+			}
+			if *s.to == 0 {
+				return fmt.Errorf("convert: %s: incomplete recurrent geometry: %s is zero", arch, s.what)
+			}
+		}
+		if err := recurrentFits(c.SSM); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
 		}
 	}
 	w := st.Window
