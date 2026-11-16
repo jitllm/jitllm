@@ -85,64 +85,70 @@ func flagshipRoleOf(name string) (jlm.Role, bool) {
 // model-correctness.md, "convert/flagship.go: gemma4Config"; the gemma4
 // statement states all of it but each block's geometry.
 
-// stateKindGeoms states each block's geometry where a sliding layer's is its
-// own (the sliding statement: its head, rotary and kv heads, the kv heads
-// per layer split by the sliding pattern) or the FFN widths differ (one
-// width, or it and twice it on the KV-sharing layers).
+// stateKindGeoms states each block's geometry where it differs from the
+// model's, as the file states it per layer: the sliding layers' head and
+// rotary where the sliding statement states them, the kv heads of each
+// attending layer where the count differs by layer, and the feed-forward
+// width where it is stated per layer. The model's geometry is its global
+// layers', the keys without _swa being theirs.
 func stateKindGeoms(f *meta.File, c *Config) error {
 	var ffns []int32
 	if kv, ok := f.Key("feed_forward_length"); ok && c.NFFN == 0 && kv.Type == meta.Array {
 		ws, err := kv.Int32s()
-		if err != nil || len(ws) != int(c.NLayer) || ws[0] <= 0 {
+		if err != nil || len(ws) != int(c.NLayer) {
 			return fmt.Errorf("feed_forward_length: %d values for %d layers (%v)", len(ws), c.NLayer, err)
 		}
-		c.NFFN = uint32(ws[0])
 		for i, w := range ws {
-			if w != ws[0] && (!c.KVShared(i) || w != 2*ws[0]) {
-				return fmt.Errorf("feed_forward_length %v: layer %d is %d, and only the %d KV-sharing "+
-					"layers may be twice %d: %w", ws, i, w, c.NKVShared, c.NFFN, ErrNotImplemented)
+			if w <= 0 {
+				return fmt.Errorf("feed_forward_length %v: layer %d has no feed-forward: %w", ws, i, ErrNotImplemented)
 			}
 		}
-		ffns = ws
+		c.NFFN, ffns = uint32(ws[0]), ws
+	}
+	_, kvs, err := layerCount(f, "attention.head_count_kv", c.NHead)
+	if err != nil {
+		return err
+	}
+	if kvs != nil && len(kvs) != int(c.NLayer) {
+		return fmt.Errorf("attention.head_count_kv: %d values for %d layers", len(kvs), c.NLayer)
 	}
 	sw := c.Stated.sliding
-	if sw == nil {
-		if ffns != nil {
-			c.Geoms = blockGeoms(c, jlm.Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot}, ffns)
-		}
+	if sw == nil && ffns == nil && kvs == nil {
 		return nil
 	}
-	swa := *sw
-	// The kv heads, one per layer: every sliding layer agrees with every
-	// other and every global layer with every other.
-	kv, ok := f.Key("attention.head_count_kv")
-	if !ok {
-		c.NKVHead = c.NHead
-	} else if v, ok := kv.Uint(); ok {
-		c.NKVHead = uint32(v)
-	} else {
-		vs, err := kv.Int32s()
-		if err != nil || len(vs) != int(c.NLayer) {
-			return fmt.Errorf("attention.head_count_kv: %d values for %d layers (%v)", len(vs), c.NLayer, err)
-		}
-		for i, v := range vs {
-			dst := &c.NKVHead
-			if sliding(c, i) {
-				dst = &swa.NKVHead
+	if kvs != nil {
+		c.NKVHead = 0
+		for _, global := range []bool{true, false} {
+			for i, v := range kvs {
+				if v != 0 && c.NKVHead == 0 && (!global || !sliding(c, i)) {
+					c.NKVHead = uint32(v)
+				}
 			}
-			if v <= 0 || (*dst != 0 && *dst != uint32(v)) {
-				return fmt.Errorf("attention.head_count_kv %v does not split by the sliding pattern", vs)
-			}
-			*dst = uint32(v)
 		}
 	}
-	if c.NKVHead == 0 || c.NHead%c.NKVHead != 0 {
-		return fmt.Errorf("%d global kv heads for %d query heads", c.NKVHead, c.NHead)
+	model := jlm.Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot, NFFN: c.NFFN}
+	gs := make([]jlm.Geom, c.NLayer)
+	differ := false
+	for i := range gs {
+		g := model
+		if sw != nil && sliding(c, i) {
+			g.HeadDim, g.NRot = sw.HeadDim, sw.NRot
+		}
+		if kvs != nil && kvs[i] != 0 {
+			g.NKVHead = uint32(kvs[i])
+		}
+		if g.NKVHead == 0 || c.NHead%g.NKVHead != 0 {
+			return fmt.Errorf("block %d: %d kv heads for %d query heads", i, g.NKVHead, c.NHead)
+		}
+		if ffns != nil {
+			g.NFFN = uint32(ffns[i])
+		}
+		gs[i] = g
+		differ = differ || g != model
 	}
-	if swa.NKVHead == 0 {
-		swa.NKVHead = c.NKVHead
+	if differ {
+		c.Geoms = gs
 	}
-	c.Geoms = blockGeoms(c, swa, ffns)
 	return nil
 }
 
@@ -167,24 +173,6 @@ func blockIndexerFits(c *Config) error {
 	case c.IdxLocal == 0 || c.IdxLocal > c.IdxTopK:
 		return fmt.Errorf("%d local blocks of %d selected: a query's own block forced in, "+
 			"inside the top-k, is implemented: %w", c.IdxLocal, c.IdxTopK, ErrNotImplemented)
-	}
-	return nil
-}
-
-// sparseBlocksFit checks a block-selecting indexer sits exactly where the
-// selection runs: on every block past the dense lead (llama.cpp's
-// is_sparse, and MiniMax-M3's published sparse_attention_freq), never inside
-// it. Read after the dense lead, which configOf reads with the mixture.
-func sparseBlocksFit(f *meta.File, c *Config) error {
-	if c.IdxBlock == 0 {
-		return nil
-	}
-	for i := 0; i < int(c.NLayer); i++ {
-		_, ok := f.Get("blk." + itoa(i) + ".indexer.q_proj.weight")
-		if want := i >= int(c.NDenseLead); ok != want {
-			return fmt.Errorf("block %d (dense lead %d) has an indexer: %v; sparse attention "+
-				"runs on exactly the blocks past the lead: %w", i, c.NDenseLead, ok, ErrNotImplemented)
-		}
 	}
 	return nil
 }
@@ -285,24 +273,16 @@ func sharedTensors(c *Config, s *jlm.Source) error {
 	return nil
 }
 
-// denseMoEFits reads a dense MLP beside a mixture (jlm.Flag2DenseMoE, Gemma
-// 4's 26B), after the generic mixture keys: softmax, renormalised whatever
-// the file says -- Gemma4TextRouter divides by the top-k sum and llama.cpp's
-// builder passes true -- with no routed scale or groups, and the dense MLP
-// carried as an ungated shared expert at the dense width.
+// denseMoEFits reads a dense MLP beside a mixture (jlm.Flag2DenseMoE): the
+// dense MLP is carried as the shared expert at the dense width, so a file
+// with a shared expert of its own has no place for it. What its router does
+// is its statement's router.
 func denseMoEFits(f *meta.File, c *Config) error {
 	if c.NExpert == 0 || !c.Flags2.Has(jlm.Flag2DenseMoE) {
 		return nil
 	}
-	if c.Flags.Has(jlm.FlagExpertSigmoid) {
-		return fmt.Errorf("a sigmoid gate, and a dense MLP's router beside it is a softmax: %w", ErrNotImplemented)
-	}
-	c.Flags &^= jlm.FlagNoExpertNorm
-	if (c.ExpertScale != 0 && c.ExpertScale != 1) || c.NExpertGroup != 0 {
-		return fmt.Errorf("a routed scale %g or expert groups beside a dense MLP: %w", c.ExpertScale, ErrNotImplemented)
-	}
 	if f.UintKey("expert_shared_count", 0) != 0 {
-		return fmt.Errorf("a shared expert beside the dense MLP: %w", ErrNotImplemented)
+		return fmt.Errorf("a shared expert beside a dense MLP carried as the shared expert: %w", ErrNotImplemented)
 	}
 	c.NFFNShExp = c.NFFN
 	return nil
@@ -311,28 +291,4 @@ func denseMoEFits(f *meta.File, c *Config) error {
 // sliding reports that block i of c's pattern slides.
 func sliding(c *Config, i int) bool {
 	return c.SWAPeriod != 0 && uint32(i)%c.SWAPeriod < c.SWAPeriod-1
-}
-
-// blockGeoms is each block's geometry: the sliding layers' swa where the
-// pattern slides, the model's elsewhere, and ffns' feed-forward width where it
-// is stated per layer; none at all when every block is the model's.
-func blockGeoms(c *Config, swa jlm.Geom, ffns []int32) []jlm.Geom {
-	model := jlm.Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot, NFFN: c.NFFN}
-	gs := make([]jlm.Geom, c.NLayer)
-	differ := false
-	for i := range gs {
-		g := model
-		if sliding(c, i) {
-			g.NKVHead, g.HeadDim, g.NRot = swa.NKVHead, swa.HeadDim, swa.NRot
-		}
-		if ffns != nil {
-			g.NFFN = uint32(ffns[i])
-		}
-		gs[i] = g
-		differ = differ || g != model
-	}
-	if !differ {
-		return nil
-	}
-	return gs
 }

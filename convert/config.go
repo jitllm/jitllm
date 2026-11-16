@@ -606,9 +606,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 	if err := denseMoEFits(f, c); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	if err := sparseBlocksFit(f, c); err != nil {
-		return nil, fmt.Errorf("convert: %s: %w", name, err)
-	}
 	if kv, ok := f.Key("rope.scaling.finetuned"); ok && !c.Flags.Has(jlm.FlagNoPosEnc) {
 		if v, ok := kv.Uint(); ok && v == 0 {
 			return nil, fmt.Errorf("convert: %s: rope.scaling.finetuned false turns the rotary off, which the "+

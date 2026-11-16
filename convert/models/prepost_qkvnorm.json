@@ -3,6 +3,7 @@
   "container": {
     "gemma4": {"revision": {"picture_bidir_sliding": "(src['embedding_length_per_layer_input'] | default(0)) == 0"},
                "flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true", "dense_moe": "(src['expert_count'] | default(0)) > 0"},
+               "router": {"gate": "softmax", "renormalise": "always", "unscaled": true, "ungrouped": true},
                "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5", "attn_scale": "1",
                "final_softcap": "src['final_logit_softcapping'] | default(0)",
                "kv_shared": "src['attention.shared_kv_layers'] | default(0)",

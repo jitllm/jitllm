@@ -1199,7 +1199,8 @@ func (r *mjRouter) apply(f *meta.File, c *Config) error {
 	}
 	if r.Gate != "" {
 		if kv, ok := f.Key("expert_gating_func"); ok {
-			if v, _ := kv.Uint(); int64(v) != mjGates()[r.Gate] {
+			// The file's reading takes a gating key of 0 as softmax too.
+			if v, _ := kv.Uint(); int64(v) != mjGates()[r.Gate] && !(r.Gate == "softmax" && v == 0) {
 				return fmt.Errorf("expert_gating_func %d, and the class's router is %s: %w", v, r.Gate, ErrNotImplemented)
 			}
 		}

@@ -201,14 +201,14 @@ schema; `convert/modeljson.go` reads it. Its sections:
   of positions (MiniMax Sparse Attention) and the blocks a query's own
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
-  (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `sliding` is the sliding layers' own geometry (`head_dim`, `value_dim`
+  (`blockIndexerFits`); a block selects where it carries the indexer. `sliding` is the sliding layers' own geometry (`head_dim`, `value_dim`
   held to it, `rotary` even and at most the head), each block's geometry
-  then stated with the kv heads split by the sliding pattern
-  (`stateKindGeoms`; a per-layer FFN width may be twice the first on the
-  KV-sharing layers, for every file); `rope_freqs: true` holds the file to a
-  `rope_freqs` tensor; the `dense_moe` flag reads a dense MLP beside a
-  mixture (`denseMoEFits`). `attn_scale` is the score multiplier in place of 1/sqrt(head_dim) (0
+  then what the file states per layer (`stateKindGeoms`: the sliding
+  layers' head and rotary, per-layer kv heads and feed-forward widths, for
+  every file); `rope_freqs: true` holds the file to a
+  `rope_freqs` tensor; the `dense_moe` flag carries a dense MLP beside a
+  mixture as the shared expert (`denseMoEFits`), its router being the
+  statement's router. `attn_scale` is the score multiplier in place of 1/sqrt(head_dim) (0
   for that; Gemma 2's and 3's state llama.cpp's loader rule for the 27B,
   n_embd/n_head at 46 and 62 layers, which their GGUFs do not state),
   `kv_shared` how many last layers read an earlier layer's history, `ple_width`
