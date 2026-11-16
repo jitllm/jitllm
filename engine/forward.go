@@ -442,9 +442,10 @@ type Instance struct {
 	// tail then copied out; rowsTok is where a greedy one's tokens land.
 	rowsLog, rowsHid []float32
 	// rowsHeads counts a hyper-connected model's verifications whose head
-	// ran on the device (rowsHead).
-	rowsHeads int
-	rowsTok   []int32
+	// ran on the device (rowsHead); devHeads a decode token's projections a
+	// device served, folded into its blocks' call or after them.
+	rowsHeads, devHeads int
+	rowsTok             []int32
 	// prepLater holds a lane binding's block preparation for the caller to
 	// run once the blocks' routes are settled (SetDeviceLayers). unprepped
 	// is each block a placement on an unlisted CPU left unprepared there
@@ -1417,7 +1418,8 @@ func (s *Instance) streamedAt(li int) bool { return li < len(s.streamedOn) && s.
 func (s *Instance) newHead() *nn.Head {
 	c := s.c
 	f := s.m.FrontGraphs()
-	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Vectors: s.headVectors(), W: model.Wt(*s.outW), Logits: s.logits,
+	head, hidden, li := s.ownHead()
+	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: head, HiddenGraph: hidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Vectors: s.headVectors(), W: model.Wt(*s.outW), Logits: s.logits,
 		Embeds: c.TiedEmbd, NoCPU: !s.listed(routeLanes)}
 	if p := s.opt.place; p != nil && p.Head != nil {
 		h.Stream = p.Head.Stream
@@ -1428,9 +1430,9 @@ func (s *Instance) newHead() *nn.Head {
 	if s.dense.PosEmbd.E != nil {
 		h.PosEmbd = model.Wt(s.dense.PosEmbd)
 	}
-	h.Streams = s.streamsPart(f.Embed)
+	h.Streams = s.streamsPart(f.Embed, -1)
 	if c.Streams() > 1 {
-		h.Mix = s.streamsPart(f.CpuHead)
+		h.Mix = s.streamsPart(head, li)
 	}
 	return h
 }
@@ -3074,10 +3076,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// With the last block on the device the projection rides the same
 	// submission (folded); otherwise it is its own call below. Device runs sit
 	// inside the block loop, and the residual crosses the seam once per run.
-	//
-	// AltUp's head reads the streams' mean, which the host takes, so the
-	// projection is never folded into the last run.
-	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !c.StreamHead() && !s.cutAt(s.hi-1)
+	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !s.wantsResidual() && !s.cutAt(s.hi-1)
 	// Not a defer inside the loop: one there takes every defer in this
 	// function off the open-coded path, and a heap defer record costs a decode
 	// token an allocation whenever the runtime's per-P pool runs dry.
@@ -3150,6 +3149,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if fold != nil {
 			// The device ran the output norm and the projection too, so the
 			// token is finished and the residual never came home.
+			s.devHeads++
 			s.advance(0, 1)
 			// The token is complete, so it steps what every token steps:
 			// a head on the device is no reason for the seam tuner or the
@@ -3177,13 +3177,14 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// same tail the folded path uses). A refusal falls through to the host,
 	// which has the norm and the weights either way.
 	done := false
-	if s.head != nil && !folded && s.devHeadReads() {
+	if s.head != nil && !folded {
 		s.closeRuns(nil)
 		if !c.ResidStreams() { // its hidden state is the residual, taken in tapStreams
 			defer s.rows.hiddenOf(s.head)()
 		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs, s.head) {
 			done = true
+			s.devHeads++
 		} else if err := s.refusal(s.gpuLayers); err != nil {
 			return nil, err
 		} else if !s.fallsBack() {

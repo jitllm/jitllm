@@ -17,16 +17,14 @@ func moveHead(dst, src *blockScratch) {
 	if dst == nil || src == nil || dst == src {
 		return
 	}
-	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
-	dst.headHidden, src.headHidden = src.headHidden, nil
+	dst.head, dst.mvHead, dst.heads, dst.sampleGraph = src.head, src.mvHead, src.heads, src.sampleGraph
 	dst.sampleWalk, src.sampleWalk = src.sampleWalk, nil
 	dst.pickGraph, dst.pickHead, src.pickGraph, src.pickHead = src.pickGraph, src.pickHead, nil, nil
 	dst.hVecs, dst.hVecBytes, dst.logits, dst.hRaw, dst.hOut = src.hVecs, src.hVecBytes, src.logits, src.hRaw, src.hOut
 	dst.embedGraph = src.embedGraph
-	dst.headMix = src.headMix
 	dst.embSW, dst.embSV = src.embSW, src.embSV
 	dst.embW, dst.posW, dst.embErr = src.embW, src.posW, src.embErr
-	src.head, src.mvHead, src.headGraph, src.sampleGraph = nil, mv{}, nil, nil
+	src.head, src.mvHead, src.heads, src.sampleGraph = nil, mv{}, nil, nil
 	src.hVecs, src.hVecBytes, src.logits, src.hRaw, src.hOut = nil, 0, nil, nil, nil
 }
 

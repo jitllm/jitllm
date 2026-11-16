@@ -22,8 +22,7 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 	c := s.c
 	n := len(tokens)
 	// The ragged head applies the final softcap itself, as decode's head does.
-	// AltUp's head reads the streams' mean, which the host takes (altup.go).
-	headOnDev := s.devCount() > 0 && s.headWithLastBlock() && !c.StreamHead() && !s.cutAt(s.hi-1)
+	headOnDev := s.devCount() > 0 && s.headWithLastBlock() && !s.wantsResidual() && !s.cutAt(s.hi-1)
 	s.growRows(n)
 	if len(s.blogits) < nlogit*c.NVocab {
 		s.blogits = make([]float32, nlogit*c.NVocab)

@@ -306,7 +306,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 					}
 					// A hyper-connected model's verifications project on the
 					// device after the host's collapse (rowsHead).
-					if m.Cfg.StreamHead() && heads == 0 {
+					if m.Cfg.ResidStreams() && heads == 0 {
 						t.Fatalf("no verification's head ran on %s: the host projected every one", spec)
 					}
 				})

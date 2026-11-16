@@ -226,7 +226,7 @@ func roomRuns(runs []Run, rows int) error {
 	end := 0
 	for i := range runs {
 		r := &runs[i]
-		if r.Logits && !in.c.StreamHead() {
+		if r.Logits {
 			head = in.head
 		}
 		end = max(end, r.sess().bpos[0]+len(r.Tokens))
@@ -662,14 +662,10 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	}
 	// The head's Logits is s0's single-sequence destination; the step borrows
 	// it for the wanted rows and hands it back. A step no row wants logits
-	// from runs no head. AltUp's head reads the streams' mean, which the host
-	// takes: the rows are read back and the host projects them.
+	// from runs no head.
 	var h *nn.Head
 	var logits []float32
-	if nlogit > 0 && c.StreamHead() {
-		s0.stepLogits = slices.Grow(s0.stepLogits[:0], nlogit*c.NVocab)[:nlogit*c.NVocab]
-		logits = s0.stepLogits
-	} else if nlogit > 0 {
+	if nlogit > 0 {
 		h = s0.head
 		s0.stepLogits = slices.Grow(s0.stepLogits[:0], nlogit*c.NVocab)[:nlogit*c.NVocab]
 		logits = s0.stepLogits
@@ -688,11 +684,6 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		}
 		return nil, fmt.Errorf("model: the device refused a step of %d rows across %d sessions: %s",
 			rows, len(runs), why)
-	}
-	if nlogit > 0 && c.StreamHead() {
-		if why := s0.headRows(x, logits, nil, nlogit, s0.plane(rows)); why != nn.DeclineServes {
-			return nil, s0.headDeclined(why)
-		}
 	}
 	out := s0.stepOut(len(runs))
 	at := 0

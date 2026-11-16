@@ -1175,10 +1175,10 @@ func (l *layer) kvOf(sid uint64) *kvPair {
 // blockScratch is the per-call staging every layer of a lane shares: a call
 // holds its lane (devsess.go), so one block runs in it at a time.
 type blockScratch struct {
-	// headGraph is the head as ops from the model's front end (nn.Head.Graph):
-	// what serving the head forms (served.go); headHidden is it writing its
-	// normed rows too (nn.Head.HiddenGraph), a call reading them back's.
-	headGraph, headHidden *graph.Graph
+	// heads is every head the tier's instances placed (headGraphs), each
+	// what serving it forms (served.go): an instance's head is its own, the
+	// model's or a prediction block's.
+	heads []headForm
 	// sampleGraph is the greedy token over the head's logits as ops from the
 	// front end (nn.Head.Sample): what serving the argmax forms; sampleWalk
 	// a top-k draw's token (nn.Head.SampleWalk), what serving SampleK forms;
@@ -1266,9 +1266,6 @@ type blockScratch struct {
 	// embedding and the position table (nn.Head.Streams), by role.
 	embSW map[jlm.Role]*resident
 	embSV map[jlm.Role]backend.Buf
-	// headMix is the tensors the head's graph binds past its own, the mix
-	// of a residual of several planes (headplanes.go), nil for none.
-	headMix *nn.RowsPart
 	// foldReq is the request of the composer's row take that moves a batched
 	// chunk's last residual row into this (decode) scratch's x, so the output
 	// projection rides the chunk's own submission (layersOnce's folded head):
@@ -2389,7 +2386,8 @@ func (g *devTier) headGraphs(h *nn.Head) {
 		}
 		for _, d := range ds {
 			if d != nil {
-				d.headGraph, d.headHidden, d.sampleGraph, d.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
+				d.holdHead(h)
+				d.sampleGraph, d.embedGraph = h.Sample, h.Embed
 				d.sampleWalk, d.pickGraph, d.pickHead = h.SampleWalk, h.PickGraph, h.PickHead
 			}
 		}
@@ -2408,12 +2406,11 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	g.headGraphs(h)
 	h.GatherRow = h.Embed != nil
-	bs.headMix = h.Mix
 	// The head is the model's: a second instance on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
 	if g.headPlaced(bs) && bs.mvHead.rows == h.W.Rows {
-		return g.adoptHead(h)
+		return g.adoptHead(h) && g.formHeads()
 	}
 	g.dropHeadScratch(bs)
 	q, ok := quantOf(h.W.T)
@@ -2578,7 +2575,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	// A head graph binding what the tier holds no buffer for is the model's
 	// error, named; it is never left to the tier's own kernels.
-	if err := bs.headServes(bs.hVecs); err != nil {
+	if err := bs.headsServe(bs.hVecs); err != nil {
 		g.giveBackHead(bs)
 		g.Declined++
 		g.LastErr = "the composed head: " + err.Error()
@@ -3126,11 +3123,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	case pos >= bs.p.MaxSeq:
 		return refuse("position %d is past this device's capacity of %d (asked for %d)",
 			pos, bs.p.MaxSeq, g.maxSeqAsked)
-	case head != nil && lo < hi && bs.p.Streams() > 1:
-		// A folded head takes the chunk's last row of one plane alone
-		// (servedRowTake): over several the blocks and the head go as two
-		// calls.
-		return refuse("a head folded into %d blocks of %d streams", hi-lo, bs.p.Streams())
 	}
 	// The head reads one residual vector and writes one logit row. A ragged
 	// step's head is the decode scratch's; the batched one has none.
@@ -3501,12 +3493,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	// (nn.ComposedPrompt).
 	composedHead := head != nil
 	if composedHead {
-		// The tier holds the head its model placed (headGraphs), every
-		// instance of the model offering the same graphs.
-		if head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden {
-			return refuse("the head offered is not the one its model placed on the tier")
+		// The tier holds every head its instances placed (headGraphs).
+		if !hb.holdsHead(head) {
+			return refuse("the head offered is not one an instance placed on the tier")
 		}
-		if err := hb.headServes(hVecs); err != nil {
+		if err := headOf(head).serves(hVecs); err != nil {
 			return refuse("the composed head: %v", err)
 		}
 	}
@@ -4053,7 +4044,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			// The head of the logits' capacity, its rows the wanted ones: one
 			// form whatever the count.
-			sv, serr := g.servedHead(hb, hVecs, bs.ragRows)
+			sv, serr := g.servedHead(hb, headOf(head), hVecs, bs.ragRows)
 			var ins []backend.Buf
 			if serr == nil {
 				ins, serr = g.headIns(bs, R)
@@ -4069,14 +4060,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				err = g.ragTokens(lc, bs, hb, min(ragHead, bs.ragRows), sampleSrv)
 			}
 		} else if fold {
-			// The chunk's last row, into the decode scratch, and decode's
-			// head on it.
-			if tk, terr := g.servedRowTake(hb, p.NEmbd, R); terr != nil {
-				err = terr
-			} else {
-				g.rows.takeIn[0], g.rows.takeOut[0] = bs.x, hb.x
-				err = tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:])
-			}
+			// The chunk's last row of every plane, into the decode
+			// scratch's planes, and decode's head on them.
+			err = g.foldTake(lc, bs, hb, R)
 			out := hb.logits
 			in := hb.x
 			if g.rowsFaulted("foldrow") {
@@ -4087,10 +4073,17 @@ func (g *devTier) layersSession(s backend.Session) {
 					err = g.runPickHead(lc, hb, hVecs, in)
 				}
 			} else {
-				sv, serr := g.servedHead(hb, hVecs, 1)
+				sv, serr := g.servedHead(hb, headOf(head), hVecs, 1)
+				var ins []backend.Buf
 				if serr == nil {
-					g.rows.headX[0] = in
-					serr = sv.runHead(g, lc, g.rows.headX[:], out, hb.h)
+					ins, serr = g.headIns(hb, 1)
+				}
+				if serr == nil {
+					if in != hb.x {
+						g.rows.headX[0] = in
+						ins = g.rows.headX[:]
+					}
+					serr = sv.runHead(g, lc, ins, out, hb.h)
 				}
 				if err == nil {
 					err = serr
@@ -4109,7 +4102,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			} else {
 				out := bs.logits
-				sv, serr := g.servedHead(bs, hVecs, 1)
+				sv, serr := g.servedHead(bs, headOf(head), hVecs, 1)
 				var ins []backend.Buf
 				if serr == nil {
 					ins, serr = g.headIns(bs, R)
@@ -5607,7 +5600,7 @@ func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratc
 			return err
 		}
 	}
-	sv, err := g.servedHead(hb, hVecs, bs.ragRows)
+	sv, err := g.servedHead(hb, headOf(head), hVecs, bs.ragRows)
 	if err != nil {
 		return err
 	}

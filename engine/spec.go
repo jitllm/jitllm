@@ -188,8 +188,9 @@ type SpecStats struct {
 	// generated after the prompt's first (Accepted plus one a round).
 	Rounds, Drafted, Accepted, Emitted int64
 	// DeviceHeads is the verifications of a hyper-connected model whose
-	// head ran on the device after the host's collapse (rowsHead).
-	DeviceHeads int
+	// head ran on the device after the host's collapse (rowsHead);
+	// DraftDeviceHeads the draft's projections a device served.
+	DeviceHeads, DraftDeviceHeads int
 	// Replayed is the rows run a second time to rebuild a recurrent state
 	// (SpecRollbackReplay); Restored the rejections a per-row copy undid;
 	// Commits the replays that ran as a pass of their own because the pass
@@ -418,6 +419,9 @@ func (sp *Speculator) Draft() *Instance { return sp.d }
 func (sp *Speculator) Stats() SpecStats {
 	st := sp.stats
 	st.DeviceHeads = sp.t.rowsHeads
+	if sp.d != nil {
+		st.DraftDeviceHeads = sp.d.devHeads
+	}
 	return st
 }
 

@@ -14,12 +14,32 @@ import (
 // hands both the residual as it is.
 
 // streamsPart is the tensors graph g binds past the head's own and the
-// embedding, by role, as the CPU binds them with no block (weightSource.matrix,
-// weightSource.vector): a card's for the input rows' planes and the head's
-// mix of them. nil where g is, or binds a tensor the model does not hold.
-func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
+// embedding, by role, as the CPU binds them (weightSource.matrix,
+// weightSource.vector): block li's first where li is a block the instance
+// runs, the model's past its blocks otherwise -- a card's for the input rows'
+// planes and the head's mix of them. nil where g is, or binds a tensor
+// neither holds.
+func (s *Instance) streamsPart(g *graph.Graph, li int) *nn.RowsPart {
 	if g == nil {
 		return nil
+	}
+	var l *model.Layer
+	if li >= s.lo && li < s.hi {
+		l = s.layer(li)
+	} else {
+		li = -1
+	}
+	vector := func(r jlm.Role) []float32 {
+		if v := s.ws.vector(li, l, r); len(v) != 0 || li < 0 {
+			return v
+		}
+		return s.ws.vector(-1, nil, r)
+	}
+	matrix := func(r jlm.Role) *model.Tensor {
+		if t := s.ws.matrix(li, l, r); (t != nil && t.E != nil) || li < 0 {
+			return t
+		}
+		return s.ws.matrix(-1, nil, r)
 	}
 	p := &nn.RowsPart{Graph: g, Rows: 1, Weights: map[jlm.Role]nn.Weight{}, Vectors: map[jlm.Role][]float32{}, File: s.m.Container}
 	for _, o := range g.Ops {
@@ -29,14 +49,14 @@ func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 				continue
 			}
 			if o.Kind != graph.OpEmbed && (b.Rows == 0 || b.Role.Expanded()) {
-				v := s.ws.vector(-1, nil, b.Role)
+				v := vector(b.Role)
 				if len(v) == 0 {
 					return nil
 				}
 				p.Vectors[b.Role] = v
 				continue
 			}
-			t := s.ws.matrix(-1, nil, b.Role)
+			t := matrix(b.Role)
 			if t == nil || t.E == nil {
 				return nil
 			}
@@ -78,10 +98,19 @@ func (s *Instance) layDraft(x []float32, rows, base int) {
 	}
 }
 
-// devHeadReads says the device's head is the instance's: the model's, not
-// the head of a prediction block that holds one of its own (MtpHead).
-func (s *Instance) devHeadReads() bool {
+// wantsResidual says the step's rows want their residual of every plane
+// back as their hidden state (Config.ResidStreams), which a head folded into
+// the blocks' call keeps on the device.
+func (s *Instance) wantsResidual() bool { return s.rows != nil && s.c.ResidStreams() }
+
+// ownHead is the head the instance projects through, on every device: the
+// prediction block's own where the block it starts at states one (its graph
+// over that block's mix of the streams), the model's otherwise; block is the
+// block whose tensors the head binds before the model's, -1 for none.
+func (s *Instance) ownHead() (head, hidden *graph.Graph, block int) {
 	fg := s.m.FrontGraphs()
-	i := s.lo - s.c.NLayer
-	return i < 0 || i >= len(fg.MtpHead) || fg.MtpHead[i] == nil
+	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpHead) && fg.MtpHead[i] != nil {
+		return fg.MtpHead[i], fg.MtpHidden[i], s.lo
+	}
+	return fg.CpuHead, fg.CpuHidden, -1
 }

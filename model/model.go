@@ -3612,11 +3612,6 @@ func (m *Model) ActWindowOf() int {
 	return composer.ActWindow(types)
 }
 
-// streamHead says the head reads a collapse of several residual streams,
-// which the host takes (the streams the converter states): a device runs the blocks and hands every stream back,
-// and never folds the head into them.
-func (c *Config) StreamHead() bool { return c.statedStreams() > 1 }
-
 // specHidW is a speculation step's hidden state per row: what a prediction
 // block reads of the trunk's. The output norm's result, n_embd wide; on
 // a residual of every stream (ResidStreams) the residual before the head's

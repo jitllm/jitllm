@@ -31,10 +31,9 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 		HeadNorm: fg.OutNorm != nil, HeadW: nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)},
 		Planes: s.c.Streams(), InPlanes: s.inPlanes(fg.CpuEmbed)}
 	part := func(g *graph.Graph, rows int) nn.PartPlan { return s.partPlan(g, rows, nil) }
-	head, hidden := fg.CpuHead, fg.CpuHidden
-	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpHead) && fg.MtpHead[i] != nil {
-		head, hidden = fg.MtpHead[i], fg.MtpHidden[i]
-		p.HeadW = nn.PartWeights{Block: s.lo, Of: &blockOver{block: s.ws.tensors(s.lo, s.layer(s.lo)), rest: s.ws.tensors(-1, nil)}}
+	head, hidden, li := s.ownHead()
+	if li >= 0 {
+		p.HeadW = nn.PartWeights{Block: li, Of: &blockOver{block: s.ws.tensors(li, s.layer(li)), rest: s.ws.tensors(-1, nil)}}
 	}
 	p.Head[0] = part(head, 1)
 	p.Head[1] = part(hidden, 1)

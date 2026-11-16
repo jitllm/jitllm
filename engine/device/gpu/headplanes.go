@@ -63,6 +63,35 @@ func (g *devTier) mixParts(p *nn.RowsPart) (composedPart, error) {
 	return cp, nil
 }
 
+// foldTake moves the last of bs's rows rows into hb's one row, each plane
+// into its own (servedRowTake): what a head folded into a chunk reads.
+func (g *devTier) foldTake(lc *launcher, bs, hb *blockScratch, rows int) error {
+	tk, err := g.servedRowTake(hb, bs.p.NEmbd, rows)
+	if err != nil {
+		return err
+	}
+	ns := bs.p.Streams()
+	if ns == 1 {
+		g.rows.takeIn[0], g.rows.takeOut[0] = bs.x, hb.x
+		return tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:])
+	}
+	_, src, err := bs.servedStreams(rows, ns)
+	if err != nil {
+		return err
+	}
+	_, dst, err := hb.servedStreams(1, ns)
+	if err != nil {
+		return err
+	}
+	for k := range ns {
+		g.rows.takeIn[0], g.rows.takeOut[0] = src[k], dst[k]
+		if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // headIns is the head's inputs over bs's residual of rows rows: x itself
 // for one plane, each plane's view of it otherwise.
 func (g *devTier) headIns(bs *blockScratch, rows int) ([]backend.Buf, error) {
