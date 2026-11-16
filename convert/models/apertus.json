@@ -1,6 +1,9 @@
 {
   "classes": ["ApertusForCausalLM"],
   "gguf": ["apertus"],
+  "container": {
+    "apertus": {"flags": {"qk_norm": "true", "rope_neox": "true"}}
+  },
   "config": {
     "arch": "apertus",
     "keys": {

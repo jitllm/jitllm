@@ -460,7 +460,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err := mamba1UnitNorms(c, f, s); err != nil {
 			return nil, err
 		}
-		if err := apertusXIELU(c, f, s); err != nil {
+		if err := xieluTensors(c, f, s); err != nil {
 			return nil, err
 		}
 	}

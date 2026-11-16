@@ -144,9 +144,20 @@ schema; `convert/modeljson.go` reads it. Its sections:
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
   state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. It replaces `configOfFile`'s case for
-  the architecture; one statement per architecture, and an expression
-  reading anything but `src` is refused.
+  period over no window is refused. `rope_base` (the rotary base),
+  `residual_scale` and `moe_step` (the mixture blocks' interleave) are
+  numbers; `mrope`, true, reads the rotary's sections off
+  `rope.dimension_sections`; `whole_rotary: true` refuses a rotary narrower
+  than the head. `router` is what the class's router does whatever the
+  keys say: `gate` (softmax, sigmoid, or sparsemixer, which reads no gating
+  key), `renormalise` (always or never), `unscaled`, `selects` (the experts
+  it picks); a key contradicting it is refused. `requires` and `lacks` name
+  the keys and tensors the class always or never has (a key of zero is
+  not had; `blk.*.` names every block's tensor), each absence or presence
+  refused. An expression may read the tensors' names too
+  (`'blk.0.attn_q_norm.weight' in tensors`). It replaces `configOfFile`'s
+  case for the architecture; one statement per architecture, and an
+  expression reading anything but `src` and `tensors` is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform

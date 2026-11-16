@@ -1,7 +1,7 @@
 package convert
 
 import (
-	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -10,7 +10,8 @@ import (
 
 // TestDbrxCarriesItsClamp is the converter half of the DBRX gate: the clamp
 // reaches the container, a DBRX without one is refused, a clamp on another
-// architecture is refused rather than dropped, and DBRX's attn_output_norm
+// architecture reaches its container too and a negative one is refused,
+// and DBRX's attn_output_norm
 // lands on the FFN norm where BERT's keeps its post-norm role. The model half
 // is model.TestC6MatchesTransformers and TestC6FeaturesAreLoadBearing.
 func TestDbrxCarriesItsClamp(t *testing.T) {
@@ -33,8 +34,12 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	}
 	s := baseKeys(3)
 	s["attention.clamp_kqv"] = meta.MakeFloat(8)
-	if _, err := configOf(headerOnly("llama", s)); !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("a llama carrying a clamp: %v, want ErrNotImplemented", err)
+	if c, err := configOf(headerOnly("llama", s)); err != nil || c.ClampKQV != 8 {
+		t.Errorf("a llama carrying a clamp: %v, want it stated", err)
+	}
+	s["attention.clamp_kqv"] = meta.MakeFloat(-8)
+	if _, err := configOf(headerOnly("llama", s)); err == nil || !strings.Contains(err.Error(), "clamp_kqv -8") {
+		t.Errorf("a negative clamp: %v, want it refused", err)
 	}
 	dbrx, err := retargets(ArchDBRX, nil)
 	if err != nil {

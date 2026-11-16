@@ -217,58 +217,6 @@ func gemma4Config(f *meta.File, c *Config) error {
 	return nil
 }
 
-// minimaxM2Config is llama.cpp's minimax-m2.cpp and transformers'
-// MiniMaxM2ForCausalLM:
-//
-//	q and k RMSNormed over the whole projection  -> FlagQKNorm|FlagQKNormWide
-//	  ({n_head*head_dim} and {n_kv*head_dim}, before the reshape into heads)
-//	NEOX rotary on rope.dimension_count of head  -> FlagRopeNeox, NRot (64 of 128)
-//	sigmoid router, selection-only bias,          -> FlagExpertSigmoid, RoleExpProbsB
-//	  renormalised, no routed scale, no shared
-//	  expert, every block a mixture
-//
-// The gate is SIGMOID whatever the file says (RULE 7m): MiniMaxM2TopKRouter
-// hardcodes nn.functional.sigmoid and reads no gating key, the published
-// config states scoring_func "sigmoid", and llama.cpp's builder passes the
-// key through. A file that states softmax is refused rather than obeyed.
-//
-// The routed weights are renormalised whatever the file says: the class
-// divides by the top-k sum unconditionally and llama.cpp's builder passes
-// true as a literal, so a file writing expert_weights_norm false describes a
-// model nothing runs and is refused.
-func minimaxM2Config(f *meta.File, c *Config) error {
-	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagQKNormWide | jlm.FlagExpertSigmoid
-	if err := partialRotary(c); err != nil {
-		return err
-	}
-	if kv, ok := f.Key("expert_gating_func"); ok {
-		if v, _ := kv.Uint(); v != 2 {
-			return fmt.Errorf("expert_gating_func %d, and MiniMaxM2TopKRouter is sigmoid: %w",
-				v, ErrNotImplemented)
-		}
-	}
-	if kv, ok := f.Key("expert_weights_norm"); ok {
-		if v, _ := kv.Uint(); v == 0 {
-			return fmt.Errorf("expert_weights_norm false, and MiniMaxM2TopKRouter always "+
-				"renormalises: %w", ErrNotImplemented)
-		}
-	}
-	if f.UintKey("expert_count", 0) == 0 {
-		return fmt.Errorf("no expert_count: minimax-m2 is a mixture")
-	}
-	if f.UintKey("expert_shared_count", 0) != 0 || f.UintKey("leading_dense_block_count", 0) != 0 {
-		return fmt.Errorf("a shared expert or a dense lead, which minimax-m2 does not have: %w",
-			ErrNotImplemented)
-	}
-	for i := 0; i < int(c.NLayer); i++ {
-		if _, ok := f.Get("blk." + itoa(i) + ".exp_probs_b.bias"); !ok {
-			return fmt.Errorf("block %d has no selection bias (use_routing_bias false): %w",
-				i, ErrNotImplemented)
-		}
-	}
-	return nil
-}
-
 // minimaxM3Config is llama.cpp's minimax-m3.cpp and transformers'
 // MiniMaxM3VLForCausalLM: a per-head q/k norm, NEOX rotary on part of each
 // head, a dense lead and then V3's sigmoid router with a shared expert,

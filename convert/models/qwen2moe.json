@@ -1,6 +1,10 @@
 {
   "classes": ["Qwen2MoeForCausalLM"],
   "gguf": ["qwen2moe"],
+  "container": {
+    "qwen2moe": {"flags": {"rope_neox": "true", "no_expert_norm": "not (src['expert_weights_norm'] | default(false))"},
+                 "router": {"gate": "softmax"}, "requires": ["expert_count", "blk.*.ffn_gate_inp.weight"]}
+  },
   "config": {
     "arch": "qwen2moe",
     "keys": {
