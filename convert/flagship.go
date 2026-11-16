@@ -70,7 +70,7 @@ func flagshipRoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// gemma4Config is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
+// Gemma 4 is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
 // text only: gemma3's block with two attention geometries (the global layers'
 // HeadDim, NKVHead and NRot, the sliding layers' their own, each block's
 // stated in jlm.Config.Geoms), the global layers' "proportional" rotary as
@@ -82,30 +82,16 @@ func flagshipRoleOf(name string) (jlm.Role, bool) {
 // layers, each block's width in its geometry.
 //
 // The reference-to-container table: docs/engineering-history/
-// model-correctness.md, "convert/flagship.go: gemma4Config".
-func gemma4Config(f *meta.File, c *Config) error {
-	c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
-	c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
-	c.Flags2 |= jlm.Flag2VNorm
-	c.AttnScale = 1
-	c.FinalSoftcap = float32(f.FloatKey("final_logit_softcapping", 0))
-	c.NKVShared = uint32(f.UintKey("attention.shared_kv_layers", 0))
-	if c.NKVShared >= c.NLayer {
-		return fmt.Errorf("%d KV-sharing layers of %d", c.NKVShared, c.NLayer)
-	}
-	c.PLEDim = uint32(f.UintKey("embedding_length_per_layer_input", 0))
-	if c.PLEDim != 0 {
-		if _, ok := f.Get("per_layer_token_embd.weight"); !ok {
-			return fmt.Errorf("per-layer embeddings %d wide and no per_layer_token_embd", c.PLEDim)
-		}
-	}
-	// One width, or the base width and twice it on the KV-sharing layers.
+// model-correctness.md, "convert/flagship.go: gemma4Config"; the gemma4
+// statement states all of it but each block's geometry.
+
+// stateKindGeoms states each block's geometry where a sliding layer's is its
+// own (the sliding statement: its head, rotary and kv heads, the kv heads
+// per layer split by the sliding pattern) or the FFN widths differ (one
+// width, or it and twice it on the KV-sharing layers).
+func stateKindGeoms(f *meta.File, c *Config) error {
 	var ffns []int32
-	if c.NFFN == 0 {
-		kv, ok := f.Key("feed_forward_length")
-		if !ok {
-			return fmt.Errorf("no feed_forward_length")
-		}
+	if kv, ok := f.Key("feed_forward_length"); ok && c.NFFN == 0 && kv.Type == meta.Array {
 		ws, err := kv.Int32s()
 		if err != nil || len(ws) != int(c.NLayer) || ws[0] <= 0 {
 			return fmt.Errorf("feed_forward_length: %d values for %d layers (%v)", len(ws), c.NLayer, err)
@@ -114,48 +100,19 @@ func gemma4Config(f *meta.File, c *Config) error {
 		for i, w := range ws {
 			if w != ws[0] && (!c.KVShared(i) || w != 2*ws[0]) {
 				return fmt.Errorf("feed_forward_length %v: layer %d is %d, and only the %d KV-sharing "+
-					"layers may be twice %d", ws, i, w, c.NKVShared, c.NFFN)
+					"layers may be twice %d: %w", ws, i, w, c.NKVShared, c.NFFN, ErrNotImplemented)
 			}
 		}
 		ffns = ws
 	}
-	c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
-	if c.SWAWindow == 0 {
-		return fmt.Errorf("no attention.sliding_window")
+	sw := c.Stated.sliding
+	if sw == nil {
+		if ffns != nil {
+			c.Geoms = blockGeoms(c, jlm.Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot}, ffns)
+		}
+		return nil
 	}
-	if err := swaPatternOf(f, c, 0); err != nil {
-		return err
-	}
-	if c.SWAPeriod == 0 || c.SWAPeriod > c.NLayer {
-		return fmt.Errorf("no sliding pattern with a global layer in it (period %d of %d layers)",
-			c.SWAPeriod, c.NLayer)
-	}
-	c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", 10000))
-	// The global layers' geometry is the model's (key_length and
-	// rope.dimension_count are the global layers'); the sliding layers' is
-	// its own.
-	var swa jlm.Geom
-	swa.HeadDim = uint32(f.UintKey("attention.key_length_swa", 0))
-	if v := uint32(f.UintKey("attention.value_length_swa", uint64(swa.HeadDim))); v != swa.HeadDim {
-		return fmt.Errorf("sliding key width %d and value width %d", swa.HeadDim, v)
-	}
-	swa.NRot = uint32(f.UintKey("rope.dimension_count_swa", uint64(swa.HeadDim)))
-	if swa.HeadDim == 0 || swa.NRot == 0 || swa.NRot%2 != 0 || swa.NRot > swa.HeadDim {
-		return fmt.Errorf("sliding head %d with rotary %d", swa.HeadDim, swa.NRot)
-	}
-	if c.HeadDimV != 0 {
-		return fmt.Errorf("global key width %d and value width %d", c.HeadDim, c.HeadDimV)
-	}
-	// The proportional rotary turns all of the global head, with frequencies
-	// rope_freqs gives; a rotary narrower than the head would pair (i,
-	// i+NRot/2) and scale every exponent by head_dim/NRot.
-	if c.NRot != c.HeadDim {
-		return fmt.Errorf("global rotary %d on a %d-wide head, where the proportional rotary "+
-			"turns the whole head", c.NRot, c.HeadDim)
-	}
-	if _, ok := f.Get("rope_freqs.weight"); !ok {
-		return fmt.Errorf("no rope_freqs: the global layers' proportional rotary is carried there")
-	}
+	swa := *sw
 	// The kv heads, one per layer: every sliding layer agrees with every
 	// other and every global layer with every other.
 	kv, ok := f.Key("attention.head_count_kv")
@@ -328,23 +285,21 @@ func sharedTensors(c *Config, s *jlm.Source) error {
 	return nil
 }
 
-// gemma4MoEConfig is the 26B's mixture (jlm.Flag2DenseMoE), read after the
-// generic mixture keys: softmax, renormalised whatever the file says --
-// Gemma4TextRouter divides by the top-k sum and llama.cpp's builder passes
-// true -- with no routed scale or groups, and the dense MLP carried as an
-// ungated shared expert at the dense width.
-func gemma4MoEConfig(f *meta.File, c *Config) error {
-	if c.NExpert == 0 {
+// denseMoEFits reads a dense MLP beside a mixture (jlm.Flag2DenseMoE, Gemma
+// 4's 26B), after the generic mixture keys: softmax, renormalised whatever
+// the file says -- Gemma4TextRouter divides by the top-k sum and llama.cpp's
+// builder passes true -- with no routed scale or groups, and the dense MLP
+// carried as an ungated shared expert at the dense width.
+func denseMoEFits(f *meta.File, c *Config) error {
+	if c.NExpert == 0 || !c.Flags2.Has(jlm.Flag2DenseMoE) {
 		return nil
 	}
-	c.Flags2 |= jlm.Flag2DenseMoE
 	if c.Flags.Has(jlm.FlagExpertSigmoid) {
-		return fmt.Errorf("a sigmoid gate, and Gemma4TextRouter is a softmax: %w", ErrNotImplemented)
+		return fmt.Errorf("a sigmoid gate, and a dense MLP's router beside it is a softmax: %w", ErrNotImplemented)
 	}
 	c.Flags &^= jlm.FlagNoExpertNorm
 	if (c.ExpertScale != 0 && c.ExpertScale != 1) || c.NExpertGroup != 0 {
-		return fmt.Errorf("a routed scale %g or expert groups, which Gemma 4 does not have: %w",
-			c.ExpertScale, ErrNotImplemented)
+		return fmt.Errorf("a routed scale %g or expert groups beside a dense MLP: %w", c.ExpertScale, ErrNotImplemented)
 	}
 	if f.UintKey("expert_shared_count", 0) != 0 {
 		return fmt.Errorf("a shared expert beside the dense MLP: %w", ErrNotImplemented)

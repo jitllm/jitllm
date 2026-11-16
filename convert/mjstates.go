@@ -85,6 +85,11 @@ type mjStates struct {
 	KVShared      string `json:"kv_shared"`
 	PLEWidth      string `json:"ple_width"`
 	ValueKeyWidth bool   `json:"value_key_width"`
+	// Sliding is the sliding layers' own geometry (stateKindGeoms), and
+	// RopeFreqs, true, states that the rotary's frequencies are a tensor
+	// (rope_freqs.weight, the global layers' proportional rotary).
+	Sliding   *mjStatesSliding `json:"sliding"`
+	RopeFreqs bool             `json:"rope_freqs"`
 	// AltUp is AltUp's parallel residual streams.
 	AltUp *mjStatesAltUp `json:"altup"`
 	// LayersByKVHeads, true, reads each layer's kind off the per-layer kv
@@ -245,6 +250,15 @@ type mjStatesStreams struct {
 	LowRank    string `json:"low_rank"`
 }
 
+// mjStatesSliding is the sliding layers' head width, their value width (the
+// head's, held to it) and their rotary width (even, at most the head), each a
+// count.
+type mjStatesSliding struct {
+	HeadDim  string `json:"head_dim"`
+	ValueDim string `json:"value_dim"`
+	Rotary   string `json:"rotary"`
+}
+
 // mjStatesAltUp is Streams parallel residual streams, at least two, and the
 // one the blocks read, Active (the first in every published checkpoint;
 // another would only relabel the streams, and is refused rather than
@@ -319,7 +333,8 @@ type Statement struct {
 	learnedPositions, ffnUngated        bool
 	mergeMixers, routerUngrouped        bool
 	compressedBlocks, plePadded         bool
-	splitKDA                            bool
+	splitKDA, ropeFreqs                 bool
+	sliding                             *jlm.Geom
 	readouts                            []string
 }
 
@@ -432,6 +447,12 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s: %s: delta gate %q is not one the container states", mj.name, arch, st.DeltaGate)
 		}
 		srcs = append(srcs, st.QSARatios, st.HeadBlocks, st.DeltaDecayBound, st.AttnScale, st.KVShared, st.PLEWidth)
+		if x := st.Sliding; x != nil {
+			if x.HeadDim == "" || x.ValueDim == "" || x.Rotary == "" {
+				return fmt.Errorf("convert: %s: %s: sliding states its head_dim, value_dim and rotary", mj.name, arch)
+			}
+			srcs = append(srcs, x.HeadDim, x.ValueDim, x.Rotary)
+		}
 		if x := st.AltUp; x != nil {
 			if x.Streams == "" {
 				return fmt.Errorf("convert: %s: %s: altup states its streams", mj.name, arch)
@@ -529,6 +550,9 @@ func stateContainer(f *meta.File, c *Config) error {
 // table where the library states the input rows add one, and one whose
 // hidden_activation names another activation than the stated one.
 func statedTensorsAgree(f *meta.File, c *Config) error {
+	if _, ok := f.Get("rope_freqs.weight"); !ok && c.Stated.ropeFreqs {
+		return fmt.Errorf("convert: %s: no rope_freqs, which the library states carries the rotary's frequencies", f.Arch())
+	}
 	if _, ok := f.Get("per_layer_token_embd.weight"); !ok && c.PLEDim != 0 {
 		return fmt.Errorf("convert: %s: per-layer inputs %d wide and no per_layer_token_embd", f.Arch(), c.PLEDim)
 	}
@@ -946,9 +970,26 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		if c.PLEDim, err = whole("ple_width", st.PLEWidth); err != nil {
 			return err
 		}
-		if c.PLEDim == 0 {
-			return fmt.Errorf("convert: %s: a per-layer input of no width", arch)
+	}
+	c.Stated.ropeFreqs = st.RopeFreqs
+	if x := st.Sliding; x != nil {
+		var g jlm.Geom
+		var v uint32
+		for _, b := range []struct {
+			what, src string
+			to        *uint32
+		}{{"sliding.head_dim", x.HeadDim, &g.HeadDim}, {"sliding.value_dim", x.ValueDim, &v}, {"sliding.rotary", x.Rotary, &g.NRot}} {
+			if *b.to, err = whole(b.what, b.src); err != nil {
+				return err
+			}
 		}
+		if v != g.HeadDim {
+			return fmt.Errorf("convert: %s: sliding key width %d and value width %d", arch, g.HeadDim, v)
+		}
+		if g.HeadDim == 0 || g.NRot == 0 || g.NRot%2 != 0 || g.NRot > g.HeadDim {
+			return fmt.Errorf("convert: %s: sliding head %d with rotary %d", arch, g.HeadDim, g.NRot)
+		}
+		c.Stated.sliding = &g
 	}
 	if st.ValueKeyWidth && c.HeadDimV != 0 {
 		return fmt.Errorf("convert: %s: value width %d on a %d-wide key, and the value is as wide as the key", arch,

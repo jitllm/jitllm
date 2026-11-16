@@ -202,7 +202,13 @@ schema; `convert/modeljson.go` reads it. Its sections:
   forces in; the engine's block selection holds it to one head per kv group,
   a key as wide as a head and its own block inside the top-k
   (`blockIndexerFits`), on exactly the blocks past the dense lead
-  (`sparseBlocksFit`). `attn_scale` is the score multiplier in place of 1/sqrt(head_dim),
+  (`sparseBlocksFit`). `sliding` is the sliding layers' own geometry (`head_dim`, `value_dim`
+  held to it, `rotary` even and at most the head), each block's geometry
+  then stated with the kv heads split by the sliding pattern
+  (`stateKindGeoms`; a per-layer FFN width may be twice the first on the
+  KV-sharing layers, for every file); `rope_freqs: true` holds the file to a
+  `rope_freqs` tensor; the `dense_moe` flag reads a dense MLP beside a
+  mixture (`denseMoEFits`). `attn_scale` is the score multiplier in place of 1/sqrt(head_dim),
   `kv_shared` how many last layers read an earlier layer's history, `ple_width`
   the per-layer input's width (its table is held to it), `value_key_width:
   true` a value as wide as the key, and `altup` AltUp's streams (at least

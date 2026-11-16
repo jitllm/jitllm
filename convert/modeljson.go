@@ -197,6 +197,7 @@ func mjFlags2() map[string]jlm.Flags2 {
 		"q_unit_norm":   jlm.Flag2QUnitNorm,
 		"out_unrotated": jlm.Flag2OutUnrotated,
 		"v_norm":        jlm.Flag2VNorm,
+		"dense_moe":     jlm.Flag2DenseMoE,
 	}
 }
 
