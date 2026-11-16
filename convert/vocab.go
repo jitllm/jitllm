@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -25,25 +26,20 @@ func vocabOf(f *meta.File) (*jlm.Vocab, error) { return VocabOf(f) }
 // section without writing a container can build one.
 func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	model, _ := f.KV["tokenizer.ggml.model"].String()
+	if model == "" {
+		return nil, nil // no tokenizer in this file; a tower, say
+	}
+	tms, err := tokenizerModels()
+	if err != nil {
+		return nil, err
+	}
+	tm, ok := tms[model]
+	if !ok {
+		return nil, fmt.Errorf("convert: tokenizer model %q is not one this container defines", model)
+	}
 	v := &jlm.Vocab{
 		BOS: -1, EOS: -1, Unk: -1, Pad: -1, Sep: -1, Mask: -1,
-	}
-	switch model {
-	case "llama":
-		v.Kind, v.ByteFallback, v.AddSpacePrefix, v.AddBOS = jlm.VocabSPM, true, true, true
-	case "gpt2":
-		v.Kind = jlm.VocabBPE
-	case "bert", "wordpiece":
-		v.Kind = jlm.VocabWPM
-	case "gemma4":
-		// SentencePiece-style BPE (llama.cpp's LLAMA_VOCAB_TYPE_BPE under the
-		// gemma4 pre-type): merges, no byte-level alphabet, byte fallback.
-		// add_space_prefix and add_bos are read below, as the file states them.
-		v.Kind, v.ByteFallback = jlm.VocabBPESPM, true
-	case "":
-		return nil, nil // no tokenizer in this file; a tower, say
-	default:
-		return nil, fmt.Errorf("convert: tokenizer model %q is not one this container defines", model)
+		Kind: vocabKinds()[tm.Kind], ByteFallback: tm.ByteFallback, AddSpacePrefix: tm.SpacePrefix, AddBOS: tm.AddBOS,
 	}
 
 	toks, ok := f.KV["tokenizer.ggml.tokens"]
@@ -134,7 +130,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	v.Templates = ggufTemplates(f.KV)
 
 	if v.Kind == jlm.VocabWPM {
-		return wordPiece(f, v), nil
+		return wordPiece(f, v, tm.Pre), nil
 	}
 	if v.Kind != jlm.VocabBPE {
 		return v, nil
@@ -253,6 +249,50 @@ type preTokenizer struct {
 	IgnoreMerges bool `json:"ignore_merges"`
 }
 
+//go:embed tokenizers.json
+var tokenizerModelsJSON []byte
+
+// tokenizerModel is what a GGUF's tokenizer.ggml.model states
+// (tokenizers.json): the container's vocabulary kind (vocabKinds), whether
+// a piece no token covers falls back to byte tokens, the space prefix and the
+// BOS the file's own keys override, and the pre-tokenizer a WordPiece
+// vocabulary names (it runs one stage, BertPreTokenizer's).
+type tokenizerModel struct {
+	Kind         string `json:"kind"`
+	ByteFallback bool   `json:"byte_fallback"`
+	SpacePrefix  bool   `json:"add_space_prefix"`
+	AddBOS       bool   `json:"add_bos"`
+	Pre          string `json:"pre"`
+}
+
+// vocabKinds is each vocabulary kind a tokenizer model states, by its name.
+func vocabKinds() map[string]jlm.VocabKind {
+	return map[string]jlm.VocabKind{"spm": jlm.VocabSPM, "bpe": jlm.VocabBPE, "wpm": jlm.VocabWPM, "bpe_spm": jlm.VocabBPESPM}
+}
+
+// tokenizerModels is tokenizers.json, by model (tokenizerModelsOf).
+func tokenizerModels() (map[string]tokenizerModel, error) {
+	return tokenizerModelsOf(tokenizerModelsJSON)
+}
+
+// tokenizerModelsOf is a tokenizers.json, by model, each of a kind vocabKinds
+// names and a WordPiece one naming its pre-tokenizer.
+func tokenizerModelsOf(b []byte) (map[string]tokenizerModel, error) {
+	var out map[string]tokenizerModel
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&out); err != nil || len(out) == 0 {
+		return nil, fmt.Errorf("convert: tokenizers.json: %v, %d models", err, len(out))
+	}
+	for name, tm := range out {
+		k, ok := vocabKinds()[tm.Kind]
+		if !ok || (k == jlm.VocabWPM) != (tm.Pre != "") {
+			return nil, fmt.Errorf("convert: tokenizers.json: %s is of kind %q with pre-tokenizer %q", name, tm.Kind, tm.Pre)
+		}
+	}
+	return out, nil
+}
+
 // preTokenizers is pretokenizers.json, by name.
 func preTokenizers() (map[string]preTokenizer, error) {
 	var out map[string]preTokenizer
@@ -270,7 +310,7 @@ func preTokenizers() (map[string]preTokenizer, error) {
 // reading one spelling leaves the other with no opener, which a CLS-pooled
 // model reads its embedding from. Both are added, as llama.cpp does for every
 // WPM vocabulary and as BertProcessing does.
-func wordPiece(f *meta.File, v *jlm.Vocab) *jlm.Vocab {
+func wordPiece(f *meta.File, v *jlm.Vocab, pre string) *jlm.Vocab {
 	if n, ok := f.KV["tokenizer.ggml.cls_token_id"].Uint(); ok && v.BOS < 0 {
 		v.BOS = int32(n)
 	}
@@ -293,7 +333,7 @@ func wordPiece(f *meta.File, v *jlm.Vocab) *jlm.Vocab {
 		strip = n != 0
 	}
 	v.Pre = []jlm.PreOp{{Kind: jlm.PreBert, CaseFold: lower, LetterMarks: !strip}}
-	v.PreName = "bert"
+	v.PreName = pre
 	return v
 }
 
