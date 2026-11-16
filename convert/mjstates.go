@@ -341,6 +341,9 @@ type Statement struct {
 	sliding                             *jlm.Geom
 	readouts                            []string
 	modelTensors, blockTensors          map[string][]statedCut
+	drops                               []statedDrop
+	gathers                             []hfGatherStep
+	keys                                []string
 	linearTensors                       map[string][]statedCut
 	fuse                                map[jlm.Role][]string
 }
@@ -445,7 +448,7 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s: %s: pre-tokenizer %q is not one the tokenizer has", mj.name, arch, st.PreTokenizer)
 		}
 		if t := st.Tensors; t != nil {
-			if t.BlockPrefix != "" || t.Gather != nil || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil ||
+			if t.BlockPrefix != "" || t.Ignore != nil || t.IgnorePrefix != nil || t.Experts != nil ||
 				t.Ternary != nil || t.Present != nil {
 				return fmt.Errorf("convert: %s: %s: tensors: a GGUF's table states its model, block and recurrent "+
 					"block tensors and its joins: %w", mj.name, arch, ErrNotImplemented)
@@ -698,6 +701,28 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 					return fmt.Errorf("convert: %s: %s: tensors: %w", by, arch, err)
 				}
 			}
+		}
+		for _, g := range t.Gather {
+			r, ok := names.roleOf(g.Role)
+			if !ok || !g.Every || g.Model || g.Count != "" || g.Name != "" {
+				return fmt.Errorf("convert: %s: %s: tensors: the gather of %s: a GGUF's gathers are every block's, "+
+					"of a role the container knows", by, arch, g.Role)
+			}
+			step := hfGatherStep{role: r, from: g.From, do: g.Do, every: true}
+			if g.If != "" {
+				if step.cond, err = parseExpr(g.If); err != nil {
+					return fmt.Errorf("convert: %s: %s: tensors: the gather of %s: %w", by, arch, g.Role, err)
+				}
+			}
+			c.Stated.gathers = append(c.Stated.gathers, step)
+		}
+		c.Stated.keys = t.Keys
+		for _, d := range t.Drop {
+			x, err := parseExpr(d.If)
+			if err != nil || d.Tensor == "" {
+				return fmt.Errorf("convert: %s: %s: tensors: drop %q where %q: %v", by, arch, d.Tensor, d.If, err)
+			}
+			c.Stated.drops = append(c.Stated.drops, statedDrop{name: d.Tensor, when: x})
 		}
 		for r, srcs := range t.Fuse {
 			role, _ := names.roleOf(r)

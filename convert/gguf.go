@@ -439,13 +439,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if uerr != nil {
 			return nil, uerr
 		}
-		// MLA's fused up-projection likewise, except its k half is transposed per
-		// head and so cannot keep the source's block layout. See unfuseMLA.
-		if !split {
-			if sub, split, uerr = unfuseMLA(&e, c); uerr != nil {
-				return nil, uerr
-			}
-		}
 		if split {
 			s.Tensors = append(s.Tensors, sub...)
 			continue
@@ -463,9 +456,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := foldPostRopeQKNorm(s); err != nil {
 		return nil, err
 	}
-	if err := sharedTensors(c, s); err != nil {
-		return nil, err
-	}
 	if err := statedTensors(c, s, ggufEnv(f)); err != nil {
 		return nil, err
 	}
@@ -473,7 +463,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err := scanUnitNorms(c, f, s); err != nil {
 			return nil, err
 		}
-		if err := xieluTensors(c, f, s); err != nil {
+		if err := statedGathers(c, s, f); err != nil {
 			return nil, err
 		}
 	}
@@ -853,94 +843,6 @@ func unfuseBias(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 		off += p.n
 	}
 	return out, true, nil
-}
-
-// unfuseMLA splits MLA's fused up-projection attn_kv_b ({kv_lora_rank,
-// n_head*(qk_nope + v_head)}, each head's W_k above its W_v), which older
-// deepseek2 GGUFs ship in place of attn_k_b/attn_v_b, into the absorbed pair.
-//
-// attn_v_b is W_v per head, used as it stands, so it keeps the source's bytes
-// exactly. attn_k_b is W_k transposed per head, because the absorb folds it
-// into the query (score = (W_k^T . q_nope) . c); a transpose moves the axis the
-// quantization blocks run along, so that half is dequantized and re-stored.
-func unfuseMLA(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || e.Role != jlm.RoleAttnKVB {
-		return nil, false, nil
-	}
-	if c.KVLoraRank == 0 {
-		return nil, false, fmt.Errorf("convert: %s is a fused MLA up-projection and the "+
-			"config has no kv_lora_rank", e.Name)
-	}
-	nh := uint64(c.NHead)
-	lat := uint64(c.KVLoraRank)
-	nope := uint64(c.HeadDim) - uint64(c.NRot)
-	vh := uint64(c.HeadDimV)
-	if vh == 0 {
-		vh = uint64(c.HeadDim)
-	}
-	per := nope + vh
-	if e.NDim < 2 || e.Dims[0] != lat || e.Dims[1] != nh*per {
-		return nil, false, fmt.Errorf("convert: %s is %dx%d, want %dx%d "+
-			"(%d head(s) of %d nope + %d value rows over a %d-wide latent)",
-			e.Name, e.Dims[0], e.Dims[1], lat, nh*per, nh, nope, vh, lat)
-	}
-	src, ok := sourceType(e.Type)
-	if !ok {
-		return nil, false, fmt.Errorf("convert: %s is %v, which has no source type", e.Name, e.Type)
-	}
-	be, bb := uint64(src.BlockElems()), uint64(src.BlockBytes())
-	if be == 0 || lat%be != 0 {
-		return nil, false, fmt.Errorf("convert: %s rows are %d elements, not a multiple of %s's %d",
-			e.Name, lat, src, be)
-	}
-	rowBytes := lat / be * bb
-	if uint64(len(e.Data)) < nh*per*rowBytes {
-		return nil, false, fmt.Errorf("convert: %s holds %d bytes, want %d",
-			e.Name, len(e.Data), nh*per*rowBytes)
-	}
-
-	// attn_v_b: gather each head's value rows. The file interleaves k and v
-	// per head, so this is a copy, of bytes: the quantization is untouched.
-	vb := make([]byte, nh*vh*rowBytes)
-	for h := uint64(0); h < nh; h++ {
-		srcOff := (h*per + nope) * rowBytes
-		copy(vb[h*vh*rowBytes:], e.Data[srcOff:srcOff+vh*rowBytes])
-	}
-
-	// attn_k_b: dequantize each head's W_k and write its transpose.
-	kb := make([]float32, nh*lat*nope)
-	row := make([]float32, lat)
-	for h := uint64(0); h < nh; h++ {
-		for i := uint64(0); i < nope; i++ { // i indexes W_k's rows: the nope half
-			off := (h*per + i) * rowBytes
-			if err := quant.Dequant32(src, e.Data[off:off+rowBytes], row); err != nil {
-				return nil, false, fmt.Errorf("convert: %s head %d row %d: %w", e.Name, h, i, err)
-			}
-			// W_k[i][j] -> W_k^T[j][i]: sheet h, row j, column i.
-			for j := uint64(0); j < lat; j++ {
-				kb[h*lat*nope+j*nope+i] = row[j]
-			}
-		}
-	}
-
-	// The k half keeps the source's precision class: stored f32, the container
-	// has no packed view, so the absorb falls out of MatVecPackedGather into a
-	// per-head loop on every token. A packed source becomes Q8_0 along the new
-	// k (quantizeQ8Rows, ggml's recipe); a verbatim F32/F16/BF16 source, or a
-	// nope that is not a whole number of Q8_0 blocks, stays F32.
-	kbType, kbData := jlm.TypeF32, f32AsBytes(kb)
-	if jlm.Packed(e.Type) && nope%q8Elems == 0 {
-		kbType, kbData = jlm.TypeQ8, quantizeQ8Rows(kb, int(nope), int(nh*lat))
-	}
-	kbT := jlm.Tensor{Role: jlm.RoleAttnKB, Block: e.Block, Index: e.Index,
-		Type: kbType, NDim: 3, Data: kbData,
-		Name: e.Name + "/" + jlm.RoleAttnKB.String()}
-	kbT.Dims[0], kbT.Dims[1], kbT.Dims[2] = nope, lat, nh
-	vbT := jlm.Tensor{Role: jlm.RoleAttnVB, Block: e.Block, Index: e.Index,
-		Type: e.Type, NDim: 3, Data: vb,
-		Name: e.Name + "/" + jlm.RoleAttnVB.String()}
-	vbT.Dims[0], vbT.Dims[1], vbT.Dims[2] = lat, vh, nh
-	return []jlm.Tensor{kbT, vbT}, true, nil
 }
 
 // f32AsBytes reinterprets a float32 slice as the little-endian bytes a

@@ -77,7 +77,7 @@ func TestModelJSONGatherOperands(t *testing.T) {
 	for _, e := range out {
 		b := fmt.Sprint(e.Block)
 		f := func(k string) float64 { return float64(vals["m."+b+"."+k]) }
-		want := xieluTensor(int(e.Block), f("a"), f("b"), f("c"), f("d"))
+		want := xieluFold(int(e.Block), f("a"), f("b"), f("c"), f("d"))
 		if e.Name != want.Name || e.Role != want.Role || e.NDim != 1 || e.Dims != want.Dims || e.Type != want.Type ||
 			string(e.Data) != string(want.Data) {
 			t.Errorf("block %s: %s %v %v %v, want the GGUF fold's %s %v %v %v",
@@ -172,4 +172,21 @@ func TestActivationParametersAndLlama3(t *testing.T) {
 	if _, _, err := run(apertusLlama3, "", 1); err == nil || !strings.Contains(err.Error(), "block 1 carries no ffn_xielu") {
 		t.Errorf("a block without its xIELU numbers: %v", err)
 	}
+}
+
+// xieluFold is block b's RoleXIELU vector as XIELUActivation computes it each
+// call: alpha_p = softplus(a_p), alpha_n = beta + softplus(a_n), torch's
+// softplus (x past 20 is itself), in binary64, each stored as binary32.
+func xieluFold(b int, aP, aN, beta, eps float64) jlm.Tensor {
+	sp := func(x float64) float64 {
+		if x > 20 {
+			return x
+		}
+		return math.Log1p(math.Exp(x))
+	}
+	p := [4]float32{float32(sp(aP)), float32(beta + sp(aN)), float32(beta), float32(eps)}
+	t := jlm.Tensor{Role: jlm.RoleXIELU, Block: int32(b), Index: -1, Type: jlm.TypeF32, NDim: 1,
+		Data: f32AsBytes(p[:]), Name: "blk." + itoa(b) + ".ffn_xielu"}
+	t.Dims[0] = 4
+	return t
 }

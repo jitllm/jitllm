@@ -10,6 +10,9 @@
                 "whole_rotary": true, "value_key_width": true,
                 "altup": {"streams": "src['altup.num_inputs']", "active": "src['altup.active_idx'] | default(0)"},
                 "tensors": {
+                  "drop": [{"tensor": "attn_k.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"},
+                         {"tensor": "attn_v.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"},
+                         {"tensor": "attn_k_norm.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"}],
                   "model": {
                     "altup_unembd_proj.weight": [
                       {"role": "stream_collapse.1", "do": [{"reshape": [3, "embedding_length", "embedding_length"]},

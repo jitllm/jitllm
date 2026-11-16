@@ -29,7 +29,7 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 		t.Fatalf("arch %v flags %v", c.Arch, c.Flags)
 	}
 	s := &jlm.Source{Config: c.Config}
-	if err := xieluTensors(c, f, s); err != nil {
+	if err := statedGathers(c, s, f); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.Tensors) != 2 {
@@ -56,7 +56,7 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 	if c, err = configOf(f); err != nil {
 		t.Fatal(err)
 	}
-	if err := xieluTensors(c, f, &jlm.Source{Config: c.Config}); err == nil {
+	if err := statedGathers(c, &jlm.Source{Config: c.Config}, f); err == nil {
 		t.Fatal("an Apertus with no xielu.eps converted")
 	}
 }

@@ -1,9 +1,7 @@
 package convert
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -159,61 +157,6 @@ func splitGateUpBank(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 		out = append(out, t)
 	}
 	return out, true, nil
-}
-
-// sharedTensors finishes the blocks that share: a KV-sharing block's
-// (NKVShared, Gemma 4's and Gemma 3n's) k and v projections and k norm are
-// dropped, since transformers never builds them and llama.cpp loads and
-// never reads them, and a file may carry them anyway. A mixture block's
-// dense MLP (jlm.Flag2DenseMoE) moves to the shared expert's roles, since
-// its gate/up/down roles are its banks, and the router's scale becomes its
-// input's norm weight, router.scale * n_embd^-1/2.
-func sharedTensors(c *Config, s *jlm.Source) error {
-	if c == nil {
-		return nil
-	}
-	if c.NKVShared != 0 {
-		kept := s.Tensors[:0]
-		for _, t := range s.Tensors {
-			if t.Block >= 0 && !t.Role.Vision() && c.KVShared(int(t.Block)) &&
-				(t.Role == jlm.RoleAttnK || t.Role == jlm.RoleAttnV || t.Role == jlm.RoleAttnKNorm) {
-				continue
-			}
-			kept = append(kept, t)
-		}
-		s.Tensors = kept
-	}
-	if !c.Flags2.Has(jlm.Flag2DenseMoE) {
-		return nil
-	}
-	inv := float32(1 / math.Sqrt(float64(c.NEmbd)))
-	for i := range s.Tensors {
-		t := &s.Tensors[i]
-		if t.Block < 0 || t.Role.Vision() {
-			continue
-		}
-		switch t.Role {
-		case jlm.RoleFFNGate:
-			t.Role = jlm.RoleShExpGate
-		case jlm.RoleFFNUp:
-			t.Role = jlm.RoleShExpUp
-		case jlm.RoleFFNDown:
-			t.Role = jlm.RoleShExpDown
-		case jlm.RoleRouterNorm:
-			if t.Type != jlm.TypeF32 || t.NDim != 1 || t.Dims[0] != uint64(c.NEmbd) ||
-				len(t.Data) != 4*int(c.NEmbd) {
-				return fmt.Errorf("convert: %s is %v %v, want an F32 vector of %d", t.Name, t.Type,
-					t.Dims[:t.NDim], c.NEmbd)
-			}
-			d := make([]byte, len(t.Data))
-			for j := 0; j < int(c.NEmbd); j++ {
-				v := math.Float32frombits(binary.LittleEndian.Uint32(t.Data[4*j:]))
-				binary.LittleEndian.PutUint32(d[4*j:], math.Float32bits(v*inv))
-			}
-			t.Data = d
-		}
-	}
-	return nil
 }
 
 // denseMoEFits reads a dense MLP beside a mixture (jlm.Flag2DenseMoE): the

@@ -2,7 +2,17 @@
   "classes": ["ApertusForCausalLM"],
   "gguf": ["apertus"],
   "container": {
-    "apertus": {"flags": {"qk_norm": "true", "rope_neox": "true"}}
+    "apertus": {"flags": {"qk_norm": "true", "rope_neox": "true"},
+      "tensors": {
+        "keys": ["xielu.alpha_p", "xielu.alpha_n", "xielu.beta", "xielu.eps"],
+        "gather": [
+          {"role": "ffn_xielu", "every": true,
+           "from": [{"from": ["xielu.alpha_p"], "do": [{"map": "softplus(x)"}]},
+                    {"from": ["xielu.alpha_n", "xielu.beta"], "do": [{"map": "y + softplus(x)"}]},
+                    "xielu.beta", "xielu.eps"],
+           "do": [{"concat": 0}]}
+        ]
+      }}
   },
   "config": {
     "arch": "apertus",

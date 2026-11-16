@@ -113,7 +113,7 @@ func lexExpr(src string) ([]string, error) {
 					continue
 				}
 			}
-			if !strings.ContainsRune("+-*/<>!()[],?:", rune(c)) {
+			if !strings.ContainsRune("+-*/%<>!()[],?:", rune(c)) {
 				return nil, fmt.Errorf("expression %q: %q is not in the language", src, c)
 			}
 			toks = append(toks, string(c))
@@ -232,7 +232,7 @@ func (p *exprParser) cmp() (*exprNode, error) {
 }
 
 func (p *exprParser) sum() (*exprNode, error)  { return p.binary(p.prod, "+", "-") }
-func (p *exprParser) prod() (*exprNode, error) { return p.binary(p.unary, "*", "/") }
+func (p *exprParser) prod() (*exprNode, error) { return p.binary(p.unary, "*", "/", "%") }
 
 func (p *exprParser) unary() (*exprNode, error) {
 	if p.peek() != "-" {
@@ -510,6 +510,11 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 			return nil, fmt.Errorf("%s: division by zero", exprText(n))
 		}
 		return l / r, nil
+	case "%":
+		if r == 0 || l != math.Trunc(l) || r != math.Trunc(r) {
+			return nil, fmt.Errorf("%s: %g %% %g is not a remainder of whole numbers", exprText(n), l, r)
+		}
+		return math.Mod(l, r), nil
 	case "<":
 		return l < r, nil
 	case "<=":

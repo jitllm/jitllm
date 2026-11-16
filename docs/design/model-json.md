@@ -234,7 +234,13 @@ schema; `convert/modeljson.go` reads it. Its sections:
   xBC and the convolution put in the delta rule's C | B | x order (`pick`),
   Mamba-1 and Jamba their in_proj and x_proj splits, LFM2 its short
   convolution's B | C | x, and DeepSeek V4 its grouped output projection as
-  the bank it is.
+  the bank it is. A GGUF's table also states `drop` (a block tensor dropped
+  where its condition holds, `block` the block's index: Gemma 4's and Gemma
+  3n's KV-sharing blocks' k, v and k norm), a target's `if` (cut where it
+  holds, `packed` the source's storage: Gemma 4's dense MLP as the shared
+  expert beside a mixture, deepseek2's fused MLA up-projection re-stored
+  Q8_0 from a packed source), and `keys` beside the class's `gather` (GGUF
+  keys read as a block's sources: Apertus's XIELU vector).
   `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
   feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,

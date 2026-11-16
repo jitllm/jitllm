@@ -253,7 +253,13 @@ type mjTensors struct {
 	Ternary      *mjTernary           `json:"ternary"`
 	// Present states a block tensor the config says every trunk block has or
 	// lacks: Tensor, relative to the block, is shipped exactly where If holds.
+	// Drop, a GGUF table's, drops a block tensor where If, over the GGUF's
+	// keys and block (the block's index), holds.
 	Present []mjPresent `json:"present"`
+	Drop    []mjPresent `json:"drop"`
+	// Keys, a GGUF table's, are the GGUF keys its gather reads as a block's
+	// sources: a key's value for every block, or its block's entry of a list.
+	Keys []string `json:"keys"`
 }
 
 type mjPresent struct {
@@ -310,6 +316,9 @@ type mjExperts struct {
 type mjTensor struct {
 	Role string `json:"role"`
 	Do   mjPipe `json:"do"`
+	// If, a GGUF table's, is an expression over the GGUF's keys: the tensor
+	// is cut where it holds and kept as it is where it does not.
+	If string `json:"if"`
 }
 
 func (t *mjTensor) UnmarshalJSON(b []byte) error {
@@ -684,9 +693,15 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			a.expert[n] = role
 		}
 	}
+	if len(mj.Tensors.Drop)+len(mj.Tensors.Keys) > 0 {
+		return nil, fmt.Errorf("convert: %s: a class's table states no drop or keys, which are a GGUF table's", mj.name)
+	}
 	st := &mjState{src: map[string]mjVal{}}
 	pipes := map[string]mjPipe{}
 	add := func(dst map[string]jlm.Role, name string, t mjTensor) error {
+		if t.If != "" {
+			return fmt.Errorf("convert: %s: %s: a class's target states no if, which is a GGUF table's", mj.name, name)
+		}
 		r, ok := mj.names.roleOf(t.Role)
 		if !ok {
 			return fmt.Errorf("convert: %s: %s's role %q is not a tensor name the container knows", mj.name, name, t.Role)

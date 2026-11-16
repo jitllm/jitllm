@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
@@ -14,6 +15,14 @@ import (
 type statedCut struct {
 	role jlm.Role
 	do   mjPipe
+	when *exprNode
+}
+
+// statedDrop is a block tensor a GGUF's table drops, by its name past the
+// blk.N. prefix, where when holds.
+type statedDrop struct {
+	name string
+	when *exprNode
 }
 
 // statedCuts is source tensor n's targets: each a role -- by the
@@ -36,8 +45,97 @@ func statedCuts(names tensorNames, n string, ts mjTargets) ([]statedCut, error) 
 			return nil, fmt.Errorf("%s: %s: %w", n, t.Role, err)
 		}
 		out[i] = statedCut{role: r, do: t.Do}
+		if t.If != "" {
+			x, err := parseExpr(t.If)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", n, err)
+			}
+			out[i].when = x
+		}
 	}
 	return out, nil
+}
+
+// keyValue is a GGUF key a table reads as a block's source: its value, by
+// its bare name (llama.cpp writes some without the architecture's) or past
+// the architecture's prefix, for every block where it is a number, its
+// block's entry where it is a list of one a block.
+func keyValue(f *meta.File, k string, block, blocks int) (float32, error) {
+	v, ok := f.KV[k]
+	if !ok {
+		if v, ok = f.Key(k); !ok {
+			return 0, fmt.Errorf("convert: no key %s", k)
+		}
+	}
+	if v.Len() == 0 {
+		x, ok := v.Float()
+		if !ok {
+			return 0, fmt.Errorf("convert: %s is %v, not a number", k, v.Type)
+		}
+		return float32(x), nil
+	}
+	xs, err := v.Float32s()
+	if err != nil {
+		return 0, fmt.Errorf("convert: %s: %w", k, err)
+	}
+	if len(xs) != blocks {
+		return 0, fmt.Errorf("convert: %s has %d values for %d blocks", k, len(xs), blocks)
+	}
+	return xs[block], nil
+}
+
+// statedGathers runs c's statement's gathers (gatherBlocks) over s's block
+// tensors and the keys it names, every block's result after s's tensors;
+// a gathered tensor is not stored.
+func statedGathers(c *Config, s *jlm.Source, f *meta.File) error {
+	if c == nil || c.Stated == nil || len(c.Stated.gathers) == 0 {
+		return nil
+	}
+	st := c.Stated
+	n := int(c.NLayer)
+	var names []string
+	byName := map[string]*jlm.Tensor{}
+	for i := range s.Tensors {
+		names = append(names, s.Tensors[i].Name)
+		byName[s.Tensors[i].Name] = &s.Tensors[i]
+	}
+	keyed := map[string]int{}
+	for b := range n {
+		for _, k := range st.keys {
+			kn := "blk." + itoa(b) + "." + k
+			names, keyed[kn] = append(names, kn), b
+		}
+	}
+	read := func(name string) ([]float32, error) {
+		if b, ok := keyed[name]; ok {
+			_, k, _ := strings.Cut(strings.TrimPrefix(name, "blk."), ".")
+			x, err := keyValue(f, k, b, n)
+			return []float32{x}, err
+		}
+		t := byName[name]
+		src, ok := sourceType(t.Type)
+		if !ok {
+			return nil, fmt.Errorf("convert: %s is %v, which has no source type", t.Name, t.Type)
+		}
+		b, err := t.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		vals := make([]float32, mjProd(mjTorch(t)))
+		return vals, quant.Dequant32(src, b, vals)
+	}
+	out, used, err := gatherBlocks(ggufEnv(f), "blk.", st.gathers, names, read, n)
+	if err != nil {
+		return err
+	}
+	kept := s.Tensors[:0]
+	for _, t := range s.Tensors {
+		if !used[t.Name] {
+			kept = append(kept, t)
+		}
+	}
+	s.Tensors = append(kept, out...)
+	return nil
 }
 
 // statedTensors cuts each of s's tensors c's statement names -- a
@@ -50,8 +148,24 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 		return nil
 	}
 	st := c.Stated
-	if len(st.modelTensors)+len(st.blockTensors)+len(st.linearTensors) == 0 {
+	if len(st.modelTensors)+len(st.blockTensors)+len(st.linearTensors)+len(st.drops) == 0 {
 		return nil
+	}
+	holds := func(x *exprNode, t *jlm.Tensor) (bool, error) {
+		v, err := evalMJ(x, func(p string) any {
+			switch p {
+			case "block":
+				return float64(t.Block)
+			case "packed":
+				return jlm.Packed(t.Type)
+			}
+			return env(p)
+		})
+		b, ok := v.(bool)
+		if err == nil && !ok {
+			err = fmt.Errorf("a condition is %v, not true or false", v)
+		}
+		return b, err
 	}
 	type slot struct {
 		block int32
@@ -70,6 +184,37 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 				cuts, ok = lc, true
 			}
 			ok = ok && in
+		}
+		dropped := false
+		for _, d := range st.drops {
+			if t.Block < 0 || d.name != rest || dropped {
+				continue
+			}
+			var err error
+			if dropped, err = holds(d.when, &t); err != nil {
+				return fmt.Errorf("convert: %s: drop: %w", t.Name, err)
+			}
+		}
+		if dropped {
+			continue
+		}
+		// A target is cut where its if holds; a tensor none of whose targets
+		// is cut is kept as it is.
+		if ok {
+			var on []statedCut
+			for _, x := range cuts {
+				h := x.when == nil
+				if !h {
+					var err error
+					if h, err = holds(x.when, &t); err != nil {
+						return fmt.Errorf("convert: %s: %w", t.Name, err)
+					}
+				}
+				if h {
+					on = append(on, x)
+				}
+			}
+			cuts, ok = on, len(on) > 0
 		}
 		if !ok {
 			out = append(out, t)

@@ -3,6 +3,7 @@ package convert
 import (
 	"bytes"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -21,7 +22,7 @@ import (
 // source stays verbatim, and a nope that is not whole Q8_0 blocks falls back
 // to f32. An unconditional f32 half is correct and silently loses the batched
 // gather, so all three are asserted.
-func TestUnfuseMLASplitsTheAbsorbedPair(t *testing.T) {
+func TestMLATableSplitsTheAbsorbedPair(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		src    jlm.Type
@@ -87,10 +88,11 @@ func TestUnfuseMLASplitsTheAbsorbedPair(t *testing.T) {
 				Name: "blk.0.attn_kv_b.weight"}
 			e.Dims[0], e.Dims[1] = lat, rows
 
-			out, split, err := unfuseMLA(&e, &Config{Config: cfg})
+			out, err := mlaUnfuse(t, e, mlaKeys(cfg))
 			if err != nil {
 				t.Fatal(err)
 			}
+			split := len(out) == 2
 			if !split || len(out) != 2 {
 				t.Fatalf("split=%v, %d tensor(s) -- this gate proved nothing", split, len(out))
 			}
@@ -209,9 +211,10 @@ func TestUnfuseMLASplitsTheAbsorbedPair(t *testing.T) {
 	}
 }
 
-// TestUnfuseMLARefusesAShapeItCannotSplit covers the geometry check, which is
-// what stopped the phi3 splitter writing three wrong tensors for qwen3next.
-func TestUnfuseMLARefusesAShapeItCannotSplit(t *testing.T) {
+// TestMLATableRefusesAShapeItCannotSplit covers the geometry the table's
+// primitives hold, which is what stopped the phi3 splitter writing three
+// wrong tensors for qwen3next.
+func TestMLATableRefusesAShapeItCannotSplit(t *testing.T) {
 	base := func() *jlm.Config {
 		return &jlm.Config{NHead: 3, HeadDim: 80, NRot: 16, HeadDimV: 32, KVLoraRank: 128}
 	}
@@ -231,8 +234,8 @@ func TestUnfuseMLARefusesAShapeItCannotSplit(t *testing.T) {
 		{"no kv_lora_rank", mk(128, 3*(64+32)), &jlm.Config{NHead: 3, HeadDim: 80, NRot: 16}},
 	} {
 		t.Run(v.name, func(t *testing.T) {
-			if _, split, err := unfuseMLA(v.e, &Config{Config: v.c}); err == nil {
-				t.Fatalf("accepted (split=%v) -- this gate proved nothing", split)
+			if out, err := mlaUnfuse(t, *v.e, mlaKeys(v.c)); err == nil {
+				t.Fatalf("accepted (%d tensors) -- this gate proved nothing", len(out))
 			} else {
 				t.Logf("refused: %v", err)
 			}
@@ -240,8 +243,53 @@ func TestUnfuseMLARefusesAShapeItCannotSplit(t *testing.T) {
 	}
 	// A tensor that is not the fused pair passes straight through.
 	e := mk(128, 3*(64+32))
-	e.Role = jlm.RoleAttnQ
-	if _, split, err := unfuseMLA(e, &Config{Config: base()}); err != nil || split {
-		t.Fatalf("attn_q was split=%v err=%v: unfuseMLA must ignore what is not its tensor", split, err)
+	e.Role, e.Name = jlm.RoleAttnQ, "blk.0.attn_q.weight"
+	if out, err := mlaUnfuse(t, *e, mlaKeys(base())); err != nil || len(out) != 1 || out[0].Role != jlm.RoleAttnQ {
+		t.Fatalf("attn_q came out as %d tensors (%v): the table must leave what is not its tensor", len(out), err)
 	}
+}
+
+// mlaKeys are the GGUF keys deepseek2's table sizes MLA's split by, from c.
+func mlaKeys(c *jlm.Config) map[string]any {
+	k := map[string]any{"attention.head_count": float64(c.NHead), "attention.key_length": float64(c.HeadDim),
+		"rope.dimension_count": float64(c.NRot)}
+	if c.KVLoraRank != 0 {
+		k["attention.kv_lora_rank"] = float64(c.KVLoraRank)
+	}
+	if c.HeadDimV != 0 {
+		k["attention.value_length"] = float64(c.HeadDimV)
+	}
+	return k
+}
+
+// mlaUnfuse runs the library's deepseek2 GGUF table on block 0's e, its sizes
+// read off keys.
+func mlaUnfuse(t *testing.T, e jlm.Tensor, keys map[string]any) ([]jlm.Tensor, error) {
+	t.Helper()
+	files, err := libraryFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st *mjStates
+	for _, mj := range files {
+		if s, ok := mj.Container["deepseek2"]; ok {
+			st = s
+		}
+	}
+	if st == nil || st.Tensors == nil {
+		t.Fatal("the library states no deepseek2 tensor table")
+	}
+	names, err := readTensorNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cuts, err := statedCuts(names, "attn_kv_b.weight", st.Tensors.Block["attn_kv_b.weight"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{Config: &jlm.Config{}, Stated: &Statement{blockTensors: map[string][]statedCut{"attn_kv_b.weight": cuts}}}
+	e.Name = "blk.0." + strings.TrimPrefix(e.Name, "blk.0.")
+	s := &jlm.Source{Tensors: []jlm.Tensor{e}}
+	err = statedTensors(c, s, func(p string) any { return keys[p] })
+	return s.Tensors, err
 }

@@ -859,7 +859,7 @@ func TestModelJSONPrimitives(t *testing.T) {
 		{"two tensors left", `[]`, two, "2 tensors are left"},
 		{"two primitives in a step", `[{"reshape": [-1], "transpose": [0]}]`, two[:1], "one primitive a step"},
 		{"no primitive in a step", `[{}]`, two[:1], "one primitive a step"},
-		{"an unknown type", `[{"type": "bf16"}]`, two[:1], "not f32 or f16"},
+		{"an unknown type", `[{"type": "bf16"}]`, two[:1], "not f32, f16 or q8"},
 		{"a slice of two values", `[{"slice": [0, 1]}]`, two[:1], "takes 3 values"},
 		{"a size that is no count", `[{"reshape": ["kernel / 2", -1]}]`, two[:1], "not a whole number"},
 		{"a size of an absent key", `[{"reshape": ["missing", -1]}]`, two[:1], "is absent"},

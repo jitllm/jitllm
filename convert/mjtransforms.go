@@ -177,8 +177,8 @@ func (p mjPipe) check() error {
 				return fmt.Errorf("%s takes %d values, not %d", n, want, len(argsOf(o)))
 			}
 		case "type":
-			if o.Type != "f32" && o.Type != "f16" {
-				return fmt.Errorf("type %q is not f32 or f16", o.Type)
+			if o.Type != "f32" && o.Type != "f16" && o.Type != "q8" {
+				return fmt.Errorf("type %q is not f32, f16 or q8", o.Type)
 			}
 		case "pick":
 			if n := len(o.Pick); n < 3 || n%2 != 1 {
@@ -564,11 +564,41 @@ func mjRepeat(v mjVal, axis, times int64) (mjVal, error) {
 	return out, nil
 }
 
+// mjRetype stores v as to: f32 or f16 of a float tensor; f32 of a packed one,
+// dequantized; q8 of a float one, its rows (the fastest axis) quantized as
+// Q8_0, whole blocks of it.
 func mjRetype(v mjVal, to string) (mjVal, error) {
-	t := map[string]jlm.Type{"f32": jlm.TypeF32, "f16": jlm.TypeF16}[to]
 	if _, err := mjElemSize(v.typ); err != nil {
-		return mjVal{}, err
+		src, ok := sourceType(v.typ)
+		if to != "f32" || !ok {
+			return mjVal{}, fmt.Errorf("a %v tensor is dequantized to f32, not stored as %s", v.typ, to)
+		}
+		out := mjVal{shape: v.shape, typ: jlm.TypeF32}
+		if v.dry() {
+			return out, nil
+		}
+		vals := make([]float32, v.count())
+		if err := quant.Dequant32(src, v.data, vals); err != nil {
+			return mjVal{}, err
+		}
+		out.data = f32AsBytes(vals)
+		return out, nil
 	}
+	if to == "q8" {
+		k := uint64(1)
+		if len(v.shape) > 0 {
+			k = v.shape[len(v.shape)-1]
+		}
+		if k%q8Elems != 0 {
+			return mjVal{}, fmt.Errorf("rows of %d are not whole Q8_0 blocks", k)
+		}
+		out := mjVal{shape: v.shape, typ: jlm.TypeQ8}
+		if !v.dry() {
+			out.data = quantizeQ8Rows(mjFloats(v), int(k), int(v.count()/k))
+		}
+		return out, nil
+	}
+	t := map[string]jlm.Type{"f32": jlm.TypeF32, "f16": jlm.TypeF16}[to]
 	out := mjVal{shape: v.shape, typ: t}
 	if v.dry() || v.typ == t {
 		out.data = v.data
@@ -618,7 +648,7 @@ func mjReadsTensor(n *exprNode) bool {
 // mjMapFuncs are the functions a map may call.
 func mjMapFuncs() map[string]func(float64) float64 {
 	return map[string]func(float64) float64{"exp": math.Exp, "log": math.Log, "sqrt": math.Sqrt, "tanh": math.Tanh,
-		"softplus": softplus}
+		"softplus": softplus, "f32": func(x float64) float64 { return float64(float32(x)) }}
 }
 
 // softplus is torch's: log(1 + e^x), and x itself past 20.
