@@ -309,7 +309,9 @@ func denseMoEFits(f *meta.File, c *Config) error {
 }
 
 // sliding reports that block i of c's pattern slides.
-func sliding(c *Config, i int) bool { return uint32(i)%c.SWAPeriod < c.SWAPeriod-1 }
+func sliding(c *Config, i int) bool {
+	return c.SWAPeriod != 0 && uint32(i)%c.SWAPeriod < c.SWAPeriod-1
+}
 
 // blockGeoms is each block's geometry: the sliding layers' swa where the
 // pattern slides, the model's elsewhere, and ffns' feed-forward width where it
