@@ -89,17 +89,6 @@ func towerPhases() []string { return []string{"joined", "source", "prepare", "fi
 func towerTransforms() map[string]func(s *jlm.Source, f *meta.File, p *projStates) error {
 	return map[string]func(*jlm.Source, *meta.File, *projStates) error{
 		"image_break_row": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return imgBreakRow(s) },
-		"point_conv_projection": func(s *jlm.Source, _ *meta.File, _ *projStates) error {
-			for i := range s.Tensors {
-				if s.Tensors[i].Role == jlm.RoleVProj {
-					if err := reshapePointConv(&s.Tensors[i]); err != nil {
-						return err
-					}
-				}
-			}
-			return nil
-		},
-		"norm_frame_rows": func(s *jlm.Source, _ *meta.File, _ *projStates) error { return normFrameRows(s, s.Vision.Eps) },
 		"stage_places": func(s *jlm.Source, f *meta.File, _ *projStates) error {
 			if f == nil {
 				return fmt.Errorf("convert: stage_places reads the tower's file, which only the source phase has")

@@ -85,8 +85,12 @@ func TestModelJSONGatherOperands(t *testing.T) {
 		}
 	}
 	var bad mjGather
-	if err := json.Unmarshal([]byte(strings.Replace(xieluGather, `, "do": [{"map": "softplus(x)"}]`, ``, 1)), &bad); err == nil {
+	if err := json.Unmarshal([]byte(strings.Replace(xieluGather, `, "do": [{"map": "y + softplus(x)"}]`, ``, 1)), &bad); err == nil {
 		t.Error("a composed operand without its primitives parsed")
+	}
+	var lone mjGather
+	if err := json.Unmarshal([]byte(strings.Replace(xieluGather, `, "do": [{"map": "softplus(x)"}]`, `, "keep": true`, 1)), &lone); err != nil {
+		t.Errorf("one source read and kept, with no primitives, did not parse: %v", err)
 	}
 	delete(vals, "m.1.c")
 	if _, _, err := gatherBlocks(mjEnv(map[string]any{}), "m.", []hfGatherStep{step}, names(), read, 2); err == nil {

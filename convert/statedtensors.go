@@ -201,6 +201,13 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 				return float64(t.Block)
 			case "packed":
 				return jlm.Packed(t.Type)
+			case "shape":
+				dims := mjTorch(t)
+				l := make([]any, len(dims))
+				for i, d := range dims {
+					l[i] = float64(d)
+				}
+				return l
 			}
 			return env(p)
 		}

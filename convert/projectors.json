@@ -730,7 +730,10 @@
    "requires": ["v.position_embd.weight"],
    "scale": "src['vision.spatial_merge_size'] | default(2)",
    "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"},
-   "transforms": {"finish": ["point_conv_projection", "norm_frame_rows"]},
+   "tensors": {"model": {"mm.2.weight": {"role": "v_proj", "do": [{"shape": [-1, -1, 1, 1]}, {"reshape": ["at(shape, 0)", -1]}]}},
+     "gather": [
+       {"role": "v_img_begin", "model": true, "from": [{"from": ["mm.image_begin"], "do": [{"rms": "vision.attention.layer_norm_epsilon ?? 0.000001"}]}, {"from": ["mm.post_norm.weight"], "keep": true}], "do": [{"map": "x * y"}], "name": "mm.image_begin"},
+       {"role": "v_img_end", "model": true, "from": [{"from": ["mm.image_end"], "do": [{"rms": "vision.attention.layer_norm_epsilon ?? 0.000001"}]}, {"from": ["mm.post_norm.weight"], "keep": true}], "do": [{"map": "x * y"}], "name": "mm.image_end"}]},
    "tower": {
     "requires": ["v_patch_embd", "v_pos_embd", "v_proj_in_norm", "v_merge_conv", "v_proj", "v_img_newline", "v_proj2", "v_img_begin", "v_img_end", "v_proj_norm"],
     "require": [

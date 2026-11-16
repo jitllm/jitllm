@@ -346,6 +346,7 @@ The primitives, each a step of a `do` list with exactly one field:
 | `{"trim": [axis, keep]}` | an axis's first keep indices, the rest refused unless every byte is zero |
 | `{"trim_zero": true}` | the slowest axis's trailing indices whose bytes are all zero, one at least kept |
 | `{"shape": [a, -1]}` | the shape the tensor in hand has, slowest axis first, -1 any size; another is refused; no byte moves |
+| `{"rms": "eps"}` | each row over its root mean square at eps, in float64, rounded once to float32 |
 | `{"type": "f32"}` | the storage type, f32, f16 or q8 |
 
 Every size and axis is a number or an expression over config.json. Each
@@ -408,7 +409,7 @@ model.json is mostly the config section and the `retarget` it needs.
    and `hard_tokens` the first id of a token table the tower embeds itself
    (read by the `hard_token_embeddings` transform). The transforms are
    named primitives (`stage_places`, `conv_layouts`, `fold_channel_scales`,
-   `point_conv_projection`, ...), each usable by any entry. A projector's
+   ...), each usable by any entry. A projector's
    `tensors` is the GGUF table over the tower's names (model entries by
    name, block entries past `v.blk.N.` as `v.<name>`, and sizes): Gemma 3's
    input projection transposed, Mistral 3's merger permuted into the

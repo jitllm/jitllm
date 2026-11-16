@@ -107,6 +107,11 @@ type mjOp struct {
 	// Shape is the shape the tensor in hand has, slowest axis first, -1 any
 	// size; another is refused. No byte moves.
 	Shape []mjSize `json:"shape"`
+	// RMS is an epsilon, an expression rounded to f32 as the container's
+	// epsilons are: each row (the fastest axis) over its root mean square,
+	// x / sqrt(mean(x^2) + eps), accumulated in float64 and rounded once to
+	// float32.
+	RMS string `json:"rms"`
 }
 
 func (o mjOp) name() string {
@@ -146,6 +151,9 @@ func (o mjOp) name() string {
 	}
 	if o.Shape != nil {
 		set = append(set, "shape")
+	}
+	if o.RMS != "" {
+		set = append(set, "rms")
 	}
 	if len(set) != 1 {
 		return strings.Join(set, "+")
@@ -189,6 +197,10 @@ func (p mjPipe) check() error {
 		case "pick":
 			if n := len(o.Pick); n < 3 || n%2 != 1 {
 				return fmt.Errorf("pick takes an axis and pairs of start and length, not %d values", n)
+			}
+		case "rms":
+			if _, err := parseExpr(o.RMS); err != nil {
+				return fmt.Errorf("rms %q: %w", o.RMS, err)
 			}
 		case "reshape", "transpose", "concat", "stack", "trim_zero", "shape":
 		default:
@@ -283,6 +295,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjPick(vs[0], args)
 			case "shape":
 				out, err = mjShape(vs[0], args)
+			case "rms":
+				out, err = mjRMS(vs[0], o.RMS, env)
 			}
 		}
 		if err != nil {
@@ -301,6 +315,42 @@ func mjAxis(axis int64, rank int) (int, error) {
 		return 0, fmt.Errorf("axis %d of a %d-axis tensor", axis, rank)
 	}
 	return int(axis), nil
+}
+
+func mjRMS(v mjVal, src string, env exprEnv) (mjVal, error) {
+	x, err := parseExpr(src)
+	if err != nil {
+		return mjVal{}, err
+	}
+	e, err := evalNum(x, env)
+	if err != nil {
+		return mjVal{}, fmt.Errorf("rms %q: %w", src, err)
+	}
+	if v.typ != jlm.TypeF32 && v.typ != jlm.TypeF16 && v.typ != jlm.TypeBF16 {
+		return mjVal{}, fmt.Errorf("rms of a %v tensor: take it to f32 first", v.typ)
+	}
+	out := mjVal{shape: v.shape, typ: jlm.TypeF32}
+	if len(v.shape) == 0 || v.shape[len(v.shape)-1] == 0 {
+		return mjVal{}, fmt.Errorf("rms of a %v tensor", v.shape)
+	}
+	if v.dry() {
+		return out, nil
+	}
+	vals := mjFloats(v)
+	n := int(v.shape[len(v.shape)-1])
+	eps := float64(float32(e))
+	for r := 0; r+n <= len(vals); r += n {
+		var ss float64
+		for _, y := range vals[r : r+n] {
+			ss += float64(y) * float64(y)
+		}
+		k := 1 / math.Sqrt(ss/float64(n)+eps)
+		for j := r; j < r+n; j++ {
+			vals[j] = float32(float64(vals[j]) * k)
+		}
+	}
+	out.data = f32AsBytes(vals)
+	return out, nil
 }
 
 func mjShape(v mjVal, sizes []int64) (mjVal, error) {
@@ -872,14 +922,17 @@ type hfGatherStep struct {
 }
 
 // mjOperand is one of a gather's inputs: a source by its block-relative name,
-// one tensor composed of sources by primitives of its own, or Fill's value at
-// Shape, each a count over the keys.
+// one tensor composed of sources by primitives of its own (one source alone
+// needs none), or Fill's value at Shape, each a count over the keys. Keep
+// reads its sources and leaves them in place, where a gather otherwise
+// consumes what it reads.
 type mjOperand struct {
 	Name  string   `json:"-"`
 	From  []string `json:"from"`
 	Do    mjPipe   `json:"do"`
 	Fill  *float64 `json:"fill"`
 	Shape []string `json:"shape"`
+	Keep  bool     `json:"keep"`
 }
 
 func (o *mjOperand) UnmarshalJSON(b []byte) error {
@@ -904,7 +957,7 @@ func (o *mjOperand) UnmarshalJSON(b []byte) error {
 	if len(o.Shape) > 0 {
 		return fmt.Errorf("a shape is a filled operand's")
 	}
-	if len(o.From) == 0 || len(o.Do) == 0 {
+	if len(o.From) == 0 || len(o.Do) == 0 && len(o.From) != 1 {
 		return fmt.Errorf("an operand composed of sources names them and its primitives")
 	}
 	return nil
@@ -1023,7 +1076,7 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 			count = int(n)
 		}
 		at := func(bp string, block int32) error {
-			source := func(f string) (mjVal, error) {
+			source := func(f string, keep bool) (mjVal, error) {
 				if !have[bp+f] {
 					return mjVal{}, fmt.Errorf("convert: the gather of %v reads %s, which the checkpoint does not carry", g.role, bp+f)
 				}
@@ -1034,7 +1087,9 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 				if count >= 0 && len(v) != count {
 					return mjVal{}, fmt.Errorf("convert: %s holds %d values, want %d", bp+f, len(v), count)
 				}
-				used[bp+f] = true
+				if !keep {
+					used[bp+f] = true
+				}
 				return mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}, nil
 			}
 			src := make([]mjVal, len(g.from))
@@ -1053,7 +1108,7 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 				ins := make([]mjVal, len(o.names()))
 				for j, f := range o.names() {
 					var err error
-					if ins[j], err = source(f); err != nil {
+					if ins[j], err = source(f, o.Keep); err != nil {
 						return err
 					}
 				}
