@@ -1,5 +1,7 @@
 package jlm
 
+import "slices"
+
 // heads is how many heads a hash over n-grams up to span reads.
 func (h *NGramHash) heads(span int32) int { return int(span-1) * int(h.HeadsPer) }
 
@@ -50,6 +52,29 @@ func decodeNGramHash(r *rbuf) *NGramHash {
 		}
 	}
 	return h
+}
+
+// RowsGathered is the tables the blocks' statements gather a row at a time
+// by index (TOpNGramRows's bound table), which a converter stores as row
+// tables (Tensor.RowTable).
+func (s *Streams) RowsGathered() []Role {
+	var rs []Role
+	for i := range s.Blocks {
+		b := &s.Blocks[i]
+		for _, sub := range []*SubStreams{&b.Pre, &b.Attn, &b.FFN} {
+			for _, p := range append([]*Program{sub.Read, sub.Join, sub.Post}, sub.Writes...) {
+				if p == nil {
+					continue
+				}
+				for _, op := range p.Ops {
+					if op.Code == TOpNGramRows && len(op.Bind) > 0 && !slices.Contains(rs, op.Bind[0]) {
+						rs = append(rs, op.Bind[0])
+					}
+				}
+			}
+		}
+	}
+	return rs
 }
 
 // states reports that a block's statement holds an op of code c.

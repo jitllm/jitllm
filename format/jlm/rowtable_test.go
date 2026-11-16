@@ -34,7 +34,7 @@ func TestRowTableIsReadARowAtATime(t *testing.T) {
 	cf := framesOf(t, c)
 	defer c.Close()
 	te, ok := c.Find(jlm.RoleNGramTable, jlm.DenseBlock, -1)
-	if !ok || !jlm.RowTable(te) || c.InDense(te) {
+	if !ok || !c.RowTable(te) || c.InDense(te) {
 		t.Fatalf("the table is not a row table outside the dense region: %+v", te)
 	}
 	rb, err := jlm.RowBytes(te)
@@ -65,7 +65,7 @@ func rowTableModel(t *testing.T) (string, *jlm.Header, []byte, uint64) {
 		binary.LittleEndian.PutUint16(table[i:], 0x3C00)
 	}
 	e := jlm.Tensor{Role: jlm.RoleNGramTable, Block: jlm.DenseBlock, Index: -1, Type: jlm.TypeIQ4NL,
-		NDim: 2, Data: table, Name: "ngram"}
+		NDim: 2, Data: table, Name: "ngram", RowTable: true}
 	e.Dims[0], e.Dims[1] = k, rows
 	src.Tensors = append(src.Tensors, e)
 	dst := filepath.Join(t.TempDir(), "m.jlm")

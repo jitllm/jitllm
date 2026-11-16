@@ -495,7 +495,7 @@ func (m *Model) Inventory(block int32) (graph.Facts, bool) {
 	// A row table is the model's, read by the block whose statement binds
 	// it.
 	for _, r := range m.Cfg.statedBinds(int(block)) {
-		if e, ok := m.Container.Find(r, jlm.DenseBlock, -1); ok && jlm.RowTable(e) {
+		if e, ok := m.Container.Find(r, jlm.DenseBlock, -1); ok && m.Container.RowTable(e) {
 			inv[e.Role] = graph.Shape{K: e.K(), Rows: e.Rows()}
 		}
 	}

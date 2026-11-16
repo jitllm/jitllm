@@ -33,7 +33,7 @@ type RowView struct {
 // NewRowView reserves row table e's view. It fails where e is not a row
 // table or the host reserves no address space.
 func (f *Frames) NewRowView(e *Entry) (*RowView, error) {
-	if !RowTable(e) {
+	if !f.file.RowTable(e) {
 		return nil, fmt.Errorf("jlm: %s is not a row table", e.Name)
 	}
 	rb, err := RowBytes(e)

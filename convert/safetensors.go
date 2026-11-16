@@ -567,6 +567,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 		return nil, err
 	}
 	StateStreams(cfg.Config, sourceStores(s))
+	storeRowTables(cfg.Config, s)
 	if err := StateSelection(cfg.Config, sourceStores(s)); err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package convert
 
 import (
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -51,6 +52,17 @@ func StateStreams(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 	}
 	s.Head = bankRead(c, s.Head, bankStreams(final), jlm.RoleOutputResScore, stores(jlm.RoleOutputResScore, jlm.DenseBlock))
 	c.Streams = s
+}
+
+// storeRowTables stores as row tables the model-level tensors of s that c's
+// statements gather a row at a time (jlm.Streams.RowsGathered).
+func storeRowTables(c *jlm.Config, s *jlm.Source) {
+	rs := c.Streams.RowsGathered()
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && slices.Contains(rs, t.Role) {
+			t.RowTable = true
+		}
+	}
 }
 
 // sourceStores says s holds role for block li (-1 the dense tensors).
