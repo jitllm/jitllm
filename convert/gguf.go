@@ -85,10 +85,10 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		return nil, err
 	}
 	if vf != nil {
-		if a := vf.Arch(); a != "clip" {
+		if a := vf.Arch(); a != towerArch {
 			return nil, fmt.Errorf("convert: %s is architecture %q, not a vision tower", mmproj, a)
 		}
-		if f.Arch() == "clip" {
+		if f.Arch() == towerArch {
 			return nil, fmt.Errorf("convert: %s is itself a vision tower; the first "+
 				"argument is the TEXT model", src)
 		}
@@ -163,11 +163,15 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 }
 
 // sourceOf translates a parsed source model into the container's own terms.
+// towerArch is the architecture every vision or audio tower's GGUF (an
+// mmproj) declares, whatever its projector.
+const towerArch = "clip"
+
 func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s := &jlm.Source{}
 	var c *Config
 	var names *towerVocab
-	tower := f.Arch() == "clip"
+	tower := f.Arch() == towerArch
 	if tower {
 		v, err := visionOf(f)
 		if err != nil {

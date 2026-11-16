@@ -140,12 +140,7 @@ func render(d lines) ([]byte, error) {
 	}
 	sort.Slice(order, func(i, j int) bool { return order[i].arch.String() < order[j].arch.String() })
 
-	var encoders []string
-	for _, n := range names {
-		if a, _ := convert.ArchitectureGraph(n); convert.Encoder(a) {
-			encoders = append(encoders, n)
-		}
-	}
+	encoders := convert.Encoders()
 
 	var read []quant.Type
 	for t := quant.Type(0); t < 256; t++ {

@@ -2,6 +2,7 @@ package convert
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -46,23 +47,26 @@ func slidingRotary(c *Config) (uint32, bool) {
 	return local, c.RopeBaseSWA != 0 || local != c.NRot
 }
 
-// Encoder reports whether a is an embedding encoder (the BERT family): its
-// blocks non-causal, with no KV cache and no logits. A decoder that pools
-// (FlagPoolMean and its siblings) is not one.
-func Encoder(a Arch) bool {
-	return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT || a == ArchLFM2Enc
-}
-
-// xdRope reports whether a's M-RoPE assigns its axes per element of the
-// rotary rather than per pair (HunyuanVL).
-func xdRope(a Arch) bool { return a == ArchHunyuanVL }
-
-// interleavedMRope reports whether a's M-RoPE sections are interleaved over a
-// head's pairs rather than laid out as contiguous runs (Qwen2-VL's). Qwen3.5
-// (ArchQwen3Next with sections) is Qwen3-VL's split under its own tower;
-// qwen3next itself carries no sections and has no runs.
-func interleavedMRope(a Arch) bool {
-	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next || a == ArchQwen4Exp
+// Encoders is every GGUF architecture the library states non-causal
+// whatever its file says, sorted: an embedding encoder, its blocks
+// non-causal, with no KV cache and no logits. A decoder that pools
+// (FlagPoolMean and its siblings), or one whose file turns its mask off
+// (attention.causal), is not one.
+func Encoders() []string {
+	files, err := libraryFiles()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, mj := range files {
+		for arch, st := range mj.Container {
+			if st.Flags["non_causal"] == "true" {
+				out = append(out, arch)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ropeFits refuses a rotary the blocks cannot turn as stated: sections that
@@ -74,7 +78,7 @@ func ropeFits(c *Config) error {
 	for _, n := range c.RopeSections {
 		pairs += n
 	}
-	xd, il := xdRope(c.Arch), interleavedMRope(c.Arch)
+	xd, il := c.Flags.Has(jlm.FlagRopeXD), c.Flags.Has(jlm.FlagRopeInterleaved)
 	if pairs != 0 && (xd && (il || 2*pairs != c.NRot) || !xd && pairs != c.NRot/2) {
 		return fmt.Errorf("convert: %v's rotary sections %v do not cover its %d rotated dimensions: %w",
 			c.Arch, c.RopeSections, c.NRot, ErrNotImplemented)

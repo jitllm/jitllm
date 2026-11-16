@@ -139,12 +139,12 @@ func xieluNumbers() []float64 {
 	return []float64{0.8, 0.6, 0.5, -1e-6}
 }
 
-func actCases() []actCase {
+func actCases(t *testing.T) []actCase {
 	return []actCase{
 		{"silu", Config{Config: &jlm.Config{}}, true, nil, each(func(g, u float64) float64 { return g * sig(g) * u })},
 		{"gelu tanh, ungated", Config{Config: &jlm.Config{Flags: jlm.FlagGELU}}, false, nil, each(func(g, _ float64) float64 { return geluTanhRef(g) })},
 		{"squared relu", Config{Config: &jlm.Config{Flags: jlm.FlagReLU2}}, true, nil, each(func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u })},
-		{"gelu erf", Config{Arch: ArchModernBERT, Config: &jlm.Config{Flags: jlm.FlagGELU}}, true, nil,
+		{"gelu erf", *statedBy(t, "modern-bert", &jlm.Config{Flags: jlm.FlagGELU}), true, nil,
 			each(func(g, u float64) float64 { return 0.5 * g * (1 + math.Erf(g/math.Sqrt2)) * u })},
 		{"xielu", Config{Config: &jlm.Config{}}, false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers()},
 			each(func(x, _ float64) float64 {
@@ -210,7 +210,7 @@ func agrees(a, b []float64) (float64, bool) {
 // swapped -- is told from it. The gaussian top-k is stated for the sparse
 // layers alone.
 func TestStatedActivationsAreTheReferences(t *testing.T) {
-	for _, c := range actCases() {
+	for _, c := range actCases(t) {
 		t.Run(c.name, func(t *testing.T) {
 			g, u := actRows()
 			if c.cfg.NSparse != 0 {
@@ -222,7 +222,7 @@ func TestStatedActivationsAreTheReferences(t *testing.T) {
 				copy(g[len(g)-4:], []float64{1.5, 2.5, 3.5, 4.5})
 			}
 			inner := *c.cfg.Config
-			cfg := &Config{Arch: c.cfg.Arch, Config: &inner}
+			cfg := &Config{Arch: c.cfg.Arch, stated: c.cfg.stated, Config: &inner}
 			cfg.NLayer = 2
 			s := &jlm.Source{Config: cfg.Config}
 			for li := range int32(2) {
@@ -329,7 +329,7 @@ func TestRouterScoreIsTheReferences(t *testing.T) {
 		t.Fatalf("a model with no experts states a score of %d terms, want none", len(e.Terms))
 	}
 	// Sparsemixer picks by the raw logits.
-	e := RouterScore(&Config{Arch: ArchPhiMoE, Config: &jlm.Config{NExpert: 16}})
+	e := RouterScore(statedBy(t, "phimoe", &jlm.Config{NExpert: 16}))
 	x := []float64{-1.5, 0.25, 2, -0.75, 1, 0}
 	if got := evalExpr(t, &e, [][]float64{x}, nil); !slices.Equal(got, x) {
 		t.Fatalf("sparsemixer scores %v by the logits %v", got, x)
@@ -346,7 +346,7 @@ func TestRouterWeightIsSparsemixers(t *testing.T) {
 	if e := RouterWeight(&Config{Config: &jlm.Config{NExpert: 16}}); len(e.Terms) != 0 {
 		t.Fatalf("a softmax mixture states a weight of %d terms, want none", len(e.Terms))
 	}
-	e := RouterWeight(&Config{Arch: ArchPhiMoE, Config: &jlm.Config{NExpert: 16}})
+	e := RouterWeight(statedBy(t, "phimoe", &jlm.Config{NExpert: 16}))
 	if err := e.Valid(); err != nil || e.Reads() != 2 {
 		t.Fatalf("the stated weight is not an expression of the logits and the pick's: %v, %d operands", err, e.Reads())
 	}

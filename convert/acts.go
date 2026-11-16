@@ -97,7 +97,7 @@ func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
 		e.Fn(jlm.FnMul, e.Fn(jlm.FnMul, e.bounded(g, c.SituBeta), e.Fn(jlm.FnSigmoid, g)), e.bounded(u, c.SituLinearBeta))
 	case c.Flags.Has(jlm.FlagReLU2):
 		unary = e.relu2
-	case c.Arch == ArchModernBERT:
+	case c.stated.activation == "gelu":
 		unary = e.GELUErf
 	case c.Flags.Has(jlm.FlagGELU) && c.SparseStd != 0 && li < int(c.NSparse):
 		unary = func(a jlm.Arg) jlm.Arg { return e.GELUTanh(e.gaussTopK(a, c.SparseStd)) }
@@ -257,8 +257,8 @@ func RouterScore(c *Config) jlm.Expr {
 	var e expr
 	x := operand(0)
 	switch {
-	case c.Arch == ArchPhiMoE:
-		// The raw logits: sparsemixer picks by them (RouterWeight).
+	case c.stated.routerScore == "logits":
+		// The raw logits, which sparsemixer picks by (RouterWeight).
 		e.Fn(jlm.FnMul, x, num(1))
 	case c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus):
 		e.Fn(jlm.FnSqrt, e.Fn(jlm.FnSoftplus, x))
@@ -283,7 +283,7 @@ func RouterScore(c *Config) jlm.Expr {
 // logits s_j kept where (m - s_j)/max(|s_j|, m) is not past twice its
 // jitter, read at the pick. None for every other model.
 func RouterWeight(c *Config) jlm.Expr {
-	if c.NExpert == 0 || c.Arch != ArchPhiMoE {
+	if c.NExpert == 0 || c.stated.routerWeight != "sparsemixer" {
 		return jlm.Expr{}
 	}
 	return SparseMixerWeight(PhiMoEJitter)

@@ -38,9 +38,18 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "qwen2", flags: neox},
 		{arch: "qwen2vl", flags: neox},
 		{arch: "qwen3", flags: qk},
-		{arch: "qwen3vl", flags: qk},
+		{arch: "qwen3vl", flags: qk | jlm.FlagRopeInterleaved},
 		{arch: "qwen3moe", flags: qk},
-		{arch: "qwen3vlmoe", flags: qk},
+		{arch: "qwen3vlmoe", flags: qk | jlm.FlagRopeInterleaved},
+		{arch: "qwen35", flags: jlm.FlagRopeInterleaved},
+		{arch: "qwen35moe", flags: jlm.FlagRopeInterleaved},
+		{arch: "qwen3next", flags: jlm.FlagRopeInterleaved},
+		{arch: "qwen4exp", flags: jlm.FlagRopeInterleaved},
+		{arch: "clef", flags: jlm.FlagRopeInterleaved},
+		{arch: "hunyuan_vl", flags: jlm.FlagRopeXD},
+		{arch: "bert", flags: jlm.FlagNonCausal},
+		{arch: "nomic-bert", flags: jlm.FlagNonCausal},
+		{arch: "modern-bert", flags: jlm.FlagNonCausal},
 		{arch: "olmoe", flags: qk | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm},
 		{arch: "bitnet-b1.58", flags: neox | jlm.FlagReLU2},
 		{arch: "gemma", keys: map[string]meta.Value{"embedding_length": meta.MakeUint(2048)},
@@ -126,12 +135,16 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 	for _, tc := range []struct{ states, want string }{
 		{`"y": {}`, "names no GGUF architecture"},
 		{`"x": {"flags": {"rope_sideways": "true"}}`, "is no graph feature"},
-		{`"x": {"activation": "gelu"}`, "is not one the container states"},
+		{`"x": {"activation": "gelu_fast"}`, "is not one the container states"},
+		{`"x": {"router": {"score": "softmax"}}`, "router {Score:softmax Weight:} is not one"},
+		{`"x": {"router": {"weight": "softmax"}}`, "is not one the container states"},
 		{`"x": {"activation": "xielu"}`, "carries its parameters"},
 		{`"x": {"norm_eps": "eps | default(1e-5)"}`, "is not the keys"},
 		{`"x": {"norm_eps": "src[["}`, "jinja expression"},
 		{`"x": {"window": {"period": "2"}}`, "states its size"},
 		{`"x": {"window": {"size": "8", "period": "2", "pattern": "2"}}`, "not both"},
+		{`"x": {"revision": {"act_quant": "int4"}}`, "activation quantization \"int4\" is not one"},
+		{`"x": {"revision": {"rope_scale_swa": "scale"}}`, "is not the keys"},
 	} {
 		_, err := parseModelJSON([]byte(file(tc.states)), "test")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -148,8 +161,15 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{mjStates{NormEps: "'small'"}, "not a number"},
 		{mjStates{EmbdScale: "src['width']"}, "is undefined"},
 		{mjStates{Flags: map[string]string{"post_norm": "true"}}, "not implemented"},
+		{mjStates{Revision: &mjStatesRevision{SWAGlobalFirst: "src['heads']"}}, "swa_global_first is 8, not true or false"},
+		{mjStates{Revision: &mjStatesRevision{RopeScaleSWA: "'one'"}}, "rope_scale_swa is"},
+		{mjStates{Revision: &mjStatesRevision{PictureBidirSliding: "src['heads'] + 1"}}, "picture_bidir_sliding is 9"},
 	} {
-		if err := tc.st.compile([]string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale}); err != nil {
+		srcs := []string{tc.st.Flags["qk_norm"], tc.st.Flags["post_norm"], tc.st.NormEps, tc.st.EmbdScale}
+		if r := tc.st.Revision; r != nil {
+			srcs = append(srcs, r.SWAGlobalFirst, r.RopeScaleSWA, r.PictureBidirSliding)
+		}
+		if err := tc.st.compile(srcs); err != nil {
 			t.Fatal(err)
 		}
 		err := tc.st.apply("test", f, &Config{Config: &jlm.Config{}})

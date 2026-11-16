@@ -2,9 +2,6 @@
 # family's name (architecture constants, class/architecture/projector literals),
 # read at 514456eea. A count may only fall; lower a line when the work that
 # removes it lands.
-1 convert/acts.go:Activation
-1 convert/acts.go:RouterScore
-1 convert/acts.go:RouterWeight
 1 convert/acts.go:StateActivations
 1 convert/apertus.go:apertusXIELU
 59 convert/arch.go:coreArchName
@@ -24,28 +21,20 @@
 1 convert/d1omniaudio.go:AudioProjectors
 1 convert/d1omni.go:d1OmniConfig
 1 convert/d1omni.go:d1OmniHead
-1 convert/decision.go:decisionOf
 1 convert/deepseek4.go:ds4Tensors
 7 convert/dense.go:denseConfig
 1 convert/flagship.go:gemma4Tensors
 1 convert/gemma3n.go:gemma3nTensors
-4 convert/geometryfits.go:Encoder
-4 convert/geometryfits.go:interleavedMRope
-1 convert/geometryfits.go:xdRope
-2 convert/gguf.go:buildGGUF
-4 convert/gguf.go:sourceOf
+3 convert/gguf.go:sourceOf
 2 convert/granite.go:gemmaAttnScale
 1 convert/hfkimik3.go:kimiK3HF
 1 convert/hfkimik3.go:kimiK3HFConfig
 1 convert/kimik3.go:kimiK3Tensors
-2 convert/legacy.go:LegacyStated
 2 convert/lfm2.go:unfuseLFM2
-87 convert/library/models.go:Models
 2 convert/mamba1.go:mamba1Arch
 1 convert/mamba1.go:mamba1Config
 1 convert/mamba1.go:mamba1UnitNorms
 4 convert/qwen35.go:qwen35Of
-4 convert/revision.go:StateRevision
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
 8 convert/safetensors.go:hfArchTable

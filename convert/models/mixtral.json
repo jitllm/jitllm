@@ -4,7 +4,8 @@
   "container": {
     "gpt-oss": {"flags": {"rope_neox": "true", "swiglu_oai": "true", "yarn_exact": "true"},
                 "window": {"size": "src['attention.sliding_window']", "period": "2"}},
-    "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2"}
+    "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2", "revision": {"act_quant": "row_int8"}},
+    "hunyuan_vl": {"flags": {"rope_xd": "true"}}
   },
   "config": {
     "defaults": {"num_key_value_heads": 8},

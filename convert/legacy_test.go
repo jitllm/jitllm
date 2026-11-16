@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -11,7 +12,7 @@ import (
 // one stating no routed weight are refused, the same containers stating
 // them and another architecture stating neither are not.
 func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
-	routed := &Config{Arch: ArchPhiMoE, Config: &jlm.Config{NExpert: 16}}
+	routed := statedBy(t, "phimoe", &jlm.Config{NExpert: 16})
 	routed.RouterWeight = RouterWeight(routed)
 	for _, c := range []struct {
 		name string
@@ -43,6 +44,46 @@ func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
 		if cfg.Revision != jlm.StatementRevision || cfg.Flags.Has(jlm.FlagRopeInterleaved) != c.interleaved {
 			t.Errorf("%v at revision 2: revision %d, interleaved %v, want %d and %v", c.arch, cfg.Revision,
 				cfg.Flags.Has(jlm.FlagRopeInterleaved), jlm.StatementRevision, c.interleaved)
+		}
+	}
+}
+
+// TestLegacyCodesStateWhatTheRevisionStated holds the migration's table of
+// opaque codes to what a revision before jlm.SourceRevision left to each
+// architecture's code, on a windowed model and an unwindowed one.
+func TestLegacyCodesStateWhatTheRevisionStated(t *testing.T) {
+	sliding := []bool{true, false, true, false}
+	for _, c := range []struct {
+		arch        Arch
+		win         uint32
+		flags       jlm.Flags
+		quant       jlm.ActQuant
+		scale       float32
+		globalFirst bool
+		bidir       []bool
+	}{
+		{arch: ArchQwen3VL, flags: jlm.FlagRopeInterleaved},
+		{arch: ArchQwen3VLMoE, flags: jlm.FlagRopeInterleaved},
+		{arch: ArchQwen3Next, flags: jlm.FlagRopeInterleaved},
+		{arch: ArchQwen4Exp, flags: jlm.FlagRopeInterleaved},
+		{arch: ArchHunyuanVL, flags: jlm.FlagRopeXD},
+		{arch: ArchBitNet, quant: jlm.ActQuantRowInt8},
+		{arch: ArchOLMo3, win: 512, scale: 1},
+		{arch: ArchModernBERT, win: 512, globalFirst: true},
+		{arch: ArchModernBERT},
+		{arch: ArchGemma4, win: 512, bidir: sliding},
+		{arch: ArchGemma4},
+		{arch: ArchLlama, win: 512},
+		{arch: ArchQwen2VL},
+	} {
+		cfg := &jlm.Config{NLayer: 4, SWAWindow: c.win, SWAPeriod: 2, Acts: []jlm.Expr{{}}}
+		if err := LegacyStated(uint16(c.arch), cfg); err != nil {
+			t.Fatalf("%v: %v", c.arch, err)
+		}
+		if cfg.Revision != jlm.StatementRevision || cfg.Flags != c.flags || cfg.ActQuant != c.quant || cfg.RopeScaleSWA != c.scale ||
+			cfg.Flags2.Has(jlm.Flag2SWAGlobalFirst) != c.globalFirst || !reflect.DeepEqual(cfg.BidirLayers, c.bidir) {
+			t.Errorf("%v (window %d): revision %d, flags %v, quant %d, scale %v, global first %v, bidir %v", c.arch, c.win,
+				cfg.Revision, cfg.Flags, cfg.ActQuant, cfg.RopeScaleSWA, cfg.Flags2.Has(jlm.Flag2SWAGlobalFirst), cfg.BidirLayers)
 		}
 	}
 }

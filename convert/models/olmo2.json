@@ -1,6 +1,9 @@
 {
   "classes": ["Olmo2ForCausalLM"],
   "gguf": ["olmo2"],
+  "container": {
+    "olmo2": {"revision": {"rope_scale_swa": "1 if (src['attention.sliding_window'] | default(0)) > 0 else 0"}}
+  },
   "config": {
     "arch": "olmo2",
     "keys": {

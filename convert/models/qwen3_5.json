@@ -1,6 +1,13 @@
 {
   "classes": ["Qwen3_5ForConditionalGeneration"],
   "gguf": ["qwen35", "qwen35moe", "qwen3next", "qwen4exp", "clef"],
+  "container": {
+    "qwen35": {"flags": {"rope_interleaved": "true"}},
+    "qwen35moe": {"flags": {"rope_interleaved": "true"}},
+    "qwen3next": {"flags": {"rope_interleaved": "true"}},
+    "qwen4exp": {"flags": {"rope_interleaved": "true"}},
+    "clef": {"flags": {"rope_interleaved": "true"}}
+  },
   "config": {
     "root": "text_config",
     "arch": "qwen3next",

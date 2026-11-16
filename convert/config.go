@@ -3,6 +3,7 @@ package convert
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -178,15 +179,25 @@ func Supported(arch string) bool {
 	return ok
 }
 
-// Architectures is every name in that list, sorted.
+// Architectures is every GGUF architecture name the library's files name
+// (convert/models), and the vision tower's (towerArch), sorted; nil where
+// the library does not read (TestArchitecturesAreTheLibrarys).
 //
 // It exists so the list can be checked against, not just consulted:
 // library.TestEveryArchitectureIsObtainable reads it to confirm everything the
 // converter implements is reachable from the download catalogue.
 func Architectures() []string {
-	out := make([]string, 0, len(archOf()))
-	for name := range archOf() {
-		out = append(out, name)
+	files, err := libraryFiles()
+	if err != nil {
+		return nil
+	}
+	out := []string{towerArch}
+	for _, mj := range files {
+		for _, n := range mj.GGUF {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -1004,7 +1015,7 @@ func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 // short list leaves a tail of each head unrotated, which is fluent and which no
 // self-comparing tier can see.
 //
-// An interleaved split (interleavedMRope) is read as transformers
+// An interleaved split (jlm.FlagRopeInterleaved) is read as transformers
 // reads it: pair i turns by h when i%3 == 1 and i < 3*sections[1], by w when
 // i%3 == 2 and i < 3*sections[2], and by t otherwise. ggml's IMROPE sends a
 // pair with i%3 == 0 at or past 3*sections[0] to a fourth axis instead; no
@@ -1037,7 +1048,7 @@ func mropeSectionsOf(f *meta.File, name string, c *Config) error {
 			"has %d rotary pairs -- the remainder would be left unrotated",
 			name, secs, sum, c.NRot/2)
 	}
-	if interleavedMRope(c.Arch) {
+	if c.Flags.Has(jlm.FlagRopeInterleaved) {
 		if c.RopeSections[3] != 0 {
 			return fmt.Errorf("convert: %s: an interleaved M-RoPE with a fourth section %d: %w",
 				name, c.RopeSections[3], ErrNotImplemented)

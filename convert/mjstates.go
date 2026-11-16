@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -31,7 +32,63 @@ type mjStates struct {
 	FinalSoftcap string          `json:"final_softcap"`
 	// LogitDiv divides the logits (0 for none).
 	LogitDiv string `json:"logit_div"`
-	exprs    map[string]*jinja.Expr
+	// Revision is what StateRevision states once the blocks' geometry is
+	// read.
+	Revision *mjStatesRevision `json:"revision"`
+	// Router is how a mixture's router scores its experts and weighs the
+	// picks (RouterScore, RouterWeight).
+	Router *mjStatesRouter `json:"router"`
+	exprs  map[string]*jinja.Expr
+}
+
+// mjStatesRevision is what StateRevision states, each read off the keys
+// where the statement applies: ActQuant how every projection's input is
+// quantized (mjActQuants), RopeScaleSWA the sliding layers' rotary
+// magnitude (a number, 0 for the model's), SWAGlobalFirst that a windowed
+// model's period starts at its global layer, and PictureBidirSliding that a
+// windowed model's sliding layers are the ones a picture's rows see each
+// other on (each true or false).
+type mjStatesRevision struct {
+	ActQuant            string `json:"act_quant"`
+	RopeScaleSWA        string `json:"rope_scale_swa"`
+	SWAGlobalFirst      string `json:"swa_global_first"`
+	PictureBidirSliding string `json:"picture_bidir_sliding"`
+}
+
+// mjStatesRouter is a router's score, by name (mjRouterScores; the
+// softmax, a sigmoid or the square-rooted softplus where unstated, as the
+// flags say), and its routed weight (mjRouterWeights; the scores where
+// unstated).
+type mjStatesRouter struct {
+	Score  string `json:"score"`
+	Weight string `json:"weight"`
+}
+
+// mjRouterScores and mjRouterWeights are each router score and routed
+// weight a file may state by name: the raw logits, and sparsemixer's
+// weight at the jitter PhiMoEJitter.
+func mjRouterScores() []string  { return []string{"logits"} }
+func mjRouterWeights() []string { return []string{"sparsemixer"} }
+
+// mjNamedActivations is each activation a container statement may name that
+// no flag carries, which the activations are stated by (Activation): GELU
+// with erf.
+func mjNamedActivations() []string { return []string{"gelu"} }
+
+// mjActQuants is each activation quantization a file may state by name.
+func mjActQuants() map[string]jlm.ActQuant {
+	return map[string]jlm.ActQuant{"row_int8": jlm.ActQuantRowInt8}
+}
+
+// libStated is what the library states for the stages after the config's:
+// StateRevision's, read off the keys, the activation by its name and the
+// router's score and weight by theirs.
+type libStated struct {
+	actQuant                            jlm.ActQuant
+	ropeScaleSWA                        float32
+	swaGlobalFirst, pictureBidirSliding bool
+	activation                          string
+	routerScore, routerWeight           string
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -61,6 +118,17 @@ func (mj *modelJSON) checkStates() error {
 			}
 			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase)
 		}
+		if r := st.Revision; r != nil {
+			if _, ok := mjActQuants()[r.ActQuant]; r.ActQuant != "" && !ok {
+				return fmt.Errorf("convert: %s: %s: activation quantization %q is not one the container states", mj.name, arch, r.ActQuant)
+			}
+			srcs = append(srcs, r.RopeScaleSWA, r.SWAGlobalFirst, r.PictureBidirSliding)
+		}
+		if r := st.Router; r != nil {
+			if r.Score != "" && !slices.Contains(mjRouterScores(), r.Score) || r.Weight != "" && !slices.Contains(mjRouterWeights(), r.Weight) {
+				return fmt.Errorf("convert: %s: %s: router %+v is not one the container states", mj.name, arch, *r)
+			}
+		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
 			if _, no := mjFlagsNotImplemented()[k]; !ok && !no {
@@ -68,7 +136,7 @@ func (mj *modelJSON) checkStates() error {
 			}
 			srcs = append(srcs, st.Flags[k])
 		}
-		if _, ok := mjActivations()[st.Activation]; st.Activation != "" && !ok {
+		if _, ok := mjActivations()[st.Activation]; st.Activation != "" && !ok && !slices.Contains(mjNamedActivations(), st.Activation) {
 			return fmt.Errorf("convert: %s: %s: activation %q is not one the container states", mj.name, arch, st.Activation)
 		}
 		if _, carried := mjActivationParams()[st.Activation]; carried {
@@ -156,6 +224,37 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		return 0, fmt.Errorf("convert: %s: %s: %s is %v, not a number", by, arch, what, v)
 	}
+	boolean := func(what, src string) (bool, error) {
+		v, err := value(what, src)
+		if err == nil && !v.IsBool() {
+			err = fmt.Errorf("convert: %s: %s: %s is %v, not true or false", by, arch, what, v)
+		}
+		return err == nil && v.AsBool(), err
+	}
+	c.stated.activation = st.Activation
+	if r := st.Router; r != nil {
+		c.stated.routerScore, c.stated.routerWeight = r.Score, r.Weight
+	}
+	if r := st.Revision; r != nil {
+		c.stated.actQuant = mjActQuants()[r.ActQuant]
+		if r.RopeScaleSWA != "" {
+			if c.stated.ropeScaleSWA, err = number("revision.rope_scale_swa", r.RopeScaleSWA); err != nil {
+				return err
+			}
+		}
+		for _, b := range []struct {
+			what, src string
+			to        *bool
+		}{{"revision.swa_global_first", r.SWAGlobalFirst, &c.stated.swaGlobalFirst},
+			{"revision.picture_bidir_sliding", r.PictureBidirSliding, &c.stated.pictureBidirSliding}} {
+			if b.src == "" {
+				continue
+			}
+			if *b.to, err = boolean(b.what, b.src); err != nil {
+				return err
+			}
+		}
+	}
 	for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 		v, err := value("flag "+k, st.Flags[k])
 		if err != nil {
@@ -173,8 +272,8 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			c.Flags &^= mjFlags()[k]
 		}
 	}
-	if st.Activation != "" {
-		c.Flags = c.Flags&^mjActivationFlags | mjActivations()[st.Activation]
+	if f, ok := mjActivations()[st.Activation]; ok {
+		c.Flags = c.Flags&^mjActivationFlags | f
 	}
 	if st.NormEps != "" {
 		if c.RMSEps, err = number("norm_eps", st.NormEps); err != nil {
