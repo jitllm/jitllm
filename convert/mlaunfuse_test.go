@@ -266,30 +266,6 @@ func mlaKeys(c *jlm.Config) map[string]any {
 // read off keys.
 func mlaUnfuse(t *testing.T, e jlm.Tensor, keys map[string]any) ([]jlm.Tensor, error) {
 	t.Helper()
-	files, err := libraryFiles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var st *mjStates
-	for _, mj := range files {
-		if s, ok := mj.Container["deepseek2"]; ok {
-			st = s
-		}
-	}
-	if st == nil || st.Tensors == nil {
-		t.Fatal("the library states no deepseek2 tensor table")
-	}
-	names, err := readTensorNames()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cuts, err := statedCuts(names, "attn_kv_b.weight", st.Tensors.Block["attn_kv_b.weight"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := &Config{Config: &jlm.Config{}, Stated: &Statement{blockTensors: map[string][]statedCut{"attn_kv_b.weight": cuts}}}
 	e.Name = "blk.0." + strings.TrimPrefix(e.Name, "blk.0.")
-	s := &jlm.Source{Tensors: []jlm.Tensor{e}}
-	err = statedTensors(c, s, func(p string) any { return keys[p] })
-	return s.Tensors, err
+	return stateTable(t, "deepseek2", []jlm.Tensor{e}, keys, nil)
 }

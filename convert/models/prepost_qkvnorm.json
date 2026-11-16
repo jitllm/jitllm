@@ -4,11 +4,23 @@
     "gemma4": {"revision": {"picture_bidir_sliding": "(src['embedding_length_per_layer_input'] | default(0)) == 0"},
                "flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true", "dense_moe": "(src['expert_count'] | default(0)) > 0"},
                "router": {"gate": "softmax", "renormalise": "always", "unscaled": true, "ungrouped": true},
-               "tensors": {
+               "tensors": {"sizes": {"q": "at(attention.head_count, block) * ((at(attention.sliding_window_pattern, block) != 0) ? attention.key_length_swa : attention.key_length)", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * ((at(attention.sliding_window_pattern, block) != 0) ? attention.key_length_swa : attention.key_length)", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * ((at(attention.sliding_window_pattern, block) != 0) ? (attention.value_length_swa ?? (attention.key_length_swa)) : (attention.value_length ?? (attention.key_length)))", "ff_exp": "expert_feed_forward_length"},
+
                  "drop": [{"tensor": "attn_k.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"},
                          {"tensor": "attn_v.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"},
                          {"tensor": "attn_k_norm.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"}],
-                 "block": {
+                 "block": {"attn_qkv.weight": [
+        {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+"attn_qkv.bias": [
+        {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+"ffn_gate_up_exps.weight": [
+        {"role": "ffn_gate_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "0", "size.ff_exp"]}]},
+        {"role": "ffn_up_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "size.ff_exp", "size.ff_exp"]}]}],
+
                    "ffn_gate.weight": {"role": "ffn_gate_shexp.weight", "if": "(expert_count ?? 0) > 0"},
                    "ffn_up.weight": {"role": "ffn_up_shexp.weight", "if": "(expert_count ?? 0) > 0"},
                    "ffn_down.weight": {"role": "ffn_down_shexp.weight", "if": "(expert_count ?? 0) > 0"},

@@ -2,6 +2,7 @@ package convert
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -52,6 +53,23 @@ func statedCuts(names tensorNames, n string, ts mjTargets) ([]statedCut, error) 
 			}
 			out[i].when = x
 		}
+	}
+	return out, nil
+}
+
+// statedSizes is a table's sizes, each parsed, by a name of letters, digits
+// and underscores.
+func statedSizes(sizes map[string]string) (map[string]*exprNode, error) {
+	out := make(map[string]*exprNode, len(sizes))
+	for _, n := range slices.Sorted(maps.Keys(sizes)) {
+		if n == "" || strings.Trim(n, "abcdefghijklmnopqrstuvwxyz0123456789_") != "" {
+			return nil, fmt.Errorf("size %q is not a name of letters, digits and underscores", n)
+		}
+		x, err := parseExpr(sizes[n])
+		if err != nil {
+			return nil, fmt.Errorf("size %s: %w", n, err)
+		}
+		out[n] = x
 	}
 	return out, nil
 }
@@ -151,8 +169,11 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 	if len(st.modelTensors)+len(st.blockTensors)+len(st.linearTensors)+len(st.drops) == 0 {
 		return nil
 	}
-	holds := func(x *exprNode, t *jlm.Tensor) (bool, error) {
-		v, err := evalMJ(x, func(p string) any {
+	// A tensor's conditions and primitives read its block, whether it is
+	// packed, the table's sizes and the source's keys; a size reads all but
+	// the sizes, and fail is where one that cannot be read says why.
+	tensorEnv := func(t *jlm.Tensor, fail *error) exprEnv {
+		own := func(p string) any {
 			switch p {
 			case "block":
 				return float64(t.Block)
@@ -160,7 +181,29 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 				return jlm.Packed(t.Type)
 			}
 			return env(p)
-		})
+		}
+		return func(p string) any {
+			n, ok := strings.CutPrefix(p, "size.")
+			if !ok {
+				return own(p)
+			}
+			x, ok := st.sizes[n]
+			if !ok {
+				return nil
+			}
+			v, err := evalMJ(x, own)
+			if err != nil && *fail == nil {
+				*fail = fmt.Errorf("size.%s: %w", n, err)
+			}
+			return v
+		}
+	}
+	holds := func(x *exprNode, t *jlm.Tensor) (bool, error) {
+		var fail error
+		v, err := evalMJ(x, tensorEnv(t, &fail))
+		if fail != nil {
+			return false, fail
+		}
 		b, ok := v.(bool)
 		if err == nil && !ok {
 			err = fmt.Errorf("a condition is %v, not true or false", v)
@@ -235,7 +278,11 @@ func statedTensors(c *Config, s *jlm.Source, env exprEnv) error {
 				p.Name = fmt.Sprintf("%s[%v]", t.Name, x.role)
 			}
 			if len(x.do) > 0 {
-				v, err := x.do.run(env, []mjVal{in})
+				var fail error
+				v, err := x.do.run(tensorEnv(&t, &fail), []mjVal{in})
+				if fail != nil {
+					err = fail
+				}
 				if err != nil {
 					return fmt.Errorf("convert: %s: %v: %w", t.Name, x.role, err)
 				}

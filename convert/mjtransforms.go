@@ -47,7 +47,7 @@ func mjElemSize(t jlm.Type) (uint64, error) {
 	switch t {
 	case jlm.TypeF32:
 		return 4, nil
-	case jlm.TypeF16:
+	case jlm.TypeF16, jlm.TypeBF16:
 		return 2, nil
 	}
 	return 0, fmt.Errorf("a %v tensor is not elements a primitive can move", t)
@@ -621,6 +621,12 @@ func mjFloats(v mjVal) []float32 {
 	if v.typ == jlm.TypeF16 {
 		for i := 0; i+2 <= len(v.data); i += 2 {
 			out = append(out, float32(quant.DecodeHalf(binary.LittleEndian.Uint16(v.data[i:]))))
+		}
+		return out
+	}
+	if v.typ == jlm.TypeBF16 {
+		for i := 0; i+2 <= len(v.data); i += 2 {
+			out = append(out, math.Float32frombits(uint32(binary.LittleEndian.Uint16(v.data[i:]))<<16))
 		}
 		return out
 	}

@@ -118,47 +118,6 @@ func blockIndexerFits(c *Config) error {
 	return nil
 }
 
-// splitGateUpBank cuts a fused gate|up expert bank ({k, 2*n_ff, n_expert},
-// each expert's gate rows then its up rows) into the gate bank and the up
-// bank. The bytes are still the source's row-major blocks, so each expert's
-// half is a byte range; the banks are new buffers because an expert's two
-// halves interleave with the next expert's.
-func splitGateUpBank(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	src, ok := sourceType(e.Type)
-	if !ok {
-		return nil, false, fmt.Errorf("convert: %s is %v, which has no source type", e.Name, e.Type)
-	}
-	be, bb := uint64(src.BlockElems()), uint64(src.BlockBytes())
-	if be == 0 || e.Dims[0]%be != 0 {
-		return nil, false, fmt.Errorf("convert: %s rows are %d elements, not a multiple of %s's %d",
-			e.Name, e.Dims[0], src, be)
-	}
-	ff, n := uint64(c.NFFNExp), e.Dims[2]
-	if n != uint64(c.NExpert) {
-		return nil, false, fmt.Errorf("convert: %s holds %d experts, want %d", e.Name, n, c.NExpert)
-	}
-	half := ff * (e.Dims[0] / be * bb)
-	if uint64(len(e.Data)) != 2*half*n {
-		return nil, false, fmt.Errorf("convert: %s holds %d bytes, want %d", e.Name, len(e.Data), 2*half*n)
-	}
-	gate, up := make([]byte, half*n), make([]byte, half*n)
-	for x := uint64(0); x < n; x++ {
-		copy(gate[x*half:(x+1)*half], e.Data[2*x*half:(2*x+1)*half])
-		copy(up[x*half:(x+1)*half], e.Data[(2*x+1)*half:(2*x+2)*half])
-	}
-	out := make([]jlm.Tensor, 0, 2)
-	for _, p := range []struct {
-		role jlm.Role
-		data []byte
-	}{{jlm.RoleExpGateBank, gate}, {jlm.RoleExpUpBank, up}} {
-		t := *e
-		t.Role, t.Data, t.Name = p.role, p.data, e.Name+"/"+p.role.String()
-		t.Dims[1] = ff
-		out = append(out, t)
-	}
-	return out, true, nil
-}
-
 // denseMoEFits reads a dense MLP beside a mixture (jlm.Flag2DenseMoE): the
 // dense MLP is carried as the shared expert at the dense width, so a file
 // with a shared expert of its own has no place for it. What its router does

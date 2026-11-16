@@ -1,7 +1,18 @@
 {
   "gguf": ["gemma3"],
   "container": {
-    "gemma3": {"attn_scale": "(src['embedding_length'] // src['attention.head_count']) ** -0.5 if src['block_count'] == 62 else src['attention.scale'] | default(0)", "flags": {"rope_neox": "true", "qk_norm": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5",
+    "gemma3": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
+                  "block": {"attn_qkv.weight": [
+                     {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "attn_qkv.bias": [
+                     {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
+      "attn_scale": "(src['embedding_length'] // src['attention.head_count']) ** -0.5 if src['block_count'] == 62 else src['attention.scale'] | default(0)", "flags": {"rope_neox": "true", "qk_norm": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5",
                "window": {"size": "src['attention.sliding_window'] | default(0)", "pattern": "6",
                           "rope_base": "src['rope.freq_base_swa'] | default(10000)"},
                "final_softcap": "src['final_logit_softcapping'] | default(0)"}

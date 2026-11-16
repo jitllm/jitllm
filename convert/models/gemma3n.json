@@ -9,7 +9,8 @@
                 "window": {"size": "src['attention.sliding_window']", "pattern": "0", "rope_base": "src['rope.freq_base_swa'] | default(10000)"},
                 "whole_rotary": true, "value_key_width": true,
                 "altup": {"streams": "src['altup.num_inputs']", "active": "src['altup.active_idx'] | default(0)"},
-                "tensors": {
+                "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
+
                   "drop": [{"tensor": "attn_k.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"},
                          {"tensor": "attn_v.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"},
                          {"tensor": "attn_k_norm.weight", "if": "block >= block_count - (attention.shared_kv_layers ?? 0)"}],
@@ -26,7 +27,15 @@
                                                                               {"reshape": [-1, "embedding_length"]}]},
                     "per_layer_token_embd.weight": {"role": "per_layer_token_embd.weight", "do": [{"trim_zero": true}]}
                   },
-                  "block": {
+                  "block": {"attn_qkv.weight": [
+        {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+"attn_qkv.bias": [
+        {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+
                     "altup_predict_coef.weight": {"role": "altup_predict_coef.weight", "do": [{"type": "f32"},
                                                   {"reshape": ["altup.num_inputs * altup.num_inputs", "altup.num_inputs"]}]},
                     "altup_correct_coef.weight": {"role": "altup_correct_coef.weight", "do": [{"type": "f32"},

@@ -37,7 +37,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 		// the host token for token, so its NMSE is the device's f32 band.
 		{"tinyllama-control", testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"), true, ""},
 		{"qwen2-biases", testmodels.Path("Qwen2-1.5B-Instruct-Q4_K_M.gguf"), true, ""},
-		// phi3 must run: convert.unfuse splits its q/k/v and gate/up at
+		// phi3 must run: its library table splits its q/k/v and gate/up at
 		// conversion. A container that carried the fusion again would put k
 		// and v back on q's rows.
 		{"phi3-unfused-qkv", testmodels.Path("Phi-3.5-mini-instruct-Q4_K_M.gguf"), true, ""},

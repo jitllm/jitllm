@@ -259,7 +259,10 @@ type mjTensors struct {
 	Drop    []mjPresent `json:"drop"`
 	// Keys, a GGUF table's, are the GGUF keys its gather reads as a block's
 	// sources: a key's value for every block, or its block's entry of a list.
-	Keys []string `json:"keys"`
+	// Sizes, a GGUF table's, are values its targets read as size.<name>, each
+	// an expression over the GGUF's keys, block and packed.
+	Keys  []string          `json:"keys"`
+	Sizes map[string]string `json:"sizes"`
 }
 
 type mjPresent struct {
@@ -693,8 +696,8 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			a.expert[n] = role
 		}
 	}
-	if len(mj.Tensors.Drop)+len(mj.Tensors.Keys) > 0 {
-		return nil, fmt.Errorf("convert: %s: a class's table states no drop or keys, which are a GGUF table's", mj.name)
+	if len(mj.Tensors.Drop)+len(mj.Tensors.Keys)+len(mj.Tensors.Sizes) > 0 {
+		return nil, fmt.Errorf("convert: %s: a class's table states no drop, keys or sizes, which are a GGUF table's", mj.name)
 	}
 	st := &mjState{src: map[string]mjVal{}}
 	pipes := map[string]mjPipe{}

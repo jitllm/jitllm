@@ -342,6 +342,7 @@ type Statement struct {
 	readouts                            []string
 	modelTensors, blockTensors          map[string][]statedCut
 	drops                               []statedDrop
+	sizes                               map[string]*exprNode
 	gathers                             []hfGatherStep
 	keys                                []string
 	linearTensors                       map[string][]statedCut
@@ -465,6 +466,9 @@ func (mj *modelJSON) checkStates() error {
 						return fmt.Errorf("convert: %s: %s: tensors: %w", mj.name, arch, err)
 					}
 				}
+			}
+			if _, err := statedSizes(t.Sizes); err != nil {
+				return fmt.Errorf("convert: %s: %s: tensors: %w", mj.name, arch, err)
 			}
 		}
 		for _, m := range st.Retarget {
@@ -717,6 +721,9 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			c.Stated.gathers = append(c.Stated.gathers, step)
 		}
 		c.Stated.keys = t.Keys
+		if c.Stated.sizes, err = statedSizes(t.Sizes); err != nil {
+			return fmt.Errorf("convert: %s: %s: tensors: %w", by, arch, err)
+		}
 		for _, d := range t.Drop {
 			x, err := parseExpr(d.If)
 			if err != nil || d.Tensor == "" {

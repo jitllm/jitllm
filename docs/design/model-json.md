@@ -239,8 +239,20 @@ schema; `convert/modeljson.go` reads it. Its sections:
   3n's KV-sharing blocks' k, v and k norm), a target's `if` (cut where it
   holds, `packed` the source's storage: Gemma 4's dense MLP as the shared
   expert beside a mixture, deepseek2's fused MLA up-projection re-stored
-  Q8_0 from a packed source), and `keys` beside the class's `gather` (GGUF
-  keys read as a block's sources: Apertus's XIELU vector).
+  Q8_0 from a packed source), `keys` beside the class's `gather` (GGUF
+  keys read as a block's sources: Apertus's XIELU vector), and `sizes`,
+  values its targets read as `size.<name>`, each over the keys, `block` and
+  `packed`. A fused tensor is its class's table entry, never a Go split:
+  every class whose llama.cpp loader reads a fused `attn_qkv`
+  (`create_tensor_qkv`, or its own) states its q, k and v widths as sizes, by
+  the loader's own formula per block -- the residual's width or the heads',
+  the gated query's twice, the rotary's -- and cuts the tensor and its bias
+  into attn_q, attn_k and attn_v; the gated-delta classes keep a recurrent
+  block's own `attn_qkv` whole (`block_linear`); phi3, glm4 and modern-bert's
+  trunk cut a gate|up `ffn_up` into halves, and every class whose loader
+  reads `ffn_gate_up_exps` cuts each expert's halves into the two banks.
+  `at(x, i)` reads a per-layer key at layer i, a key that is not a list
+  being every layer's, as llama.cpp reads one that may be either.
   `compressed_blocks: true` reads each block's compression (CSA, HCA or
   none) off its tensors and `compress_ratios` (`ds4Kinds`); a flag may name a
   feature of the container's second flag word (`mjFlags2`: `swiglu_clamp`,

@@ -13,10 +13,10 @@ import (
 // its top), arithmetic (+ - * /), comparisons (== != < <= > >=, in), logic
 // (&& || !), a ?? b, which is b where a is absent or null, c ? a : b, a ** b,
 // and a key of a parenthesised value, (a ?? b).key. There are no loops, and
-// calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x) and
-// the layer lists' each_layer(n, members, first, inside, outside) and
-// partitions(n, first, a, b), whose counts are bounded, so an expression
-// sizes nothing unchecked (RULE 9), and its depth is bounded.
+// calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x),
+// at(x, i), and the layer lists' each_layer(n, members, first, inside,
+// outside) and partitions(n, first, a, b), whose counts are bounded, so an
+// expression sizes nothing unchecked (RULE 9), and its depth is bounded.
 //
 // An absent key is null; null in arithmetic or an ordering is an error that
 // names the key, so a default is written, never assumed.
@@ -435,6 +435,8 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 		switch {
 		case n.str == "uniform" && len(n.args) == 1:
 			return evalUniform(n.args[0], env)
+		case n.str == "at" && len(n.args) == 2:
+			return evalAt(n.args, env)
 		case n.str == "each_layer" && len(n.args) == 5:
 			return evalEachLayer(n.args, env)
 		case n.str == "partitions" && len(n.args) == 4:
@@ -650,6 +652,28 @@ func evalUniform(n *exprNode, env exprEnv) (any, error) {
 		}
 	}
 	return list[0], nil
+}
+
+// evalAt is at(x, i): a per-layer key's value at layer i -- a list's entry
+// i, or the one value a key that is not a list states for every layer, as
+// llama.cpp reads a key that may be either.
+func evalAt(args []*exprNode, env exprEnv) (any, error) {
+	v, err := evalMJ(args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	i, err := evalNum(args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return v, nil
+	}
+	if i != math.Trunc(i) || i < 0 || i >= float64(len(list)) {
+		return nil, fmt.Errorf("%s: entry %v of a list of %d", exprText(args[0]), i, len(list))
+	}
+	return list[int(i)], nil
 }
 
 func evalNum(n *exprNode, env exprEnv) (float64, error) {
