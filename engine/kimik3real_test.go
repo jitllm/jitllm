@@ -92,7 +92,7 @@ func k3RealModels() []struct {
 		// 400 times this bound.
 		{"Kimi-K3-0.40B-MXFP4", "kimik3/Kimi-K3-0.40B-MXFP4-hf", 1e-4, 0, false},
 		// A mixed quantization: attn_q at Q4_K beside attn_k and attn_v at Q8_0,
-		// which convert.k3JoinRows re-stores as one Q8_0 projection. Its one flip
+		// which convert.kdaJoinRows re-stores as one Q8_0 projection. Its one flip
 		// is "The capital of France" -> "ith" where the reference says " my", a
 		// 0.955 margin, and llama.cpp reading the same file answers "ith" too.
 		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B.Q4_K_M.gguf", 2e-1, 1, false},
