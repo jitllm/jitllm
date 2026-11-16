@@ -49,7 +49,7 @@ func (c *Config) statedBinds(li int) []jlm.Role {
 // the head's mix reads them, not the output norm's row.
 func (c *Config) ResidStreams() bool { return c.stated != nil && len(c.stated.Expand) != 0 }
 
-// A block over a bank of checkpoints (Config.ResAttn): stream 0 is the
+// A block over a bank of checkpoints (jlm.BlockStreams.Bank): stream 0 is the
 // running residual and stream 1+j checkpoint j. Each sublayer reads a
 // softmax mix of the checkpoints banked so far and the running residual,
 // each scored by its stored vector's dot with the stream RMS-normed with no
