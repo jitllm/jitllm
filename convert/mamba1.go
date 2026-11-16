@@ -22,20 +22,6 @@ import (
 // dt_proj (ssm_dt.weight, RoleSSMDtProj) takes the bottleneck back up to the
 // channels; its rank is read off that tensor, not stated in the config.
 
-// neverRenormalises states a router that never renormalises its weights
-// (llama.cpp's builder passes false as a literal), refusing a file whose
-// expert_weights_norm says otherwise: it describes a model neither
-// reference runs, and the generic reading would obey it.
-func neverRenormalises(f *meta.File, c *Config, router string) error {
-	if kv, ok := f.Key("expert_weights_norm"); ok {
-		if v, _ := kv.Uint(); v != 0 {
-			return fmt.Errorf("expert_weights_norm true, and %s does not renormalise: %w", router, ErrNotImplemented)
-		}
-	}
-	c.Flags |= jlm.FlagNoExpertNorm
-	return nil
-}
-
 // unfuseMamba1 splits in_proj and x_proj into their outputs (see the top of
 // this file). Row ranges of a row-major matrix are byte ranges, so the bytes
 // are the source's.

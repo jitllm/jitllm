@@ -2,7 +2,7 @@
   "gguf": ["mamba", "jamba"],
   "container": {
     "mamba": {"flags": {"no_pos_enc": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "1", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.inner_size'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "scan"}]},
-    "jamba": {"flags": {"no_pos_enc": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "1", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.inner_size'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "scan"}]}
+    "jamba": {"flags": {"no_pos_enc": "true"}, "router": {"renormalise": "never"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "1", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.inner_size'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "scan"}]}
   },
   "graph": {
     "block": [

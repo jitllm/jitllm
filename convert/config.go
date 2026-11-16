@@ -359,10 +359,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := nemotronConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchJamba:
-		if err := neverRenormalises(f, c, "Jamba's router"); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchMiniMaxM3:
 		if err := minimaxM3Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
