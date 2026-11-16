@@ -1735,7 +1735,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"latent_eps":         jinja.NewFloat(cmp.Or(float64(c.LatentNormEps), bf.eps)),
 		"qk_norm_wide":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormWide)),
 		"qk_norm_post":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
-		"rope_split":         jinja.NewBool(2*len(c.RopeTable) > int(c.NRot)),
+		"rope_keeps_rms":     jinja.NewBool(2*len(c.RopeTable) <= int(c.NRot)),
 		"non_causal":         jinja.NewBool(c.Flags.Has(jlm.FlagNonCausal)),
 		"streams":            jinja.NewInt(int64(statedStreams(c))),
 		"stream_pre":         jinja.NewBool(bf.streamsAt().Pre.Read != nil),

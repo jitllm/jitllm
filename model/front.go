@@ -817,7 +817,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// Under a split rotary k's norm follows it too: a pair's elements
 	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
-	postK := postQ && c.RopeAt(li) && splitRope(m.ropeAt(li)) && !shared && !m.xdKNormFirst
+	postK := postQ && c.RopeAt(li) && splitRope(m.ropeAt(li)) && !shared
 	// A key norm stored beside no key latent is the key's own.
 	if !shared && has(jlm.RoleAttnKVANorm) && !has(jlm.RoleAttnKVA) {
 		k = b.Norm(k, jlm.RoleAttnKVANorm, c.RMSEps)

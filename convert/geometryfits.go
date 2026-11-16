@@ -78,6 +78,12 @@ func interleavedMRope(a Arch) bool {
 // their positions and take column, row and the picture's ordinal on the
 // other three axes. Sections ropeFits refuses state nothing.
 func stateRopeTable(c *Config) {
+	stateRopeLayout(c.Config, xdRope(c.Arch), interleavedMRope(c.Arch))
+}
+
+// stateRopeLayout is stateRopeTable for a rotary laid over the elements
+// (xd) or interleaved (il), whichever source says so.
+func stateRopeLayout(c *jlm.Config, xd, il bool) {
 	c.RopeTable, c.PictureRope = nil, jlm.PictureRope{}
 	if c.RopeSections == [4]uint32{} || c.NRot == 0 || c.NRot%2 != 0 {
 		return
@@ -90,7 +96,7 @@ func stateRopeTable(c *Config) {
 	}
 	var out []jlm.RopePair
 	switch {
-	case xdRope(c.Arch):
+	case xd:
 		if sum != half {
 			return
 		}
@@ -110,7 +116,7 @@ func stateRopeTable(c *Config) {
 			{Mul: jlm.PicOne, Div: jlm.PicCols},
 			{Base: jlm.PicOrdinal},
 		}}
-	case interleavedMRope(c.Arch):
+	case il:
 		if c.RopeSections[3] != 0 {
 			return
 		}
@@ -134,7 +140,7 @@ func stateRopeTable(c *Config) {
 			}
 		}
 	}
-	if !xdRope(c.Arch) {
+	if !xd {
 		frame := jlm.PictureAxis{Base: jlm.PicStart, Mul: jlm.PicStride, Div: jlm.PicCells}
 		c.PictureRope = jlm.PictureRope{Side: true, Axes: [4]jlm.PictureAxis{
 			frame,

@@ -9,9 +9,8 @@ import (
 
 // TestRopeTableRoundTrips holds the twenty-ninth tail to the config's
 // contract: the table and a picture's layout round-trip, a config without
-// them reads none, sections without a table are refused (an upgrade below
-// revision 3, a conversion again otherwise), and entries the rotary cannot
-// hold are refused.
+// them reads none, sections without a table are refused for the upgrade,
+// and entries the rotary cannot hold are refused.
 func TestRopeTableRoundTrips(t *testing.T) {
 	base := func() *Config {
 		return &Config{NLayer: 2, NEmbd: 64, NHead: 4, NKVHead: 2,
@@ -40,12 +39,8 @@ func TestRopeTableRoundTrips(t *testing.T) {
 	}
 	bare := base()
 	bare.RopeSections = c.RopeSections
-	if _, err := bare.RopePairs(); err == nil || !strings.Contains(err.Error(), "convert the model again") {
+	if _, err := bare.RopePairs(); !errors.As(err, new(*UpgradeError)) || !strings.Contains(err.Error(), "rotary table") {
 		t.Fatalf("sections without a table: %v", err)
-	}
-	bare.Revision = 2
-	if _, err := bare.RopePairs(); !errors.As(err, new(*UpgradeError)) {
-		t.Fatalf("sections without a table below revision 3: %v", err)
 	}
 	for _, bad := range [][]RopePair{{{4, 0}}, {{0, 4}}, {{0, -1}}, make([]RopePair, 9)} {
 		d := base()
