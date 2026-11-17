@@ -170,12 +170,13 @@ func composedCPUAttendQ8(t *testing.T, cpuOn cpuArm, heads, kvh, dim int, f grap
 		t.Errorf("with two pages swapped the NMSE is %.3e: the gate cannot see a wrong page", e)
 	}
 	// The keys' pool holding f32 rows, read as q8 rows: a read that ignored
-	// the layout would not see it.
+	// the layout would not see it. Their bits read as scales may not be
+	// finite, and a non-finite output the gate above refuses too.
 	f32k := make([]uint32, len(kpool))
 	for i := range f32k {
 		f32k[i] = math.Float32bits(float32(rng.NormFloat64()))
 	}
-	if e := errOf(run([]uint32{0, 1, 2, 3}, f32k, vpool)); !(e > 1e-6) {
+	if e := errOf(run([]uint32{0, 1, 2, 3}, f32k, vpool)); !(e > 1e-6) && !math.IsNaN(e) {
 		t.Errorf("with the keys' pool not q8 the NMSE is %.3e: the gate cannot see the layout", e)
 	}
 }
