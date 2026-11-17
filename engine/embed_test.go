@@ -281,18 +281,13 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 		},
 		"embeddinggemma-300m": {
 			{"causal attention on a bidirectional model", func(m *model.Model) func() {
-				undo := builtGraphs(m)
-				m.Cfg.NonCausal = false
-				return func() { m.Cfg.NonCausal = true; undo() }
+				return cfgMut(m, func(c *model.Config) { c.NonCausal = false })
 			}},
 			{"last-token pooling on a mean model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolLast) }},
 			// Only the golden's long text is past the window, which is why it
 			// is in the golden. Widening the window moves only the mask.
 			{"a sliding window four times too wide", func(m *model.Model) func() {
-				undo := builtGraphs(m)
-				old := m.Cfg.SWAWindow
-				m.Cfg.SWAWindow = 4 * old
-				return func() { m.Cfg.SWAWindow = old; undo() }
+				return cfgMut(m, func(c *model.Config) { c.SWAWindow *= 4 })
 			}},
 			{"no dense heads", func(m *model.Model) func() {
 				undoM := dropDenseMats(m, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2)
@@ -303,7 +298,7 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 		"qwen3-embedding-0.6b": {
 			{"mean pooling on a last-token model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolMean) }},
 			{"bidirectional attention on a causal model", func(m *model.Model) func() {
-				undo := builtGraphs(m)
+				undo := relowered(m)
 				m.Cfg.NonCausal = true
 				return func() { m.Cfg.NonCausal = false; undo() }
 			}},

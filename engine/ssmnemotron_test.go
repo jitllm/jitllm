@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"slices"
+
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -78,7 +81,11 @@ func nemotronhMoEViolations() []c6Violation {
 func nemotronhViolations(device bool) []c6Violation {
 	vs := []c6Violation{
 		{"the gated norm over the whole of Inner", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.SSMNormGroups = 1 })
+			// The norm's groups are the stated count that groups B and C too,
+			// so the violation is the norm op's alone.
+			return restated(m, func(g *graph.Graph) *graph.Graph {
+				return editing(opsNamed("ssm.norm"), func(o *graph.Op) { o.Attr.HeadDim = g.Values[o.Out[0]].Width })(g)
+			})
 		}},
 		{"the MLP reading its mixer's norm", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {
@@ -91,7 +98,16 @@ func nemotronhViolations(device bool) []c6Violation {
 	}
 	if !device {
 		vs = append(vs, c6Violation{"value heads paired with key groups tiled", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.DeltaKeyTiled = true })
+			// The scan reads B and C at each head's place in a cycle of the
+			// groups, where Mamba-2 reads them at its group.
+			return restated(m, editing(opsOfKind(graph.OpStateScan), func(o *graph.Op) {
+				o.Attr.Words = slices.Clone(o.Attr.Words)
+				for k := range min(2, len(o.Attr.Words)) {
+					if w := graph.ScanAxis(o.Attr.Words[k]); w&graph.ScanGroup != 0 {
+						o.Attr.Words[k] = uint64(w&^graph.ScanGroup | graph.ScanCycle)
+					}
+				}
+			}))
 		}})
 	}
 	return vs

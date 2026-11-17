@@ -92,7 +92,7 @@ func noTemp(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.
 
 // unitRopeScale takes mistral3's YaRN magnitude off cos and sin.
 func unitRopeScale(m *model.Model) func() {
-	undo := builtGraphs(m)
+	undo := relowered(m)
 	was := m.Rope.Scale
 	m.Rope.Scale = 1
 	return func() { m.Rope.Scale = was; undo() }
@@ -231,40 +231,66 @@ func xieluMut(f func(p []float32, li int)) func(m *model.Model) func() {
 // each head reading the first head_dim of the weight -- what an engine that
 // took the qwen3 reading of the same tensor names would compute.
 func perHeadQK(m *model.Model) func() {
-	undoC := cfgMut(m, func(c *model.Config) { c.QKNormWide = false })
 	hd := m.Cfg.HeadDim
 	undoL := eachLayer(m, func(l *model.Layer) {
 		setVec(l, jlm.RoleAttnQNorm, func(v []float32) []float32 { return v[:hd] })
 		setVec(l, jlm.RoleAttnKNorm, func(v []float32) []float32 { return v[:hd] })
 	})
-	undoR := restate(m, func(inv map[jlm.Role]graph.Shape) {
-		for _, r := range []jlm.Role{jlm.RoleAttnQNorm, jlm.RoleAttnKNorm} {
-			if _, ok := inv[r]; ok {
-				inv[r] = graph.Shape{K: hd}
-			}
-		}
-	})
-	return func() { undoR(); undoL(); undoC() }
+	perHead := func(r jlm.Role) func(*graph.Graph) *graph.Graph {
+		return editing(opsBinding(r), func(o *graph.Op) {
+			o.Kind, o.Attr.HeadDim = graph.OpHeadNorm, hd
+			o.Weight = []graph.Binding{{Role: r, K: hd}}
+		})
+	}
+	undo := restated(m, func(g *graph.Graph) *graph.Graph { return perHead(jlm.RoleAttnKNorm)(perHead(jlm.RoleAttnQNorm)(g)) })
+	return func() { undo(); undoL() }
 }
 
 // postAsPre moves each post-norm to the pre-norm slot of its branch, which is
-// llama's block with OLMo 2's weights.
+// llama's block with OLMo 2's weights: the sublayer reads its input normed by
+// the post-norm's weight, and its output goes to the residual as it is.
 func postAsPre(m *model.Model) func() {
-	undoL := eachLayer(m, func(l *model.Layer) {
-		addVec(l, jlm.RoleAttnNorm, l.Vector(jlm.RolePostAttnNorm))
-		addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RolePostFFNNorm))
-		setVec(l, jlm.RolePostAttnNorm, func([]float32) []float32 { return nil })
-		setVec(l, jlm.RolePostFFNNorm, func([]float32) []float32 { return nil })
-	})
-	undoR := restate(m, func(inv map[jlm.Role]graph.Shape) {
-		for _, r := range [][2]jlm.Role{{jlm.RolePostAttnNorm, jlm.RoleAttnNorm}, {jlm.RolePostFFNNorm, jlm.RoleFFNNorm}} {
-			if s, ok := inv[r[0]]; ok {
-				inv[r[1]] = s
-				delete(inv, r[0])
+	return restated(m, func(g *graph.Graph) *graph.Graph {
+		out := cloned(g)
+		moved := false
+		for _, r := range []jlm.Role{jlm.RolePostAttnNorm, jlm.RolePostFFNNorm} {
+			k := slices.IndexFunc(out.Ops, func(o graph.Op) bool { return binding(r)(0, &o) })
+			if k < 0 {
+				continue
 			}
+			post := out.Ops[k]
+			y, z := post.In[0], post.Out[0]
+			add := slices.IndexFunc(out.Ops, func(o graph.Op) bool { return o.Kind == graph.OpAdd && slices.Contains(o.In, z) })
+			if add < 0 {
+				continue
+			}
+			in := out.Ops[add].In[0]
+			if in == z {
+				in = out.Ops[add].In[1]
+			}
+			redirect(out, z, y, k+1)
+			pre, from := insert(out, writer(out, in), func(b *graph.Builder) graph.ValueID {
+				return b.Emit(post.Kind, []graph.ValueID{in}, []graph.Result{{Name: "pre", Width: out.Values[in].Width}},
+					post.Weight, post.Attr, nil, nil)[0]
+			})
+			redirect(out, in, pre, from)
+			// The residual adds the sublayer's input as it was.
+			for i := range out.Ops {
+				if o := &out.Ops[i]; o.Kind == graph.OpAdd && slices.Contains(o.In, y) {
+					for j := range o.In {
+						if o.In[j] == pre {
+							o.In[j] = in
+						}
+					}
+				}
+			}
+			moved = true
 		}
+		if !moved {
+			return g
+		}
+		return out
 	})
-	return func() { undoR(); undoL() }
 }
 
 func denseDevViolations() map[string][]c6Violation {

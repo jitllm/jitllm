@@ -796,12 +796,14 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 		for e := n0 - 2*d; e < n0; e++ {
 			pairs[e].Axis = 1
 		}
-		undo := builtGraphs(m)
-		m.Cfg = &c
+		jc := m.Container.Config()
+		wasPairs := jc.RopeTable
+		jc.RopeTable = pairs
 		m.Rope.Runs = nn.PairRuns(pairs)
+		undo := withCfg(m, &c)
 		bad, _ := run(0)
-		m.Cfg, m.Rope.Runs = was, a
 		undo()
+		jc.RopeTable, m.Rope.Runs = wasPairs, a
 		wb, fb := qvlWorst(g, bad)
 		if !(wb > 1e3*max(w, 1e-12)) {
 			t.Fatalf("composed: with XD-RoPE's sections moved the worst NMSE is %.3e (%d flips) against %.3e: the gate cannot see the coordinates", wb, fb, w)

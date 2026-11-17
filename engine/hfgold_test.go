@@ -11,7 +11,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -175,11 +174,7 @@ func hfContainer(t *testing.T, name string) string {
 	t.Helper()
 	dir := testmodels.Path(name)
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err == nil {
-		dst := filepath.Join(t.TempDir(), name+jlm.Ext)
-		if _, err := convert.FromSafetensors(dir, dst, jlm.Fingerprint{Host: "test"}); err != nil {
-			t.Fatalf("convert %s: %v", dir, err)
-		}
-		return dst
+		return jlmOf(t, dir)
 	}
 	if p := dir + jlm.Ext; fileExists(p) {
 		t.Logf("no %s here; using %s, converted elsewhere", dir, p)

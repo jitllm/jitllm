@@ -114,11 +114,7 @@ func TestComposedLatentViolations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := frontModel(t, lm.file)
 			if lm.nope {
-				defer builtGraphs(m)()
-				m.Cfg.NoPosEnc = true
-				m.Front.Mu.Lock()
-				m.Front.Set = nil
-				m.Front.Mu.Unlock()
+				defer cfgMut(m, func(c *model.Config) { c.NoPosEnc = true })()
 				for li := range m.Cfg.NLayer {
 					for _, o := range m.Composing().BlockGraph(li).Ops {
 						if o.Kind == graph.OpRope {

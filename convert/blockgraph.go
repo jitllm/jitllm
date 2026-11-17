@@ -641,6 +641,23 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, tak
 	return nil
 }
 
+// StateBlocksAs states the blocks' graphs of s, a source written by hand
+// rather than read from a file, as FromGGUF states those of a file of the
+// GGUF architecture arch whose keys past the architecture's prefix are keys:
+// by arch's library graph, over each block's config and tensors. An
+// architecture whose library file states no graph states none.
+func StateBlocksAs(s *jlm.Source, arch string, keys map[string]int64) error {
+	g, err := ggufGraph(arch)
+	if err != nil || g == nil {
+		return err
+	}
+	d := jinja.NewDict()
+	for k, v := range keys {
+		d.AsDict().Set(k, jinja.NewInt(v))
+	}
+	return StateBlockGraphs(&Config{Config: s.Config}, s, g, d, nil)
+}
+
 // usedGraphs are the library's graphs g's uses name, in their order.
 func usedGraphs(g *mjGraph) ([]*mjGraph, error) {
 	if len(g.Use) == 0 {
@@ -1899,7 +1916,7 @@ func (bf *blockFacts) ropeAt() bool {
 // both ways where the model attends so.
 func (bf *blockFacts) attend() graph.Attrs {
 	c := bf.c
-	scale := 1 / math.Sqrt(float64(c.HeadDim))
+	scale := 1 / math.Sqrt(float64(bf.headDim))
 	if c.AttnScale != 0 {
 		scale = float64(c.AttnScale)
 	}

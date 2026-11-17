@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/graph"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
@@ -89,13 +90,11 @@ func ds4Violations() []c6Violation {
 	return []c6Violation{
 		{"the mixer softmaxed and not Sinkhorn-normalised", rounds(1)},
 		{"three Sinkhorn rounds", rounds(3)},
-		{"q not normed", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QUnitNorm = false }) }},
+		{"q not normed", func(m *model.Model) func() { return restated(m, skipping(opsNamed("q.unit"), 0)) }},
 		{"the rotary on each head's first elements", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.RopeTail = false })
+			return restated(m, editing(opsOfKind(graph.OpRope), func(o *graph.Op) { o.Attr.Offset = 0 }))
 		}},
-		{"the output left rotated", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.OutUnrotated = false })
-		}},
+		{"the output left rotated", func(m *model.Model) func() { return restated(m, skipping(opsNamed("att.unrope"), 0)) }},
 		{"plain SwiGLU", actSwap(0)},
 	}
 }

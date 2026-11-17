@@ -88,7 +88,8 @@ func formBlocks(t *testing.T, m *model.Model, blocks []int) {
 // attention's output multiplied by the sigmoid of the gate before the output
 // projection -- to the ops that say so, and forms them, with its recurrent
 // blocks stated as delta rules and formed; a mixture's blocks are stated too.
-// A model read as ungated is refused, not given a q of the wrong width.
+// A q stored at the ungated width under the gated graph is refused, not read
+// short.
 func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -121,10 +122,13 @@ func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 			formBlocks(t, m, stated)
 		})
 	}
-	t.Run("read as ungated", func(t *testing.T) {
+	t.Run("a q stored ungated", func(t *testing.T) {
 		m, _ := hybridModelOpt(t, hyOpt{})
-		defer builtGraphs(m)()
-		m.Cfg.AttnOutGate = false
+		defer restateInventory(m, func(inv map[jlm.Role]graph.Shape) {
+			if s, ok := inv[jlm.RoleAttnQ]; ok {
+				inv[jlm.RoleAttnQ] = graph.Shape{K: s.K, Rows: s.Rows / 2}
+			}
+		})()
 		n := 0
 		for li := range m.Cfg.NLayer {
 			if m.Cfg.LayerKind(li) != jlm.LayerFullAttn {
@@ -133,7 +137,7 @@ func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 			n++
 			why, err := m.Uncovered(li), m.UncoveredErr(li)
 			if why != model.UncoveredUnverified || err == nil || !strings.Contains(err.Error(), jlm.RoleAttnQ.String()) {
-				t.Fatalf("block %d with a stored double-width q read as ungated is refused by %q (%v), want the q projection's shape named", li, why, err)
+				t.Fatalf("block %d storing its q at the ungated width is refused by %q (%v), want the q projection's shape named", li, why, err)
 			}
 		}
 		if n == 0 {
@@ -358,10 +362,10 @@ func TestFrontStatesTheActivationFromTheBlocksNumbers(t *testing.T) {
 		}
 	}
 	formBlocks(t, m, []int{0, m.Cfg.NLayer - 1})
-	undo := dropStored(m, jlm.RoleXIELU)
+	undo := restateInventory(m, func(inv map[jlm.Role]graph.Shape) { delete(inv, jlm.RoleXIELU) })
 	defer undo()
 	why, err := m.Uncovered(0), m.UncoveredErr(0)
-	if why != model.UncoveredAct || err == nil || !strings.Contains(err.Error(), jlm.RoleXIELU.String()) {
+	if why != model.UncoveredUnverified || err == nil || !strings.Contains(err.Error(), jlm.RoleXIELU.String()) {
 		t.Fatalf("a block without its stored numbers is refused by %q (%v), want them named", why, err)
 	}
 }
@@ -382,8 +386,7 @@ func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 	if !m.Cfg.TokenAct {
 		t.Fatal("the fixture does not quantize per token: this gate is about a model that does")
 	}
-	defer builtGraphs(m)()
-	m.Cfg.TokenAct = false
+	defer cfgMut(m, func(c *model.Config) { c.TokenAct = false })()
 	var stated []int
 	for li := range m.Cfg.NLayer {
 		if why := m.Uncovered(li); why != model.Covered {
@@ -407,7 +410,7 @@ func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 		stated = append(stated, li)
 	}
 	formBlocks(t, m, stated[:min(2, len(stated))])
-	undo := restate(m, func(inv map[jlm.Role]graph.Shape) {
+	undo := restateInventory(m, func(inv map[jlm.Role]graph.Shape) {
 		inv[jlm.RoleAttnSubNorm] = graph.Shape{K: inv[jlm.RoleAttnSubNorm].K - 1}
 	})
 	defer undo()

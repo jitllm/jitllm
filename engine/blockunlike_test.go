@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -20,7 +22,6 @@ import (
 func TestABlockUnlikeItsSetRunsOnTheCard(t *testing.T) {
 	m, g, openOpts := openSynthLlama4(t)
 	defer m.Close()
-	defer builtGraphs(m)()
 	cfg := *m.Cfg
 	decode := func(st *Instance) [][]float32 {
 		var out [][]float32
@@ -33,9 +34,8 @@ func TestABlockUnlikeItsSetRunsOnTheCard(t *testing.T) {
 		}
 		return out
 	}
-	onHost := func(c *model.Config) [][]float32 {
-		m.Cfg = c
-		defer func() { m.Cfg = &cfg }()
+	onHost := func(violate func() func()) [][]float32 {
+		defer violate()()
 		st := testInstance(t, m, len(g.IDs)+1, openOpts...)
 		defer st.Close()
 		return decode(st)
@@ -59,22 +59,20 @@ func TestABlockUnlikeItsSetRunsOnTheCard(t *testing.T) {
 		}
 		return worst, flips
 	}
-	c0 := cfg
-	base := onHost(&c0)
+	base := onHost(func() func() { return func() {} })
 	ran := 0
+	edit := func(f func(c *model.Config)) func() func() { return func() func() { return cfgMut(m, f) } }
 	for _, v := range []struct {
-		name string
-		mut  func(c *model.Config)
+		name    string
+		violate func() func()
 	}{
-		{"no QK L2 norm", func(c *model.Config) { c.QKL2Norm = false }},
-		{"no attention temperature", func(c *model.Config) { c.AttnTempScale = 0 }},
-		{"another score scale", func(c *model.Config) { c.AttnScale = 0.5 / math.Sqrt(float64(c.HeadDim)) }},
-		{"a residual scale", func(c *model.Config) { c.ResidualScale = 0.5 }},
-		{"a parallel block", func(c *model.Config) { c.Parallel = true }},
+		{"no QK L2 norm", edit(func(c *model.Config) { c.QKL2Norm = false })},
+		{"no attention temperature", edit(func(c *model.Config) { c.AttnTempScale = 0 })},
+		{"another score scale", edit(func(c *model.Config) { c.AttnScale = 0.5 / math.Sqrt(float64(c.HeadDim)) })},
+		{"a residual scale", edit(func(c *model.Config) { c.ResidualScale = 0.5 })},
+		{"a parallel block", func() func() { return restated(m, parallelFFN) }},
 	} {
-		other := cfg
-		v.mut(&other)
-		want := onHost(&other)
+		want := onHost(v.violate)
 		if d, _ := cmp(base, want); !(d > 1e-3) {
 			t.Fatalf("%s: the fixture cannot see it -- the host reads %.3e from the unchanged config", v.name, d)
 		}
@@ -98,8 +96,7 @@ func TestABlockUnlikeItsSetRunsOnTheCard(t *testing.T) {
 				if n := first.GPULayers(); n != 1 {
 					t.Fatalf("%s on %s: the first instance placed %d blocks: %v %v", v.name, spec, n, first.DeviceDeclines(), gpux.Err())
 				}
-				m.Cfg = &other
-				defer func() { m.Cfg = &cfg }()
+				defer v.violate()()
 				second := testInstance(t, m, len(g.IDs)+1, openOpts...)
 				defer second.Close()
 				second.SetDeviceLayers(gpux, -1)
@@ -124,4 +121,18 @@ func TestABlockUnlikeItsSetRunsOnTheCard(t *testing.T) {
 	if ran == 0 {
 		t.Skip("no device on this host")
 	}
+}
+
+// parallelFFN has each block's feed-forward read the block's input where it
+// reads the attention's residual, as a parallel block's does; the residual
+// sums the block's input, its attention and its feed-forward either way.
+func parallelFFN(g *graph.Graph) *graph.Graph {
+	var in graph.ValueID
+	for _, o := range g.Ops {
+		if binding(jlm.RoleAttnNorm)(0, &o) {
+			in = o.In[0]
+			break
+		}
+	}
+	return editing(opsBinding(jlm.RoleFFNNorm), func(o *graph.Op) { o.In[0] = in })(g)
 }

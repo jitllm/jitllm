@@ -10975,3 +10975,42 @@ llama.cpp's own grid for tinyopenjev (libmtmd, at the mmproj's 8192 to
 4194304 pixels) agrees with the published processor's at 552 of 1521
 pictures: the bounds divergence recorded for Qwen3-VL.
 
+## The Go block builder, deleted
+
+model/front.go built every block's graph from config fields where a
+container stated none: the attention, the mixture and its router, the latent
+attention, the selection's indexer, the window pool, the recurrent mixers
+(the gated delta rule, the selective and per-channel scans, the short
+convolution), the residual streams' banks. Once every architecture and class
+stated its blocks (block-as-program), it ran only for containers converted
+before that, and it was the spec two gates held each stated graph to op for
+op (TestStatedBlockGraphsAreTheBuiltOnes over 191 fixtures,
+TestEveryAuditedGraphIsTheBuiltOne over the census). On the user's decision it
+went, with every function only it reached (38, found by deadcode), the
+mixer kinds and records only it read, and the two gates. A container that
+states no graph is refused at Open naming the conversion; `jitllm upgrade`
+cannot state one, so the activation and revision refusals that sent such a
+container to it went too. The gates that cleared a container's graphs for the
+builder to rebuild a violated config have the converter state the violated
+model instead: the engine gates' statedAgain converts the model's source
+again (convert.WithStatedSource) from its container's config as the
+violation left it, the container field of each config field the violation
+changed (configFrom the other way, each read back from the restated
+container) and the tensors its front end reads through restate, and the
+front end lowers those graphs; TestAnUnviolatedModelIsStatedAgainAsItWas
+holds it to restating an untouched model graph for graph. The KV source a
+shared block reads, which only the builder read off model.Config.KvSrcAt,
+is a rewrite of the stated graph, and the field went. Where a library graph
+states a feature whatever a block stores or a flag says (DeepSeek V4's unit
+q norm, Gemma 4's v norm, the post-norm graphs' output norms, the q/k
+norms) the violation is a rewrite of the stated graph too.
+
+The restated gates found two things the library stated wrong where the
+builder had stated them right: a block stating no score scale was given
+1/sqrt of the model's head width rather than its own, so a mixed-geometry
+block attended at the wrong scale (TestMixedGeometriesTakeTheirOwnScale);
+and a fractional attention-temperature offset was truncated at conversion
+(temp_offset|int). No model states a fractional offset, so the library
+states none -- the position op's integer attribute refuses one -- and
+TestATemperatureOffsetIsAWholeNumber holds the refusal where
+TestATemperatureOffsetOfAnyValue held the builder's floor.

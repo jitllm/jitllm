@@ -75,9 +75,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			}
 			// The blocks' violation: the rows attend causally, the graphs
 			// restated so.
-			undo := builtGraphs(m)
-			m.Cfg.NonCausal = false
-			m.Front.Restated++
+			undo := cfgMut(m, func(c *model.Config) { c.NonCausal = false })
 			ce, err := NewEmbedder(m, openOpts...)
 			if err != nil {
 				t.Fatal(err)
@@ -85,8 +83,6 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			cbad := embedTexts(t, m, ce, g)
 			cs, cd := ce.st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 			ce.Close()
-			m.Cfg.NonCausal = true
-			m.Front.Restated++
 			undo()
 			cc := worstCos(cbad, want)
 			t.Logf("%s: violation (causal rows): worst cosine to %s %.6f, %d block runs served", g.Model, refName, cc, cs)

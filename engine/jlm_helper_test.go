@@ -222,11 +222,7 @@ func convertPair(path, mmproj string) (string, error) {
 		return "", err
 	}
 	sweepServedCopies(dst)
-	var opts []convert.Option
-	if c := ModelConfigForTest(path); c != "" {
-		opts = append(opts, convert.WithModelConfig(c))
-	}
-	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
+	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, ggufOptions(path)...); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}
@@ -305,10 +301,8 @@ func sweepServedCopies(dst string) {
 // build wrote it.
 func convertDir(dir string, q8 bool) (string, error) {
 	dst := filepath.Clean(dir) + jlm.Ext
-	var opts []convert.Option
 	if q8 {
 		dst = filepath.Clean(dir) + "-q8" + jlm.Ext
-		opts = append(opts, convert.WithQ8())
 	}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -328,11 +322,52 @@ func convertDir(dir string, q8 bool) (string, error) {
 		return "", err
 	}
 	sweepServedCopies(dst)
-	if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
+	if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, dirOptions(q8)...); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}
 	return place(tmp, dst)
+}
+
+// ggufOptions are what a GGUF fixture converts with: the publisher's
+// config.json where it converts with one (ModelConfigForTest).
+func ggufOptions(path string) []convert.Option {
+	if c := ModelConfigForTest(path); c != "" {
+		return []convert.Option{convert.WithModelConfig(c)}
+	}
+	return nil
+}
+
+// dirOptions are what a HuggingFace fixture converts with: its matrices in
+// Q8_0 when it is named with q8Suffix.
+func dirOptions(q8 bool) []convert.Option {
+	if q8 {
+		return []convert.Option{convert.WithQ8()}
+	}
+	return nil
+}
+
+// convertedFrom is the fixture m's container was converted from, read back
+// from the names convertPair gives its containers: <name>.jlm beside a GGUF,
+// <dir>.jlm or <dir>-q8.jlm beside a HuggingFace directory. A GGUF and a
+// directory of one name are the GGUF's.
+func convertedFrom(m *model.Model) (string, error) {
+	base := strings.TrimSuffix(m.Container.Path, jlm.Ext)
+	if fileExists(base + ".gguf") {
+		return base + ".gguf", nil
+	}
+	if isDir(base) {
+		return base, nil
+	}
+	if dir, ok := strings.CutSuffix(base, "-q8"); ok && isDir(dir) {
+		return dir + q8Suffix, nil
+	}
+	return "", fmt.Errorf("%s is no container jlmOf converted beside its source: there is no source to state it again from", m.Container.Path)
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }
 
 // The gates' own options: the package reads no environment, so a knob set with

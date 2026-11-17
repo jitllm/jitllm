@@ -97,11 +97,20 @@ func TestQwen4ExpMatchesTransformers(t *testing.T) {
 func q4eViolations() []c6Violation {
 	return []c6Violation{
 		{"no n-gram embedding", func(m *model.Model) func() {
-			return streamsMut(m, func(s *jlm.Streams) {
+			// The n-gram block and its constants go with its read.
+			c := m.Container.Config()
+			was := *c
+			c.NGramBlock, c.NGram, c.NGramHeadsPer, c.NGramRowDim, c.NGramConv = 0, 0, 0, 0, 0
+			c.NGramEOS, c.NGramImage, c.NGramMul, c.NGramOff, c.NGramVoc = 0, 0, nil, nil, nil
+			undo := streamsMut(m, func(s *jlm.Streams) {
 				for i := range s.Blocks {
 					s.Blocks[i].Pre = jlm.SubStreams{}
 				}
 			})
+			return func() {
+				undo()
+				*c = was
+			}
 		}},
 		{"the n-gram embedding without its convolution", func(m *model.Model) func() {
 			return streamsMut(m, func(s *jlm.Streams) {

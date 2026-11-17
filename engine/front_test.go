@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -103,18 +105,6 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
-	// A mixture whose container states no score for its router (one written
-	// before scores were stated) is refused by that name at every block, so
-	// a refusal that disappears fails here.
-	t.Run("synth-phimoe.gguf/no stated score", func(t *testing.T) {
-		m := frontModel(t, "synth-phimoe.gguf")
-		defer statedRouter(m, jlm.Expr{}, jlm.Expr{})()
-		for li := range m.Cfg.NLayer {
-			if why := m.Uncovered(li); why != model.UncoveredRouterScore || !namedReason(why) {
-				t.Fatalf("block %d is refused by %q, want %q", li, why, model.UncoveredRouterScore)
-			}
-		}
-	})
 }
 
 // rotaryTables is how many of parts are a rotary's table.
@@ -131,16 +121,30 @@ func rotaryTables(parts []composer.Part) int {
 // TestFrontNamesNoFamily holds the front end to reading numbers: its source
 // names no model family.
 func TestFrontNamesNoFamily(t *testing.T) {
+	testmodels.SourceTree(t)
 	family := regexp.MustCompile(`(?i)gemma|llama|qwen|deepseek|kimi|mistral|mixtral|granite|hunyuan|minimax|nemotron|jamba|mamba|olmo|ernie|glm|bitnet|phi[0-9]|phimoe|gpt-?oss|falcon|starcoder|command-?r|cohere|stablelm|dbrx|exaone|smollm|arcee|seed_?oss|apertus|bailing|dots1|bert|lfm|clip|altup|laurel|jlm\.Arch|\.Arch\b`)
-	for _, file := range []string{"front.go", "frontdelta.go", "frontssm.go", "frontstreams.go", "fronttower.go", "frontenc.go",
-		"frontsinkhorn.go", "frontngram.go", "frontcomp.go"} {
+	files, err := filepath.Glob(filepath.Join("..", "model", "front*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := 0
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
 		src, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
+		read++
+		// llama.cpp is the reference a comment cites, not a family.
+		src = bytes.ReplaceAll(src, []byte("llama.cpp"), nil)
 		if loc := family.FindIndex(src); loc != nil {
 			t.Fatalf("%s names a model family or reads the architecture: %q", file, src[loc[0]:loc[1]])
 		}
+	}
+	if read == 0 {
+		t.Fatal("read no front-end file: the gate read nothing")
 	}
 }
 
@@ -158,55 +162,33 @@ func frontModel(t *testing.T, file string) *model.Model {
 	return m
 }
 
-// TestFrontRefusesWhatItDropsFromABlock is the gate against a violation: a
-// front end that leaves out part of a block (Qwen3-0.6B read as if it had
-// no q/k norm) leaves stored tensors unbound, and the block is refused naming
-// them rather than given a graph that computes something else. A stated
-// graph is held the same way: a tensor the block stores and its stated graph
-// does not bind is refused by name.
+// TestFrontRefusesWhatItDropsFromABlock is the gate against a stated graph
+// that does not describe its block: a tensor the block stores and the graph
+// does not bind is refused by name, and so is one the graph binds and the
+// block does not store, rather than either given a graph that computes
+// something else.
 func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 	m := frontModel(t, "Qwen3-0.6B-Q8_0.gguf")
 	if len(m.Container.Config().Blocks.Of) == 0 {
 		t.Fatal("Qwen3-0.6B states no block graphs: the stated arm would not be selected")
 	}
-	undo := restateInventory(m, func(inv map[jlm.Role]graph.Shape) { inv[jlm.RolePostAttnNorm] = graph.Shape{K: m.Cfg.NEmbd} })
-	why, err := m.Uncovered(0), m.UncoveredErr(0)
-	undo()
-	if why != model.UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RolePostAttnNorm.String()) {
-		t.Fatalf("a stated graph leaving a stored tensor unbound is refused by %q (%v), want the unbound norm named", why, err)
+	for _, c := range []struct {
+		what string
+		inv  func(inv map[jlm.Role]graph.Shape)
+		why  model.Uncovered
+		role jlm.Role
+	}{
+		{"a stored tensor it does not bind", func(inv map[jlm.Role]graph.Shape) { inv[jlm.RolePostAttnNorm] = graph.Shape{K: m.Cfg.NEmbd} },
+			model.UncoveredUnbound, jlm.RolePostAttnNorm},
+		{"a tensor it binds and the block does not store", func(inv map[jlm.Role]graph.Shape) { delete(inv, jlm.RoleAttnK) },
+			model.UncoveredUnverified, jlm.RoleAttnK},
+	} {
+		undo := restateInventory(m, c.inv)
+		why, err := m.Uncovered(0), m.UncoveredErr(0)
+		undo()
+		if why != c.why || err == nil || !strings.Contains(err.Error(), c.role.String()) {
+			t.Fatalf("block 0's stated graph beside %s is refused by %q (%v), want %q naming %s", c.what, why, err, c.why, c.role)
+		}
+		t.Logf("block 0's stated graph beside %s: %s: %v", c.what, why, err)
 	}
-	t.Logf("block 0's stated graph beside a tensor it does not bind: %s: %v", why, err)
-	defer builtGraphs(m)()
-	m.Cfg.QKNorm = false
-	why, err = m.Uncovered(0), m.UncoveredErr(0)
-	if why != model.UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RoleAttnQNorm.String()) {
-		t.Fatalf("a block built without its stored q norm is refused by %q (%v), want the unbound q norm named", why, err)
-	}
-	t.Logf("block 0 without its q/k norm: %s: %v", why, err)
-	// Gemma 4's E-model read without its per-layer embeddings leaves each
-	// block's gate unbound, and read as if no block shared a history has its
-	// readers bind keys the container does not store.
-	e := frontModel(t, "synth-gemma4-e.gguf")
-	last := e.Cfg.NLayer - 1
-	if !e.Cfg.KVShared(last) || e.Uncovered(0) != model.Covered || e.Uncovered(last) != model.Covered {
-		t.Fatalf("the fixture does not select the shape: block %d shares %v; %s, %s", last, e.Cfg.KVShared(last), e.Uncovered(0), e.Uncovered(last))
-	}
-	cfg := *e.Cfg
-	noPLE := cfg
-	noPLE.PLEDim = 0
-	e.Cfg = &noPLE
-	why, err = e.Uncovered(0), e.UncoveredErr(0)
-	if why != model.UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RolePLEGate.String()) {
-		t.Fatalf("a block built without its per-layer embedding is refused by %q (%v), want the unbound gate named", why, err)
-	}
-	t.Logf("block 0 without its per-layer embedding: %s: %v", why, err)
-	noShare := cfg
-	noShare.NKVShared = 0
-	e.Cfg = &noShare
-	why, err = e.Uncovered(last), e.UncoveredErr(last)
-	if why != model.UncoveredUnverified || err == nil || !strings.Contains(err.Error(), jlm.RoleAttnK.String()) {
-		t.Fatalf("a reader built as if it wrote its own history is refused by %q (%v), want its unstored keys named", why, err)
-	}
-	t.Logf("block %d writing a history of its own: %s: %v", last, why, err)
-	e.Cfg = &cfg
 }

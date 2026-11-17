@@ -55,7 +55,8 @@ func cloned(g *graph.Graph) *graph.Graph {
 	out.Values = slices.Clone(g.Values)
 	out.Ops = slices.Clone(g.Ops)
 	for i := range out.Ops {
-		out.Ops[i].In = slices.Clone(out.Ops[i].In)
+		o := &out.Ops[i]
+		o.In, o.Reads, o.Writes = slices.Clone(o.In), slices.Clone(o.Reads), slices.Clone(o.Writes)
 	}
 	out.Out = slices.Clone(g.Out)
 	return &out
@@ -177,6 +178,22 @@ func skipping(match func(g *graph.Graph) func(int, *graph.Op) bool, in int) func
 	}
 }
 
+// zeroing is the rewrite reading every op match picks as zero (zero); g
+// itself where it picks none.
+func zeroing(match func(g *graph.Graph) func(int, *graph.Op) bool) func(*graph.Graph) *graph.Graph {
+	return func(g *graph.Graph) *graph.Graph {
+		vs := written(g, match(g))
+		if len(vs) == 0 {
+			return g
+		}
+		out := cloned(g)
+		for _, v := range vs {
+			zero(out, writer(out, v))
+		}
+		return out
+	}
+}
+
 // editing is the rewrite applying edit to every op match picks; g itself
 // where it picks none.
 func editing(match func(g *graph.Graph) func(int, *graph.Op) bool, edit func(o *graph.Op)) func(*graph.Graph) *graph.Graph {
@@ -259,11 +276,41 @@ func streamsMut(m *model.Model, f func(s *jlm.Streams)) func() {
 	s.Blocks = slices.Clone(was.Blocks)
 	f(&s)
 	c.Streams = s
-	undo := restate(m, func(map[jlm.Role]graph.Shape) {})
+	gone := map[jlm.Role]bool{}
+	for _, r := range streamBinds(&was) {
+		gone[r] = true
+	}
+	for _, r := range streamBinds(&s) {
+		delete(gone, r)
+	}
+	undo := restate(m, func(inv map[jlm.Role]graph.Shape) {
+		for r := range gone {
+			delete(inv, r)
+		}
+	})
 	return func() {
 		c.Streams = was
 		undo()
 	}
+}
+
+// streamBinds is every role the programs of s's blocks bind.
+func streamBinds(s *jlm.Streams) []jlm.Role {
+	var out []jlm.Role
+	for i := range s.Blocks {
+		b := &s.Blocks[i]
+		for _, u := range []*jlm.SubStreams{&b.Pre, &b.Attn, &b.FFN} {
+			for _, p := range append([]*jlm.Program{u.Read, u.Join, u.Post}, u.Writes...) {
+				if p == nil {
+					continue
+				}
+				for _, op := range p.Ops {
+					out = append(out, op.Bind...)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // eachRead runs f on a copy of every stated read's program, the head's
@@ -317,13 +364,12 @@ func latentAttnUngated(m *model.Model) func() { return restated(m, skipping(opsN
 // stated gate over (z, o) restated as o alone (Config.DeltaGate), the op an
 // older front end names "gated" skipped to its ungated input elsewhere.
 func recurrentUngated(m *model.Model) func() {
-	if was := m.Cfg.DeltaGate; was != nil {
-		m.Cfg.DeltaGate = &jlm.Program{NIn: 2, Out: 1}
-		undo := restate(m, func(map[jlm.Role]graph.Shape) {})
-		return func() {
-			m.Cfg.DeltaGate = was
-			undo()
-		}
+	if m.Cfg.DeltaGate != nil {
+		// The gate's output is the normed output as it is.
+		return cfgMut(m, func(c *model.Config) {
+			c.DeltaGate = &jlm.Program{NIn: 2, Out: 2, Ops: []jlm.TowerOp{{Code: jlm.TOpStated, In: []uint16{1},
+				Expr: &jlm.Expr{Terms: []jlm.Term{{Fn: jlm.FnMul, Args: [3]jlm.Arg{{Kind: jlm.ArgIn}, {Kind: jlm.ArgConst, Value: 1}}}}}}}}
+		})
 	}
 	return restated(m, skipping(inBlocks(recurrent(m), opsNamed("gated")), 1))
 }

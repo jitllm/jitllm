@@ -284,11 +284,12 @@ func moeBaseDevViolations() map[string][]c6Violation {
 	}
 }
 
-// noQKNorm drops the q/k norm by the one switch both tiers read (QKNormAt).
+// noQKNorm skips q's and k's norms, which a graph states whatever the block
+// stores.
 func noQKNorm(m *model.Model) func() {
-	undoC := cfgMut(m, func(c *model.Config) { c.QKNorm = false })
-	undoR := dropStored(m, jlm.RoleAttnQNorm, jlm.RoleAttnKNorm)
-	return func() { undoR(); undoC() }
+	return restated(m, func(g *graph.Graph) *graph.Graph {
+		return skipping(opsBinding(jlm.RoleAttnKNorm), 0)(skipping(opsBinding(jlm.RoleAttnQNorm), 0)(g))
+	})
 }
 
 // hostNormRotary pairs the host's rotary (2i, 2i+1) where the model pairs
@@ -314,19 +315,16 @@ func noSelectionBias(m *model.Model) func() {
 	return dropVecs(m, jlm.RoleExpProbsB)
 }
 
-// noSharedExpert drops the shared expert, and its gate where it has one; the
-// width goes too, since a device plan with a width and no weights is refused.
+// noSharedExpert reads the shared expert's output, and so its gate's product
+// with it, as zero: a mixture graph states the shared expert whatever a block
+// stores.
 func noSharedExpert(m *model.Model) func() {
-	undo := cfgMut(m, func(c *model.Config) { c.NFFNShExp = 0 })
-	undoL := eachLayer(m, func(l *model.Layer) { l.ShGate, l.ShUp, l.ShDown = model.Tensor{}, model.Tensor{}, model.Tensor{} })
-	undoR := dropStored(m, jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown)
-	undoV := dropVecs(m, jlm.RoleShRouter)
-	return func() { undoV(); undoR(); undoL(); undo() }
+	return restated(m, zeroing(opsBinding(jlm.RoleShExpDown)))
 }
 
 // noSharedGate runs the shared expert at weight one: its sigmoid gate dropped.
 func noSharedGate(m *model.Model) func() {
-	return dropVecs(m, jlm.RoleShRouter)
+	return restated(m, skipping(opsNamed("shared.gated"), 1))
 }
 
 // routerSwap scores every expert by its logit's sigmoid, or by the softmax

@@ -292,6 +292,15 @@ func hybridModelOpt(t *testing.T, o hyOpt) (*model.Model, []Option) {
 	if err := convert.StateActivations(convert.Unstated(cfg), src); err != nil {
 		t.Fatal(err)
 	}
+	// The delta rule and the blocks as a Qwen3-Next GGUF of this geometry
+	// states them.
+	convert.StateDelta(cfg, func(r jlm.Role, li int32) bool {
+		return slices.ContainsFunc(src.Tensors, func(t jlm.Tensor) bool { return t.Role == r && t.Block == li })
+	})
+	if err := convert.StateBlocksAs(src, "qwen3next", map[string]int64{"ssm.conv_kernel": hyConv,
+		"ssm.group_count": hyKHeads, "ssm.inner_size": hyInner, "ssm.state_size": hyKDim, "ssm.time_step_rank": hyVHeads}); err != nil {
+		t.Fatal(err)
+	}
 	dst := filepath.Join(t.TempDir(), "hybrid"+jlm.Ext)
 	if _, err := jlm.Write(dst, src, jlm.Fingerprint{Host: "test"}); err != nil {
 		t.Fatalf("jlm.Write: %v", err)

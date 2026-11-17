@@ -65,7 +65,7 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 		fn(&o)
 	}
 	dir := hfDir{meta, name}
-	s, err := hfSourceWith(dir, hs, o.modelJSON, o.taken)
+	s, err := hfSourceWith(dir, hs, o.modelJSON, o.taken, o.statedSource)
 	if err != nil {
 		return nil, err
 	}

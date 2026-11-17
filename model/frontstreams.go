@@ -14,18 +14,6 @@ import (
 // input. The call site binds them at their offsets in main's stream-major
 // residual.
 
-// streams is a block's residual streams as its graph reads them: the
-// inputs, and the stream the block banks its input into, written before any
-// stream is read (0 for none).
-type streams struct {
-	in   []graph.ValueID
-	bank graph.ValueID
-	// cur is the streams after a sublayer that writes every one, and ex
-	// the values the sublayer's read exports to its writes.
-	cur []graph.ValueID
-	ex  []graph.ValueID
-}
-
 // statedBinds is every role block li's stated reads bind.
 func (c *Config) statedBinds(li int) []jlm.Role {
 	if c.stated == nil || li < 0 || li >= len(c.stated.Blocks) {
@@ -79,7 +67,7 @@ func (c *Config) StatesStreams() bool {
 }
 
 // Streams is how many residual streams a token carries: the streams the
-// converter states, DeepSeek V4's hyper-connections, or one.
+// converter states, the hyper-connections' (HCMult), or one.
 func (c *Config) Streams() int { return max(c.HCMult, c.statedStreams(), 1) }
 
 // statedStreams is how many streams the converter states, 0 for none.
@@ -98,19 +86,6 @@ func (c *Config) Stream(x []float32, k, rows, r int) []float32 {
 	d := c.NEmbd
 	o := (k*rows + r) * d
 	return x[o : o+d]
-}
-
-// banked writes the block's streams: the running residual y, the banked
-// stream its input, every other stream its input itself, which no kernel
-// writes.
-func (m *Model) banked(b *graph.Builder, f graph.Facts, li int, st *streams, y graph.ValueID, has func(jlm.Role) bool) (*graph.Graph, Uncovered, error) {
-	out := slices.Clone(st.in)
-	out[0] = outScaled(b, has, y)
-	if k := m.Cfg.stated.Blocks[li].Bank; k != 0 {
-		out[k] = st.bank
-	}
-	b.Out(out...)
-	return verified(b, f)
 }
 
 // streamCopy is a row of v as a value of its own.
@@ -159,17 +134,6 @@ func (m *Model) streamMix(b *graph.Builder, f graph.Facts) (graph.ValueID, error
 		return 0, fmt.Errorf("the streams' stated head read: %w", err)
 	}
 	return y, nil
-}
-
-// plainActAt is block li's stated activation without the sparsity the
-// container states on its FFN's gate (unsparsified): the activation a gate
-// that is not an FFN's (the per-layer input's) reads.
-func (m *Model) plainActAt(li int) *jlm.Expr {
-	e := m.Container.Config().ActAt(li)
-	if e == nil {
-		return nil
-	}
-	return Unsparsified(e)
 }
 
 // Unsparsified is e with each term keeping max(g - t, 0) of its gate g

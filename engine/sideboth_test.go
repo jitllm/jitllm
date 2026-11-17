@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
@@ -35,9 +36,8 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 					t.Fatalf("%s has no per-layer embeddings", name)
 				}
 				if withTaps {
-					defer builtGraphs(m)()
 					m.Cfg.DeepTaps = taps
-					m.Front.Set = nil
+					defer restated(m, tapsFirst(taps*m.Cfg.NEmbd))()
 					if w := m.Cfg.SideWidth(); w != taps*m.Cfg.NEmbd+m.Cfg.PleWidth() {
 						t.Fatalf("a side row of %d, want the taps' %d and the per-layer inputs' %d", w,
 							taps*m.Cfg.NEmbd, m.Cfg.PleWidth())
@@ -100,5 +100,30 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no arm ran")
+	}
+}
+
+// tapsFirst states a block's side row with n elements of tap rows before its
+// per-layer inputs, as the converter states the blocks of a model whose
+// tower taps them: the side input n wider, each slice of it n further on.
+func tapsFirst(n int) func(*graph.Graph) *graph.Graph {
+	return func(g *graph.Graph) *graph.Graph {
+		side := -1
+		for _, v := range g.In {
+			if isNamed(g, v, "ple") {
+				side = int(v)
+			}
+		}
+		if side < 0 {
+			return g
+		}
+		out := cloned(g)
+		out.Values[side].Width += n
+		for i := range out.Ops {
+			if o := &out.Ops[i]; o.Kind == graph.OpSlice && len(o.In) > 0 && int(o.In[0]) == side {
+				o.Attr.Offset += n
+			}
+		}
+		return out
 	}
 }

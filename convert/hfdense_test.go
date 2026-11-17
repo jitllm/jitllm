@@ -48,9 +48,8 @@ func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 			a, b := hfSource(t, dir), ggufSource(t, gp)
 			ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 			// Where one side states no block graphs (its class or
-			// architecture states none yet), the other's are held to the ones
-			// the engine builds from this same config instead
-			// (engine.TestStatedBlockGraphsAreTheBuiltOnes).
+			// architecture states none yet), the other's are held by its
+			// own gates against its reference.
 			oneStates := len(a.Config.Blocks.Of) == 0 || len(b.Config.Blocks.Of) == 0
 			for i := 0; i < ca.NumField(); i++ {
 				if !ca.Type().Field(i).IsExported() || ca.Type().Field(i).Name == "Blocks" && oneStates {

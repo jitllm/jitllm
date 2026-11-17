@@ -276,9 +276,6 @@ type Config struct {
 	expWidth int
 	// LatentNormEps is the MLA latent norms' epsilon.
 	LatentNormEps float64
-	// kvSrcAt replaces KVSource's choice for the shared blocks, a source a
-	// block (nil: none), for a gate's violation only.
-	KvSrcAt []int
 	// noRouter marks the blocks of a mixture model that carry no router:
 	// Nemotron 3's mixer-only layers and Jamba's dense blocks between its
 	// mixtures. MoEAt is false there. Read off the container at build(), nil
@@ -328,15 +325,6 @@ func (c *Config) RopeAt(il int) bool {
 // wherever a window exists, so every windowed model reads as before.
 func (c *Config) periodLocal(il int) bool {
 	return c.SWAPeriod > 0 && il%c.SWAPeriod < c.SWAPeriod-1
-}
-
-// ropeLocal says block il turns by the sliding blocks' rotary where the
-// model holds one: a sliding block.
-func (c *Config) ropeLocal(il int) bool {
-	// A compressing block windows its rows and turns by the model's
-	// rotary, as its entries do.
-	_, rate := c.CompAt(il)
-	return c.SWA(il) && rate == 0
 }
 
 // AttnWindow is the key range layer il attends to from position pos: w0 is
@@ -587,9 +575,6 @@ func (c *Config) KVShared(li int) bool {
 func (c *Config) KVSource(li int) int {
 	if !c.KVShared(li) {
 		return li
-	}
-	if li < len(c.KvSrcAt) {
-		return c.KvSrcAt[li]
 	}
 	for j := c.NLayer - c.NKVShared - 1; j >= 0; j-- {
 		if c.SWA(j) == c.SWA(li) && c.LayerKind(j).Attends() {
@@ -1278,13 +1263,6 @@ func Open(path string, options ...Option) (*Model, error) {
 		}
 		return nil, err
 	}
-	// Where the composer serves, a container written before the converter
-	// stated its activations would run every block on the tier's own kernels
-	// and say nothing: refused, with the command that states them.
-	if err := m.statesActivations(path); err != nil {
-		m.Close()
-		return nil, err
-	}
 	if err := m.Unstated(); err != nil {
 		m.Close()
 		return nil, err
@@ -1293,34 +1271,7 @@ func Open(path string, options ...Option) (*Model, error) {
 	// config as it is then: the front set is keyed on the config's address,
 	// and a test states another model by setting a field of it in place.
 	m.Front.Set = nil
-	// Sliding layers with a scaled rotary or beside a tower read what a
-	// container written before revision 2 does not state.
-	if c := m.Container.Config(); c.Revision < 2 && c.SWAWindow > 0 &&
-		(c.YarnFactor > 1 || m.Container.Vision() != nil) {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "sliding layers"}
-	}
-	// A block of sub-norms before its projections reads the activation
-	// quantization a container written before revision 2 does not state.
-	if c := m.Container.Config(); c.Revision < 2 && m.storesAny(jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm) {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "activation quantization"}
-	}
 	return m, nil
-}
-
-// statesActivations is an UpgradeRequiredError where the container states no
-// activation and the front end refuses a block for wanting one.
-func (m *Model) statesActivations(path string) error {
-	if len(m.Container.Config().Acts) > 0 {
-		return nil
-	}
-	for li := range m.Cfg.NLayer {
-		if m.Uncovered(li) == UncoveredAct {
-			return &UpgradeRequiredError{Path: path, What: "activations"}
-		}
-	}
-	return nil
 }
 
 // UpgradeRequiredError is a container written before this build states what
@@ -3646,16 +3597,4 @@ func (c *Config) BidirAt(li int) bool {
 		return h.BidirAt(li)
 	}
 	return len(c.bidir) == 0 || c.bidir[li]
-}
-
-// storesAny reports that some block of the container stores one of rs.
-func (m *Model) storesAny(rs ...jlm.Role) bool {
-	for bi := range m.Container.Config().NLayer {
-		for _, r := range rs {
-			if m.Container.Has(r, int32(bi), -1) {
-				return true
-			}
-		}
-	}
-	return false
 }

@@ -35,10 +35,11 @@ func TestMixedGeometriesTakeTheirOwnScale(t *testing.T) {
 			t.Fatalf("%s states one geometry", name)
 		}
 		if derived {
-			defer builtGraphs(m)()
-			m.Container.Config().AttnScale = 0
-			c.AttnScale = 0
-			m.Front.Set = nil
+			jc := m.Container.Config()
+			was := jc.AttnScale
+			jc.AttnScale = 0
+			defer func() { jc.AttnScale = was }()
+			defer statedAgain(m)()
 			widths, attends := map[int]bool{}, 0
 			for li, bg := range m.FrontGraphs().Blocks {
 				if bg == nil {

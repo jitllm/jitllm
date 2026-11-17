@@ -134,13 +134,13 @@ func moe2Violations() map[string][]c6Violation {
 				return func() { undoR(); undoV() }
 			}},
 			{"no LongRoPE short factors", func(m *model.Model) func() {
-				undo := builtGraphs(m)
+				undo := relowered(m)
 				was := m.Rope.Freqs
 				m.Rope.Freqs = nil
 				return func() { m.Rope.Freqs = was; undo() }
 			}},
 			{"no LongRoPE magnitude", func(m *model.Model) func() {
-				undo := builtGraphs(m)
+				undo := relowered(m)
 				was := m.Rope.Scale
 				m.Rope.Scale = 1
 				return func() { m.Rope.Scale = was; undo() }

@@ -164,7 +164,6 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 func TestSynthLlama4FeaturesAreLoadBearing(t *testing.T) {
 	m, g, openOpts := openSynthLlama4(t)
 	defer m.Close()
-	defer builtGraphs(m)()
 	cfg := *m.Cfg
 	for _, v := range []struct {
 		name string
@@ -176,13 +175,12 @@ func TestSynthLlama4FeaturesAreLoadBearing(t *testing.T) {
 		{"weight on the expert's output", func(c *model.Config) { c.ExpertWeightIn = false }},
 		{"no attention temperature", func(c *model.Config) { c.AttnTempScale = 0 }},
 		{"temperature offset 0", func(c *model.Config) { c.AttnTempOffs = 0 }},
-		{"no chunk at all", func(c *model.Config) { c.SWAWindow = 0 }},
+		{"no chunk at all", func(c *model.Config) { c.SWAWindow, c.SWAChunked = 0, false }},
 	} {
 		t.Run(v.name, func(t *testing.T) {
 			c := cfg
 			v.mut(&c)
-			m.Cfg = &c
-			defer func() { m.Cfg = &cfg }()
+			defer withCfg(m, &c)()
 			st := testInstance(t, m, len(g.IDs)+1, openOpts...)
 			defer st.Close()
 			worst := 0.0

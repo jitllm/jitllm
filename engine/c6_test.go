@@ -411,13 +411,12 @@ func dropVecs(m *model.Model, roles ...jlm.Role) func() {
 // the returned undo: a violation that drops, renames or resizes tensors in the
 // model's layers states the same model to the composer, which reads the
 // container (frontState.restate). It applies over the restatements already
-// in place, so violations compose. The blocks are built from the config
-// meanwhile, so a violation of the config or the tensors reaches a container
-// that states its graphs (builtGraphs).
+// in place, so violations compose, and the blocks run the graphs the library
+// states for the tensors so read (statedAgain).
 func restate(m *model.Model, f func(inv map[jlm.Role]graph.Shape)) func() {
-	undoB := builtGraphs(m)
 	undo := restateInventory(m, f)
-	return func() { undo(); undoB() }
+	undoS := statedAgain(m)
+	return func() { undoS(); undo() }
 }
 
 // restateInventory has the front end read every block's stored tensors
@@ -506,27 +505,26 @@ func dropStoredDense(m *model.Model, roles ...jlm.Role) func() {
 	}
 }
 
-// noQKVBias, noPostAttnNorm and noPostFFNNorm are blocks without those
-// tensors, in the model's layers and as the composer reads them.
+// noQKVBias is blocks without their q, k and v biases, in the model's layers
+// and as the composer reads them.
 func noQKVBias(m *model.Model) func() {
 	return dropVecs(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias)
 }
 
+// noPostAttnNorm and noPostFFNNorm skip a sublayer's output norm, which a
+// post-norm graph states whatever the block stores.
 func noPostAttnNorm(m *model.Model) func() {
-	return dropVecs(m, jlm.RolePostAttnNorm)
+	return restated(m, skipping(opsBinding(jlm.RolePostAttnNorm), 0))
 }
 
 func noPostFFNNorm(m *model.Model) func() {
-	return dropVecs(m, jlm.RolePostFFNNorm)
+	return restated(m, skipping(opsBinding(jlm.RolePostFFNNorm), 0))
 }
 
 func cfgMut(m *model.Model, f func(c *model.Config)) func() {
-	undo := builtGraphs(m)
-	was := m.Cfg
-	c := *was
+	c := *m.Cfg
 	f(&c)
-	m.Cfg = &c
-	return func() { m.Cfg = was; undo() }
+	return withCfg(m, &c)
 }
 
 // c6Violations are the violation runs for the kit, kept as a gate: each feature

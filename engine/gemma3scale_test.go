@@ -49,7 +49,7 @@ func TestGemma3GlobalLayersAreLinearlyScaled(t *testing.T) {
 	keys := func(unscaled bool) map[int][]float32 {
 		t.Helper()
 		if unscaled {
-			defer builtGraphs(m)()
+			defer relowered(m)()
 			was := m.Rope.Freqs
 			m.Rope.Freqs = nil
 			defer func() { m.Rope.Freqs = was }()

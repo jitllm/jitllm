@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -107,7 +108,7 @@ func gemma4Fixtures() []struct {
 func gemma4Violations() map[string][]c6Violation {
 	return map[string][]c6Violation{
 		"synth-gemma4": {
-			{"no v norm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.VNorm = false }) }},
+			{"no v norm", noVNorm},
 			{"no layer scalar", noLayerScalar},
 			{"the sliding rotary on the global layers", globalRopeIsLocal},
 			{"the global layers' rotary without its proportional factors", noRopeFreqs},
@@ -121,11 +122,11 @@ func gemma4Violations() map[string][]c6Violation {
 			{"NORM rotary for NEOX", hostNormRotary},
 		},
 		"synth-gemma4-kv": {
-			{"no v norm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.VNorm = false }) }},
+			{"no v norm", noVNorm},
 			{"the sliding rotary on the global layers", globalRopeIsLocal},
 		},
 		"synth-gemma4-wide": {
-			{"no v norm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.VNorm = false }) }},
+			{"no v norm", noVNorm},
 			{"the global layers' rotary without its proportional factors", noRopeFreqs},
 		},
 		"synth-gemma4-moe":      gemma4MoEViolations(),
@@ -146,12 +147,24 @@ func gemma4EViolations() []c6Violation {
 		// than the last one's (transformers' store_full_length_kv); the global
 		// one has no other source of its kind.
 		{"a shared layer reading an earlier source", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) {
-				c.KvSrcAt = make([]int, c.NLayer)
-				for li := range c.KvSrcAt {
-					c.KvSrcAt[li] = 2
+			// Every sharing block reads block 2's history, block 4 block 1's.
+			reads := func(*graph.Graph) func(int, *graph.Op) bool {
+				return func(_ int, o *graph.Op) bool {
+					return slices.ContainsFunc(o.Reads, func(r graph.StateRef) bool { return r.From != 0 })
 				}
-				c.KvSrcAt[4] = 1
+			}
+			return restated(m, func(g *graph.Graph) *graph.Graph {
+				at := 2
+				if g.Block == 4 {
+					at = 1
+				}
+				return editing(reads, func(o *graph.Op) {
+					for k := range o.Reads {
+						if o.Reads[k].From != 0 {
+							o.Reads[k].From = at + 1
+						}
+					}
+				})(g)
 			})
 		}},
 		{"the per-layer embedding's post-norm unweighted", func(m *model.Model) func() {
@@ -193,18 +206,25 @@ func noLayerScalar(m *model.Model) func() {
 }
 
 // globalRopeIsLocal gives the global layers the sliding layers' base with no
-// factors: one rotary for every layer, at each layer's own width.
+// factors: one rotary for every layer, at each layer's own width. Its rope
+// ops name the table they turn by, so they turn at that base too.
 func globalRopeIsLocal(m *model.Model) func() {
-	undo := builtGraphs(m)
 	was := m.Rope
-	m.Rope.Base, m.Rope.Freqs = m.Ropes[0].Base, nil
-	return func() { m.Rope = was; undo() }
+	global, local := m.Rope.Base, m.Ropes[0].Base
+	m.Rope.Base, m.Rope.Freqs = local, nil
+	undo := restated(m, editing(func(*graph.Graph) func(int, *graph.Op) bool {
+		return func(_ int, o *graph.Op) bool { return o.Kind == graph.OpRope && o.Attr.Base == global }
+	}, func(o *graph.Op) { o.Attr.Base, o.Attr.Freqs = local, false }))
+	return func() { undo(); m.Rope = was }
 }
+
+// noVNorm skips the scale-free norm each block states on v.
+func noVNorm(m *model.Model) func() { return restated(m, skipping(opsNamed("v.norm"), 0)) }
 
 // noRopeFreqs turns every pair of the global head (the plain rotary over 32
 // dimensions), where the proportional rotary turns the first quarter.
 func noRopeFreqs(m *model.Model) func() {
-	undo := builtGraphs(m)
+	undo := relowered(m)
 	was := m.Rope.Freqs
 	m.Rope.Freqs = nil
 	return func() { m.Rope.Freqs = was; undo() }
@@ -250,14 +270,14 @@ func TestGemma4MatchesTransformers(t *testing.T) {
 func gemma4DevViolations() map[string][]c6Violation {
 	return map[string][]c6Violation{
 		"synth-gemma4": {
-			{"no v norm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.VNorm = false }) }},
+			{"no v norm", noVNorm},
 			{"no layer scalar", noLayerScalar},
 		},
 		"synth-gemma4-kv": {
-			{"no v norm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.VNorm = false }) }},
+			{"no v norm", noVNorm},
 		},
 		"synth-gemma4-wide": {
-			{"no v norm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.VNorm = false }) }},
+			{"no v norm", noVNorm},
 		},
 		"synth-gemma4-moe":      gemma4MoEViolations(),
 		"synth-gemma4-e":        gemma4EViolations(),

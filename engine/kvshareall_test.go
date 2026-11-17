@@ -1,10 +1,10 @@
 package engine
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
@@ -50,23 +50,12 @@ func TestKVSharingOnEveryBlockKind(t *testing.T) {
 					t.Fatalf("%s has no two blocks that attend", name)
 				}
 				if share {
-					defer builtGraphs(m)()
 					c.NKVShared = c.NLayer - last
-					// A sharing block stores no key, value or latent of its own.
-					m.Front.Restate = func(block int32, inv map[jlm.Role]graph.Shape) {
-						if int(block) == last {
-							for _, r := range []jlm.Role{jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnKBias, jlm.RoleAttnVBias,
-								jlm.RoleAttnKNorm, jlm.RoleAttnKVA, jlm.RoleAttnKVANorm} {
-								delete(inv, r)
-							}
-						}
-					}
-					m.Front.Restated++
-					m.Front.Set = nil
 					src := c.KVSource(last)
 					if !c.KVShared(last) || src < 0 || src >= last || !c.LayerKind(src).Attends() {
 						t.Fatalf("block %d shares %v from %d", last, c.KVShared(last), src)
 					}
+					defer restated(m, sharedFrom(last, src))()
 				}
 				ids := m.Vocab.Encode("The capital of France is", true)
 				s := testInstance(t, m, len(ids)+gen+1, WithKVF16(false))
@@ -123,5 +112,47 @@ func TestKVSharingOnEveryBlockKind(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no model ran")
+	}
+}
+
+// sharedFrom is block li read as sharing block src's history, as a
+// KV-sharing block's stated graph reads it: its own history's writes go, with
+// the keys and values only they read, and each read of its own history reads
+// src's.
+func sharedFrom(li, src int) func(*graph.Graph) *graph.Graph {
+	return func(g *graph.Graph) *graph.Graph {
+		if g.Block != li {
+			return g
+		}
+		out := cloned(g)
+		out.Ops = slices.DeleteFunc(out.Ops, func(o graph.Op) bool {
+			return slices.ContainsFunc(o.Writes, func(r graph.StateRef) bool { return r.State == graph.StateKV })
+		})
+		for {
+			read := map[graph.ValueID]bool{}
+			for _, o := range out.Ops {
+				for _, v := range o.In {
+					read[v] = true
+				}
+			}
+			for _, v := range out.Out {
+				read[v] = true
+			}
+			n := len(out.Ops)
+			out.Ops = slices.DeleteFunc(out.Ops, func(o graph.Op) bool {
+				return len(o.Out) > 0 && len(o.Writes) == 0 && !slices.ContainsFunc(o.Out, func(v graph.ValueID) bool { return read[v] })
+			})
+			if len(out.Ops) == n {
+				break
+			}
+		}
+		for i := range out.Ops {
+			for k, r := range out.Ops[i].Reads {
+				if r.State == graph.StateKV && r.From == 0 {
+					out.Ops[i].Reads[k] = graph.StateRef{State: graph.StateKV, From: src + 1, Hist: r.Hist}
+				}
+			}
+		}
+		return out
 	}
 }

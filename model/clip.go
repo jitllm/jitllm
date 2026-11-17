@@ -1,10 +1,7 @@
 package model
 
 import (
-	"unsafe"
-
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/graph"
 )
 
 // Clip is a voice clip as its container stores it: frames of Channels
@@ -27,13 +24,4 @@ func (c Clip) Frames() int {
 		return len(c.PCM) / b
 	}
 	return 0
-}
-
-// FloatClip is mono samples at rate as a clip of floats.
-func FloatClip(samples []float32, rate int) Clip {
-	pcm := make([]byte, 4*len(samples))
-	if len(samples) > 0 {
-		copy(pcm, unsafe.Slice((*byte)(unsafe.Pointer(&samples[0])), 4*len(samples)))
-	}
-	return Clip{Format: graph.SoundF32, Channels: 1, Rate: rate, PCM: pcm}
 }

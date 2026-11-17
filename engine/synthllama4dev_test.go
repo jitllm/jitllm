@@ -24,7 +24,6 @@ import (
 func TestSynthLlama4OnEveryDevice(t *testing.T) {
 	m, g, openOpts := openSynthLlama4(t)
 	defer m.Close()
-	defer builtGraphs(m)()
 	cfg := *m.Cfg
 	decode := func(st *Instance) [][]float32 {
 		var out [][]float32
@@ -45,8 +44,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 		return [][]float32{append([]float32(nil), lg...)}
 	}
 	onHost := func(c *model.Config, run func(*Instance) [][]float32) [][]float32 {
-		m.Cfg = c
-		defer func() { m.Cfg = &cfg }()
+		defer withCfg(m, c)()
 		st := testInstance(t, m, len(g.IDs)+1, openOpts...)
 		defer st.Close()
 		return run(st)
@@ -97,8 +95,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer gpux.Close()
-				m.Cfg = c
-				defer func() { m.Cfg = &cfg }()
+				defer withCfg(m, c)()
 				st := testInstance(t, m, len(g.IDs)+1, openOpts...)
 				defer st.Close()
 				st.SetDeviceLayers(gpux, -1)
@@ -209,7 +206,7 @@ func TestSynthLlama4ServesComposed(t *testing.T) {
 		{"no attention temperature", mut(func(c *model.Config) { c.AttnTempScale = 0 })},
 		{"the temperature offset a floor further", mut(func(c *model.Config) { c.AttnTempOffs += c.AttnTempFloor })},
 		{"the temperature's floor doubled", mut(func(c *model.Config) { c.AttnTempFloor *= 2 })},
-		{"no chunk at all", mut(func(c *model.Config) { c.SWAWindow = 0 })},
+		{"no chunk at all", mut(func(c *model.Config) { c.SWAWindow, c.SWAChunked = 0, false })},
 	}
 	if servesComposed(t, m, g.IDs, 1e-6, vs, true, openOpts...) == 0 {
 		t.Skip("no device on this host")

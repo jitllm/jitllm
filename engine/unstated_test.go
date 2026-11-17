@@ -25,7 +25,7 @@ func TestUnstatedPartsAreRefused(t *testing.T) {
 	// A per-layer input's gate: read only where the model has per-layer
 	// inputs, which stories260K has not. A sub-norm would not do, the block
 	// norms by it where the container stores one.
-	undo := restate(m, func(inv map[jlm.Role]graph.Shape) {
+	undo := restateInventory(m, func(inv map[jlm.Role]graph.Shape) {
 		inv[jlm.RolePLEGate] = graph.Shape{K: m.Cfg.NEmbd, Rows: 8}
 	})
 	defer undo()

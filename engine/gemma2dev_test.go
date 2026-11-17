@@ -33,8 +33,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 	// x, so skipping the cap stays inside the band. Both tiers run the same
 	// config, so capping at 2, which bends nearly every score, is still
 	// like-for-like: working ~5e-3, the cap skipped ~6e-2, the bound between.
-	defer builtGraphs(m)()
-	m.Cfg.AttnSoftcap = 2
+	defer cfgMut(m, func(c *model.Config) { c.AttnSoftcap = 2 })()
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
 	run := func(st *Instance) [][]float32 {
 		var out [][]float32

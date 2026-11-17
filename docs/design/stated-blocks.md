@@ -1,14 +1,15 @@
 # Stated blocks: the converter states what a family adds
 
 A vision tower is a program the converter writes (`jlm.Tower`), lowered by
-`model` with no switch on the family. The text model is not there yet: the
-front end (`model/front.go`) builds each block's graph from config fields,
-and where a family adds a feature -- a bank of residual checkpoints, gated
-hyper-connections, a block selection -- the front end, the plan and the
-devices carry code named for it (`model/k3.go`, `model/q4e.go`,
-`nn.K3Plan`, `nn.LayerPlan.MSA()`). A feature with one family behind it is
-that family's code whatever it is named (AGENTS.md, the five principles; the
-user's ruling on renames). This is the design that takes it out.
+`model` with no switch on the family, and so is every text block: the
+converter states each block's graph (`jlm.Config.Blocks`) from its library
+file, and the front end (`model/front.go`) lowers the stated graph and builds
+none from config fields. Where a family adds a feature -- a bank of residual
+checkpoints, gated hyper-connections, a block selection -- it is a statement
+in the family's library file, not code named for it. A feature with one
+family behind it is that family's code whatever it is named (AGENTS.md, the
+five principles; the user's ruling on renames). This is the design that took
+it out.
 
 ## What is stated
 
@@ -38,22 +39,22 @@ and its weights are bindings by role.
 
 ## Lowering and gates
 
-`model` lowers a stated piece where the front end built the family's code
-before, and the two must agree before the old code goes: a gate states each
-fixture both ways and compares the graphs op for op (`graph` canonical
-order), then the family's end-to-end gates (matches its reference, features
-load-bearing, every device, relocation, paging, allocation) run on the
-stated path alone. A violation is a rewrite of the stated program, never a
-fault knob in `model`.
+`model` lowers each stated graph; the family's end-to-end gates (matches its
+reference, features load-bearing, every device, relocation, paging,
+allocation) hold it. While the front end still built blocks from the config,
+a gate stated each fixture both ways and compared the graphs op for op; that
+builder and its comparison are gone. A violation is a rewrite of the stated
+program, or the model restated at conversion: its source converted again
+with the violated config or tensors (`convert.WithStatedSource`), the
+library stating the violated model's graphs -- never a fault knob in
+`model`.
 
 ## Containers already converted
 
-The statement is a new optional tail of the config section. A container
-without it is upgraded in place by `jitllm upgrade`, which states the
-programs from the config and tensors the container already holds -- the
-family interpretation lives in the converter and the upgrade, nowhere else.
-A container that should state a piece and does not is refused with the
-upgrade command, as one written before activations were stated is.
+The statement is an optional tail of the config section. A container
+without it states no block's graph, and Open refuses it naming the
+conversion: only conversion states a graph, from the source file, and a v31
+container records no architecture an upgrade could state one by.
 
 ## Order
 

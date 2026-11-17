@@ -1,10 +1,12 @@
 package engine
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -16,263 +18,372 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// statedGraphModels are fixtures of each class whose model.json states its
-// blocks' graph.
-func statedGraphModels() []string {
-	return []string{
-		"qwen3", "synth-hf-qwen3-yarn",
-		"qwen2.5-tiny-random", "synth-qwen2",
-		"synth-hf-llama3", "tiny-random-LlamaForCausalLM",
-		"synth-hf-smollm3", "synth-hf-seedoss", "synth-ernie45-hf",
-		"synth-gemma", "tiny-random-GemmaForCausalLM",
-		"synth-phi3", "tiny-random-Phi3ForCausalLM", "tiny-random-phi3",
-		"synth-hf-arcee", "synth-apertus-hf", "synth-hf-olmo2", "synth-hf-exaone4",
-		"synth-hf-olmo3", "synth-olmo3-af-hf", "synth-hf-ministral3", "synth-mistral3-af-hf",
-		"synth-hunyuan-hf", "synth-hunyuanmoe-hf",
-		"tiny-qwen3moe-hf", "synth-qwen2moe-hf", "synth-mixtral", "synth-hf-mixtral-swa", "tiny-random-OlmoeForCausalLM",
-		"synth-dots1-hf", "synth-ernie45moe-hf", "synth-glm4moe-hf",
-		"synth-phimoe-hf", "synth-bitnet-hf", "synth-bitnet-online-hf",
-		// GGUFs of the architectures the library's graphs state.
-		"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf",
-		"Qwen3-0.6B-Q8_0.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "tiny-qwen3moe-f32.gguf",
-		"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "gemma-2b.gguf", "synth-qwen2moe.gguf",
-		"synth-apertus.gguf", "synth-arcee.gguf", "synth-dots1.gguf", "synth-ernie45.gguf", "synth-ernie45moe.gguf",
-		"synth-exaone4.gguf", "synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "synth-olmo3.gguf", "synth-seedoss.gguf",
-		"synth-smollm3.gguf", "synth-glm4moe.gguf",
-		"gemma-2-2b-it-Q4_K_M.gguf", "gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "synth-glm4.gguf",
-		"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
-		"granite/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf",
-		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "synth-qwen2vl.gguf", "synth-qwen25vl.gguf",
-		// With their towers, whose taps the first blocks add.
-		"synth-qwen2vl.gguf+mmproj-synth-qwen2vl.gguf", "synth-qwen3vl.gguf+mmproj-synth-qwen3vl.gguf",
-		"synth-qwen3vlmoe.gguf+mmproj-synth-qwen3vlmoe.gguf",
-		"Qwen3-VL-2B-Instruct-f16.gguf+mmproj-Qwen3-VL-2B-Instruct-f16.gguf",
-		// The gated delta rule beside gated attention, with prediction blocks.
-		"synth-hf-qwen35", "synth-qwen35-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp.gguf",
-		"synth-qwen35moe-hybrid-mtp-bf16.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-MTP-Q8_0.gguf",
-		"synth-qwen35vl.gguf+mmproj-synth-qwen35vl.gguf", "clef/fixture/clef-fixture.gguf", "clef/fixture-vl/clef-fixture-vl.gguf",
-		// The same blocks over hyper-connected streams, the pooled selection
-		// and an n-gram embedding in a linear block's recurrent tail.
-		"synth-qwen4exp.gguf", "synth-qwen4exp-ragged.gguf", "synth-qwen4exp-mtp.gguf", "synth-qwen4exp-mtp-trunk.gguf",
-		// Vision-language models whose text model is a claimed architecture's.
-		"SmolVLM-256M-Instruct-Q8_0.gguf", "minicpmv/Janus-Pro-1B-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
-		"newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf",
-		"library/ERNIE-4.5-0.3B-PT-Q4_K_M.gguf", "SmolLM2-1.7B-Instruct-Q4_K_M.gguf", "stories260K.gguf",
-		"embed/qwen3-embedding-0.6b.gguf",
-		// The selective state-space mixers.
-		"synth-mamba2.gguf", "synth-mamba1.gguf", "synth-mamba1-ragged.gguf", "synth-falconmamba.gguf",
-		"mamba/mamba-130m-hf.Q8_0.gguf",
-		// The gated short convolution beside attention.
-		"synth-lfm2.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf",
-		"vlmb/LFM2-VL-450M-F16.gguf+vlmb/mmproj-LFM2-VL-450M-F16.gguf",
-		// The classic transformers' blocks.
-		"synth-phi2.gguf", "synth-starcoder.gguf", "synth-starcoder2.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
-		"synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf", "synth-commandr.gguf", "synth-cohere2.gguf",
-		"synth-dbrx.gguf",
-		// The state-space mixer beside attention, the feed-forward where a block stores one.
-		"synth-granitehybrid.gguf", "synth-granitehybridmoe.gguf", "synth-nemotronh.gguf", "synth-nemotronhmoe.gguf",
-		"granite/granite-4.0-h-350m-Q8_0.gguf", "granite/granite-4.0-h-1b-Q4_K_M.gguf", "granite/granite-4.0-h-tiny-Q4_K_M.gguf",
-		"nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
-		"synth-jamba.gguf", "jamba/jamba-reasoning-3b-Q4_K_M.gguf",
-		"synth-falconh1.gguf", "synth-falconh1-nonorm.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
-		// Llama's block with the attention temperature, the L2 head norms and
-		// the router weighting the experts' input.
-		"synth-llama4.gguf", "synth-llama4-q8.gguf", "synth-mistral3.gguf", "synth-mistral3-af.gguf",
-		"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf+vlmb/mmproj-Ministral-3-3B-BF16.gguf",
-		// The q/k norm over the whole projection or after the rotary, the
-		// router's selection bias, the shared expert, sinks.
-		"synth-minimaxm2.gguf", "synth-hunyuan.gguf", "synth-hunyuanmoe.gguf",
-		"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "synth-gptoss.gguf", "gpt-oss-20b-MXFP4.gguf",
-		"lfm2/LFM2-8B-A1B-Q4_K_M.gguf",
-		// The classic block with a router whose picks' weights are stated.
-		"synth-phimoe.gguf",
-		// DeepSeek-V3's router beside shared experts on per-head-normed attention.
-		"synth-bailingmoe2.gguf",
-		// Llama's block over int8 inputs, with the inner norms.
-		"synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf", "bitnet-b1.58-2B-4T-i2_s.gguf",
-		// Attention through a latent beside DeepSeek-V3's mixture.
-		"synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
-		"Moonlight-16B-A3B-Instruct-Q4_K_M.gguf", "Kimi-VL-A3B-Thinking-2506-Q4_K_M.gguf+mmproj-Kimi-VL-A3B-Instruct-f16.gguf",
-		// The same blocks from safetensors: DeepSeek V2, V3 with and without its prediction block, YaRN, GLM-4.7-Flash.
-		"synth-deepseek", "synth-deepseek-dense", "synth-deepseek-lite", "synth-deepseek-mtp", "synth-glm4moelite",
-		"synth-deepseek-yarn-hf", "synth-deepseek-yarn-af-hf",
-		// An indexer's key cached beside the keys, attention over the positions it selects.
-		"synth-deepseek32.gguf", "synth-minimaxm3.gguf",
-		// Kimi Delta Attention beside attention through a latent, the
-		// checkpoint banks and the latent mixture.
-		"synth-kimik3.gguf", "synth-kimik3-ragged.gguf", "kimik3/Kimi-K3-0.40B.Q8_0.gguf", "hf/synth-kimik3",
-		"synth-kimilinear",
-		// Hyper-connected streams over a window beside compressed entries, an
-		// indexer selecting among them, and a token table routing the first
-		// blocks.
-		"synth-deepseek4.gguf", "synth-deepseek4-hca.gguf", "synth-deepseek4-sliding.gguf",
-		// XD-RoPE: four axes over cat(freq, freq), k's norm after it.
-		"synth-hunyuanvl.gguf", "synth-hunyuanvl.gguf+mmproj-synth-hunyuanvl.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
-		// The encoders: each sublayer's sum normed after the residual.
-		"library/all-MiniLM-L6-v2-ggml-model-f16.gguf", "embed/MiniLM-L6-v2.Q8_0.gguf", "embed/snowflake-arctic-embed-22m.gguf",
-		"library/mxbai-embed-large-v1_fp16.gguf", "library/nomic-embed-text-v1.5.f16.gguf", "embed/nomic-embed-text.gguf",
-		"laya/fixture/laya-fixture.gguf", "d1-omni/d1-omni-600M-F16.gguf",
-		// Each block's own geometry, v's norm, a block reading an earlier
-		// one's history, the per-layer inputs, and a mixture beside the MLP.
-		"synth-gemma4.gguf", "synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-kv.gguf",
-		"synth-gemma4-moe.gguf", "synth-gemma4-wide.gguf", "synth-gemma4v.gguf",
-		"synth-gemma4v.gguf+mmproj-synth-gemma4v.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
-		"gemma4/google_gemma-4-E4B-it-Q4_K_M.gguf", "gemma4/google_gemma-4-26B-A4B-it-Q4_K_M.gguf", "gemma4/gemma-4-31B-it-Q4_K_M.gguf",
-		"vlmb/gemma-4-E2B-it-Q4_K_M.gguf+vlmb/mmproj-gemma-4-E2B-it-BF16.gguf",
-		// Residual streams the container states, a per-layer side input, the
-		// last blocks reading an earlier block's history.
-		"synth-gemma3n.gguf", "synth-gemma3nv.gguf+mmproj-synth-gemma3nv.gguf", "gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf",
-		"gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf+gemma3n/mmproj-gemma-3n-E2B-it-f16.gguf",
-	}
-}
-
-// TestStatedBlockGraphsAreTheBuiltOnes converts each model whose model.json
-// states its blocks' graph, and holds every block's stated graph to the one
-// the front end builds from the config: the same ops, operands, weights,
-// states and attributes, byte for byte as a container stores them.
-func TestStatedBlockGraphsAreTheBuiltOnes(t *testing.T) {
-	for _, name := range statedGraphModels() {
-		t.Run(name, func(t *testing.T) {
-			path := hfContainer
-			switch text, proj, pair := strings.Cut(name, "+"); {
-			case pair:
-				path = func(t *testing.T, _ string) string { return jlmOfPair(t, testmodels.Path(text), testmodels.Path(proj)) }
-			case strings.HasSuffix(name, ".gguf"):
-				path = func(t *testing.T, name string) string { return jlmOf(t, testmodels.Path(name)) }
-			}
-			m, err := model.Open(path(t, name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			c := m.Container.Config()
-			if n := m.Cfg.NLayer + m.Cfg.NMTP; len(c.Blocks.Of) != n || n == 0 {
-				t.Fatalf("the container states graphs for %d blocks of %d", len(c.Blocks.Of), n)
-			}
-			requireStatedIsBuilt(t, m)
-		})
-	}
-}
-
-// TestEveryAuditedGraphIsTheBuiltOne holds every model the census converts
-// to the same bar: where its container states its blocks' graphs, each is
-// the one the front end builds from the config. A model of a claimed
-// architecture that statedGraphModels does not list is held here.
-func TestEveryAuditedGraphIsTheBuiltOne(t *testing.T) {
-	slow := os.Getenv("JITLLM_SLOW") != ""
-	var stated, built []string
-	for _, src := range auditModels(t) {
-		if !slow && src.size > 2<<30 {
-			continue
-		}
-		t.Run(src.name, func(t *testing.T) {
-			path := src.path
-			if src.hf {
-				path = jlmOfSafetensors(t, src.path)
-			} else {
-				p, err := convertPair(src.path, src.mmproj)
-				if errors.Is(err, convert.ErrNotImplemented) || errors.Is(err, convert.ErrPart) || errors.Is(err, convert.ErrBadInput) {
-					t.Skipf("the census refuses it too: %v", err)
-				}
-				if err != nil {
-					t.Fatalf("convert: %v", err)
-				}
-				path = p
-			}
-			m, err := model.Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			if len(m.Container.Config().Blocks.Of) == 0 {
-				built = append(built, src.name)
-				return
-			}
-			stated = append(stated, src.name)
-			requireStatedIsBuilt(t, m)
-		})
-	}
-	t.Logf("%d models state their graphs; %d build them from the config: %v", len(stated), len(built), built)
-	if len(stated) == 0 {
-		t.Fatal("no audited model states its graphs")
-	}
-}
-
-// requireStatedIsBuilt fails t where a block's stated graph is not, byte for
-// byte, the one the front end builds from m's config.
-func requireStatedIsBuilt(t *testing.T, m *model.Model) {
-	t.Helper()
-	c := m.Container.Config()
-	stated := slices.Clone(m.FrontGraphs().Blocks)
-	kept := c.Blocks
-	c.Blocks = jlm.BlockGraphs{}
-	m.Front.Restated++
-	built := slices.Clone(m.FrontGraphs().Blocks)
-	builtWhy := make([]error, len(built))
-	for li := range built {
-		why, err := m.UncoveredAt(li)
-		builtWhy[li] = fmt.Errorf("%v: %w", why, err)
-	}
-	c.Blocks = kept
-	m.Front.Restated++
-	for li := range stated {
-		if stated[li] == nil || built[li] == nil {
-			why, err := m.UncoveredAt(li)
-			t.Fatalf("block %d: stated %v (%v: %v), built %v (%v)", li, stated[li] != nil, why, err, built[li] != nil, builtWhy[li])
-		}
-		if d := graphDiff(stated[li], built[li]); d != "" {
-			t.Errorf("block %d: the stated graph is not the built one: %s\nstated\n%s\nbuilt\n%s", li, d, stated[li], built[li])
-		}
-	}
-}
-
-// builtGraphs has the front end build every block's graph from the config
-// until the returned undo, as it does for a container that states none: a
-// violation of the config then reaches the blocks.
-func builtGraphs(m *model.Model) func() {
-	c := m.Container.Config()
+// relowered has the front end lower every block's stated graph again from
+// the config as it is, and again at the returned undo: a violation of what
+// the lowering reads then reaches the blocks.
+func relowered(m *model.Model) func() {
 	fr := &m.Front
 	fr.Mu.Lock()
-	kept := c.Blocks
-	c.Blocks = jlm.BlockGraphs{}
 	fr.Restated++
 	fr.Mu.Unlock()
 	return func() {
 		fr.Mu.Lock()
-		c.Blocks = kept
 		fr.Restated++
 		fr.Mu.Unlock()
 	}
 }
 
-// graphDiff is the first difference between two graphs, "" for none.
-func graphDiff(a, b *graph.Graph) string {
-	ea, err := graph.Encode(a)
+// statedAgain has the front end lower the graphs the library states for m
+// as a violation has left it (restatedBlocks), until the returned undo. A
+// violation made of several edits may pass through a state the converter
+// refuses: the blocks then state no graph, and the reason is printed, until
+// an edit after it states one; a violation that ends there is refused by
+// the front end.
+func statedAgain(m *model.Model) func() {
+	jc := m.Container.Config()
+	was := jc.Blocks
+	blocks, err := restatedBlocks(m)
 	if err != nil {
-		return err.Error()
+		fmt.Fprintf(os.Stderr, "statedAgain: %v\n", err)
 	}
-	eb, err := graph.Encode(b)
+	jc.Blocks = blocks
+	undo := relowered(m)
+	return func() {
+		undo()
+		jc.Blocks = was
+	}
+}
+
+// withCfg has m read c as its config, over the graphs the library states
+// for it (statedAgain), until the returned undo.
+func withCfg(m *model.Model, c *model.Config) func() {
+	was := m.Cfg
+	m.Cfg = c
+	undo := statedAgain(m)
+	return func() {
+		undo()
+		m.Cfg = was
+	}
+}
+
+// restatedBlocks are the graphs the library states for m as a violation has
+// left it: m's source converted again (convertStated) from its container's
+// config as it now is, the container's fields of every config field m.Cfg
+// has changed from the one the container states (statedFields; a field with
+// none is the lowering's to read), and the stored tensors its front end
+// reads in place of the container's (restate). Each changed field must read
+// back from the restated container as the violation set it.
+func restatedBlocks(m *model.Model) (jlm.BlockGraphs, error) {
+	src, err := convertedFrom(m)
 	if err != nil {
-		return err.Error()
+		return jlm.BlockGraphs{}, err
 	}
-	if bytes.Equal(ea, eb) {
-		return ""
+	p, err := model.Open(m.Container.Path)
+	if err != nil {
+		return jlm.BlockGraphs{}, fmt.Errorf("restating %s: %w", src, err)
 	}
-	switch {
-	case len(a.Ops) != len(b.Ops):
-		return fmt.Sprintf("%d ops against %d", len(a.Ops), len(b.Ops))
-	case len(a.Values) != len(b.Values):
-		return fmt.Sprintf("%d values against %d", len(a.Values), len(b.Values))
+	changed := changedFields(p.Cfg, m.Cfg)
+	p.Close()
+	jc := m.Container.Config()
+	m.Front.Mu.Lock()
+	hook := m.Front.Restate
+	m.Front.Mu.Unlock()
+	fields := statedFields()
+	dir, err := os.MkdirTemp("", "restated")
+	if err != nil {
+		return jlm.BlockGraphs{}, err
 	}
-	for i := range a.Values {
-		if a.Values[i] != b.Values[i] {
-			return fmt.Sprintf("value %d: %+v against %+v", i, a.Values[i], b.Values[i])
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "restated"+model.Ext)
+	if err := convertStated(src, path, func(s *jlm.Source) {
+		*s.Config = *jc
+		for _, f := range changed {
+			if state, ok := fields[f]; ok {
+				state(s.Config, m.Cfg)
+			}
+		}
+		restatedTensors(s, hook)
+	}); err != nil {
+		return jlm.BlockGraphs{}, fmt.Errorf("restating %s: %w", src, err)
+	}
+	cf, err := jlm.Open(path)
+	if err != nil {
+		return jlm.BlockGraphs{}, fmt.Errorf("restating %s: %w", src, err)
+	}
+	blocks := cf.Config().Blocks
+	cf.Close()
+	// A violated model may be one Open refuses (BitNet's inner norms without
+	// its per-token activations); its graphs are stated all the same.
+	r, err := model.Open(path)
+	if err != nil {
+		return blocks, nil
+	}
+	defer r.Close()
+	for _, f := range changed {
+		if _, ok := fields[f]; !ok {
+			continue
+		}
+		if got, want := reflect.ValueOf(*r.Cfg).FieldByName(f).Interface(), reflect.ValueOf(*m.Cfg).FieldByName(f).Interface(); !sameStated(got, want) {
+			return jlm.BlockGraphs{}, fmt.Errorf("restating %s: the container states %s %v where the violation set %v", src, f, got, want)
 		}
 	}
-	for i := range a.Ops {
-		if x, y := fmt.Sprintf("%+v", a.Ops[i]), fmt.Sprintf("%+v", b.Ops[i]); x != y {
-			return fmt.Sprintf("op %d: %s against %s", i, x, y)
+	return blocks, nil
+}
+
+// sameStated is whether a and b are one field's value as a container holds
+// it: a float in f32, to the f32 rounding Open's arithmetic over it adds
+// (YaRN's correction squared multiplies a stated score scale).
+func sameStated(a, b any) bool {
+	if x, ok := a.(float64); ok {
+		if y, ok := b.(float64); ok {
+			return math.Abs(x-y) <= 1e-6*math.Abs(y)
 		}
 	}
-	return fmt.Sprintf("inputs %v against %v, outputs %v against %v, routed %v against %v", a.In, b.In, a.Out, b.Out, a.Routed, b.Routed)
+	return reflect.DeepEqual(a, b)
+}
+
+// changedFields are the exported fields of was that now differs in.
+func changedFields(was, now *model.Config) []string {
+	a, b := reflect.ValueOf(*was), reflect.ValueOf(*now)
+	var out []string
+	for i := range a.NumField() {
+		f := a.Type().Field(i)
+		if f.IsExported() && !reflect.DeepEqual(a.Field(i).Interface(), b.Field(i).Interface()) {
+			out = append(out, f.Name)
+		}
+	}
+	return out
+}
+
+// statedFields write each config field a violation changes into the
+// container's field Open derives it from (configFrom, the other way).
+func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
+	flag := func(b jlm.Flags, on func(mc *model.Config) bool) func(*jlm.Config, *model.Config) {
+		return func(c *jlm.Config, mc *model.Config) {
+			c.Flags &^= b
+			if on(mc) {
+				c.Flags |= b
+			}
+		}
+	}
+	flag2 := func(b jlm.Flags2, on func(mc *model.Config) bool) func(*jlm.Config, *model.Config) {
+		return func(c *jlm.Config, mc *model.Config) {
+			c.Flags2 &^= b
+			if on(mc) {
+				c.Flags2 |= b
+			}
+		}
+	}
+	return map[string]func(*jlm.Config, *model.Config){
+		"RopeNeox":       flag(jlm.FlagRopeNeox, func(mc *model.Config) bool { return mc.RopeNeox }),
+		"NoExpertNorm":   flag(jlm.FlagNoExpertNorm, func(mc *model.Config) bool { return mc.NoExpertNorm }),
+		"Parallel":       flag(jlm.FlagParallel, func(mc *model.Config) bool { return mc.Parallel }),
+		"NoPEGlobal":     flag(jlm.FlagNoPEGlobal, func(mc *model.Config) bool { return mc.NoPEGlobal }),
+		"NoPosEnc":       flag(jlm.FlagNoPosEnc, func(mc *model.Config) bool { return mc.NoPosEnc }),
+		"LayerNorm":      flag(jlm.FlagLayerNorm, func(mc *model.Config) bool { return mc.LayerNorm }),
+		"QKL2Norm":       flag(jlm.FlagQKL2Norm, func(mc *model.Config) bool { return mc.QKL2Norm }),
+		"QKNorm":         flag(jlm.FlagQKNorm, func(mc *model.Config) bool { return mc.QKNorm }),
+		"QKNormWide":     flag(jlm.FlagQKNormWide, func(mc *model.Config) bool { return mc.QKNormWide }),
+		"QKNormPost":     flag(jlm.FlagQKNormPostRope, func(mc *model.Config) bool { return mc.QKNormPost }),
+		"SWAChunked":     flag(jlm.FlagSWAChunked, func(mc *model.Config) bool { return mc.SWAChunked }),
+		"ExpertWeightIn": flag(jlm.FlagExpertWeightIn, func(mc *model.Config) bool { return mc.ExpertWeightIn }),
+		"ExpertSigmoid":  flag(jlm.FlagExpertSigmoid, func(mc *model.Config) bool { return mc.ExpertSigmoid }),
+		"DeltaKeyTiled":  flag(jlm.FlagDeltaKeyTiled, func(mc *model.Config) bool { return mc.DeltaKeyTiled }),
+		"AttnOutGate":    flag(jlm.FlagAttnOutGate, func(mc *model.Config) bool { return mc.AttnOutGate }),
+		"NonCausal":      flag(jlm.FlagNonCausal, func(mc *model.Config) bool { return mc.NonCausal }),
+		"VNorm":          flag2(jlm.Flag2VNorm, func(mc *model.Config) bool { return mc.VNorm }),
+		"RopeTail":       flag2(jlm.Flag2RopeTail, func(mc *model.Config) bool { return mc.RopeTail }),
+		"QUnitNorm":      flag2(jlm.Flag2QUnitNorm, func(mc *model.Config) bool { return mc.QUnitNorm }),
+		"OutUnrotated":   flag2(jlm.Flag2OutUnrotated, func(mc *model.Config) bool { return mc.OutUnrotated }),
+		"Pooling": func(c *jlm.Config, mc *model.Config) {
+			c.Flags &^= jlm.FlagPoolMean | jlm.FlagPoolCLS | jlm.FlagPoolLast
+			switch mc.Pooling {
+			case jlm.PoolMean:
+				c.Flags |= jlm.FlagPoolMean
+			case jlm.PoolCLS:
+				c.Flags |= jlm.FlagPoolCLS
+			case jlm.PoolLast:
+				c.Flags |= jlm.FlagPoolLast
+			}
+		},
+		"RopeSections": func(c *jlm.Config, mc *model.Config) {
+			for i, v := range mc.RopeSections {
+				c.RopeSections[i] = uint32(v)
+			}
+		},
+		"SWAWindow":        func(c *jlm.Config, mc *model.Config) { c.SWAWindow = uint32(mc.SWAWindow) },
+		"SWAPeriod":        func(c *jlm.Config, mc *model.Config) { c.SWAPeriod = uint32(mc.SWAPeriod) },
+		"NRot":             func(c *jlm.Config, mc *model.Config) { c.NRot = uint32(mc.NRot) },
+		"NMTP":             func(c *jlm.Config, mc *model.Config) { c.NMTP = uint32(mc.NMTP) },
+		"NFFNShExp":        func(c *jlm.Config, mc *model.Config) { c.NFFNShExp = uint32(mc.NFFNShExp) },
+		"NExpertUsed":      func(c *jlm.Config, mc *model.Config) { c.NExpertUsed = uint32(mc.NExpertUsed) },
+		"NExpertGroupUsed": func(c *jlm.Config, mc *model.Config) { c.NExpertGroupUsed = uint32(mc.NExpertGroupUsed) },
+		"NExpertGroup":     func(c *jlm.Config, mc *model.Config) { c.NExpertGroup = uint32(mc.NExpertGroup) },
+		// Open counts a marker head's blocks into NLayer.
+		"NLayer":        func(c *jlm.Config, mc *model.Config) { c.NLayer = uint32(mc.NLayer) - c.HeadBlocks() },
+		"NKVShared":     func(c *jlm.Config, mc *model.Config) { c.NKVShared = uint32(mc.NKVShared) },
+		"PLEDim":        func(c *jlm.Config, mc *model.Config) { c.PLEDim = uint32(mc.PLEDim) },
+		"SSMNormGroups": func(c *jlm.Config, mc *model.Config) { c.SSM.Groups = uint32(mc.SSMNormGroups) },
+		"AttnSoftcap":   func(c *jlm.Config, mc *model.Config) { c.AttnSoftcap = mc.AttnSoftcap },
+		"FinalSoftcap":  func(c *jlm.Config, mc *model.Config) { c.FinalSoftcap = mc.FinalSoftcap },
+		"ExpertScale":   func(c *jlm.Config, mc *model.Config) { c.ExpertScale = float32(mc.ExpertScale) },
+		"ResidualScale": func(c *jlm.Config, mc *model.Config) { c.ResidualScale = float32(mc.ResidualScale) },
+		"LogitScale":    func(c *jlm.Config, mc *model.Config) { c.LogitScale = float32(mc.LogitScale) },
+		"LatentNormEps": func(c *jlm.Config, mc *model.Config) { c.LatentNormEps = float32(mc.LatentNormEps) },
+		"AttnTempScale": func(c *jlm.Config, mc *model.Config) { c.AttnTempScale = float32(mc.AttnTempScale) },
+		"AttnTempFloor": func(c *jlm.Config, mc *model.Config) { c.AttnTempFloor = uint32(mc.AttnTempFloor) },
+		"AttnTempOffs":  func(c *jlm.Config, mc *model.Config) { c.AttnTempOffset = float32(mc.AttnTempOffs) },
+		"DeltaDecay":    func(c *jlm.Config, mc *model.Config) { c.DeltaDecay = mc.DeltaDecay },
+		"DeltaGate":     func(c *jlm.Config, mc *model.Config) { c.DeltaGate = mc.DeltaGate },
+		// Open scales a stated score scale by YaRN's correction squared.
+		"AttnScale": func(c *jlm.Config, mc *model.Config) {
+			s := mc.AttnScale
+			if c.YarnLogMul != 0 && c.YarnFactor > 1 {
+				k := float64(c.YarnLogMul)*math.Log(float64(c.YarnFactor)) + 1
+				s /= k * k
+			}
+			c.AttnScale = float32(s)
+		},
+		// A clamp's bound is the min's constant (jlm.Config.QKVAct).
+		"QKVAct": func(c *jlm.Config, mc *model.Config) {
+			c.ClampKQV = 0
+			if mc.QKVAct != nil {
+				c.ClampKQV = mc.QKVAct.Terms[1].Args[1].Value
+			}
+		},
+		"TokenAct": func(c *jlm.Config, mc *model.Config) {
+			c.ActQuant = jlm.ActQuantNone
+			if mc.TokenAct {
+				c.ActQuant = jlm.ActQuantRowInt8
+			}
+		},
+	}
+}
+
+// restatedTensors has s's tensors read as the front end reads m's through
+// restate, each block's and the model's own: a tensor the hook takes away
+// goes, and one it adds or resizes stands in as zeros of its shape, the
+// graphs stated over it being all that is read back.
+func restatedTensors(s *jlm.Source, restate func(block int32, inv map[jlm.Role]graph.Shape)) {
+	if restate == nil {
+		return
+	}
+	text := func(t jlm.Tensor) bool { return t.Index < 0 && !t.Role.Vision() }
+	invs := map[int32]map[jlm.Role]graph.Shape{}
+	for _, t := range s.Tensors {
+		if !text(t) {
+			continue
+		}
+		if invs[t.Block] == nil {
+			invs[t.Block] = map[jlm.Role]graph.Shape{}
+		}
+		sh := graph.Shape{K: int(t.Dims[0])}
+		if t.NDim >= 2 {
+			sh.Rows = int(t.Dims[1])
+		}
+		if t.NDim >= 3 {
+			sh.Sheets = int(t.Dims[2])
+		}
+		invs[t.Block][t.Role] = sh
+	}
+	for _, b := range slices.Sorted(maps.Keys(invs)) {
+		was := invs[b]
+		inv := maps.Clone(was)
+		restate(b, inv)
+		s.Tensors = slices.DeleteFunc(s.Tensors, func(t jlm.Tensor) bool {
+			sh, ok := inv[t.Role]
+			return t.Block == b && text(t) && (!ok || sh != was[t.Role])
+		})
+		for _, r := range slices.Sorted(maps.Keys(inv)) {
+			sh := inv[r]
+			if old, ok := was[r]; ok && old == sh {
+				continue
+			}
+			t := jlm.Tensor{Role: r, Block: b, Index: -1, Type: jlm.TypeF32, NDim: 1, Name: "restated " + r.String()}
+			t.Dims[0] = uint64(sh.K)
+			n := sh.K
+			for _, d := range []int{sh.Rows, sh.Sheets} {
+				if d > 0 {
+					t.Dims[t.NDim] = uint64(d)
+					t.NDim++
+					n *= d
+				}
+			}
+			t.Data = make([]byte, 4*n)
+			s.Tensors = append(s.Tensors, t)
+		}
+	}
+}
+
+// convertStated converts the fixture at src as jlmOf converts it -- a GGUF
+// with the config.json it converts with, a HuggingFace directory, its
+// matrices quantized when named with q8Suffix -- to dst, with edit made to
+// the source before the library states the blocks' graphs
+// (convert.WithStatedSource): the graphs follow the edit.
+func convertStated(src, dst string, edit func(*jlm.Source)) error {
+	fp := jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}
+	stated := convert.WithStatedSource(edit)
+	if dir, q8 := strings.CutSuffix(src, q8Suffix); isDir(dir) {
+		_, err := convert.FromSafetensors(dir, dst, fp, append(dirOptions(q8), stated)...)
+		return err
+	}
+	_, err := convert.FromGGUFs(src, "", dst, fp, append(ggufOptions(src), stated)...)
+	return err
+}
+
+// statedModel is the fixture at src converted with edit made to its source
+// (convertStated) and opened: a restated model whose graphs follow the
+// restatement.
+func statedModel(t testing.TB, src string, edit func(*jlm.Source)) *model.Model {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stated"+model.Ext)
+	if err := convertStated(src, path, edit); err != nil {
+		t.Fatalf("restating %s: %v", src, err)
+	}
+	m, err := model.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// TestAnUnviolatedModelIsStatedAgainAsItWas holds statedAgain to the
+// converter: a model no violation has touched is stated again graph for
+// graph as its container states it, and one with a feature switched off
+// is not.
+func TestAnUnviolatedModelIsStatedAgainAsItWas(t *testing.T) {
+	for _, name := range []string{"synth-phi2.gguf", "synth-llama4.gguf", "synth-gemma3n.gguf", "synth-gemma4-e.gguf", "synth-olmo2.gguf"} {
+		t.Run(name, func(t *testing.T) {
+			src, ok := existingModel(testmodels.Path(name))
+			if !ok || !strings.HasSuffix(src, ".gguf") {
+				testmodels.Missing(t, "MODEL MISSING: %s (see docs/testing.md) -- this gate proved nothing", testmodels.Path(name))
+			}
+			m, err := model.Open(jlmOf(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			jc := m.Container.Config()
+			was := jc.Blocks
+			same := func() bool {
+				return slices.Equal(jc.Blocks.Of, was.Of) && slices.Equal(jc.Blocks.Graphs, was.Graphs)
+			}
+			got, err := restatedBlocks(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got.Of, was.Of) || !slices.Equal(got.Graphs, was.Graphs) {
+				t.Fatalf("stated again untouched, %d graphs for %d blocks where the container states %d for %d",
+					len(got.Graphs), len(got.Of), len(was.Graphs), len(was.Of))
+			}
+			undo := cfgMut(m, func(c *model.Config) { c.RopeNeox = !c.RopeNeox })
+			if same() {
+				t.Fatal("the rotary's pairing flipped states the same graphs: statedAgain reads no violation")
+			}
+			undo()
+			if !same() {
+				t.Fatal("the undo leaves other graphs than the container's")
+			}
+		})
+	}
 }

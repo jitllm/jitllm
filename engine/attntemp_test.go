@@ -1,40 +1,34 @@
 package engine
 
 import (
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
 
-// TestATemperatureOffsetOfAnyValue: the attention temperature 1 + s ln(1 +
-// floor((pos + o) / f)) is stated for any offset o, not only a whole one.
-// For a whole position m, floor((m + 0.5) / f) is floor(m / f), so the Llama
-// 4 fixture at offset 1.5 -- its floor taken in the expression -- must
-// read offset 1's logits bit for bit, on the composed CPU and with every
-// block on a card, while offset 2 moves them (the temperature steps a
-// position sooner). The fractional arm is held to having taken the
-// expression's floor.
-func TestATemperatureOffsetOfAnyValue(t *testing.T) {
+// TestATemperatureOffsetIsAWholeNumber: the attention temperature 1 + s ln(1
+// + floor((pos + o) / f)) is stated over the position op's whole-number
+// offset o, the only kind a model states (Llama 4's is 1). A fractional one
+// is refused at conversion, never truncated to the whole number below it,
+// and offset 2 moves the Llama 4 fixture's logits from offset 1's (the
+// temperature steps a position sooner) on the composed CPU and with every
+// block on a card.
+func TestATemperatureOffsetIsAWholeNumber(t *testing.T) {
+	src := testmodels.Path("synth-llama4.gguf")
+	if !sourcePresent(src) {
+		testmodels.Missing(t, "MODEL MISSING: %s (see docs/testing.md) -- this gate proved nothing", src)
+	}
+	err := convertStated(src, filepath.Join(t.TempDir(), "half"+model.Ext), func(s *jlm.Source) { s.Config.AttnTempOffset = 1.5 })
+	if err == nil || !strings.Contains(err.Error(), "not an integer") {
+		t.Fatalf("a temperature offset of 1.5 converts (%v): it must be refused, not truncated", err)
+	}
 	m, g, opts := openSynthLlama4(t)
 	defer m.Close()
-	rounds := func() int {
-		n := 0
-		for li := range m.Cfg.NLayer {
-			if why := m.Uncovered(li); why != model.Covered {
-				t.Fatalf("block %d at offset %v is refused by %q (%v)", li, m.Cfg.AttnTempOffs, why, m.UncoveredErr(li))
-			}
-			for _, o := range m.Composing().BlockGraph(li).Ops {
-				for _, e := range o.Attr.Expr {
-					if o.Kind == graph.OpExpr && e.Fn == graph.MapRound {
-						n++
-					}
-				}
-			}
-		}
-		return n
-	}
 	gc, _ := openGPU(t)
 	if gc != nil {
 		defer gc.Close()
@@ -49,9 +43,8 @@ func TestATemperatureOffsetOfAnyValue(t *testing.T) {
 	}
 	for _, a := range arms {
 		t.Run(a.name, func(t *testing.T) {
-			decode := func(offs float64) ([][]float32, int) {
+			decode := func(offs float64) [][]float32 {
 				defer cfgMut(m, func(c *model.Config) { c.AttnTempOffs = offs })()
-				n := rounds()
 				st := a.run()
 				defer st.Close()
 				out := make([][]float32, 0, len(g.IDs))
@@ -62,19 +55,9 @@ func TestATemperatureOffsetOfAnyValue(t *testing.T) {
 					}
 					out = append(out, slices.Clone(lg))
 				}
-				return out, n
+				return out
 			}
-			whole, n1 := decode(1)
-			half, nh := decode(1.5)
-			further, _ := decode(2)
-			if n1 != 0 || nh == 0 {
-				t.Fatalf("offset 1 states %d rounding(s) and offset 1.5 %d: the arms did not take their own paths", n1, nh)
-			}
-			for p := range whole {
-				if !slices.Equal(whole[p], half[p]) {
-					t.Fatalf("position %d: offset 1.5 reads other logits than offset 1", p)
-				}
-			}
+			whole, further := decode(1), decode(2)
 			moved := false
 			for p := range whole {
 				moved = moved || !slices.Equal(whole[p], further[p])
@@ -82,7 +65,7 @@ func TestATemperatureOffsetOfAnyValue(t *testing.T) {
 			if !moved {
 				t.Fatal("offset 2 reads offset 1's logits at every position: the gate cannot see the temperature")
 			}
-			t.Logf("%d positions: offset 1.5 equals offset 1 bit for bit through %d rounding(s); offset 2 moves them", len(whole), nh)
+			t.Logf("%d positions: offset 2 moves offset 1's logits", len(whole))
 		})
 	}
 }

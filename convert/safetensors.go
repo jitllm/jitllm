@@ -90,7 +90,7 @@ func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, f
 	for _, fn := range opts {
 		fn(&o)
 	}
-	s, err := hfSourceWith(hfDir{meta, name}, open, o.modelJSON, nil)
+	s, err := hfSourceWith(hfDir{meta, name}, open, o.modelJSON, nil, o.statedSource)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +136,7 @@ type options struct {
 	head         string             // WithHead, GGUF only
 	modelConfig  string             // WithModelConfig, GGUF only
 	pictureStep  func(*jlm.PreStep) // WithPictureStep, GGUF only
+	statedSource func(*jlm.Source)  // WithStatedSource
 	longestEdge  int32              // the processor config's size.longest_edge, 0 for none
 	modelJSON    string             // WithModelJSON, safetensors only
 	taken        map[string]bool    // the features a conversion takes (FeaturesOf)
@@ -147,6 +148,14 @@ type options struct {
 // follow it.
 func WithPictureStep(edit func(*jlm.PreStep)) Option {
 	return func(o *options) { o.pictureStep = edit }
+}
+
+// WithStatedSource edits the source once the library has stated its
+// config and tensors and before it states the blocks' graphs, which then
+// state the edited model: a feature restated, or a tensor added or taken
+// away, as a gate restates one to see the model it answers for follow it.
+func WithStatedSource(edit func(*jlm.Source)) Option {
+	return func(o *options) { o.statedSource = edit }
 }
 
 // WithModelConfig reads what a GGUF dropped from the publisher's config.json
@@ -299,12 +308,13 @@ func (d hfDir) String() string                { return d.name }
 
 // hfSourceOf translates a HuggingFace directory into the container's own terms.
 func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
-	return hfSourceWith(dir, shards, "", nil)
+	return hfSourceWith(dir, shards, "", nil, nil)
 }
 
 // hfSourceWith is hfSourceOf by the caller's model.json, where there is one,
 // each feature its blocks take added to taken where that is not nil.
-func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken map[string]bool) (*jlm.Source, error) {
+func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken map[string]bool,
+	stated func(*jlm.Source)) (*jlm.Source, error) {
 	hc, err := readHFConfig(dir)
 	if err != nil {
 		return nil, err
@@ -593,6 +603,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 	StateDelta(cfg.Config, sourceStores(s))
 	if err := StateRevision(cfg); err != nil {
 		return nil, err
+	}
+	if stated != nil {
+		stated(s)
 	}
 	if g != nil {
 		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc), taken); err != nil {

@@ -181,9 +181,9 @@ func TestLayaFeaturesAreLoadBearing(t *testing.T) {
 		{"SiLU for GELU", func(c *jlm.Config) { c.Acts, c.ActLayers = silu.Acts, silu.ActLayers }},
 	} {
 		t.Run(v.name, func(t *testing.T) {
-			// The copy builds its blocks from the restated config: the
-			// graphs the container states are the unviolated ones.
-			rm := restatedCopy(t, path, func(c *jlm.Config) { v.restate(c); c.Blocks = jlm.BlockGraphs{} })
+			// The source converted restated: the library states the
+			// restated model's graphs.
+			rm := statedModel(t, src, func(s *jlm.Source) { v.restate(s.Config) })
 			defer rm.Close()
 			bad := markerWorst(t, rm, mc.gold, same)
 			t.Logf("%s: scores %.4f from the reference", v.name, bad)
@@ -255,29 +255,4 @@ func markerWorst(t *testing.T, m *model.Model, base string, typ func(DecisionQue
 		t.Fatal("no question was asked")
 	}
 	return worst
-}
-
-// restatedCopy is the container at src copied and restated by restate,
-// opened.
-func restatedCopy(t *testing.T, src string, restate func(c *jlm.Config)) *model.Model {
-	t.Helper()
-	b, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "restated"+model.Ext)
-	if err := os.WriteFile(path, b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if changed, err := jlm.Restate(path, func(_ *jlm.File, c *jlm.Config) (bool, error) {
-		restate(c)
-		return true, nil
-	}); err != nil || !changed {
-		t.Fatalf("restating %s: changed %v, %v", src, changed, err)
-	}
-	m, err := model.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
 }

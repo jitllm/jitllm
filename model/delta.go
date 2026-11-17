@@ -2,8 +2,6 @@ package model
 
 import (
 	"math"
-
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The gated delta net: the other half of a hybrid's block loop.
@@ -24,11 +22,6 @@ import (
 //
 // The node-by-node transcript: docs/engineering-history/model-correctness.md,
 // "model/delta.go".
-
-// kdaL2Eps is the epsilon Kimi Delta Attention's q/k L2 normalisation adds to
-// the sum of squares. It is the reference helper's own default, not the
-// model's rms_norm_eps (1e-5 on the checkpoints shipped so far).
-const kdaL2Eps = 1e-6
 
 // deltaGeom is the recurrent block's derived geometry. Every field is a
 // function of Config.SSM; they are computed once per call rather than stored so
@@ -94,33 +87,6 @@ func (c *Config) Delta() DeltaGeom {
 		g.Scan, g.Chans, g.QkBytes, g.Rank = true, int(c.SSM.Inner), 0, c.DtRank
 	}
 	return g
-}
-
-// mixer is a recurrent block's mixer by its structure, as the front end
-// states it.
-type mixer uint8
-
-const (
-	mixNone      mixer = iota
-	mixDelta           // the gated delta rule (jlm.LayerLinearAttn)
-	mixSelective       // the additive update, one decay a head (jlm.LayerSSD, LayerSSDAttn)
-	mixScan            // the additive update, one decay a state element of each channel (jlm.LayerScan)
-	mixShortConv       // the gated short convolution (jlm.LayerShortConv)
-)
-
-// mixerAt is block li's recurrent mixer, mixNone for a block with none.
-func (c *Config) mixerAt(li int) mixer {
-	switch c.LayerKind(li) {
-	case jlm.LayerLinearAttn:
-		return mixDelta
-	case jlm.LayerSSD, jlm.LayerSSDAttn:
-		return mixSelective
-	case jlm.LayerScan:
-		return mixScan
-	case jlm.LayerShortConv:
-		return mixShortConv
-	}
-	return mixNone
 }
 
 // convStateLen and deltaStateLen are one sequence's recurrent state for one

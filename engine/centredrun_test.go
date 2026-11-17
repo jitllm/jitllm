@@ -1,10 +1,7 @@
 package engine
 
 import (
-	"io"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,38 +25,14 @@ func centredModel(t *testing.T) *model.Model {
 	if !sourcePresent(src) {
 		testmodels.Missing(t, "MODEL MISSING: %s (see docs/testing.md) -- this gate proved nothing", src)
 	}
-	path := filepath.Join(t.TempDir(), "centred"+model.Ext)
-	in, err := os.Open(jlmOf(t, src))
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = io.Copy(out, in)
-	in.Close()
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed, err := jlm.Restate(path, func(_ *jlm.File, c *jlm.Config) (bool, error) {
-		if c.Flags.Has(jlm.FlagNonCausal) {
-			t.Fatal("LFM2 350M states itself non-causal already: the gate would restate nothing")
-		}
-		c.Flags |= jlm.FlagNonCausal
-		// The blocks build from the restated config: the stated graphs are
-		// the causal ones.
-		c.Blocks = jlm.BlockGraphs{}
-		return true, nil
-	}); err != nil || !changed {
-		t.Fatalf("restating the mask: changed %v, %v", changed, err)
-	}
-	m, err := model.Open(path)
-	if err != nil {
-		t.Fatal(err)
+	was := false
+	m := statedModel(t, src, func(s *jlm.Source) {
+		was = s.Config.Flags.Has(jlm.FlagNonCausal)
+		s.Config.Flags |= jlm.FlagNonCausal
+	})
+	if was {
+		m.Close()
+		t.Fatal("LFM2 350M states itself non-causal already: the gate would restate nothing")
 	}
 	centred := 0
 	for _, g := range m.FrontGraphs().Blocks {
