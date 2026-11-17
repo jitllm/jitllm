@@ -814,6 +814,16 @@ func (e *x86Lowerer) node(i int) {
 			e.fail("a lane sum out of its operand's register")
 		}
 		t := x86.Reg(nd.Tmp - 1)
+		if nd.Type == ir.U32 {
+			// Words: the upper half added onto the lower, then two
+			// horizontal adds; lane 0 holds the sum, the upper lanes are
+			// not read.
+			a.VEXTRACTI128(t, r, 1)
+			a.VPADDD(r, r, t)
+			a.VPHADDD(r, r, r)
+			a.VPHADDD(r, r, r)
+			return
+		}
 		a.VEXTRACTF128(t, r, 1)
 		a.VADDPSx(r, r, t)
 		a.VHADDPSx(r, r, r)

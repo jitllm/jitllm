@@ -450,6 +450,11 @@ func (e *x86Lowerer) nodeSSE(i int) {
 			e.fail("a lane sum out of its operand's register")
 			return
 		}
+		if nd.Type == ir.U32 {
+			a.PHADDD(r, r, r)
+			a.PHADDD(r, r, r)
+			return
+		}
 		a.HADDPS(r, r, r)
 		a.HADDPS(r, r, r)
 	default:

@@ -357,6 +357,13 @@ func (e *a64Lowerer) node(i int) {
 		if r != e.reg(nd.A) {
 			e.fail("a lane sum out of its operand's register")
 		}
+		if nd.Type == ir.U32 {
+			a.ADD4s(lo(r), lo(r), hi(r))
+			a.ADDP4s(lo(r), lo(r), lo(r))
+			a.ADDP4s(lo(r), lo(r), lo(r))
+			a.MOVIzero(hi(r))
+			return
+		}
 		a.FADD4s(lo(r), lo(r), hi(r))
 		a.FADDP4s(lo(r), lo(r), lo(r))
 		a.FADDP4s(lo(r), lo(r), lo(r))

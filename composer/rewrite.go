@@ -282,6 +282,15 @@ func (n *Kernel) copyKeep(i int, sub map[int]int) int {
 	return walk(i)
 }
 
+// wordsSum reports whether fold f sums the words a load reads: an index
+// row's sum, a lane a word. A count a comparison makes stays a word a trip:
+// vectorized, the composer's forming of the infill draw's counts went from
+// about a second to minutes (TestComposedCPUSampleInfill logs the time).
+func (n *Kernel) wordsSum(f int) bool {
+	st := n.Nodes[n.Nodes[f].A]
+	return st.Op == OpAdd && st.A == f && n.Nodes[st.B].Op == OpLoad && n.Nodes[st.B].Type == ir.U32
+}
+
 // sumFold reports whether fold f's step adds into it: an fma onto it or an
 // add of it.
 func (n *Kernel) sumFold(f int) bool {

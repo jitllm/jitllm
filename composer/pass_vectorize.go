@@ -76,7 +76,8 @@ func (k *Kernel) vectorizable(c int) bool {
 	}
 	folds := k.foldsOf(c)
 	for _, f := range folds {
-		if k.Nodes[f].Type == ir.F32 && (k.sumFold(f) || k.extremeTerm(f) >= 0) || k.carriedBy(f) >= 0 {
+		ty := k.Nodes[f].Type
+		if ty == ir.F32 && (k.sumFold(f) || k.extremeTerm(f) >= 0) || ty == ir.U32 && k.wordsSum(f) || k.carriedBy(f) >= 0 {
 			continue
 		}
 		return false
