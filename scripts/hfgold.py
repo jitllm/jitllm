@@ -248,6 +248,10 @@ SYNTH = {
         moe_intermediate_size=32, n_group=1, topk_group=1,
         routed_scaling_factor=2.446, norm_topk_prob=True,
         num_hidden_layers=3, hidden_act="silu",
+        # A context past one device prefill chunk (512 rows), which the
+        # hybrid batch gate's prompt crosses: KimiLinearConfig's context key
+        # is model_max_length.
+        model_max_length=1024,
         layer_types=["linear_attention", "full_attention", "linear_attention"],
         mlp_layer_types=["dense", "sparse", "sparse"],
         # The donor vocabulary is far smaller than this config's default
