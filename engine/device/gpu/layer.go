@@ -1400,6 +1400,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				g.LastErr = why
 				placed = false
 			}
+			// The reserved width the forms above narrowed (narrowReserved)
+			// has its per-row head formed here, as a first placement's
+			// (prewarmComposed): a step at that width forms nothing.
+			g.prepRowsReserved()
 			g.mu.Unlock()
 		}
 	}()
