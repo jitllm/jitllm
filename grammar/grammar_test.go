@@ -281,10 +281,15 @@ func TestPatternsMatchTheirLanguage(t *testing.T) {
 	}
 	grow(nil)
 	for _, pt := range []string{`^a*b$`, `ab|c`, `^(a|b)+$`, `[^a]`, `^[a-c]{2,3}$`, `^\d+-?$`, `"`, `^\\`, `a.c`, `^$`,
-		`^(?:ab)?c$`, `[\w-]+`, `^[^\n]*$`, `é`, `^[\s"]{2}`, `^a|b$`, `^(a|)c$`, `[^-a-c1]$`, `\x41`, `^\u00e9?a`} {
-		// Go's regexp spells ECMA-262's \u escape \x{}.
+		`^(?:ab)?c$`, `[\w-]+`, `^[^\n]*$`, `é`, `^[\s"]{2}`, `^a|b$`, `^(a|)c$`, `[^-a-c1]$`, `\x41`, `^\u00e9?a`,
+		`^\p{L}+$`, `^\p{Lu}`, `[\p{N}\p{Pd}]`, `^\P{L}*$`, `^\p{Script=Latin}+$`, `\p{gc=Nd}`, `^[^\p{Ll}\s]+$`,
+		`^\u{e9}+$`, `[\u{41}-\u{43}]`} {
+		// Go's regexp spells ECMA-262's \u escape \x{}, and a script by its
+		// name alone.
 		goRe := pt
-		if g, ok := map[string]string{`^\u00e9?a`: `^\x{e9}?a`}[pt]; ok {
+		if g, ok := map[string]string{`^\u00e9?a`: `^\x{e9}?a`, `^\p{Script=Latin}+$`: `^\p{Latin}+$`,
+			`\p{gc=Nd}`: `\p{Nd}`,
+			`^\u{e9}+$`: `^\x{e9}+$`, `[\u{41}-\u{43}]`: `[\x{41}-\x{43}]`}[pt]; ok {
 			goRe = g
 		}
 		re := regexp.MustCompile(goRe)

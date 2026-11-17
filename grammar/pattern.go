@@ -149,8 +149,8 @@ func jsonEscape(r rune) string {
 // pattern is GBNF for the content of a JSON string that holds a match of
 // src, a JSON Schema pattern (an ECMA-262 regular expression, unanchored: a
 // branch with no ^ may start anywhere, one with no $ end anywhere).
-// Lookarounds, backreferences, word boundaries and Unicode property escapes
-// are refused by name.
+// A Unicode property escape reads the Unicode tok's tables carry (property);
+// lookarounds, backreferences and word boundaries are refused by name.
 func (c *converter) pattern(src string) (string, error) {
 	any := c.prim("char") + "*"
 	var alts []string
@@ -461,6 +461,18 @@ func (p *rxParser) escape(inClass bool) (rune, runeSet, error) {
 		r, err := hex(2)
 		return r, nil, err
 	case 'u':
+		if p.i < len(p.s) && p.s[p.i] == '{' {
+			end := slices.Index(p.s[p.i:], '}')
+			if end < 2 {
+				return 0, nil, fmt.Errorf("grammar: a pattern's \\u{ names no code point")
+			}
+			v, err := strconv.ParseUint(string(p.s[p.i+1:p.i+end]), 16, 32)
+			if err != nil || v > 0x10FFFF {
+				return 0, nil, fmt.Errorf("grammar: a pattern's \\u{%s} is not a code point", string(p.s[p.i+1:p.i+end]))
+			}
+			p.i += end + 1
+			return rune(v), nil, nil
+		}
 		r, err := hex(4)
 		return r, nil, err
 	case 'c':
@@ -478,7 +490,22 @@ func (p *rxParser) escape(inClass bool) (rune, runeSet, error) {
 	case 'B':
 		return 0, nil, ErrUnsupported{"a word boundary (\\B) in a pattern"}
 	case 'p', 'P':
-		return 0, nil, ErrUnsupported{"a Unicode property escape in a pattern"}
+		if p.i >= len(p.s) || p.s[p.i] != '{' {
+			return 0, nil, fmt.Errorf("grammar: a pattern's \\%c names no property in braces", c)
+		}
+		end := slices.Index(p.s[p.i:], '}')
+		if end < 0 {
+			return 0, nil, fmt.Errorf("grammar: a pattern's \\%c{ has no }", c)
+		}
+		set, err := property(string(p.s[p.i+1 : p.i+end]))
+		p.i += end + 1
+		if err != nil {
+			return 0, nil, err
+		}
+		if c == 'P' {
+			set = set.complement()
+		}
+		return 0, set, nil
 	case 'k':
 		return 0, nil, ErrUnsupported{"a backreference in a pattern"}
 	case '0':
