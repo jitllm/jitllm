@@ -2,11 +2,8 @@ package tok_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"testing"
 
 	"github.com/jitllm/jitllm/tok"
@@ -14,49 +11,59 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestStopSetMatchesLlamaCpp holds the stop set built from a GGUF to the one
-// the oracle prints at load: EOS, the file's eot, eom and FIM ids, and the
-// names eogNames lists, with the harmony and gemma4 exceptions. The models are picked for what each exercises: a stated
-// eot no name covers (HunyuanOCR), a literal "</s>" and FIM tokens in a BPE
-// vocabulary (Qwen2.5, stories260K-infill), harmony (gpt-oss), <|end|>
-// (phi3), and the families' own turn ends.
-func TestStopSetMatchesLlamaCpp(t *testing.T) {
-	lcpp := os.Getenv("JITLLM_LCPP")
-	if lcpp == "" {
-		t.Skip("set JITLLM_LCPP to the oracle's build directory holding llama-tokenize -- this gate proved nothing")
-	}
-	bin := filepath.Join(lcpp, "llama-tokenize")
-	eogLine := regexp.MustCompile(`EOG token\s+=\s+(\d+)`)
-	for _, name := range []string{
-		"hunyuanvl/HunyuanOCR-Q8_0", "qwen2.5-1.5b-instruct-q4_k_m", "stories260K-infill",
-		"gpt-oss-20b-Q4_K_M", "Phi-3.5-mini-instruct-Q4_K_M", "Llama-3.2-1B-Instruct-Q4_K_M",
-		"gemma-3-1b-it-Q4_K_M", "SmolLM2-360M-Instruct-Q8_0", "DeepSeek-V2-Lite.Q4_K_M",
-		"Mistral-7B-Instruct-v0.3-Q4_K_M", "Qwen3-0.6B-Q8_0", "phi-4-Q4_K_M",
+// TestStopSetIsTheModelsOwn holds the stop set built from a GGUF to the
+// model's own: its generation_config.json's eos_token_id, copied below from
+// the published file, which a GGUF carries as its eos and eot ids and its
+// family's library statement's stop pieces (convert's mjStates.Stop). No
+// piece is a stop by its name alone: SmolLM2's <|endoftext|>, Qwen's FIM
+// pieces and </s>, and gpt-oss's <|end|> end no generation, since their
+// references do not stop on them. stories260K-infill has no reference
+// generation_config, and stops on the eos its file states alone, its FIM
+// ids no stops. rnj-1's file states <|end_of_text|> as its eos beside the
+// <|eot_id|> its generation_config lists.
+func TestStopSetIsTheModelsOwn(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		want []int32
+	}{
+		{"hunyuanvl/HunyuanOCR-Q8_0", []int32{120007, 120020}},
+		{"qwen2.5-1.5b-instruct-q4_k_m", []int32{151643, 151645}},
+		{"stories260K-infill", []int32{2}},
+		{"gpt-oss-20b-Q4_K_M", []int32{199999, 200002, 200012}},
+		{"Phi-3.5-mini-instruct-Q4_K_M", []int32{32000, 32001, 32007}},
+		{"Llama-3.2-1B-Instruct-Q4_K_M", []int32{128001, 128008, 128009}},
+		{"Meta-Llama-3.1-8B-Instruct-Q4_K_M", []int32{128001, 128008, 128009}},
+		{"gemma-2-2b-it-Q4_K_M", []int32{1, 107}},
+		{"gemma-3-1b-it-Q4_K_M", []int32{1, 106}},
+		{"gemma4/gemma-4-31B-it-Q4_K_M", []int32{1, 50, 106}},
+		{"SmolLM2-360M-Instruct-Q8_0", []int32{2}},
+		{"DeepSeek-V2-Lite.Q4_K_M", []int32{100001}},
+		{"Mistral-7B-Instruct-v0.3-Q4_K_M", []int32{2}},
+		{"Qwen3-0.6B-Q8_0", []int32{151643, 151645}},
+		{"phi-4-Q4_K_M", []int32{100257, 100265}},
+		{"Falcon-H1-0.5B-Instruct-Q4_K_M", []int32{11, 228}},
+		{"LFM2-350M-Q4_K_M", []int32{7}},
+		{"granite-3.3-2b-instruct-Q4_K_M", []int32{0}},
+		{"EXAONE-4.0-1.2B-Q4_K_M", []int32{361}},
+		{"realck/Phi-mini-MoE-instruct-Q4_K_M", []int32{32000, 32001, 32007}},
+		{"realck/Phi-tiny-MoE-instruct-Q8_0", []int32{32000, 32001, 32007}},
+		{"GLM-4-9B-0414-Q4_K_M", []int32{151329, 151336, 151338}},
+		{"library/Llama-4-Scout-17B-16E-Instruct-Q3_K_S", []int32{200001, 200007, 200008}},
+		{"moe2/inclusionAI_Ling-mini-2.0-Q4_K_M", []int32{156892, 156895}},
+		{"nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M", []int32{2, 11, 12}},
+		{"nemotron/nvidia_Nemotron-3-Nano-30B-A3B-Q4_K_M", []int32{2, 11}},
+		{"swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M", []int32{2, 68, 72}},
+		{"minicpmv/MiniCPM-V-4-Q4_K_M", []int32{2, 73440}},
+		{"rnj/EssentialAI_rnj-1-instruct-Q4_K_M", []int32{128001, 128009}},
 	} {
-		t.Run(filepath.Base(name), func(t *testing.T) {
-			path := testmodels.Path(name + ".gguf")
+		t.Run(filepath.Base(c.name), func(t *testing.T) {
+			path := testmodels.Path(c.name + ".gguf")
 			if _, err := os.Stat(path); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate would prove nothing (RULE 11)", err)
 			}
-			cmd := exec.Command(bin, "-m", path, "-p", "x", "--ids", "--log-verbose")
-			cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+lcpp)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("llama-tokenize: %v\n%s", err, out)
-			}
-			var want []int32
-			for _, m := range eogLine.FindAllStringSubmatch(string(out), -1) {
-				n, _ := strconv.Atoi(m[1])
-				if !slices.Contains(want, int32(n)) {
-					want = append(want, int32(n))
-				}
-			}
-			if len(want) == 0 {
-				t.Fatalf("llama-tokenize printed no EOG token -- the oracle said nothing:\n%s", out)
-			}
-			s := openSrc(t, testmodels.Path(name))
+			s := openSrc(t, testmodels.Path(c.name))
 			if s == nil {
-				testmodels.Missing(t, "MODEL MISSING: %s", name)
+				testmodels.Missing(t, "MODEL MISSING: %s", c.name)
 			}
 			v, err := tok.New(s.vocab(t))
 			s.Close()
@@ -65,9 +72,8 @@ func TestStopSetMatchesLlamaCpp(t *testing.T) {
 			}
 			got := slices.Clone(v.EOG())
 			slices.Sort(got)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Errorf("stop set %v, oracle %v", got, want)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("stop set %v, the model's generation_config states %v", got, c.want)
 			} else {
 				t.Logf("%d stop ids agree: %v", len(got), got)
 			}
@@ -75,8 +81,8 @@ func TestStopSetMatchesLlamaCpp(t *testing.T) {
 	}
 }
 
-// TestStatedStopsEndAGeneration: an id the container states ends a generation
-// though no name eogNames lists covers it. HunyuanOCR closes a turn with
+// TestStatedStopsEndAGeneration: an id the container states ends a
+// generation, and one it does not state does not. HunyuanOCR closes a turn with
 // <｜hy_Assistant｜>, which reaches the container only as the GGUF's
 // eot_token_id; with the stated set dropped -- the state before the
 // container carried it -- the reply runs on past its turn.
@@ -104,15 +110,64 @@ func TestStatedStopsEndAGeneration(t *testing.T) {
 	if w, err := tok.New(&dropped); err != nil {
 		t.Fatal(err)
 	} else if w.IsEOG(id) {
-		t.Error("with the stated stops dropped <｜hy_Assistant｜> still ends a generation: a name covers it, and this gate cannot see the container's set")
+		t.Error("with the stated stops dropped <｜hy_Assistant｜> still ends a generation: something besides the container's set decides it")
+	}
+}
+
+// TestAnUnstatedContainerStopsByName: a container written before it stated
+// its stop set (WithNamedStops, which model.Open passes for a container with
+// no generation tail) stops where it did -- Phi-3.5's <|end|> and </s> --
+// and harmony's <|end|> still does not end gpt-oss's reply; the same
+// vocabulary without the option stops on EOS alone.
+func TestAnUnstatedContainerStopsByName(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		eog, not []string
+		unstated []string
+	}{
+		{"Phi-3.5-mini-instruct-Q4_K_M", []string{"<|end|>", "</s>"}, nil, []string{"<|end|>"}},
+		{"gpt-oss-20b-Q4_K_M", []string{"<|return|>", "<|call|>"}, []string{"<|end|>"}, []string{"<|call|>"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := openSrc(t, testmodels.Path(c.name))
+			if s == nil {
+				testmodels.Missing(t, "MODEL MISSING: %s", c.name)
+			}
+			vc := *s.vocab(t)
+			s.Close()
+			vc.Stop = nil
+			named, err := tok.New(&vc, tok.WithNamedStops())
+			if err != nil {
+				t.Fatal(err)
+			}
+			bare, err := tok.New(&vc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range append(append(slices.Clone(c.eog), c.not...), c.unstated...) {
+				id, ok := named.ID(p)
+				if !ok {
+					t.Fatalf("%s is not in the vocabulary", p)
+				}
+				switch {
+				case slices.Contains(c.eog, p) && !named.IsEOG(id):
+					t.Errorf("%s does not end a generation by name", p)
+				case slices.Contains(c.not, p) && named.IsEOG(id):
+					t.Errorf("%s ends a generation by name", p)
+				case slices.Contains(c.unstated, p) && bare.IsEOG(id):
+					t.Errorf("%s ends a generation with no stops stated and no names", p)
+				}
+			}
+		})
 	}
 }
 
 // TestHarmonyContinuesPastEnd holds gpt-oss's stop set to its harmony format
-// and phi3's to its own, on the real vocabularies. In harmony <|end|> closes a
-// message -- the reasoning is one -- and the turn ends at <|return|> or
-// <|call|>; stopping on <|end|> cut every reply off before its answer. phi3's
-// <|end|> is its end of turn, and must stay one.
+// and phi3's to its own, on the real vocabularies, each its library
+// statement's. In harmony <|end|> closes a message -- the reasoning is one --
+// and the turn ends at <|return|> or <|call|>; stopping on <|end|> cut every
+// reply off before its answer. phi3's <|end|> is its end of turn, and must
+// stay one.
 func TestHarmonyContinuesPastEnd(t *testing.T) {
 	for _, c := range []struct {
 		stems       []string

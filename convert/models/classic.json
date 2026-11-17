@@ -84,7 +84,7 @@
                  {"from": "attn_out_norm", "to": "ffn_norm", "why": "its attn_output_norm is the FFN's pre-norm (llama.cpp's dbrx.cpp), where BERT's is applied after the residual add"}],
       "flags": {"layer_norm": "true", "rope_neox": "true"}, "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
              "clamp_kqv": "src['attention.clamp_kqv']"},
-    "phimoe": {"tensors": {"sizes": {"q": "embedding_length",
+    "phimoe": {"stop": ["<|endoftext|>", "<|assistant|>", "<|end|>"], "tensors": {"sizes": {"q": "embedding_length",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [

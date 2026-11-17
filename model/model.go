@@ -2149,6 +2149,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	// An unsupported tokenizer is not a reason to refuse the weights: Vocab
 	// nil is a model that runs token ids but cannot turn text into them.
 	// TokErr says why.
+	if c.Config().Generation == nil {
+		options = append(slices.Clip(options), tok.WithNamedStops())
+	}
 	if m.Vocab, m.TokErr = tok.New(c.Vocab(), options...); m.TokErr != nil {
 		m.Vocab = nil
 	}

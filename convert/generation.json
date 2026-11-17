@@ -1,0 +1,9 @@
+{
+  "gguf": {
+    "temperature": "general.sampling.temp",
+    "top_k": "general.sampling.top_k",
+    "top_p": "general.sampling.top_p",
+    "min_p": "general.sampling.min_p",
+    "repetition_penalty": "general.sampling.penalty_repeat"
+  }
+}

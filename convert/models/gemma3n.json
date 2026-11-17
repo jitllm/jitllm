@@ -2,7 +2,7 @@
   "describe": {"gemma3n": "Gemma 3n E2B, E4B"},
   "gguf": ["gemma3n"],
   "container": {
-    "gemma3n": {"flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true"},
+    "gemma3n": {"stop": ["<eos>", "<end_of_turn>"], "flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true"},
                 "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5", "attn_scale": "1",
                 "final_softcap": "src['final_logit_softcapping'] | default(0)",
                 "kv_shared": "src['attention.shared_kv_layers'] | default(0)",

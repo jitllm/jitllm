@@ -240,7 +240,7 @@ func TestKimiDenseBlockTakesTheCheckpointsSpelling(t *testing.T) {
 		h = append(h, ' ')
 	}
 	dir := t.TempDir()
-	for _, e := range []string{"config.json", "tokenizer.json", "tokenizer_config.json"} {
+	for _, e := range []string{"config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json"} {
 		if b, err := os.ReadFile(filepath.Join(src, e)); err == nil {
 			os.WriteFile(filepath.Join(dir, e), b, 0o644)
 		}

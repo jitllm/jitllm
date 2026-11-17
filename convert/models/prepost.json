@@ -2,7 +2,7 @@
   "describe": {"gemma2": "Gemma 2", "glm4": "GLM-4-0414; the text model of GLM-4.1V and GLM-4.6V-Flash"},
   "gguf": ["gemma2", "glm4"],
   "container": {
-    "gemma2": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "gemma2": {"stop": ["<eos>", "<end_of_turn>"], "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [
@@ -18,7 +18,7 @@
                           "rope_base": "src['rope.freq_base_swa'] | default(src['rope.freq_base'] | default(10000))"},
                "attn_softcap": "src['attn_logit_softcapping'] | default(0)",
                "final_softcap": "src['final_logit_softcapping'] | default(0)"},
-    "glm4": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "glm4": {"stop": ["<|endoftext|>", "<|user|>", "<|observation|>"], "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "ff": "at(feed_forward_length, block)"},

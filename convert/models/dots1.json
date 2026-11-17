@@ -3,7 +3,7 @@
   "classes": ["Dots1ForCausalLM"],
   "gguf": ["dots1", "bailingmoe2"],
   "container": {
-    "dots1": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "dots1": {"stop": ["<|endoftext|>", "<|endofresponse|>"], "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [
@@ -17,7 +17,7 @@
       "flags": {"rope_neox": "true", "qk_norm": "true"},
               "window": {"size": "src['attention.sliding_window'] | default(0)", "from": "src['max_window_layers']"},
               "router": {"gate": "sigmoid"}, "whole_rotary": true},
-    "bailingmoe2": {"tensors": {"sizes": {"q": "embedding_length",
+    "bailingmoe2": {"stop": ["<|endoftext|>"], "tensors": {"sizes": {"q": "embedding_length",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [

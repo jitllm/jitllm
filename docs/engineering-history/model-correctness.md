@@ -7688,6 +7688,70 @@ tokens, and with the stated set dropped runs the full 64.
 construction: they are completions of a bare prompt to a fixed length that
 stop on EOS alone, not on `IsEOG`.
 
+### The stop set becomes the model's own, and the draw is stated too (#404)
+
+The user's decision: generation defaults are taken from the container, which
+the library statements tell the converter what to put there. The name list
+(`tok.eogNames`, with its harmony and gemma4 drop rules) and the GGUF FIM
+pad/repo/separator ids as stops were the oracle's design, not any model's: the
+stop set is now EOS and `jlm.Vocab.Stop` alone. A safetensors model's comes
+from its generation_config.json as before; a GGUF, which has no key for that
+list, states its eot and eom ids, and its architecture's container statement
+lists the pieces its family's generation_config.json names
+(`mjStates.Stop`, e.g. Llama 3's `<|eot_id|>`, `<|eom_id|>`,
+`<|end_of_text|>`; gpt-oss's `<|return|>`, `<|call|>`, `<|endoftext|>`;
+Gemma 4's `<eos>`, `<turn|>`, `<|tool_response>`), each taken where the
+vocabulary holds it. What changed against the old set: SmolLM2 no longer stops
+on `<|endoftext|>`, Qwen2.5/Qwen3 on their FIM pieces or `</s>`, and gpt-oss's
+`<|end|>` is out because its reference does not list it, not by a rule.
+
+The first library lists left families out, and their GGUFs lost a piece their
+own generation_config.json lists. The stop set the old code built and the
+one the statements build were compared over the 319 GGUFs of box 51's model
+tree, and every model losing an id was held to its publisher's
+generation_config.json: phimoe now states `<|endoftext|>`, `<|assistant|>`,
+`<|end|>` (Phi-mini-MoE, Phi-tiny-MoE: [32000, 32001, 32007]); glm4
+`<|endoftext|>`, `<|user|>`, `<|observation|>` (GLM-4-9B-0414); llama4
+`<|end_of_text|>`, `<|eom|>`, `<|eot|>`; dots1 `<|endoftext|>`,
+`<|endofresponse|>`; bailingmoe2 `<|endoftext|>` (Ling-mini-2.0: [156892,
+156895]); nemotron_h `</s>`, `<SPECIAL_11>`, `<SPECIAL_12>` (Nemotron Nano 9B
+v2: [2, 11, 12]); nemotron_h_moe `</s>`, `<|im_end|>` (Nemotron 3 Nano: [2,
+11]); apertus `</s>`, `<|assistant_end|>`, `<|tools_suffix|>` ([2, 68, 72]);
+llama adds `</s>` (MiniCPM-V 4: [2, 73440]) and gemma3 `<|eot_id|>` (rnj-1:
+128009). What is still lost is what no reference lists: the FIM pieces, a
+`</s>` or `[PAD]` no generation_config names, SmolLM2's and LFM2's
+`<|endoftext|>`, Kimi-VL's `<|im_end|>` (its list is [163585]), Moonlight's
+`[EOS]` (its list is [163586]). The stop gate holds the new models' sets too.
+
+A container written before the tail (no `jlm.Config.Generation`) keeps the
+stop set it had: `model.Open` asks the tokenizer for the names as before
+(`tok.WithNamedStops`, the old list and its harmony and gemma4 drop rules),
+until it is converted again (`tok.TestAnUnstatedContainerStopsByName`).
+
+transformers' GenerationConfig samples only where do_sample is true, and a
+file that states a temperature but no do_sample (Seed-OSS: 1.1 and 0.95)
+draws greedily; the converter reads it so. A GGUF carries no do_sample key:
+the keys a draw is read from are library data (`convert/generation.json`,
+generation_config.json's field names to the `general.sampling.*` keys), a
+family's statement states its reference's fields where a file has no key and
+its do_sample (`mjStates.Generation`; seed_oss states do_sample false, so its
+GGUF and its safetensors agree), and a file stating any sampling key samples
+otherwise.
+
+The draw is a config tail (`jlm.Config.Generation`, the thirtieth):
+generation_config.json's do_sample, temperature, top_k, top_p, min_p,
+typical_p and repetition_penalty over GenerationConfig's defaults (greedy,
+1, 50, 1, none, 1, 1); a GGUF's from its `general.sampling.*` keys, read as
+the decimal the f32 was written from. An older reader drops the tail.
+
+Gates: `tok.TestStopSetIsTheModelsOwn` holds nineteen GGUFs' sets to their
+published generation_config.json lists; `convert.TestGenerationIsTheModelsOwn`
+reads nine real generation_config.json files on the box (Qwen3, Qwen3-MoE,
+Qwen3-Next, SmolLM2, BitNet, DeepSeek-V2-Lite, HunyuanOCR, Phi-tiny-MoE,
+Pythia) and holds draw and stop set to their values;
+`convert.TestGGUFGenerationReadsItsSamplingKeys` reads HunyuanOCR's, Gemma
+4's and Llama 3.2's keys; `jlm.TestGenerationTailRoundTrips` the tail.
+
 ## The tokenizer authorities and the kimi-k2 pre-tokenizer (RULE 7m)
 
 ### ★ RULE 7m: llama.cpp IS A GOOD-ENOUGH ORACLE, NOT THE SPECIFICATION.

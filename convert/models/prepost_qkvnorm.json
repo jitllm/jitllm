@@ -2,7 +2,7 @@
   "describe": {"gemma4": "Gemma 4"},
   "gguf": ["gemma4"],
   "container": {
-    "gemma4": {"revision": {"picture_bidir_sliding": "(src['embedding_length_per_layer_input'] | default(0)) == 0"},
+    "gemma4": {"stop": ["<eos>", "<turn|>", "<|tool_response>"], "revision": {"picture_bidir_sliding": "(src['embedding_length_per_layer_input'] | default(0)) == 0"},
                "flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true", "dense_moe": "(src['expert_count'] | default(0)) > 0"},
                "router": {"gate": "softmax", "renormalise": "always", "unscaled": true, "ungrouped": true},
                "tensors": {"sizes": {"q": "at(attention.head_count, block) * ((at(attention.sliding_window_pattern, block) != 0) ? attention.key_length_swa : attention.key_length)", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * ((at(attention.sliding_window_pattern, block) != 0) ? attention.key_length_swa : attention.key_length)", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * ((at(attention.sliding_window_pattern, block) != 0) ? (attention.value_length_swa ?? (attention.key_length_swa)) : (attention.value_length ?? (attention.key_length)))", "ff_exp": "expert_feed_forward_length"},

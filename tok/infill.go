@@ -14,8 +14,8 @@ import "slices"
 // Class[b] or one of the Depth parents up from Class[b].
 //
 // EOG is the end-of-generation ids (IsEOG), and EOT the token the sampler
-// ends on when nothing but end-of-generation tokens survives: the first of
-// eogNames the vocabulary holds, else EOS.
+// ends on when nothing but end-of-generation tokens survives: EOS, else the
+// first stop id the container states.
 //
 // The tables are built from the pieces when a model opens. They could be
 // stated at conversion instead, with the next container version.
@@ -33,14 +33,10 @@ func (v *Vocab) Infill() Infill {
 		pieces[t], _ = v.Piece(int32(t))
 	}
 	in := Infill{EOG: slices.Clone(v.eog), EOT: v.EOS}
-	in.Class, in.Parent, in.Depth = InfillOf(pieces)
-	for _, name := range []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<end_of_turn>", "<|endoftext|>",
-		"<|end_of_text|>", "<EOT>", "_<EOT>", "[EOT]", "<｜end▁of▁sentence｜>", "<end_of_utterance>"} {
-		if id, ok := v.ids[name]; ok {
-			in.EOT = id
-			break
-		}
+	if in.EOT < 0 && len(v.eog) > 0 {
+		in.EOT = v.eog[0]
 	}
+	in.Class, in.Parent, in.Depth = InfillOf(pieces)
 	return in
 }
 

@@ -2,7 +2,7 @@
   "describe": {"gemma3": "Gemma 3; EmbeddingGemma (pooled)"},
   "gguf": ["gemma3"],
   "container": {
-    "gemma3": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+    "gemma3": {"stop": ["<eos>", "<end_of_turn>", "<|eot_id|>"], "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
                             "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
                   "block": {"attn_qkv.weight": [

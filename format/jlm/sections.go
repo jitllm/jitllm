@@ -224,8 +224,12 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// joint head of zeros standing for none (an older reader builds a
 	// decision graph no request reaches).
 	// The twenty-ninth, the rotary's table and a picture's layout on it,
-	// implies the first twenty-eight, no graphs standing for none.
-	rope := len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
+	// implies the first twenty-eight, no graphs standing for none. The
+	// thirtieth, the stated generation defaults, implies the first
+	// twenty-nine, an empty table standing for none; an older reader drops it
+	// and generates as it did before the field existed.
+	gen := c.Generation != nil
+	rope := gen || len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
 	graphs := rope || len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
 	joint := graphs || c.JointHead != nil
 	marker := joint || c.MarkerPrompt != nil
@@ -430,6 +434,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 			w.bool(x.Pos)
 		}
 		w.bool(c.PictureRope.Side)
+	}
+	if gen {
+		encodeGeneration(w, c.Generation)
 	}
 	return w.b
 }
@@ -660,8 +667,16 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		}
 		c.PictureRope.Side = r.bool()
 	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Generation = decodeGeneration(r)
+	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if c.Generation != nil {
+		if err := c.Generation.Valid(); err != nil {
+			return nil, err
+		}
 	}
 	if err := c.olderGeoms(swa); err != nil {
 		return nil, err

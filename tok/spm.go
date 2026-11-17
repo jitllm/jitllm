@@ -101,6 +101,8 @@ type loadOpts struct {
 	// tokenizerJSON is the caller's asserted tokenizer.json, or nil. It is
 	// parsed inside New so a malformed file is New's error.
 	tokenizerJSON io.Reader
+	// namedStops is WithNamedStops.
+	namedStops bool
 }
 
 // Option adjusts how a vocabulary is loaded.
@@ -117,6 +119,14 @@ type Option func(*loadOpts)
 // ignore_merges still come from the container.
 func WithTokenizer(r io.Reader) Option {
 	return func(o *loadOpts) { o.tokenizerJSON = r }
+}
+
+// WithNamedStops adds to the stop set the end-of-turn pieces a vocabulary
+// holds by name (namedStops), the stop set of a container written before it
+// stated its own (jlm.Config.Generation nil): such a container stops where
+// it did until it is converted again.
+func WithNamedStops() Option {
+	return func(o *loadOpts) { o.namedStops = true }
 }
 
 // New builds a vocabulary from a model's tokenizer metadata.
@@ -182,6 +192,9 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 	}
 	v.BOS, v.EOS, v.Unk = vc.BOS, vc.EOS, vc.Unk
 	v.eog = eogOf(v, vc.Stop)
+	if lo.namedStops {
+		v.eog = namedStops(v, v.eog)
+	}
 	v.harmony = harmonyOf(v)
 	if vc.Kind == jlm.VocabWPM {
 		return v, newWPM(vc, v)
@@ -335,45 +348,37 @@ func (h *bigramHeap) pop() bigram {
 	return top
 }
 
-// eogNames are the end-of-turn pieces a vocabulary stops on by name, besides
-// EOS and the ids its container states, and the fill-in-the-middle pad, repo
-// and file-separator pieces; every one present is taken.
-func eogNames() []string {
-	return []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
+// eogOf is the stop set: EOS and the ids the container states (jlm.Vocab.Stop:
+// a safetensors model's generation_config.json eos_token_id list, a GGUF's
+// eot and eom ids and the pieces its family's library statement lists).
+func eogOf(v *Vocab, stated []int32) []int32 {
+	var out []int32
+	for _, id := range append([]int32{v.EOS}, stated...) {
+		if id >= 0 && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// namedStops is eog with the end-of-turn pieces v holds by name, and the
+// fill-in-the-middle pad, repo and file-separator pieces. <|end|> closes a
+// message in gpt-oss's harmony format, not the reply, so it is dropped where
+// a vocabulary has both <|return|> and <|call|> (<|calls|> and <|flush|>
+// likewise); </s> is not a stop on a vocabulary with gemma4's
+// <|tool_response>.
+func namedStops(v *Vocab, eog []int32) []int32 {
+	has := func(n string) bool { _, ok := v.ids[n]; return ok }
+	out := slices.Clone(eog)
+	for _, n := range []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
 		"<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>", "<|eom_id|>",
 		"<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>", "<end_of_utterance>",
 		"<eos>", "<turn|>", "<|tool_response>", "<｜end▁of▁sentence｜>", "[e~[",
 		"<|fim_pad|>", "<fim-pad>", "<fim_pad>", "<PAD>", "[PAD]",
 		"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>",
-		"<|file_sep|>"}
-}
-
-// eogOf is the stop set: EOS, the ids the container states (jlm.Vocab.Stop:
-// a GGUF's eot and eom, a safetensors model's generation_config list), and
-// the pieces eogNames names.
-//
-// EOS is not the end of a turn on every model (phi3 closes a turn with
-// <|end|>). But in gpt-oss's harmony format <|end|> closes a message, not the
-// reply, so it is dropped when a vocabulary has both <|return|> and <|call|>
-// (solar-open's <|calls|> and <|flush|> likewise). And </s> is not a stop on a
-// vocabulary with gemma4's <|tool_response>.
-func eogOf(v *Vocab, stated []int32) []int32 {
-	has := func(n string) bool { _, ok := v.ids[n]; return ok }
-	harmony := (has("<|return|>") && has("<|call|>")) || (has("<|calls|>") && has("<|flush|>"))
-	toolResponse := has("<|tool_response>")
-	var out []int32
-	add := func(id int32) {
-		if id >= 0 && !slices.Contains(out, id) {
+		"<|file_sep|>"} {
+		if id, ok := v.ids[n]; ok && !slices.Contains(out, id) {
 			out = append(out, id)
-		}
-	}
-	add(v.EOS)
-	for _, id := range stated {
-		add(id)
-	}
-	for _, n := range eogNames() {
-		if id, ok := v.ids[n]; ok {
-			add(id)
 		}
 	}
 	drop := func(n string) {
@@ -381,17 +386,17 @@ func eogOf(v *Vocab, stated []int32) []int32 {
 			out = slices.DeleteFunc(out, func(x int32) bool { return x == id })
 		}
 	}
-	if harmony {
+	if (has("<|return|>") && has("<|call|>")) || (has("<|calls|>") && has("<|flush|>")) {
 		drop("<|end|>")
 	}
-	if toolResponse {
+	if has("<|tool_response>") {
 		drop("</s>")
 	}
 	return out
 }
 
-// IsEOG reports whether id ends a generation: EOS, a stop id the model's file
-// states, or an end-of-turn piece eogNames names.
+// IsEOG reports whether id ends a generation: EOS or a stop id the container
+// states, or with WithNamedStops a piece namedStops names.
 func (v *Vocab) IsEOG(id int32) bool { return slices.Contains(v.eog, id) }
 
 // Encode tokenizes text. addSpecial controls the leading BOS (the tokenizers

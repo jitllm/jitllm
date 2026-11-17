@@ -370,6 +370,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 	if voc.Stop, err = hfStops(dir, voc); err != nil {
 		return nil, err
 	}
+	if s.Config.Generation, err = hfGeneration(dir); err != nil {
+		return nil, err
+	}
 	if len(voc.Templates) == 0 && ha.template != "" {
 		voc.Templates = []jlm.ChatTemplate{{Body: ha.template}}
 	}

@@ -69,6 +69,14 @@ type mjStates struct {
 	// Retarget is the roles whose name in the source means what another
 	// role does (retargets).
 	Retarget []mjRetarget `json:"retarget"`
+	// Stop is the pieces the family's generation_config.json lists as its
+	// eos_token_id besides the one a GGUF states, which has no key for the
+	// list: each one a vocabulary holds ends a generation (VocabOf).
+	Stop []string `json:"stop"`
+	// Generation is the family's reference draw, generation_config.json's
+	// fields, where a GGUF states no key for one (ggufGeneration); its
+	// do_sample whether the file's keys are drawn with.
+	Generation *generationFields `json:"generation"`
 	// DeltaGate is the delta rule's output gate, by name (mjDeltaGates;
 	// StateDelta's where unstated).
 	DeltaGate string `json:"delta_gate"`

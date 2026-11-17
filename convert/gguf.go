@@ -230,6 +230,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if c, err = configOf(f); err != nil {
 			return nil, err
 		}
+		if c.Config.Generation, err = ggufGeneration(f); err != nil {
+			return nil, err
+		}
 	}
 	s.Config = c.Config
 	voc, err := vocabOf(f)

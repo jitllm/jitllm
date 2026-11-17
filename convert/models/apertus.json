@@ -3,7 +3,7 @@
   "classes": ["ApertusForCausalLM"],
   "gguf": ["apertus"],
   "container": {
-    "apertus": {"flags": {"qk_norm": "true", "rope_neox": "true"},
+    "apertus": {"stop": ["</s>", "<|assistant_end|>", "<|tools_suffix|>"], "flags": {"qk_norm": "true", "rope_neox": "true"},
       "tensors": {"block": {"attn_qkv.weight": [
         {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
         {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},

@@ -155,6 +155,10 @@ type Config struct {
 	// on those axes. Together the twenty-ninth optional tail.
 	RopeTable   []RopePair
 	PictureRope PictureRope
+	// Generation is how the model generates when a caller asks nothing,
+	// stated at conversion: the thirtieth optional tail. Nil in a container
+	// written before it, which generates as ReferenceGeneration says.
+	Generation *Generation
 
 	// Sliding-window attention. Zero for either means every layer sees the
 	// whole history.

@@ -84,12 +84,12 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 			*s.dst = int32(n)
 		}
 	}
-	// The ids the file states end a generation besides EOS: llama.cpp's
-	// special_eot_id and special_eom_id, and the FIM pad, repo and file
-	// separator it also stops on (llama-vocab.cpp, special_eog_ids). A GGUF has
-	// no list key; HunyuanOCR's <｜hy_Assistant｜> reaches its file only as
-	// eot_token_id.
-	for _, k := range []string{"eot", "eom", "fim_pad", "fim_rep", "fim_sep"} {
+	// The ids the file states end a generation besides EOS: its end of turn
+	// and end of message. A GGUF has no key for generation_config.json's
+	// eos_token_id list; HunyuanOCR's <｜hy_Assistant｜> reaches its file only
+	// as eot_token_id, and the rest of a family's list is its library
+	// statement's stop pieces.
+	for _, k := range []string{"eot", "eom"} {
 		n, ok := f.KV["tokenizer.ggml."+k+"_token_id"].Uint()
 		if !ok {
 			continue
@@ -99,6 +99,9 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 				k, n, len(v.Tokens))
 		}
 		v.Stop = addStop(v.Stop, v.EOS, int32(n))
+	}
+	if v.Stop, err = statedStops(f.Arch(), v); err != nil {
+		return nil, err
 	}
 	for _, s := range []struct {
 		key string
