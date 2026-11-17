@@ -254,9 +254,6 @@ func (c *Config) at(li int) *Config {
 // MoE reports whether this model's FFN is a mixture of experts.
 func (c *Config) MoE() bool { return c.NExpert > 0 }
 
-// GQA is how many query heads share one key/value head.
-func (c *Config) GQA() int { return c.NHead / c.NKVHead }
-
 // KVDim is the width of one K or V vector: kv heads times head dim.
 //
 // Under MLA it is one row for the whole layer: the latent plus the shared
@@ -381,10 +378,6 @@ func (c *Config) NKVHeadAt(li int) int {
 // block's own.
 func (c *Config) NHeadAt(li int) int { return c.at(li).NHead }
 
-// LayerNormAt says block li normalises by LayerNorm, its biases its own: a
-// marker head's blocks do over a trunk that does not.
-func (c *Config) LayerNormAt(li int) bool { return c.at(li).LayerNorm }
-
 // Marks says the model reads its answer at a prompt's marker rows: a marker
 // head's scorer or a pointer readout.
 func (c *Config) Marks() bool { return c.Head != nil || c.MarkPointer }
@@ -409,13 +402,7 @@ func (c *Config) KVDimAt(li int) int {
 	return c.NKVHeadAt(li) * c.HeadDimAt(li)
 }
 
-// GQAAt is GQA at layer li's geometry.
-func (c *Config) GQAAt(li int) int { return c.NHeadAt(li) / c.NKVHeadAt(li) }
-
-// QDimAt is the query (and the attention output) width at layer li.
-func (c *Config) QDimAt(li int) int { return c.NHeadAt(li) * c.HeadDimAt(li) }
-
-// MaxHeadDim, MaxQDim and MaxNRot are the widest of the blocks'
+// MaxHeadDim and MaxQDim are the widest of the blocks'
 // geometries: what a buffer that serves every layer is sized by.
 func (c *Config) MaxHeadDim() int {
 	m := c.HeadDim
@@ -451,33 +438,12 @@ func (c *Config) NFFNAt(li int) int {
 	return c.NFFN
 }
 
-// MaxNFFN is the widest feed-forward width of any block.
-func (c *Config) MaxNFFN() int {
-	m := c.NFFN
-	for li := range c.geoms {
-		m = max(m, c.NFFNAt(li))
-	}
-	if c.Head != nil {
-		m = max(m, c.Head.NFFN)
-	}
-	return m
-}
-
 // MaxQDim is the query width at the widest head.
 func (c *Config) MaxQDim() int {
 	if c.Head != nil {
 		return max(c.NHead*c.MaxHeadDim(), c.Head.NHead*c.Head.HeadDim)
 	}
 	return c.NHead * c.MaxHeadDim()
-}
-
-// MaxNRot is the widest rotary any block turns.
-func (c *Config) MaxNRot() int {
-	m := c.NRot
-	for li := range c.geoms {
-		m = max(m, c.NRotAt(li))
-	}
-	return m
 }
 
 // RopeW is how many floats one row's rotary table holds: two a pair of its
