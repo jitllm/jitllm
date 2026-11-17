@@ -836,29 +836,23 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		out.Head, out.NLayer = h, out.NLayer+int(c.DecisionBlocks)
-		out.mixed = out.mixed || h.HeadDim != out.HeadDim || h.NKVHead != out.NKVHead || h.NRot != out.NRot
+		out.Head, out.NLayer = h, out.NLayer+int(c.HeadBlocks())
 	}
 	return out, nil
 }
 
 // headConfigOf is a marker head's blocks as a config (jlm.Flag2HeadBlocks):
-// the container's DecisionHeads heads over the trunk's width, every block
-// pre-norm with LayerNorms at DecisionEps, attending both ways with no
-// position encoding and no window. Its feed-forward width is the head
-// blocks' own, which build reads off their tensors.
+// every block pre-norm with LayerNorms over the trunk's width, attending
+// both ways with no position encoding and no window. Its attention and its
+// norms' epsilon are its blocks' stated graph's and its feed-forward width
+// their tensors', which build reads (statedHead).
 func headConfigOf(c *jlm.Config, trunk *Config) (*Config, error) {
-	n, d := int(c.DecisionHeads), int(c.NEmbd)
-	if c.DecisionBlocks == 0 || n == 0 || d%n != 0 || !(c.DecisionEps > 0) {
-		return nil, fmt.Errorf("model: %d head blocks of %d heads over a %d-wide residual at epsilon %v",
-			c.DecisionBlocks, n, d, c.DecisionEps)
+	if c.HeadBlocks() == 0 {
+		return nil, fmt.Errorf("model: the container states a marker head of no blocks")
 	}
-	hd := d / n
-	return &Config{NLayer: trunk.NLayer + int(c.DecisionBlocks), NEmbd: d, NHead: n, NKVHead: n,
-		HeadDim: hd, HeadDimV: hd, NFFN: trunk.NFFN, NVocab: trunk.NVocab, NCtx: trunk.NCtx, RMSEps: float64(c.DecisionEps),
-		LatentNormEps: float64(c.DecisionEps), EmbdScale: 1, AttnFactor: 1, ResidualScale: 1, LogitScale: 1, ExpertScale: 1,
-		AttnScale: 1 / math.Sqrt(float64(hd)), SSMNormGroups: 1, NonCausal: true, NoPosEnc: true, LayerNorm: true,
-		Trunk: trunk.NLayer}, nil
+	return &Config{NLayer: trunk.NLayer + int(c.HeadBlocks()), NEmbd: int(c.NEmbd), NFFN: trunk.NFFN,
+		NVocab: trunk.NVocab, NCtx: trunk.NCtx, EmbdScale: 1, AttnFactor: 1, ResidualScale: 1, LogitScale: 1,
+		ExpertScale: 1, SSMNormGroups: 1, NonCausal: true, NoPosEnc: true, LayerNorm: true, Trunk: trunk.NLayer}, nil
 }
 
 // tensor is one weight matrix, kept as the raw mapping plus its shape.
@@ -2301,6 +2295,10 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, fmt.Errorf("model: the marker head's block %d stores no feed-forward", cfg.Trunk)
 		}
 		h.NFFN = e.Rows()
+		if err := (&Model{Cfg: cfg, Container: c}).statedHead(h); err != nil {
+			return nil, err
+		}
+		cfg.mixed = cfg.mixed || h.HeadDim != cfg.HeadDim || h.NKVHead != cfg.NKVHead || h.NRot != cfg.NRot
 	}
 	if v := c.Vision(); v != nil && v.Tower != nil && len(v.Tower.Taps) > 0 {
 		cfg.DeepTaps = len(v.Tower.Taps)

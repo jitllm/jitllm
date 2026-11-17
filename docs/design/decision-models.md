@@ -286,7 +286,7 @@ Order, by what each unlocks (coordinator's priorities):
 | Laya confidence | TypeSafe's formula | `1 - H(p)/log k` | the reference |
 | Laya head per type | runs all three types | runs the asked type | the asked type (same answer, a third of the head's work) |
 | Laya head's last block | every row | every row | the marker rows only (keys and values from every row) |
-| Laya head heads | the encoder's count | `max(1, d // 64)` | the reference's, stated in the container (`Config.DecisionHeads`); they agree on every published checkpoint |
+| Laya head heads | the encoder's count | `max(1, d // 64)` | the reference's, stated in the container: the converter writes `Config.DecisionHeads` into the head blocks' graph (`convert/models/prenorm_encoder.json`), whose attention the engine reads it from; they agree on every published checkpoint |
 | Laya sequence | template rendered whole, then re-cut | each piece tokenized alone | the reference; token for token equal to both on the gates' requests |
 | Laya GELU | tanh (GeGLU), erf (scorer) | erf in both | the reference: `ActGELUErf` on every tier (host and device); worst logit 1e-6 on the f32 fixture, where the tanh form left 3e-4 |
 | Laya state cut | the context | `max_len` (512) | the context: the GGUF does not carry `max_len` |

@@ -653,6 +653,36 @@ func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, wid
 	return b.Map(name, a, w, width, in...)
 }
 
+// statedHead fills marker head h's attention and norms from its first
+// block's stated graph: the attention's heads, their width and scale, and the
+// LayerNorms' epsilon, which the scorer's norm shares (markGraph).
+func (m *Model) statedHead(h *Config) error {
+	c, b := m.Container.Config(), h.Trunk
+	if b >= len(c.Blocks.Of) || int(c.Blocks.Of[b]) >= len(c.Blocks.Graphs) {
+		return fmt.Errorf("model: the marker head's block %d states no graph: convert the model again", b)
+	}
+	f, _ := m.blockFacts(b)
+	g, err := graph.Decode([]byte(c.Blocks.Graphs[c.Blocks.Of[b]]), b, f)
+	if err != nil {
+		return fmt.Errorf("model: the marker head's block %d: %w", b, err)
+	}
+	var att, norm *graph.Attrs
+	for i := range g.Ops {
+		switch o := &g.Ops[i]; {
+		case o.Kind == graph.OpAttend && att == nil:
+			att = &o.Attr
+		case o.Kind == graph.OpLayerNorm && norm == nil:
+			norm = &o.Attr
+		}
+	}
+	if att == nil || norm == nil || att.NHead <= 0 || att.NHead*att.HeadDim != h.NEmbd || !(norm.Eps > 0) {
+		return fmt.Errorf("model: the marker head's block %d states no attention over its %d-wide rows beside a LayerNorm", b, h.NEmbd)
+	}
+	h.NHead, h.NKVHead, h.HeadDim, h.HeadDimV, h.AttnScale = att.NHead, att.NKVHead, att.HeadDim, att.HeadDim, att.Scale
+	h.RMSEps, h.LatentNormEps = norm.Eps, norm.Eps
+	return nil
+}
+
 // headGraph is the head (graph.Head) of what the container stores: a
 // LayerNorm with its stored bias where the model's norms are LayerNorms, an
 // RMSNorm otherwise, the projection to the vocabulary (the embedding's where
