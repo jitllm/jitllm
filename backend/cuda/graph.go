@@ -7,15 +7,21 @@ import "fmt"
 // ~450-launch decode token. Whether it pays is measured by `jitllm verify -ab
 // graph`, not stated here.
 //
-// Like llama.cpp (GGML_CUDA_USE_GRAPHS), jitllm does not patch the graph per
-// token as the KV cache grows: it pads the KV length so the graph stays
-// identical for a run of tokens and re-captures when the padding rolls over.
+// The graph is not patched per token as the KV cache grows: a capture has a
+// fixed shape, so the KV length is padded to the next score grain and the one
+// capture is replayed for scoreGrain tokens (engine/device/gpu), re-captured
+// when the padding rolls over.
 
 // captureRelaxed is CU_STREAM_CAPTURE_MODE_RELAXED.
 //
-// Relaxed, as llama.cpp uses: the stricter modes forbid the capturing thread
-// from touching the legacy stream, and nothing is issued outside the capture
-// stream while a capture is open anyway.
+// The CUDA Driver API's capture modes (cuThreadExchangeStreamCaptureMode):
+// GLOBAL prohibits potentially unsafe calls on every thread while any thread
+// holds a GLOBAL capture; THREAD_LOCAL confines the prohibition to the
+// capturing thread; RELAXED lifts it there too, leaving only calls that
+// conflict with the capture itself. Queued sessions capture on their own threads while
+// other threads allocate, so not GLOBAL. RELAXED is kept; THREAD_LOCAL was
+// measured to pass the same capture gates (backend 3, engine/device/gpu 4,
+// engine 612 subtests).
 const captureRelaxed = int32(2)
 
 // Stream is an explicit CUDA stream, created only because a graph cannot be

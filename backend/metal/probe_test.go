@@ -51,7 +51,7 @@ kernel void probe(device uint* p [[buffer(0)]], uint t [[thread_position_in_thre
 // msl/ emits a register-tiled int8 kernel with no threadgroup memory and no
 // matrix units, so its measured rate is a floor for that kernel shape, not the
 // hardware's ceiling. Apple's matrix units are float, so the shape that suits
-// this GPU is dequantize-to-fp16 and multiply (as MLX does). This records
+// this GPU is dequantize-to-fp16 and multiply. This records
 // which primitives the toolchain compiles.
 func TestSimdgroupMatrix(t *testing.T) {
 	c, err := metal.Open()

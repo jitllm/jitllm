@@ -143,8 +143,8 @@ func (c *Counters) SetCUDATiming(on bool) { c.cudaTiming.Store(on) }
 // outside a capture runs between two events, read when CUDAKernelTimes is
 // called after the work is done; a capture records an event node after every
 // launch, and each replay's kernels are read back one replay later -- the SAME
-// measurement scripts/kshim.c takes of llama.cpp's graphs, so the two engines'
-// kernels can be set side by side. It applies to graphs recorded after it is
+// measurement scripts/kshim.c takes of the baseline's graphs (RULE 1), so the
+// two rows' kernels can be set side by side. It applies to graphs recorded after it is
 // armed. A measurement instrument, default off: the event nodes cost device
 // time of their own.
 func (c *Counters) SetCUDAKernelTiming(on bool) { c.cudaKernTiming.Store(on) }
