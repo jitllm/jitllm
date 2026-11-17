@@ -115,8 +115,8 @@ type mjRotaryLayers struct {
 	Every string `json:"every"`
 }
 
-// mjGatings is each router gate a file may state, as llama.cpp's
-// expert_gating_func, which configOf reads.
+// mjGatings is each router gate a file may state, by the code a GGUF's
+// expert_gating_func key stores, which configOf reads.
 func mjGatings() map[string]uint64 {
 	return map[string]uint64{"softmax": 1, "sigmoid": 2}
 }

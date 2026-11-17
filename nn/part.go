@@ -242,19 +242,19 @@ type DrawArgs struct {
 	Mu               *float32
 	Penalty          Penalties
 	Window           []float32
-	// Dry is each token's DRY exponent plus one, 0 where llama.cpp's DRY
-	// sampler leaves it, nil for none: a marked token falls by DryMult times
+	// Dry is each token's DRY exponent plus one, 0 where DRY leaves it, nil
+	// for none: a marked token falls by DryMult times
 	// e to DryLogBase times the exponent (graph.SampleStage).
 	Dry                 []float32
 	DryMult, DryLogBase float32
-	// Infill runs llama.cpp's infill sampler over the survivors before the
+	// Infill runs the fill-in-the-middle draw over the survivors before the
 	// draw, at a top-k of at most InfillMaxK.
 	Infill bool
 }
 
-// Penalties are a draw's penalties over the tokens its window holds, as
-// llama.cpp applies them: the repeat penalty once a token (1 is none), then
-// presence once a token and frequency once a count subtracted (0 is none).
+// Penalties are a draw's penalties over the tokens its window holds: the
+// repeat penalty once a token (1 is none), then presence once a token and
+// frequency once a count subtracted (0 is none).
 type Penalties [3]float32
 
 // NoPenalties leaves every logit as it is.
@@ -322,8 +322,8 @@ type InputsDevice interface {
 }
 
 // PoolDevice is a device reading an embedding model's readout: the pooled
-// row of a call's n rows of x into out, normalised as llama.cpp's
-// embd_normalize norm asks (2 is unit length) -- with raw, the row before
+// row of a call's n rows of x into out, normalised as norm asks
+// (EmbedNorm's codes; 2 is unit length) -- with raw, the row before
 // the dense heads -- reporting whether it served it; or a marker head's, the
 // scores of the rows the request words req name.
 type PoolDevice interface {

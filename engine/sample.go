@@ -21,22 +21,22 @@ import (
 // draw over what survives them. Equal logits are ordered higher logit first,
 // lower id on a tie.
 type Sampler struct {
-	Temp     float64 // 0 = greedy; llama.cpp's --temp
+	Temp     float64 // 0 = greedy; the logits' divisor
 	TopK     int     // 0 = disabled
 	TopP     float64 // 0 or 1 = disabled; nucleus
 	MinP     float64 // 0 = disabled; keep tokens above MinP * p(best)
-	TypicalP float64 // 0 or 1 = disabled; llama.cpp's typical_p
-	// XTCProbability and XTCThreshold are llama.cpp's XTC: with that
+	TypicalP float64 // 0 or 1 = disabled; locally typical sampling's mass
+	// XTCProbability and XTCThreshold are XTC, exclude top choices: with that
 	// probability a draw cuts the survivors at or above the threshold but
 	// the least; off at probability 0 or a threshold past 0.5.
 	XTCProbability, XTCThreshold float64
-	TopNSigma                    float64 // 0 or below = disabled; llama.cpp's top_n_sigma
-	// DynatempRange and DynatempExponent are llama.cpp's dynamic
-	// temperature: off where the range is not above 0; an exponent of 0 is 1.
+	TopNSigma                    float64 // 0 or below = disabled; logits n deviations under the largest are out
+	// DynatempRange and DynatempExponent are the dynamic temperature, moved
+	// with the survivors' entropy (graph.SampleStage): off where the range is
+	// not above 0; an exponent of 0 is 1.
 	DynatempRange, DynatempExponent float64
-	// Mirostat is llama.cpp's Mirostat version, 0 for none, 1 or 2; it
-	// replaces every other filter and the penalties, as llama.cpp's chain
-	// does. MirostatTau (0 is 5) is its target surprise in bits, MirostatEta
+	// Mirostat is the Mirostat version, 0 for none, 1 or 2; it replaces
+	// every other filter and the penalties (graph.SampleMirostat). MirostatTau (0 is 5) is its target surprise in bits, MirostatEta
 	// (0 is 0.1) its learning rate.
 	Mirostat                 int
 	MirostatTau, MirostatEta float64
@@ -45,16 +45,16 @@ type Sampler struct {
 	muSet       bool
 	RepeatPen   float64 // 1 or 0 (unset) = disabled; any other value applies, below 1 too
 	RepeatLastN int     // how far back the penalties look; 0 = 64
-	// PresencePen and FreqPen are llama.cpp's presence and frequency
-	// penalties over the same window: 0 = disabled.
+	// PresencePen and FreqPen are the presence and frequency penalties over
+	// the same window: 0 = disabled.
 	PresencePen, FreqPen float64
 	// DryMultiplier, DryBase, DryAllowedLength and DryPenaltyLastN are
-	// llama.cpp's DRY sampler (llama_sampler_dry): a token that would extend
+	// DRY, "don't repeat yourself": a token that would extend
 	// a run the history repeats, at least DryAllowedLength long, falls by
 	// DryMultiplier times DryBase to the run's length past it, over the last
 	// DryPenaltyLastN tokens (-1 the instance's context). Off at a
 	// multiplier of 0, a base below 1 or a window of 0. DryBreakers are the
-	// sequence breakers, nil for llama.cpp's "\n", ":", "\"" and "*": a run
+	// sequence breakers, nil for "\n", ":", "\"" and "*" (dryBreakers): a run
 	// does not reach back across one, and a token that is one alone is not
 	// penalized.
 	DryMultiplier, DryBase            float64
@@ -63,26 +63,25 @@ type Sampler struct {
 	// dhist is DRY's history: the tokens its window holds.
 	dhist []int32
 	Seed  int64
-	// Infill runs llama.cpp's infill sampler over the survivors before the
+	// Infill runs the fill-in-the-middle draw over the survivors before the
 	// draw (graph.SampleWalk's Infill), at a top-k of at most
 	// nn.InfillMaxK: a draw with no top-k, or one past it, draws as though
 	// its top-k were that.
 	Infill bool
-	// MinKeep is llama.cpp's min_keep: typical-p, top-p, min-p and XTC each
-	// leave at least that many of their candidates, at most nn.SampleMaxK
-	// past a cut; 0 or 1 is llama.cpp's default. A draw asking more runs its
+	// MinKeep is the fewest candidates a cut leaves: typical-p, top-p, min-p
+	// and XTC each leave at least that many of theirs, at most nn.SampleMaxK
+	// past a cut; 0 or 1 asks none past what the cut keeps. A draw asking more runs its
 	// stages (the fused draw's order where Stages names none), min_keep after
 	// each cut (graph.SampleKeep).
 	MinKeep int
-	// Adaptive draws through llama.cpp's adaptive-p sampler in place of the
+	// Adaptive draws through adaptive-p in place of the
 	// plain walk (graph.SampleAdaptive): tokens near AdaptiveTarget's
 	// probability, the target moved by a moving average of the drawn
 	// tokens' probabilities decaying at AdaptiveDecay (held to [0, 0.99]).
-	// A target below 0 is the plain walk, as llama.cpp's is, and Mirostat
-	// replaces it, as its chain does.
+	// A target below 0 is the plain walk, and Mirostat replaces it.
 	Adaptive                      bool
 	AdaptiveTarget, AdaptiveDecay float64
-	// Stages runs llama.cpp's samplers in an order of their own (llama-server's
+	// Stages runs the samplers in an order of the caller's (a request's
 	// samplers list) where it is set: each over the row the one before it
 	// leaves (graph.SampleStage), then the row's walk at temperature 1, or
 	// adaptive-p or the infill sampler in its place. Nil is the fused draw,
@@ -112,9 +111,9 @@ type Sampler struct {
 	drew nn.DrawArgs
 }
 
-// Prime makes a prompt's tokens the history the penalties and DRY read, as llama.cpp
-// resets its sampler and accepts every prompt token before the first draw
-// (common_sampler_accept): the window holds the prompt's tail. A negative id,
+// Prime makes a prompt's tokens the history the penalties and DRY read:
+// they look back over the context, the prompt among it, from the first draw,
+// so the window holds the prompt's tail. A negative id,
 // a picture's row, is no token. The history is the sampler's own after it,
 // never one a copy shares.
 func (s *Sampler) Prime(prompt []int32) {
@@ -212,7 +211,7 @@ func (s *Sampler) Bounded(n int) bool {
 		!s.Infill && !s.adaptive() && !s.staged()
 }
 
-// Stage is one of llama.cpp's samplers a chain runs (Sampler.Stages).
+// Stage is one sampler of a chain (Sampler.Stages).
 type Stage uint8
 
 const (
@@ -261,8 +260,8 @@ func (s *Sampler) dryOn() bool {
 }
 
 // greedyMoved reports whether a greedy draw's row is not the logits as they
-// are: its penalties or DRY move them, as llama.cpp's chain runs them before
-// its temperature sampler keeps the largest.
+// are: its penalties or DRY move them, and they run before the temperature,
+// whose greedy draw keeps the largest of what they leave.
 func (s *Sampler) greedyMoved() bool { return s != nil && (!s.penalties().Off() || s.dryOn()) }
 
 // staged reports whether a draw runs its stages in an order of their own.
@@ -276,7 +275,8 @@ func (s *Sampler) adaptive() bool {
 }
 
 // adaptiveWords is adaptive-p's words for the next draw: its average starts
-// at target/(1-decay) over a weight of 1/(1-decay), as llama.cpp starts it.
+// at target/(1-decay) over a weight of 1/(1-decay), the average a long run
+// of draws at the target holds.
 func (s *Sampler) adaptiveWords() [6]float32 {
 	if !s.adSet {
 		d := float32(min(max(s.AdaptiveDecay, 0), 0.99))

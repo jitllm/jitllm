@@ -49,7 +49,7 @@ func (s *SampleTopK) emit(b *Builder) (v, vals, ids ValueID) {
 	return v, cand[1], cand[0]
 }
 
-// penalizedRow is llama.cpp's penalties over logits l, on each token the
+// penalizedRow is the penalties over logits l, on each token the
 // window holds (its count in win above zero): the repeat penalty once,
 // whatever its count -- a positive logit divided by it, correctly rounded,
 // any other multiplied by it -- then frequency times its count plus
@@ -96,7 +96,7 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 // from (u unread): each candidate's share of the survivors' softmax at the
 // temperature (0 where it is cut), then the candidates' ids.
 //
-// With Infill the survivors go through llama.cpp's infill sampler at the
+// With Infill the survivors go through the fill-in-the-middle draw at the
 // temperature before the walk (sampleEmitter.infill), and the draw may be
 // its end-of-turn token in place of any candidate. sample.walk has an
 // eleventh word, top-n-sigma's n (on above 0): a candidate under the
@@ -216,7 +216,7 @@ func (s *SampleRow) Build() *Graph {
 // u the caller draws, as SampleRow walks the row. Where neither cut fires
 // anywhere in the row, the draw is SampleRow's. With Typical, sample.cut's
 // last word is typical-p, and before the cuts the row keeps its locally
-// typical tokens (llama.cpp's typical sampler): those whose surprise -log p
+// typical tokens (locally typical sampling): those whose surprise -log p
 // is nearest the row's entropy, in that order, up to the first whose mass up
 // to and including it passes typical-p; the cuts read their softmax
 // renormalized, and the survivors are walked whether or not a cut fires.
@@ -375,7 +375,7 @@ func (s *SampleCut) Build() *Graph {
 	return b.G
 }
 
-// SampleMirostat is llama.cpp's Mirostat draw: over the logits' softmax at
+// SampleMirostat is the Mirostat draw: over the logits' softmax at
 // the temperature, in its order (the larger first, the lower id of two
 // equal), version 2 keeps the tokens whose surprise -log2 p is at most mu,
 // the best always; version 1 (V1) the k most likely, k the integer part of
@@ -456,8 +456,7 @@ func (s *SampleMirostat) Build() *Graph {
 	return b.G
 }
 
-// SampleAdaptive is llama.cpp's adaptive-p sampler (llama_sampler_adaptive_p)
-// over a draw's distribution: sample.p, every token's probability, 0 off the
+// SampleAdaptive is the adaptive-p draw over a draw's distribution: sample.p, every token's probability, 0 off the
 // survivors, with sample.cand.p's put in place at sample.cand.ids (u32; an id
 // at or past the vocabulary names none), so a top-k draw's candidates arrive
 // as a whole row. sample.adaptive's words are the target, the decay, the
@@ -499,16 +498,16 @@ func (s *SampleAdaptive) Build() *Graph {
 }
 
 // SampleStage is one stage of a sampler chain run in an order of its own
-// (llama-server's samplers list) over logits, a row whose removed tokens
+// (a request's samplers list) over logits, a row whose removed tokens
 // are -Inf: the survivors the stage leaves -- those sample.p gives a
 // probability above 0 (sample.cand.p put in place at sample.cand.ids, u32;
 // an id at or past the vocabulary names none), or every finite one where
 // sample.stage's word 1 is 1 -- penalized as SampleRow penalizes them
 // (sample.window and sample.penalty) and scaled by the reciprocal
 // temperature, word 0, or where word 2, the dynamic range, is above 0 by
-// llama.cpp's dynamic temperature over the survivors' softmax at its
+// the dynamic temperature over the survivors' softmax at its
 // exponent, word 3 (sampleEmitter.dynTemp). The rest are -Inf. Before the
-// temperature, llama.cpp's DRY penalty: each token sample.dry marks (its
+// temperature, DRY's penalty: each token sample.dry marks (its
 // exponent plus one, 0 for none) falls by sample.dry.words' first, the
 // multiplier, times e to its second, the base's log, times the exponent.
 // Its output is the stage's row.
@@ -544,7 +543,7 @@ func (s *SampleStage) Build() *Graph {
 	return b.G
 }
 
-// SampleKeep is llama.cpp's min_keep over one cut of a chain run in an order
+// SampleKeep is min_keep over one cut of a chain run in an order
 // of its own (SampleStage): over logits, a row whose removed tokens are
 // -Inf, the cut's survivors -- those sample.p gives a probability above 0,
 // sample.cand.p put in place at sample.cand.ids (u32; an id at or past the
@@ -616,7 +615,7 @@ func (e sampleEmitter) before(x, place ValueID, name string) ValueID {
 
 // dynTemp is the reciprocal temperature a draw over the survivors keep
 // (0/1, w their weights at temperature 1, any scale) runs at: invT, or where
-// rng is above 0 and two or more survive llama.cpp's dynamic temperature,
+// rng is above 0 and two or more survive the dynamic temperature,
 // lo + (hi - lo)*(H/Hmax)^ex with T = 1/invT, lo = max(0, T - rng), hi = T +
 // rng, H the survivors' entropy and Hmax the log of their count; its
 // reciprocal held to 1e30, which a temperature of 0 makes greedy.
@@ -737,7 +736,7 @@ func (e sampleEmitter) sigma(v, ns ValueID) ValueID {
 		e.mapc(MapSub, 0, "sample.sig.edge", 1, vmax, e.mapc(MapMul, 0, "sample.sig.ndev", 1, ns, dev)))
 }
 
-// infill is llama.cpp's infill sampler (llama_sampler_infill_apply) over the
+// infill is the fill-in-the-middle draw over the
 // K candidates keep leaves, in place order, w their weights at the draw's
 // temperature: what survives it, whether the draw is forced to the
 // end-of-turn token in place of any of them, and the input holding that

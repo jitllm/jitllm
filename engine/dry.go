@@ -20,11 +20,11 @@ type dryState struct {
 	breaker map[int32][][]int32
 }
 
-// dryBreakers are llama.cpp's default sequence breakers (common_params_sampling).
+// dryBreakers are DRY's default sequence breakers: a newline, a colon, a
+// quote and an asterisk.
 func dryBreakers() []string { return []string{"\n", ":", "\"", "*"} }
 
-// breakersOf is strs read off v as llama.cpp's DRY sampler reads its
-// breakers at init (llama_sampler_init_dry, get_overlapping_token_sequences):
+// breakersOf is strs read off v, the tokens a breaker's text may begin in:
 // each cut to 40 bytes, an empty one skipped; every token whose text holds
 // one heads it alone (no tail), and every token whose text ends in one's
 // beginning heads the rest of it, tokenized without specials and cut to 20
@@ -76,8 +76,7 @@ func breakersOf(v *tok.Vocab, strs []string) map[int32][][]int32 {
 }
 
 // dryObserve records t in DRY's history, which holds its window's last
-// tokens (llama.cpp's ring buffer of dry_penalty_last_n; -1, the context,
-// holds them all).
+// tokens (DryPenaltyLastN of them; -1, the context, holds them all).
 func (s *Sampler) dryObserve(t int32) {
 	if n := s.DryPenaltyLastN; n > 0 && len(s.dhist) >= n {
 		copy(s.dhist, s.dhist[len(s.dhist)-n+1:])
@@ -86,15 +85,13 @@ func (s *Sampler) dryObserve(t int32) {
 	s.dhist = append(s.dhist, t)
 }
 
-// dryRow writes s.dry.row for smp's next draw as llama.cpp's DRY sampler
-// finds what it penalizes (llama_sampler_dry_apply, steps 1 to 3, and step
-// 4's exponent): over the last tokens of its history, the nearest restart
-// sequence limits how far back a repeat reaches; the Z-algorithm, reversed,
-// finds each earlier place the history's tail repeats and how long; the
-// token after each repeat at least DryAllowedLength long would extend it,
-// and is marked with the longest, less the allowed length, clamped where
-// the base to it would overflow binary32 -- a token that is a breaker alone
-// excepted. It reports whether it marked any.
+// dryRow writes s.dry.row for smp's next draw: over the last tokens of its
+// history, the nearest restart sequence limits how far back a repeat reaches
+// (step 1); the Z-algorithm, reversed, finds each earlier place the history's
+// tail repeats and how long (2); the token after each repeat at least
+// DryAllowedLength long would extend it, and is marked with the longest (3),
+// less the allowed length, clamped where the base to it would overflow
+// binary32 (4) -- a token that is a breaker alone excepted. It reports whether it marked any.
 func (s *Instance) dryRow(smp *Sampler) bool {
 	d, n := &s.dry, s.c.NVocab
 	if len(d.row) != n {
@@ -194,7 +191,7 @@ func (s *Instance) dryRow(smp *Sampler) bool {
 			d.row[t] = max(d.row[t], float32(l+1))
 		}
 	}
-	// Step 4's exponent: the length past the allowed one, clamped where
+	// Step 4: the exponent, the length past the allowed one, clamped where
 	// the base to it would pass binary32's largest.
 	maxExp := 0
 	if smp.DryBase > 1.000001 {
