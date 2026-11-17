@@ -46,6 +46,21 @@ func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
 	default:
 		return nil, fmt.Errorf("a reduce by %v", o.Attr.Fn)
 	}
+	// An index row's words reduce as unsigned integers: a max from 0, a min
+	// from the largest word.
+	var t ir.Type
+	if c.value(o.In[0]).Elem == ir.U32 {
+		if c.value(o.Out[0]).Elem != ir.U32 {
+			return nil, fmt.Errorf("a reduce of an index row into a float row")
+		}
+		t = ir.U32
+		switch o.Attr.Fn {
+		case graph.MapMax:
+			init = 0
+		case graph.MapMin:
+			init = math.MaxUint32
+		}
+	}
 	R := c.Step.Rows
 	if D := o.Attr.HeadDim; D > 0 {
 		// Each column of Span rows of D, in order from the first.
@@ -58,10 +73,10 @@ func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
 		b, j, i := x.coord(1), x.coord(2), x.coord(3)
 		x.at(0, []int{R, W}, x.coord(0), x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, b, x.u(uint32(S))), i), x.u(uint32(D))), j))
 		return []Prim{{Kind: PrimReduce, Shape: []int{R, W / (S * D), D, S}, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]),
-			Combine: comb, Init: init, Expr: x.e}}, nil
+			Combine: comb, Init: init, Type: t, Expr: x.e}}, nil
 	}
 	if o.Attr.Order == graph.OrderTree {
-		return reduceTree(c, o, comb, G, S)
+		return reduceTree(c, o, comb, G, S, t)
 	}
 	sh := []int{R, G, S}
 	var x exprs
@@ -72,7 +87,7 @@ func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
 		x.at(0, sh, x.coord(0), x.coord(1), x.coord(2))
 	}
 	return []Prim{{Kind: PrimReduce, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Combine: comb,
-		Init: init, Expr: x.e}}, nil
+		Init: init, Type: t, Expr: x.e}}, nil
 }
 
 // decomposeTake is In[0]'s element at each index of In[1], held to the row.
@@ -1142,8 +1157,8 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 // i+w/2. A group of a width not a power of two starts at the next power of
 // two, element i passed on alone where i+w/2 is past the group
 // (graph.OrderTree).
-func reduceTree(c *Context, o graph.Op, comb Op, G, S int) ([]Prim, error) {
-	R, U, F := c.Step.Rows, ir.U32, ir.F32
+func reduceTree(c *Context, o graph.Op, comb Op, G, S int, t ir.Type) ([]Prim, error) {
+	R, U, F := c.Step.Rows, ir.U32, elemOf(t)
 	P := 1
 	for P < S {
 		P <<= 1
@@ -1160,7 +1175,7 @@ func reduceTree(c *Context, o graph.Op, comb Op, G, S int) ([]Prim, error) {
 		}
 		out := c.value(o.Out[0])
 		if h > 1 {
-			out = Operand{Kind: OperandScratch, Name: fmt.Sprintf("%s.tree%d", c.value(o.Out[0]).Name, lvl), Temp: true}
+			out = Operand{Kind: OperandScratch, Name: fmt.Sprintf("%s.tree%d", c.value(o.Out[0]).Name, lvl), Temp: true, Elem: t}
 		}
 		var x exprs
 		r, e := x.coord(0), x.coord(1)
