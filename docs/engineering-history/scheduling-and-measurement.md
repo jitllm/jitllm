@@ -1880,6 +1880,20 @@ its kernels would have waited for are taken beside another's, and some the
 kind-at-a-time order never reached are. It is a codegen change, and its
 speed is unmeasured; it is open (open-questions.md).
 
+The ladder's last rung takes a part apart one expression a formation, so a
+part that only fits once many are split forms the graph as many times.
+Admitting every sum of words to the vector loop (not only a sum of loaded
+words, which b60b837c7 admits) put the infill walk's counts at 16
+candidates under register pressure: 148 formations, 147 of them the last
+rung over three or four parts, 2 min 45 s against 1.07 s (box 50; each
+pass's time grew about 150 times, the fusion before the vectorizer as much
+as the binding after it). On HEAD's admission the composer's 362 CPU gates
+form again 412 times -- unrolls 119, crowded and streamed walks 114,
+copies at an initializer 60, pairs 46, wide jams 25, jams 14, cursors 13,
+a term or the fusion 13 (12 of them TestComposedCPUGroupedRouter's), split
+dots 8 -- so the last rung's one-at-a-time is rare there, and the cost is
+the whole graph formed again per retry.
+
 ## The start: a placement composed one form at a time
 
 A CPU profile of `jitllm run -devices cuda:0` on Gemma 4 E2B (a V100,
@@ -1939,3 +1953,18 @@ line), before against every change, twice each:
     Gemma 4 E2B Q4_K_M     259.1, 259.7 s ->  67.8, 68.8 s
 
 
+
+## The probe's arms and the clock governor
+
+The host probe's single-thread rows are short: an L1 walk of 2^20 steps is
+1.7 ms, a read round of 256 MiB at L1 about 3 ms. Under schedutil with
+turbo on (box 49, E5-2680 v4), an A/B of the composed probe against the
+hand-built one read the same walking kernel, in both arms, at 4 cycles of
+2.4 GHz in one arm (1.68 ns) and 4 cycles of 3.3 GHz in the other (1.22 ns,
+spread 0.38): the arms met the core at different clocks, the governor's
+state after whatever ran before. Under the performance governor the walk's
+rows agree within the band (L1 0.9947, L2 0.9984, L3 1.0021, memory
+1.0039), and the A/Bs of the probe's forms are taken so. The probe itself
+runs where scripts/genhardware runs it, and its L1 rows there land on the
+clock the governor left; whether it should warm its thread before the
+short rows is unmeasured.

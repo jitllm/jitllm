@@ -5548,3 +5548,24 @@ As they stood in open-questions.md, closed when main's CPU kernels went
 The composed CPU's k-quant forms are the composer's (`composer/x86`,
 `composer/a64`); whether either point recurs there is the composer's to
 measure.
+
+## Each lane's index in a vector loop
+
+A vector loop runs Lanes iterations a trip, and an iteration read as data
+rather than as an address -- a position turned to a float, a mask from a
+compare against a count -- is each lane's own: Induction, after Vectorize
+in every CPU profile, gives the loop a running value from each lane's
+index (OpLanes), Lanes more each trip. Read before it, a vector loop's
+iteration is the trip's first element, which a general register holds and
+a vector reading it gets broadcast. A probe at Vectorize's admission found
+202 vector loops in the composer's CPU gates reading their iteration so.
+With Induction skipping vector loops, 9 of 48 gates over those loops fail
+on box 51 (PosResampleAntialias, RelativeAttention, RowsAttend,
+RowsAttendGrouped, RowsAttendInARange, and Select's blocks, blocksJ and
+blocksFirst), and these pass: AttendBlocks and BlockRows, where the index
+feeds the softmax's running maximum, a stabiliser the result cancels;
+AttendBoth (an unsigned compare of the index, a mask stored); Select's
+dense and indexer cases and SelectPooled (a product of the index compared
+with a count, selected, masked, stored). Their shapes keep the compare
+constant across a vector, or the value is cancelled: a gate there needs a
+shape whose bound falls inside a vector's lanes.
