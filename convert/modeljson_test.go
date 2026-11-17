@@ -916,7 +916,7 @@ func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
 // Every other class rotates the whole head whatever the key says, so its file
 // leaves the key unread and a factor other than 1 is refused (mjGraphKeys).
 func TestPartialRotaryOnlyWhereTheClassReadsIt(t *testing.T) {
-	reads := map[string]bool{"phi3.json": true, "glm4moe.json": true, "qwen3_5.json": true}
+	reads := map[string]bool{"phi3.json": true, "glm4moe.json": true, "qwen3_5.json": true, "gptneox.json": true}
 	ents, err := fs.ReadDir(modelLibraryFS, "models")
 	if err != nil {
 		t.Fatal(err)

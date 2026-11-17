@@ -375,6 +375,10 @@
       "graph": "exaone4"
     },
     {
+      "name": "GPTNeoXForCausalLM",
+      "graph": "gptneox"
+    },
+    {
       "name": "GemmaForCausalLM",
       "graph": "gemma"
     },
@@ -413,6 +417,10 @@
     {
       "name": "MixtralForCausalLM",
       "graph": "mixtral"
+    },
+    {
+      "name": "OPTForCausalLM",
+      "graph": "opt"
     },
     {
       "name": "Olmo2ForCausalLM",

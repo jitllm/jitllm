@@ -11014,3 +11014,39 @@ and a fractional attention-temperature offset was truncated at conversion
 states none -- the position op's integer attribute refuses one -- and
 TestATemperatureOffsetIsAWholeNumber holds the refusal where
 TestATemperatureOffsetOfAnyValue held the builder's floor.
+
+## GPT-NeoX and OPT from their library files
+
+The test of "a model is data": two architectures the converter had never
+taken, each added by a library file (convert/models/gptneox.json, opt.json)
+and held to transformers' own classes -- a fixture of each class with every
+parameter and buffer random (scripts/hfgold.py synth-hf-gptneox,
+synth-hf-opt) and a real checkpoint of each (pythia-160m, opt-125m), 24 and 8
+positions of logits.
+
+What the files state: GPT-NeoX's parallel block over LayerNorm with biases,
+its fused q|k|v ([heads, 3, head_dim] rows) split by three slices of the
+tensor table, NeoX rotary over half (the fixture) or a quarter (Pythia) of
+each head, and its erf GELU as an expr op in the block's graph
+(0.5 x (1 + erf(x / sqrt 2))); OPT's pre-norm block, its learned position
+table sliced past the offset of 2 OPTLearnedPositionalEmbedding adds, and its
+ReLU as an expr op. What they refuse: GPT-NeoX's sequential residual, another
+activation, no attention bias; OPT's post-norm blocks, a projected embedding,
+dropped biases or affine norms, a removed final norm.
+
+What they could not do alone, and what changed in code to let them -- both
+generic, neither naming a model:
+
+- A class had to name its activation from a closed list (mjActivations),
+  even with its graph stating the activation itself; Pythia's erf GELU and
+  OPT's ReLU were refused. A file now names none when its graph has no act
+  op to read one (readsActivation); an act op with none named is refused.
+- The config reader's stand-in tensor table held a class's block tensors and
+  its head, not its other model-level tensors, so a stated learned position
+  table was "not there". Model-level tensors now stand in too, shaped by
+  their steps (modelStandIns), which also lets the table's width be checked
+  and its rows bound the context.
+
+The description of each class's models is still a line of Go
+(internal/modelsdoc/describe.go) until that table moves into the library.
+

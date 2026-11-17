@@ -292,6 +292,17 @@ SYNTH = {
     "synth-hf-llama3": ("llama", dict(**SPM_IDS, rope_parameters={
         "rope_type": "llama3", "rope_theta": 10000.0, "factor": 8.0, "low_freq_factor": 1.0,
         "high_freq_factor": 4.0, "original_max_position_embeddings": 16}), "tiny-random-LlamaForCausalLM"),
+    # Two classes added by their library files alone (convert/models/gptneox.json
+    # and opt.json): GPT-NeoX's parallel block, its per-head fused q|k|v and its
+    # rotary over half of each head; OPT's learned positions read past an offset
+    # of 2 and its ReLU MLP.
+    "synth-hf-gptneox": ("gpt_neox", dict(**SPM_IDS, num_hidden_layers=3, hidden_act="gelu", use_parallel_residual=True,
+                                          rope_parameters={"rope_type": "default", "rope_theta": 10000.0,
+                                                           "partial_rotary_factor": 0.5}),
+                         "tiny-random-MixtralForCausalLM"),
+    "synth-hf-opt": ("opt", dict(**SPM_IDS, num_hidden_layers=3, ffn_dim=96, word_embed_proj_dim=64,
+                                 activation_function="relu", do_layer_norm_before=True),
+                     "tiny-random-MixtralForCausalLM"),
     "synth-hf-ministral3": ("ministral3", dict(**SPM_IDS, 
         num_hidden_layers=3,
         rope_parameters={"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 16.0,
@@ -407,7 +418,7 @@ BUILT = {"synth-hf-qwen35": (synth_qwen35, qwen35Stale)}
 # A windowed fixture runs long enough to cross KV page boundaries: a window
 # SHORTER than a page (32 positions) is read out of one page until it is not,
 # and 8 positions never leave the first.
-LONG = {"synth-phi3": 80, "synth-phi3-longrope": 40, "synth-hf-qwen3-yarn": 40, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24}
+LONG = {"synth-phi3": 80, "synth-phi3-longrope": 40, "synth-hf-qwen3-yarn": 40, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24, "synth-hf-gptneox": 24, "synth-hf-opt": 24}
 
 
 def ids_for(vocab, n=NPOS):

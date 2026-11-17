@@ -8,8 +8,8 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 `go run ./scripts/genmodels docs/models.md`.
 
 - **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **30** graphs
-- **32** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **21** graphs, **0** of them reached only from safetensors
-- **30** graphs in all (`convert.GraphOf`, each a library file)
+- **34** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **23** graphs, **2** of them reached only from safetensors
+- **32** graphs in all (`convert.GraphOf`, each a library file)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
 - **3** embedding encoders, and pooling on any decoder
@@ -34,12 +34,14 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `gemma` | `gemma` | `GemmaForCausalLM` | Gemma 1 |
 | `gemma3n` | `gemma3n` | -- | Gemma 3n E2B, E4B |
 | `glm4moe` | `glm4moe` | `Glm4MoeForCausalLM` | GLM-4.5, GLM-4.6, GLM-4.5-Air; with M-RoPE sections the text model of GLM-4.5V and GLM-4.6V (the glm4vmoe graph) |
+| `gptneox` | -- | `GPTNeoXForCausalLM` | Pythia, GPT-NeoX-20B (safetensors only) |
 | `hybrid` | `falcon-h1`, `granitehybrid`, `mamba2`, `nemotron_h`, `nemotron_h_moe` | -- | `falcon-h1`: Falcon-H1; `granitehybrid`: Granite 4.0 hybrids (Mamba-2 beside attention); `mamba2`: Mamba-2, Mamba-Codestral; `nemotron_h`: Nemotron-H, Nemotron Nano 2; `nemotron_h_moe`: Nemotron 3 Nano |
 | `latent` | `deepseek2`, `deepseek32` | `DeepseekV2ForCausalLM`, `DeepseekV3ForCausalLM`, `Glm4MoeLiteForCausalLM` | `deepseek2`: DeepSeek-V2, V2-Lite, Coder-V2, V3, R1; Kimi-K2; Moonlight; Kimi-VL's text model; `deepseek32`: DeepSeek V3.2 |
 | `latent_delta` | `kimi-k3` | `KimiK3ForConditionalGeneration`, `KimiLinearForCausalLM` | Kimi-K3 |
 | `mixtral` | `bitnet-b1.58`, `gpt-oss`, `granite`, `granitemoe`, `hunyuan-dense`, `hunyuan-moe`, `hunyuan_vl`, `llama`, `llama4`, `minimax-m2`, `minimax-m3`, `mistral3` | `BitNetForCausalLM`, `Ernie4_5ForCausalLM`, `HunYuanDenseV1ForCausalLM`, `HunYuanMoEV1ForCausalLM`, `LlamaForCausalLM`, `Ministral3ForCausalLM`, `MixtralForCausalLM` | `bitnet-b1.58`: BitNet b1.58 2B-4T (bitnet.cpp's I2_S, F16 and F32 conversions); `gpt-oss`: gpt-oss 20B, 120B; `granite`: Granite 3.x and 4.0 dense; `granitemoe`: Granite 3.x mixtures; `hunyuan-dense`: Hunyuan dense (0.5B to 7B); `hunyuan-moe`: Hunyuan-A13B; `hunyuan_vl`: HunyuanOCR's text model (XD-RoPE); `llama`: Llama 2, 3, 3.1, 3.2, 3.3; Mistral 7B; Mixtral; SmolLM2; TinyLlama; the text model of SmolVLM, LLaVA and Janus-Pro; `llama4`: Llama 4 Scout, Maverick; `minimax-m2`: MiniMax-M2, M2.1, M2.5; `minimax-m3`: MiniMax-M3; `mistral3`: Ministral 3 |
 | `olmo2` | `olmo2` | `Olmo2ForCausalLM`, `Olmo3ForCausalLM` | OLMo 2; OLMo 3 (its sliding window makes it the olmo3 graph) |
 | `olmoe` | `olmoe` | `OlmoeForCausalLM` | OLMoE |
+| `opt` | -- | `OPTForCausalLM` | OPT 125M to 66B with pre-norm blocks (safetensors only) |
 | `phi3` | `phi3` | `Phi3ForCausalLM` | Phi-3, Phi-3.5, Phi-4, Phi-4-mini |
 | `prepost` | `gemma2`, `glm4` | -- | `gemma2`: Gemma 2; `glm4`: GLM-4-0414; the text model of GLM-4.1V and GLM-4.6V-Flash |
 | `prepost_qknorm` | `gemma3` | -- | Gemma 3; EmbeddingGemma (pooled) |
@@ -70,6 +72,7 @@ classes; any other is refused, and `model_type` is not a fallback.
 | `Ernie4_5ForCausalLM` | `mixtral` | ERNIE 4.5 dense models |
 | `Ernie4_5_MoeForCausalLM` | `ernie4_5_moe` | ERNIE 4.5 mixtures |
 | `Exaone4ForCausalLM` | `exaone4` | EXAONE 4.0 |
+| `GPTNeoXForCausalLM` | `gptneox` | Pythia, GPT-NeoX-20B (safetensors only) |
 | `GemmaForCausalLM` | `gemma` | Gemma 1 |
 | `Glm4MoeForCausalLM` | `glm4moe` | GLM-4.5, GLM-4.6, GLM-4.5-Air |
 | `Glm4MoeLiteForCausalLM` | `latent` | GLM-4.7-Flash |
@@ -80,6 +83,7 @@ classes; any other is refused, and `model_type` is not a fallback.
 | `LlamaForCausalLM` | `mixtral` | Llama 2 and 3, Mistral 7B, SmolLM2, TinyLlama |
 | `Ministral3ForCausalLM` | `mixtral` | Ministral 3's text model |
 | `MixtralForCausalLM` | `mixtral` | Mixtral 8x7B, 8x22B |
+| `OPTForCausalLM` | `opt` | OPT 125M to 66B with pre-norm blocks (safetensors only) |
 | `Olmo2ForCausalLM` | `olmo2` | OLMo 2 |
 | `Olmo3ForCausalLM` | `olmo2` | OLMo 3 (its sliding window makes it the olmo3 graph) |
 | `OlmoeForCausalLM` | `olmoe` | OLMoE |

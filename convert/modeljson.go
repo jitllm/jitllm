@@ -427,8 +427,8 @@ func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error
 	if mj.Config.Vocab == "" || mj.Config.Head.Tensor == "" {
 		return nil, fmt.Errorf("convert: %s states no vocab or no head tensor", name)
 	}
-	if mj.Config.Activation == "" {
-		return nil, fmt.Errorf("convert: %s states no activation", name)
+	if mj.Config.Activation == "" && (mj.Graph == nil || len(mj.Graph.Use) != 0 || readsActivation(mj.Graph.Block)) {
+		return nil, fmt.Errorf("convert: %s states no activation, and its graph has an act op to read one", name)
 	}
 	for f := range mj.Config.Flags {
 		if _, ok := mjFlags()[f]; !ok && mjFlagsNotImplemented()[f] == "" {
@@ -979,15 +979,18 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		if err != nil {
 			return nil, err
 		}
-		n, err := parseExpr(mj.Config.Activation)
-		if err != nil {
-			return nil, err
+		var act string
+		if mj.Config.Activation != "" {
+			n, err := parseExpr(mj.Config.Activation)
+			if err != nil {
+				return nil, err
+			}
+			av, err := evalMJ(n, env)
+			if err != nil {
+				return nil, err
+			}
+			act, _ = av.(string)
 		}
-		av, err := evalMJ(n, env)
-		if err != nil {
-			return nil, err
-		}
-		act, _ := av.(string)
 		var form ternaryForm
 		if tern != nil {
 			if form, err = tern.form(mj.name, env); err != nil {
@@ -1394,6 +1397,10 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 	}
 	ts = append(ts, more...)
+	if more, err = mj.modelStandIns(renv, c.shapes, names, have); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
+	ts = append(ts, more...)
 	// A prediction block the file states and the checkpoint does not ship is
 	// not counted: a checkpoint saved without them converts as its trunk.
 	if nv, ok := kvs[ns+"nextn_predict_layers"]; ok {
@@ -1473,14 +1480,17 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		return nil, fmt.Errorf("convert: %s: a sliding window of %d is not one graph %s runs: %w",
 			c.path, window, mj.Config.Arch, ErrNotImplemented)
 	}
-	av, err := eval("activation", mj.Config.Activation)
-	if err != nil {
-		return nil, err
-	}
-	act, _ := av.(string)
-	af, ok := mjActivations()[act]
-	if !ok {
-		return nil, fmt.Errorf("convert: %s: activation %v is not implemented: %w", c.path, av, ErrNotImplemented)
+	var af jlm.Flags
+	if mj.Config.Activation != "" {
+		av, err := eval("activation", mj.Config.Activation)
+		if err != nil {
+			return nil, err
+		}
+		act, _ := av.(string)
+		var ok bool
+		if af, ok = mjActivations()[act]; !ok {
+			return nil, fmt.Errorf("convert: %s: activation %v is not implemented: %w", c.path, av, ErrNotImplemented)
+		}
 	}
 	cfg.Flags = cfg.Flags&^mjActivationFlags | af
 	fnames := make([]string, 0, len(mj.Config.Flags))
@@ -1657,6 +1667,39 @@ func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
 // blockStandIns is each block tensor configOf may read, under the GGUF name
 // its role gives it and in the container's order: a source feeding several
 // roles stands in for each, at the shape its primitives cut it to.
+// modelStandIns are the checkpoint's model-level tensors the file maps, each
+// under its role's name, its shape the one its steps leave, in the container's
+// order; the embedding and the head stand in already (have).
+func (mj *modelJSON) modelStandIns(env exprEnv, shapes map[string][]uint64, names []string, have map[string]bool) ([]meta.Tensor, error) {
+	var ts []meta.Tensor
+	for _, n := range names {
+		shape := shapes[n]
+		if shape == nil {
+			continue
+		}
+		for _, t := range mj.Tensors.Model[n] {
+			if have[t.Role] {
+				continue
+			}
+			have[t.Role] = true
+			sh := shape
+			if len(t.Do) > 0 {
+				v, err := t.Do.run(env, []mjVal{{shape: shape, typ: jlm.TypeF32}})
+				if err != nil {
+					return nil, fmt.Errorf("%s as %s: %w", n, t.Role, err)
+				}
+				sh = v.shape
+			}
+			dims := make([]uint64, len(sh))
+			for i, d := range sh {
+				dims[len(sh)-1-i] = d
+			}
+			ts = append(ts, meta.Tensor{Name: t.Role, Dims: dims})
+		}
+	}
+	return ts, nil
+}
+
 func (mj *modelJSON) blockStandIns(env exprEnv, shapes map[string][]uint64, names []string, have map[string]bool) ([]meta.Tensor, error) {
 	var ts []meta.Tensor
 	for _, n := range names {
@@ -1896,4 +1939,15 @@ func exprUint(what string, v any) (uint64, error) {
 		return 0, fmt.Errorf("convert: %s is %v, not a count", what, v)
 	}
 	return uint64(f), nil
+}
+
+// readsActivation reports whether a block's ops, an each's steps among them,
+// hold an act op: the one op that reads the activation a file names.
+func readsActivation(ops []mjBlockOp) bool {
+	for _, o := range ops {
+		if o.Op == "act" || readsActivation(o.Steps) {
+			return true
+		}
+	}
+	return false
 }
