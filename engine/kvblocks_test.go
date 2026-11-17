@@ -189,9 +189,12 @@ func TestPagingDoesNotChangeTheAnswerWithBlockHistories(t *testing.T) {
 // the reference's own reading plus the 0.15 the GGUF oracle's CUDA build spans
 // against its CPU build (0.85-1.02); the typed instance and the GGUF oracle may
 // disagree on as many greedy picks as when that reading was taken plus the f32
-// arms' (4 of 127). The reference's first attending block, whose rows no
-// attention feeds, is held to the oracle's quantizer bit for bit, and two f32
-// arms of one process to each other bit for bit.
+// arms' (4 of 127). The typed instance's own loss on the CPU's default forms is
+// held to its own reading by the same 0.15: their int8 activations move it
+// from the reference's (q5_1 1.166 against 1.320). The reference's first
+// attending block, whose rows no attention feeds, is held to the oracle's
+// quantizer bit for bit, and two f32 arms of one process to each other bit
+// for bit.
 //
 // Two violations, each given the typed history before every step, must
 // fall outside the implementation's bound: an f32 history that attends its
@@ -480,11 +483,12 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 	// instance and the GGUF oracle disagree on.
 	const spread = 0.15
 	for _, c := range []struct {
-		kt    model.KVType
-		ratio float64
-		picks int
+		kt         model.KVType
+		ratio, own float64
+		picks      int
 	}{
-		{model.KVQ8_0, 1.073, 6}, {model.KVQ4_0, 1.455, 27}, {model.KVQ4_1, 1.491, 34}, {model.KVQ5_0, 1.301, 17}, {model.KVQ5_1, 1.320, 18}, {model.KVIQ4_NL, 1.220, 28}, {model.KVBF16, 0.968, 5},
+		{model.KVQ8_0, 1.073, 1.067, 6}, {model.KVQ4_0, 1.455, 1.351, 27}, {model.KVQ4_1, 1.491, 1.508, 34}, {model.KVQ5_0, 1.301, 1.283, 17},
+		{model.KVQ5_1, 1.320, 1.166, 18}, {model.KVIQ4_NL, 1.220, 1.341, 28}, {model.KVBF16, 0.968, 0.973, 5},
 	} {
 		t.Run(c.kt.String(), func(t *testing.T) {
 			r := lockstep(t, c.kt)
@@ -517,6 +521,12 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 				c.kt, loss, ratio, lcMove, c.ratio-spread, c.ratio+spread, fl, c.picks+baseFlips, flips(typed, base), flips(lcT, lcBase))
 			if !(math.Abs(ratio-c.ratio) <= spread) {
 				t.Errorf("%v costs jitllm's log-probabilities %.3f times what it costs the GGUF oracle's, outside %.3f-%.3f", c.kt, ratio, c.ratio-spread, c.ratio+spread)
+			}
+			own := gap(typed, base) / lcMove
+			t.Logf("%v: the typed instance on the CPU's default forms loses %.3f of the GGUF oracle's move (band %.3f-%.3f)", c.kt, own, c.own-spread, c.own+spread)
+			if !(math.Abs(own-c.own) <= spread) {
+				t.Errorf("%v: the typed instance on the CPU's default forms costs %.3f times what it costs the GGUF oracle's, outside %.3f-%.3f",
+					c.kt, own, c.own-spread, c.own+spread)
 			}
 			if fl > c.picks+baseFlips {
 				t.Errorf("%v: %d greedy picks differ from the GGUF oracle's, past %d and the f32 arms' %d", c.kt, fl, c.picks, baseFlips)
