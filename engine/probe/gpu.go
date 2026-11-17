@@ -12,6 +12,8 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/cost"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // GPU measures device d: what a launch costs the host and a kernel the
@@ -30,17 +32,15 @@ import (
 // past twice the nearest and within the TLB's reach. Read rates cannot find them: the
 // multiprocessors' nearest caches together can hold more than the last.
 // The last's rate is every workgroup reading one set of half its size, so
-// each multiprocessor reads more than its own cache holds. The last cache is found
-// from the read rate over sets doubling in size: the nearest caches serve
-// near the peak, the last more than two and a half times the memory's
-// rate; its rate is read at half its size, its latency the shortest of a
-// chase over sets past the nearest caches. Reads of the whole memory warm
-// the device first, and on a device with its own clock a read of the whole
-// memory goes before each timed launch of an instruction class, whose
-// values live in registers, so a measurement of one thread runs at the
-// clock a loaded device runs at. Every measuring kernel is
-// generated IR, compiled for the device in front of it, and timed on the
-// device's clock where the backend has one.
+// each multiprocessor reads more than its own cache holds. Reads of the
+// whole memory warm the device first, and on a device with its own clock a
+// read of the whole memory goes before each timed launch of an instruction
+// class, so a measurement of one thread runs at the clock a loaded device
+// runs at. A launch is the composer's smallest form and a read of the
+// whole memory its column reduction, each formed for the device in front
+// of it as a model's part is; the reads a cache serves, the chase and the
+// instruction classes are still kernels built from IR. Each is timed on
+// the device's clock where the backend has one.
 func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
 	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API())}}
@@ -51,15 +51,8 @@ func GPU(d backend.Device) (cost.Device, error) {
 		out.Units = u.Multiprocessors()
 	}
 	threads := out.Slots
-	p := &gpuProbe{d: d}
+	p := newGPUProbe(d)
 	defer p.close()
-
-	empty := ir.New("probe_empty", [3]int{width, 1, 1})
-	empty.Param("p", ir.F32)
-	scratch, err := p.alloc(4 * width)
-	if err != nil {
-		return out, err
-	}
 
 	free, _, err := d.Mem()
 	if err != nil {
@@ -73,22 +66,17 @@ func GPU(d backend.Device) (cost.Device, error) {
 	if err != nil {
 		return out, err
 	}
-	sums, err := p.alloc(4 * threads)
-	if err != nil {
-		return out, err
-	}
 	reads := func(set int64, threads int, whole bool) (float64, error) {
 		traffic := max(set, 256<<20)
 		if threads <= width {
 			traffic = 16 << 20
 		}
-		per := max(1, int(traffic/4)/threads)
-		k, err := gpuReadKernel(fmt.Sprintf("probe_read_%d_%d_%v", threads, set, whole), threads, per, int(set/4-1), width, whole)
+		f, words, err := p.read(fmt.Sprintf("probe_read_%d_%d_%v", threads, set, whole), in, set, traffic, threads, whole)
 		if err != nil {
 			return 0, err
 		}
-		secs, err := p.time(k, max(1, threads/width), min(width, threads), 8, in, sums)
-		return float64(per*threads*4) / secs, err
+		secs, err := p.time(f, 8)
+		return float64(4*words) / secs, err
 	}
 	read := func(set int64, threads int) (float64, error) { return reads(set, threads, false) }
 	for range 8 {
@@ -99,23 +87,18 @@ func GPU(d backend.Device) (cost.Device, error) {
 	if out.Bandwidth, err = read(big, threads); err != nil {
 		return out, err
 	}
-	warm, err := gpuReadKernel("probe_warm", threads, max(1, int(big/4)/threads), int(big/4-1), width, false)
+	loaded, _, err := p.read("probe_warm", in, big, big, threads, false)
 	if err != nil {
 		return out, err
 	}
-	wk, err := p.compile(warm)
+	empty, err := p.empty()
 	if err != nil {
 		return out, err
 	}
-	loaded := &warmLaunch{k: wk, groups: max(1, threads/width), width: min(width, threads), bufs: []backend.Buf{in, sums}}
-	ek, err := empty.Done()
-	if err != nil {
+	if out.Floor, err = p.time(empty, 64); err != nil {
 		return out, err
 	}
-	if out.Floor, err = p.time(ek, 1, width, 64, scratch); err != nil {
-		return out, err
-	}
-	if out.Launch, err = p.wall(ek, 1, width, 256, scratch); err != nil {
+	if out.Launch, err = p.wall(empty, 256); err != nil {
 		return out, err
 	}
 
@@ -192,23 +175,13 @@ func GPU(d backend.Device) (cost.Device, error) {
 		out.Caches[1] = cost.Cache{Bytes: l2, Rate: cost.Rate{Total: rate}, Latency: l2lat}
 	}
 
-	ops := map[cost.Class]gpuOp{
-		cost.ClassFloat: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Fma(x, b.ConstF32(0.999), b.ConstF32(0.001))
-		}},
-		cost.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
-		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
-		}},
-		cost.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
-		}},
-		cost.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
-		cost.ClassGroup: {t: ir.F32, op: groupSum, shared: true},
+	sums, err := p.alloc(4 * threads)
+	if err != nil {
+		return out, err
 	}
 	p.warm = loaded
 	defer func() { p.warm = nil }()
-	for cl, op := range ops {
+	for cl, op := range gpuOps() {
 		rate := func(chains, deep, threads int) (float64, error) {
 			trips := 1 << 12
 			if threads <= width {
@@ -221,7 +194,11 @@ func GPU(d backend.Device) (cost.Device, error) {
 			if err != nil {
 				return 0, err
 			}
-			secs, err := p.time(k, max(1, threads/width), min(width, threads), 4, sums)
+			f, err := p.kernel(k, max(1, threads/width), min(width, threads), sums)
+			if err != nil {
+				return 0, err
+			}
+			secs, err := p.time(f, 4)
 			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
 		}
 		chains := 8
@@ -260,22 +237,42 @@ const defaultSlots = 16384
 // cache (an A100's or an H100's L2 read 96 MiB and 256 KiB that way).
 const tlbReach = 4 << 20
 
-// gpuProbe holds the device the probe measures and what it allocated, and
-// the launch that keeps it loaded between timed ones.
+// gpuProbe holds the device the probe measures, what it allocated, the
+// composer it forms its kernels with and the device it forms them for, and
+// the launch that keeps the device loaded between timed ones.
 type gpuProbe struct {
 	d    backend.Device
+	reg  *composer.Registry
+	dev  composer.Device
 	bufs []backend.Buf
 	ks   []backend.Kernel
-	warm *warmLaunch
+	warm *gpuForm
 }
 
-// warmLaunch is a kernel reading the whole memory, launched before each
-// timed launch so a measurement of one thread starts at the clock a loaded
-// device runs at rather than the one an idle device falls to.
-type warmLaunch struct {
-	k             backend.Kernel
-	groups, width int
-	bufs          []backend.Buf
+// gpuForm is kernels launched in order, each with its workgroups, width and
+// buffers: a graph the composer formed, compiled.
+type gpuForm struct {
+	ks     []backend.Kernel
+	names  []string
+	groups []int
+	widths []int
+	args   [][]backend.Buf
+}
+
+func newGPUProbe(d backend.Device) *gpuProbe {
+	lanes := 1
+	if ok, _ := backend.GuaranteedLanes(d, ir.SubgroupLanes); ok {
+		lanes = ir.SubgroupLanes
+	}
+	dev := composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API()),
+		ExactArith: composer.ExactArithOn(d.API()), VectorLoads: composer.VectorLoadsOn(d.API()), Buffers: backend.Bindings(d)}
+	if u, ok := d.(backend.MultiprocessorDevice); ok {
+		dev.Units = u.Multiprocessors()
+	}
+	if s, ok := d.(backend.SharedMemoryDevice); ok {
+		dev.Shared = s.SharedPerMultiprocessor()
+	}
+	return &gpuProbe{d: d, reg: composer.Default(), dev: dev}
 }
 
 func (p *gpuProbe) close() {
@@ -305,24 +302,172 @@ func (p *gpuProbe) compile(k *ir.Kernel) (backend.Kernel, error) {
 	return c, nil
 }
 
-// time is the device seconds a launch of k takes, after one that warms it:
-// the mean of n on the device's own clock where its backend has one, else
-// the median of the wall's around each waited launch.
-func (p *gpuProbe) time(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf) (float64, error) {
+// kernel is k compiled, launched at groups workgroups of width over bufs.
+func (p *gpuProbe) kernel(k *ir.Kernel, groups, width int, bufs ...backend.Buf) (*gpuForm, error) {
 	c, err := p.compile(k)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	if err := c.Launch(groups, width, bufs...); err != nil {
+	return &gpuForm{ks: []backend.Kernel{c}, names: []string{k.Name}, groups: []int{groups}, widths: []int{width}, args: [][]backend.Buf{bufs}}, nil
+}
+
+// form is g's kernels as the composer forms them for the device at one row,
+// compiled, each value bound to its buffer in vals or one of its own, and
+// each constant block, scratch and the step's row count to one of its own.
+func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gpuForm, error) {
+	_, codes, err := p.reg.Form(p.request(g))
+	if err != nil {
+		return nil, err
+	}
+	own := map[composer.Operand]backend.Buf{}
+	words := func(ws []uint32) (backend.Buf, error) {
+		b, err := p.alloc(max(4*len(ws), 4))
+		if err != nil {
+			return nil, err
+		}
+		return b, b.Write(unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(ws))), 4*len(ws)))
+	}
+	f := &gpuForm{}
+	for _, c := range codes {
+		if c.GPU == nil {
+			return nil, fmt.Errorf("probe: %s has no GPU code", c.Name)
+		}
+		k, err := p.compile(c.GPU)
+		if err != nil {
+			return nil, err
+		}
+		args := make([]backend.Buf, len(c.Binds))
+		for i, bd := range c.Binds {
+			o := bd.Operand
+			b, ok := own[o]
+			switch {
+			case ok:
+			case o.Kind == composer.OperandValue && vals[o.Value] != nil:
+				b = vals[o.Value]
+			case o.Kind == composer.OperandValue:
+				b, err = p.alloc(4 * max(g.Values[o.Value].Width, 1))
+			case bd.Words != nil:
+				b, err = words(bd.Words)
+			case o.Kind == composer.OperandTable && o.Name == "rows.n":
+				b, err = words([]uint32{1})
+			case o.Kind == composer.OperandScratch:
+				b, err = p.alloc(int(max(bd.Bytes, 4)))
+			default:
+				return nil, fmt.Errorf("probe: %s binds %v, which a probe does not hold", c.Name, o)
+			}
+			if err != nil {
+				return nil, err
+			}
+			own[o], args[i] = b, b
+		}
+		f.ks, f.names = append(f.ks, k), append(f.names, c.GPU.Name)
+		f.groups, f.widths, f.args = append(f.groups, c.Groups), append(f.widths, c.GPU.Group[0]), append(f.args, args)
+	}
+	return f, nil
+}
+
+// request asks for g at one row on the device the probe measures, its
+// inputs and outputs buffers of their own.
+func (p *gpuProbe) request(g *graph.Graph) composer.Request {
+	return composer.Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: composer.Step{Rows: 1, Page: 64, Keys: 1}, Device: p.dev, Apart: true}
+}
+
+// empty is the smallest form: one element, doubled.
+func (p *gpuProbe) empty() (*gpuForm, error) {
+	b := graph.New()
+	x := b.In("probe_empty_in", 1)
+	b.Out(b.Map("probe_empty", graph.Attrs{Fn: graph.MapMul, Const: 2}, nil, 1, x))
+	return p.form(b.G, nil)
+}
+
+// read is a column reduction of set bytes of buf, as threads columns of at
+// least traffic bytes in all, and the words it reads: column j sums the
+// set's words j, j+threads, ... wrapped at the set, so a set smaller than
+// the reads is read over and over. Where whole is set each workgroup's
+// columns read the whole set. A set read once is the composer's reduction;
+// a set the reads wrap is still a built kernel, since the composer forms a
+// reduction over a tile with the tile a kernel of its own, which reads the
+// set once and writes every period of it.
+func (p *gpuProbe) read(name string, buf backend.Buf, set, traffic int64, threads int, whole bool) (*gpuForm, int, error) {
+	const width = 256
+	words := int(set / 4)
+	per := max(1, int(traffic/4)/threads)
+	n := per * threads
+	if whole || n > words {
+		sums, err := p.alloc(4 * threads)
+		if err != nil {
+			return nil, 0, err
+		}
+		k, err := gpuReadKernel(name, threads, per, words-1, width, whole)
+		if err != nil {
+			return nil, 0, err
+		}
+		f, err := p.kernel(k, max(1, threads/width), min(width, threads), buf, sums)
+		return f, n, err
+	}
+	b := graph.New()
+	x := b.In(name+"_set", n)
+	b.Out(b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: name, Width: threads}}, nil,
+		graph.Attrs{Fn: graph.MapAdd, HeadDim: threads, Span: per, Order: graph.OrderSeq}, nil, nil)[0])
+	f, err := p.form(b.G, map[graph.ValueID]backend.Buf{x: buf})
+	return f, n, err
+}
+
+// gpuReadKernel sums, in each of threads threads, per words of the first
+// buffer strided by threads and wrapped by mask, a power of two less one;
+// and stores each sum. Where whole is set each workgroup reads the whole
+// set, strided by its width.
+func gpuReadKernel(name string, threads, per, mask, width int, whole bool) (*ir.Kernel, error) {
+	b := ir.New(name, [3]int{min(width, threads), 1, 1})
+	in, out := b.Param("in", ir.F32), b.Param("out", ir.F32)
+	t := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+	first, stride := t, threads
+	if whole {
+		first, stride = b.TID(), min(width, threads)
+	}
+	zero := b.ConstF32(0)
+	b.Loop(int64(per))
+	j := b.Phi(ir.U32, first)
+	acc := b.Phi(ir.F32, zero)
+	b.SetPhi(acc, b.Add(ir.F32, acc, b.Load(ir.F32, in, j, 0)))
+	b.SetPhi(j, b.And(ir.U32, b.Add(ir.U32, j, b.Const(ir.U32, int64(stride))), b.Const(ir.U32, int64(mask))))
+	b.EndLoop()
+	b.Store(out, t, acc, 0)
+	return b.Done()
+}
+
+func (f *gpuForm) run(s backend.Session) error {
+	for i, k := range f.ks {
+		if err := s.Launch(k, f.groups[i], f.widths[i], f.args[i]...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *gpuForm) launch() error {
+	for i, k := range f.ks {
+		if err := k.Launch(f.groups[i], f.widths[i], f.args[i]...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// time is the device seconds a launch of f takes, after one that warms it:
+// the mean of n on the device's own clock where its backend has one, else
+// the median of the wall's around each waited launch.
+func (p *gpuProbe) time(f *gpuForm, n int) (float64, error) {
+	if err := f.launch(); err != nil {
 		return 0, err
 	}
 	if t, ok := Timer(p.d); ok {
-		return p.timed(t, k.Name, c, groups, width, n, bufs...)
+		return p.timed(t, f, n)
 	}
 	var times []float64
 	for range n {
 		t0 := time.Now()
-		if err := c.Launch(groups, width, bufs...); err != nil {
+		if err := f.launch(); err != nil {
 			return 0, err
 		}
 		times = append(times, time.Since(t0).Seconds())
@@ -336,34 +481,27 @@ func (p *gpuProbe) time(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf)
 // Bandwidth, after reads of the whole set have woken it. It is the wall a
 // decode row is a fraction of (RULE 1), measured in the process that runs it.
 func ReadRate(d backend.Device, set int64, rounds int) (float64, error) {
-	const width = 256
 	threads := d.Slots()
 	if threads == 0 {
 		threads = defaultSlots
 	}
-	p := &gpuProbe{d: d}
+	p := newGPUProbe(d)
 	defer p.close()
 	in, err := p.alloc(int(set))
 	if err != nil {
 		return 0, err
 	}
-	sums, err := p.alloc(4 * threads)
+	f, words, err := p.read("probe_wall", in, set, set, threads, false)
 	if err != nil {
 		return 0, err
 	}
-	per := max(1, int(set/4)/threads)
-	k, err := gpuReadKernel("probe_wall", threads, per, int(set/4-1), width, false)
-	if err != nil {
-		return 0, err
-	}
-	groups := max(1, threads/width)
 	for range 4 {
-		if _, err := p.time(k, groups, min(width, threads), 1, in, sums); err != nil {
+		if _, err := p.time(f, 1); err != nil {
 			return 0, err
 		}
 	}
-	secs, err := p.time(k, groups, min(width, threads), max(rounds, 1), in, sums)
-	return float64(per*threads*4) / secs, err
+	secs, err := p.time(f, max(rounds, 1))
+	return float64(4*words) / secs, err
 }
 
 // KernelTimer is a backend's per-kernel device clock: arming it, and each
@@ -382,9 +520,16 @@ func Timer(d backend.Device) (KernelTimer, bool) {
 	return KernelTimer{}, false
 }
 
-// timed is the mean device seconds of n launches of c in one session, on
-// clock t.
-func (p *gpuProbe) timed(t KernelTimer, name string, c backend.Kernel, groups, width, n int, bufs ...backend.Buf) (float64, error) {
+// timed is the mean device seconds of n launches of f in one session, on
+// clock t: each of its kernels' mean, summed.
+func (p *gpuProbe) timed(t KernelTimer, f *gpuForm, n int) (float64, error) {
+	if w := p.warm; w != nil {
+		for _, name := range f.names {
+			if slices.Contains(w.names, name) {
+				return 0, fmt.Errorf("probe: %s is a kernel of the warm launch too", name)
+			}
+		}
+	}
 	t.Arm(true)
 	defer t.Arm(false)
 	t.Times()
@@ -392,13 +537,11 @@ func (p *gpuProbe) timed(t KernelTimer, name string, c backend.Kernel, groups, w
 	p.d.Session(func(s backend.Session) {
 		for range n {
 			if w := p.warm; w != nil {
-				if err := s.Launch(w.k, w.groups, w.width, w.bufs...); err != nil {
-					errs = err
+				if errs = w.run(s); errs != nil {
 					return
 				}
 			}
-			if err := s.Launch(c, groups, width, bufs...); err != nil {
-				errs = err
+			if errs = f.run(s); errs != nil {
 				return
 			}
 		}
@@ -408,20 +551,20 @@ func (p *gpuProbe) timed(t KernelTimer, name string, c backend.Kernel, groups, w
 		return 0, errs
 	}
 	us, cnt := t.Times()
-	if cnt[name] == 0 {
-		return 0, fmt.Errorf("probe: %s was not timed", name)
+	secs := 0.0
+	for _, name := range slices.Compact(slices.Sorted(slices.Values(f.names))) {
+		if cnt[name] == 0 {
+			return 0, fmt.Errorf("probe: %s was not timed", name)
+		}
+		secs += us[name] / float64(n) / 1e6
 	}
-	return us[name] / float64(cnt[name]) / 1e6, nil
+	return secs, nil
 }
 
-// wall is the seconds a launch of k costs n back to back in one session:
+// wall is the seconds a launch of f costs n back to back in one session:
 // the rate the host issues launches at, where the kernel takes less; the
 // median of rounds sessions.
-func (p *gpuProbe) wall(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf) (float64, error) {
-	c, err := p.compile(k)
-	if err != nil {
-		return 0, err
-	}
+func (p *gpuProbe) wall(f *gpuForm, n int) (float64, error) {
 	var times []float64
 	for range rounds {
 		var errs error
@@ -431,7 +574,7 @@ func (p *gpuProbe) wall(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf)
 			}
 			t0 := time.Now()
 			for range n {
-				if errs = s.Launch(c, groups, width, bufs...); errs != nil {
+				if errs = f.run(s); errs != nil {
 					return
 				}
 			}
@@ -476,32 +619,12 @@ func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	secs, err := p.time(k, 1, 1, 3, buf, sink)
-	return secs / steps, err
-}
-
-// gpuReadKernel sums, in each of threads threads, per words of the first
-// buffer strided by threads and wrapped by mask, a power of two less one,
-// so a set smaller than the reads is read over and over; and stores each
-// sum. Where whole is set each workgroup reads the whole set, strided by
-// its width.
-func gpuReadKernel(name string, threads, per, mask, width int, whole bool) (*ir.Kernel, error) {
-	b := ir.New(name, [3]int{min(width, threads), 1, 1})
-	in, out := b.Param("in", ir.F32), b.Param("out", ir.F32)
-	t := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
-	first, stride := t, threads
-	if whole {
-		first, stride = b.TID(), min(width, threads)
+	f, err := p.kernel(k, 1, 1, buf, sink)
+	if err != nil {
+		return 0, err
 	}
-	zero := b.ConstF32(0)
-	b.Loop(int64(per))
-	j := b.Phi(ir.U32, first)
-	acc := b.Phi(ir.F32, zero)
-	b.SetPhi(acc, b.Add(ir.F32, acc, b.Load(ir.F32, in, j, 0)))
-	b.SetPhi(j, b.And(ir.U32, b.Add(ir.U32, j, b.Const(ir.U32, int64(stride))), b.Const(ir.U32, int64(mask))))
-	b.EndLoop()
-	b.Store(out, t, acc, 0)
-	return b.Done()
+	secs, err := p.time(f, 3)
+	return secs / steps, err
 }
 
 // gpuOp is instructions of a class a probe chains, ones the device's
@@ -517,6 +640,24 @@ type gpuOp struct {
 	op     func(b *ir.Builder, sh, tid, x ir.Value) ir.Value
 	shared bool
 	per    float64
+}
+
+// gpuOps is the instructions each class's rate is measured over.
+func gpuOps() map[cost.Class]gpuOp {
+	return map[cost.Class]gpuOp{
+		cost.ClassFloat: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+			return b.Fma(x, b.ConstF32(0.999), b.ConstF32(0.001))
+		}},
+		cost.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
+		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
+		}},
+		cost.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
+		}},
+		cost.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
+		cost.ClassGroup: {t: ir.F32, op: groupSum, shared: true},
+	}
 }
 
 // groupSum is a workgroup's sum the way the composer's GPU lowering forms
