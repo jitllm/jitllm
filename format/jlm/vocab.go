@@ -96,6 +96,15 @@ const (
 	// PreSparkSplit is Spark-X2.5's variant of it (pretok.OpSparkSplit); a
 	// reader that predates it refuses the stage.
 	PreSparkSplit PreOpKind = 11
+	// PrePattern is a Split as the model's tokenizer.json writes it: its
+	// regex (Pattern), behavior (Behavior) and Invert, run by the tokenizer's
+	// pattern engine. The pattern and the invert flag travel in the vocab
+	// record's last optional tail, after a tool form that is then always
+	// written, empty when the model has none. A reader that predates the kind
+	// reads that empty tool form as JSON and fails to open the container;
+	// given a tool form, it skips the tail and splits by its own table row
+	// for PreName.
+	PrePattern PreOpKind = 12
 )
 
 // PreOp is one stage, with every parameter the stage takes. A reader runs these
@@ -133,8 +142,12 @@ type PreOp struct {
 	// PreDigits.
 	Individual bool
 
-	// PrePunctuation.
+	// PrePunctuation; PrePattern's split behavior.
 	Behavior string
+
+	// PrePattern.
+	Pattern string
+	Invert  bool
 }
 
 // Merge is one BPE merge rule, as an explicit pair: the source's joined

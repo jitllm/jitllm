@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok"
 	"github.com/jitllm/jitllm/tok/pretok"
 )
 
@@ -190,13 +191,20 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 // It is the one translation for both input formats: the GGUF path gets its
 // []pretok.Op through pretok.Table() by name, the safetensors path from
 // pretok.ParsePreTokenizer. A stage with no container code is a refusal rather
-// than routed to the nearest-looking one.
+// than routed to the nearest-looking one, and so is a stage the tokenizer
+// could not build, a pattern that does not compile among them.
 func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
+	if len(ops) > 0 {
+		if err := tok.CheckPreOps(ops); err != nil {
+			return nil, fmt.Errorf("convert: %w", err)
+		}
+	}
 	out := make([]jlm.PreOp, 0, len(ops))
 	for _, o := range ops {
 		p := jlm.PreOp{
 			UseRegex: o.UseRegex, AddPrefixSpace: o.AddPrefixSpace,
 			Individual: o.Individual, Behavior: o.Behavior,
+			Pattern: o.Pattern, Invert: o.Invert,
 			Contractions: o.Split.Contractions, CaseFold: o.Split.CaseFold,
 			CaseRuns: o.Split.CaseRuns, SuffixContract: o.Split.SuffixContract,
 			PunctSlash: o.Split.PunctSlash, HanRuns: o.Split.HanRuns, PunctNoNewline: o.Split.PunctNoNewline,
@@ -223,6 +231,8 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 			p.Kind = jlm.PreHunyuanSplit
 		case pretok.OpSparkSplit:
 			p.Kind = jlm.PreSparkSplit
+		case pretok.OpPattern:
+			p.Kind = jlm.PrePattern
 		default:
 			return nil, fmt.Errorf("convert: stage %v is one this container does not define", o.Kind)
 		}

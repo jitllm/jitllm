@@ -30,6 +30,7 @@ import (
 
 func main() {
 	dump := flag.String("dump", "", "also write each model's raw pre_tokenizer JSON object to this directory")
+	pin := flag.String("rev", "", "the directory's revision; the latest when empty")
 	flag.Parse()
 	out := "tok/pretok/table.go"
 	if flag.NArg() > 0 {
@@ -41,7 +42,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	dir, rev, err := fetchDirectory()
+	dir, rev, err := fetchDirectory(*pin)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "directory:", err)
 		os.Exit(1)
@@ -193,19 +194,18 @@ func handWritten() map[string]handWrittenRow {
 		//	|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?
 		//	|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
 		//
-		// which is o200k -- gpt-4o's row below, flag for flag -- plus HanRuns, and
-		// minus PunctSlash: the punctuation run ends [\r\n]* here where o200k's is
-		// [\r\n/]*. tok/testdata/kimi_k2_split.json is the golden, generated from
-		// that pattern.
+		// which is o200k -- gpt-4o's row below -- with Han runs of their own and
+		// Han subtracted from the letter classes, and a punctuation run that ends
+		// [\r\n]* where o200k's is [\r\n/]*. tok/testdata/kimi_k2_split.json is
+		// the golden, generated from that pattern.
 		"kimi-k2": {
 			repo: "moonshotai/Kimi-K2-Instruct (tokenization_kimi.py)",
 			why:  "no tokenizer.json is published; the pat_str is the artefact",
 			ops: []pretok.Op{
-				{Kind: pretok.OpSplit, Split: pretok.SplitParams{
-					Contractions: true, CaseFold: true, DigitGroup: 3,
-					CaseRuns: true, SuffixContract: true, PunctSlash: false,
-					HanRuns: true,
-				}},
+				{Kind: pretok.OpPattern, Behavior: "Isolated", Pattern: `[\p{Han}]+` +
+					`|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?` +
+					`|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?` +
+					`|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+`},
 				{Kind: pretok.OpByteLevel},
 			},
 		},

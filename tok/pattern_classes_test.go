@@ -8,7 +8,24 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/uniprop"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
+
+// TestShippedSplitIsPinned drives the anti-revert pins of
+// TestPinnedUnicodeTables through the pipeline that ships, llama-bpe's
+// pattern on the engine: a letter Go's newer Unicode tables know and 15.1.0
+// leaves unassigned is no letter here, so "a<U+1C89>b" is two pieces.
+func TestShippedSplitIsPinned(t *testing.T) {
+	p, err := buildPipeline(pretok.Table()["llama-bpe"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for text, want := range map[string]int{"aᲉb": 2, "a࢏b": 2, "aꟋb": 2, "ab": 1} {
+		if got := len(p.apply(text)); got != want {
+			t.Errorf("%q splits into %d pieces, want %d: the engine is not reading the pinned %s tables", text, got, want, uniprop.Version)
+		}
+	}
+}
 
 // TestClassesAreTheLibrarys holds each class the patterns use -- \w, \d, \s
 // and the properties -- to the tokenizers library's own regex over every code

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/tok/pretok"
@@ -92,13 +93,14 @@ func TestKimiK2NeedsHanRuns(t *testing.T) {
 	copy(off, ops)
 	found := false
 	for i := range off {
-		if off[i].Kind == pretok.OpSplit && off[i].Split.HanRuns {
-			off[i].Split.HanRuns = false
+		if off[i].Kind == pretok.OpPattern && strings.HasPrefix(off[i].Pattern, `[\p{Han}]+|`) {
+			p := strings.TrimPrefix(off[i].Pattern, `[\p{Han}]+|`)
+			off[i].Pattern = strings.ReplaceAll(p, `&&[^\p{Han}]`, "")
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("kimi-k2's entry has no HanRuns stage -- it is gpt-4o's pipeline")
+		t.Fatal("kimi-k2's entry has no Han runs -- it is gpt-4o's pipeline")
 	}
 	on, err := buildPipeline(ops)
 	if err != nil {

@@ -2,6 +2,7 @@ package tok_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/tok"
@@ -63,7 +64,7 @@ func TestGeneratedShapes(t *testing.T) {
 	}{
 		{"falcon3", []pretok.OpKind{pretok.OpPunctuation, pretok.OpByteLevel, pretok.OpDigits},
 			"was routed to splitLlama3 (a single Split); its real shape is three stages"},
-		{"falcon-h1", []pretok.OpKind{pretok.OpPunctuation, pretok.OpSplit, pretok.OpByteLevel, pretok.OpSplit},
+		{"falcon-h1", []pretok.OpKind{pretok.OpPunctuation, pretok.OpPattern, pretok.OpByteLevel, pretok.OpPattern},
 			"was routed to splitLlama3; its real shape is four stages"},
 		{"starcoder", []pretok.OpKind{pretok.OpDigits, pretok.OpByteLevel},
 			"control: the legacy starcoderFamily already did digits-then-gpt2"},
@@ -85,21 +86,22 @@ func TestGeneratedShapes(t *testing.T) {
 			}
 		}
 	}
-	// The digit rule, from the models' own artefacts.
-	for name, want := range map[string]int{"llama-bpe": 3, "smaug-bpe": 3, "qwen2": 1, "qwen35": 1} {
-		ops := pretok.Table()[name]
-		for _, op := range ops {
-			if op.Kind == pretok.OpSplit && op.Split.DigitGroup != want {
-				t.Errorf("%s: digit group %d, want %d", name, op.Split.DigitGroup, want)
+	// The digit rule and the letter run, from the models' own artefacts:
+	// qwen35 is [\p{L}\p{M}]+ where qwen2 is \p{L}+ -- a difference the
+	// legacy family map could not express at all, since both were
+	// "qwen2Family".
+	for name, want := range map[string][2]string{
+		"llama-bpe": {`\p{N}{1,3}`, `\p{L}+`}, "smaug-bpe": {`\p{N}{1,3}`, `\p{L}+`},
+		"qwen2": {`|\p{N}|`, `\p{L}+`}, "qwen35": {`|\p{N}|`, `[\p{L}\p{M}]+`},
+	} {
+		op := pretok.Table()[name][0]
+		for _, w := range want {
+			if op.Kind != pretok.OpPattern || !strings.Contains(op.Pattern, w) {
+				t.Errorf("%s: stage 0 is %+v, want a pattern holding %s", name, op, w)
 			}
 		}
 	}
-	// qwen35 is [\p{L}\p{M}]+ where qwen2 is \p{L}+ -- a difference the legacy
-	// family map could not express at all, since both were "qwen2Family".
-	if !pretok.Table()["qwen35"][0].Split.LetterMarks {
-		t.Error("qwen35: LetterMarks should be set; its pattern is [\\p{L}\\p{M}]+")
-	}
-	if pretok.Table()["qwen2"][0].Split.LetterMarks {
-		t.Error("qwen2: LetterMarks should NOT be set; its pattern is \\p{L}+")
+	if strings.Contains(pretok.Table()["qwen2"][0].Pattern, `[\p{L}\p{M}]+`) {
+		t.Error("qwen2: its letter run is \\p{L}+, not [\\p{L}\\p{M}]+")
 	}
 }

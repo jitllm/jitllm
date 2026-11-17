@@ -29,6 +29,8 @@ const (
 // as it did when it was written.
 func (op Op) AsPattern() (pattern, behavior string, ok bool) {
 	switch op.Kind {
+	case OpPattern:
+		return op.Pattern, op.Behavior, true
 	case OpSplit:
 		return op.Split.Pattern(), "Isolated", true
 	case OpByteLevel:

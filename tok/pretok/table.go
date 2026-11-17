@@ -10,65 +10,69 @@
 package pretok
 
 // Table maps a pre-tokenizer name to the ordered stages it denotes.
-// 71 names resolved.
+// 73 names resolved.
 func Table() map[string][]Op {
 	return map[string][]Op{
 		// skt/A.X-4.0
 		"a.x-4.0": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// arcee-ai/Trinity-Tokenizer
-		"afmoe": {{Kind: OpDigits, Individual: false}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: true, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"afmoe": {{Kind: OpDigits, Individual: false}, {Kind: OpPattern, Pattern: "\\p{Nd}{1,510}(?=(?>\\p{Nd}{510})*(?:\\P{Nd}|$))|\\G\\p{Nd}{510}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\A\\p{Nd}{1,2}(?=\\p{Nd}{3}+\\z)", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\A\\p{Nd}{3}|\\G\\p{Nd}{3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "(?:[\\u4E00-\\u9FFF\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\uf900-\\uFAFF\\uFF65-\\uFF9F\\u2F00-\\u2FDF]+|[\\u0E00-\\u0E7F]+|[\\u0E80-\\u0EFF]+|[\\u1780-\\u17FF]+|[\\u1000-\\u109F\\uAA60-\\uAA7F\\uA9E0-\\uA9FF]+|[\\uAC00-\\uD7AF\\u1100-\\u11FF]+)", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// inclusionAI/Ling-lite
-		"bailingmoe": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"bailingmoe": {{Kind: OpPattern, Pattern: "'(?i:[sdmt]|ll|ve|re)|[^\\r\\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]++[\\r\\n]*|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// inclusionAI/Ling-mini-base-2.0
-		"bailingmoe2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"bailingmoe2": {{Kind: OpPattern, Pattern: "'(?i:[sdmt]|ll|ve|re)|[^\\r\\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]++[\\r\\n]*|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// zai-org/glm-4-9b-chat-hf
-		"chatglm-bpe": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"chatglm-bpe": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// WisdomShell/CodeShell-7B
 		"codeshell": {{Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// CohereLabs/North-Mini-Code-1.0
-		"cohere2moe": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"cohere2moe": {{Kind: OpPattern, Pattern: "\\d{1,3}(?=(?:\\d{3})*\\b)", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// mlx-community/aya-23-8B-8bit
 		"command-r": {{Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// deepseek-ai/deepseek-coder-6.7b-base
-		"deepseek-coder": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"deepseek-coder": {{Kind: OpPattern, Pattern: "[\r\n]", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\s?\\p{L}+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\s?\\p{P}+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥ࠀ-一가-\ud7ff]+", Behavior: "Isolated", Invert: false}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// deepseek-ai/deepseek-llm-7b-base
-		"deepseek-llm": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"deepseek-llm": {{Kind: OpPattern, Pattern: "[\r\n]", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\s?[A-Za-zµÀ-ÖØ-öø-ƺƼ-ƿǄ-ʓʕ-ʯͰ-ͳͶͷͻ-ͽͿΆΈ-ΊΌΎ-ΡΣ-ϵϷ-ҁҊ-ԯԱ-ՖႠ-ჅᎠ-Ᏽᏸ-ᏽᲐ-ᲺᲽ-Ჿᴀ-ᴫᵫ-ᵷᵹ-ᶚḀ-ἕἘ-Ἕἠ-ὅὈ-Ὅὐ-ὗὙὛὝὟ-ώᾀ-ᾴᾶ-ᾼιῂ-ῄῆ-ῌῐ-ΐῖ-Ίῠ-Ῥῲ-ῴῶ-ῼℂℇℊ-ℓℕℙ-ℝℤΩℨK-ℭℯ-ℴℹℼ-ℿⅅ-ⅉⅎↃↄⰀ-ⱻⱾ-ⳤⳫ-ⳮⳲⳳꙀ-ꙭꚀ-ꚛꜢ-ꝯꝱ-ꞇꞋ-ꞎꭰ-ꮿﬀ-ﬆﬓ-ﬗＡ-Ｚａ-ｚ𐐀-𐑏𐒰-𐓓𐓘-𐓻𐲀-𐲲𐳀-𐳲𑢠-𑣟𞤀-𞥃]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\s?[!-/:-~！-／：-～‘-‟\u3000-。]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "\\s+$", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥ࠀ-一가-\ud7ff]+", Behavior: "Isolated", Invert: false}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-		"deepseek-r1-qwen": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"deepseek-r1-qwen": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// deepseek-ai/DeepSeek-V3
-		"deepseek-v3": {{Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}}, {Kind: OpKanaHanRuns}, {Kind: OpHunyuanSplit}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"deepseek-v3": {{Kind: OpPattern, Pattern: "\\p{N}{1,3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥\u3040-ゟ゠-ヿ]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// LGAI-EXAONE/K-EXAONE-236B-A23B
-		"exaone-moe": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"exaone-moe": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// LGAI-EXAONE/EXAONE-4.0-32B
 		"exaone4": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// codefuse-ai/F2LLM-v2-4B
-		"f2llmv2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"f2llmv2": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// tiiuae/falcon-7b
-		"falcon": {{Kind: OpPunctuation, Behavior: "Contiguous"}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}, {Kind: OpDigits, Individual: false}, {Kind: OpDigitTriples}},
+		"falcon": {{Kind: OpPunctuation, Behavior: "Contiguous"}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}, {Kind: OpDigits, Individual: false}, {Kind: OpPattern, Pattern: "[0-9][0-9][0-9]", Behavior: "Isolated", Invert: false}},
 		// tiiuae/Falcon-H1-0.5B-Base
-		"falcon-h1": {{Kind: OpPunctuation, Behavior: "Contiguous"}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: true, SuffixContract: false, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}},
+		"falcon-h1": {{Kind: OpPunctuation, Behavior: "Contiguous"}, {Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}, {Kind: OpPattern, Pattern: "[0-9]", Behavior: "Isolated", Invert: false}},
 		// tiiuae/Falcon3-7B-Base
 		"falcon3": {{Kind: OpPunctuation, Behavior: "Contiguous"}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}, {Kind: OpDigits, Individual: true}},
+		// danish-foundation-models/DFM-Mimir
+		"gemma4": {{Kind: OpPattern, Pattern: " ", Behavior: "MergedWithPrevious", Invert: false}},
 		// ai-sage/GigaChat-20B-A3B-instruct
-		"gigachat": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"gigachat": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Removed", Invert: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// THUDM/glm-4-9b-hf
-		"glm4": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"glm4": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// openai-community/gpt2
 		"gpt-2": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// Xenova/gpt-4o
-		"gpt-4o": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"gpt-4o": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Removed", Invert: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// ibm-granite/granite-docling-258M
 		"granite-docling": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
+		// ibm-granite/granite-embedding-311m-multilingual-r2
+		"granite-embed-multi-311m": {{Kind: OpPattern, Pattern: " ", Behavior: "MergedWithPrevious", Invert: false}},
 		// ibm-granite/granite-embedding-97m-multilingual-r2
-		"granite-embed-multi-97m": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"granite-embed-multi-97m": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// alvarobartt/grok-2-tokenizer
-		"grok-2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"grok-2": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// tencent/Hunyuan-A13B-Instruct
-		"hunyuan": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"hunyuan": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// tencent/Hunyuan-4B-Instruct
-		"hunyuan-dense": {{Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}}, {Kind: OpKanaHanRuns}, {Kind: OpHunyuanSplit}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"hunyuan-dense": {{Kind: OpPattern, Pattern: "\\p{N}{1,3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥\u3040-ゟ゠-ヿ]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// tencent/Hy4-preview
-		"hy_v4": {{Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}}, {Kind: OpKanaHanRuns}, {Kind: OpHunyuanSplit}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"hy_v4": {{Kind: OpPattern, Pattern: "\\p{N}{1,3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥\u3040-ゟ゠-ヿ]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// jinaai/jina-embeddings-v2-base-code
 		"jina-v2-code": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// jinaai/jina-embeddings-v2-base-de
@@ -76,37 +80,37 @@ func Table() map[string][]Op {
 		// jinaai/jina-embeddings-v2-base-es
 		"jina-v2-es": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// jinaai/jina-embeddings-v5-text-nano
-		"jina-v5-nano": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"jina-v5-nano": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// jdopensource/JoyAI-LLM-Flash
-		"joyai-llm": {{Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}}, {Kind: OpKanaHanRuns}, {Kind: OpHunyuanSplit}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"joyai-llm": {{Kind: OpPattern, Pattern: "\\p{N}{1,3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥\u3040-ゟ゠-ヿ]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// kakaocorp/kanana-2-30b-a3b-instruct-2601
-		"kanana2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"kanana2": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// moonshotai/Kimi-K2-Instruct (tokenization_kimi.py)
-		"kimi-k2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: false, HanRuns: true}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"kimi-k2": {{Kind: OpPattern, Pattern: "[\\p{Han}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}&&[^\\p{Han}]]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}&&[^\\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}&&[^\\p{Han}]]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}&&[^\\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// KORMo-Team/KORMo-tokenizer
-		"kormo": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"kormo": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// poolside/Laguna-XS.2
-		"laguna": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"laguna": {{Kind: OpPattern, Pattern: "(?:\\r?\\n)+(?!\\r?\\n)", Behavior: "MergedWithNext", Invert: false}, {Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// LiquidAI/LFM2.5-350M
-		"lfm2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"lfm2": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// NousResearch/Meta-Llama-3-8B
-		"llama-bpe": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"llama-bpe": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// unsloth/Llama-4-Scout-17B-16E-Instruct
-		"llama4": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"llama4": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// Infinigence/Megrez-3B-Instruct
-		"megrez": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"megrez": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// JetBrains/Mellum-4b-base
 		"mellum": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// JetBrains/Mellum2-12B-A2.5B-Base
 		"mellum2": {{Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// K-intelligence/Midm-2.0-Base-Instruct
-		"midm-2.0": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"midm-2.0": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Removed", Invert: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// sapienzanlp/Minerva-7B-base-v1.0
 		"minerva-7b": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: true}},
 		// openbmb/MiniCPM5-1B
-		"minicpm5": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"minicpm5": {{Kind: OpPattern, Pattern: "\\p{N}{1,3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// MiniMaxAI/MiniMax-M2
-		"minimax-m2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"minimax-m2": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Removed", Invert: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// answerdotai/ModernBERT-base
 		"modern-bert": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// allenai/OLMo-1.7-7B-hf
@@ -114,47 +118,47 @@ func Table() map[string][]Op {
 		// microsoft/phi-2
 		"phi-2": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// mistral-community/pixtral-12b
-		"pixtral": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"pixtral": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// LumiOpen/Poro-34B-chat
-		"poro-chat": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"poro-chat": {{Kind: OpPattern, Pattern: " ?[^(\\s|[.,!?…。，、।۔،])]+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// Qwen/Qwen1.5-7B
-		"qwen2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"qwen2": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// openbmb/MiniCPM-V-4_6
-		"qwen35": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: true, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"qwen35": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// smallcloudai/Refact-1_6-base
 		"refact": {{Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// sentence-transformers/stsb-roberta-base
 		"roberta-bpe": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// sarvamai/sarvam-30b
-		"sarvam-moe": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}},
+		"sarvam-moe": {{Kind: OpPattern, Pattern: " ", Behavior: "MergedWithPrevious", Invert: false}},
 		// ByteDance-Seed/Seed-Coder-8B-Base
-		"seed-coder": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false, PunctNoNewline: true}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"seed-coder": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1}| ?[^\\s\\p{L}\\p{N}\r\n]+|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// abacusai/Smaug-Llama-3-70B-Instruct
-		"smaug-bpe": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"smaug-bpe": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// HuggingFaceTB/SmolLM-135M
 		"smollm": {{Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// upstage/Solar-Open-100B
-		"solar-open": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"solar-open": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// XHToken/Spark-X2.5-1.7B
-		"spark2_5": {{Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}}, {Kind: OpKanaHanRuns}, {Kind: OpSparkSplit}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"spark2_5": {{Kind: OpPattern, Pattern: "\\p{N}{1,3}", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[一-龥\u3040-ゟ゠-ヿ]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+|[\r\n]|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// stabilityai/stablelm-2-zephyr-1_6b
-		"stablelm2": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"stablelm2": {{Kind: OpPattern, Pattern: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+", Behavior: "Removed", Invert: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// bigcode/starcoder2-3b
 		"starcoder": {{Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// UW/OLMo2-8B-SuperBPE-t180k
-		"superbpe": {{Kind: OpDigits, Individual: false}, {Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"superbpe": {{Kind: OpDigits, Individual: false}, {Kind: OpPattern, Pattern: "(?=(\\d{3})+(?!\\d))", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// lewtun/talkie-1930-13b-it-hf
-		"talkie": {{Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 3, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"talkie": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// mistralai/Mistral-Nemo-Base-2407
-		"tekken": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: true, SuffixContract: false, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"tekken": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// trillionlabs/Trillion-7B-preview
 		"trillion": {{Kind: OpByteLevel, UseRegex: true, AddPrefixSpace: false}},
 		// ufakai/ufakzeka-1
-		"ufakzeka": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"ufakzeka": {{Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// LumiOpen/Viking-7B
-		"viking": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"viking": {{Kind: OpPattern, Pattern: " ?[^(\\s|[.,!?…。，、।۔،])]+", Behavior: "Isolated", Invert: false}, {Kind: OpDigits, Individual: true}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 		// tencent/Youtu-LLM-2B
-		"youtu": {{Kind: OpSplit, Split: SplitParams{Contractions: false, CaseFold: false, LetterMarks: false, DigitGroup: 1, CaseRuns: false, SuffixContract: false, PunctSlash: false, HanRuns: false}}, {Kind: OpSplit, Split: SplitParams{Contractions: true, CaseFold: true, LetterMarks: false, DigitGroup: 1, CaseRuns: true, SuffixContract: true, PunctSlash: true, HanRuns: false}}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
+		"youtu": {{Kind: OpPattern, Pattern: "\\p{Hangul}+|[！…“”‘’—：；，、-〿︰-﹏]+|[ㄅ-ㄯ]+|[一-龥\u3040-ゟ゠-ヿ]+", Behavior: "Isolated", Invert: false}, {Kind: OpPattern, Pattern: "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+", Behavior: "Isolated", Invert: false}, {Kind: OpByteLevel, UseRegex: false, AddPrefixSpace: false}},
 	}
 }
 
@@ -163,12 +167,10 @@ func Table() map[string][]Op {
 // against its model; any other is refused rather than guessed (RULE 7):
 //   bert-bge-large (BAAI/bge-large-zh-v1.5: tok: pre_tokenizer has no recognised stages)
 //   chameleon (facebook/chameleon-7b: gated repo: needs HF_TOKEN)
-//   dbrx (databricks/dbrx-base: http 404)
+//   dbrx (databricks/dbrx-base: repo not found on HuggingFace)
 //   exaone (LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct: gated repo: needs HF_TOKEN)
-//   gemma4 (danish-foundation-models/DFM-Mimir: tok: pre_tokenizer has no recognised stages)
-//   granite-embed-multi-311m (ibm-granite/granite-embedding-311m-multilingual-r2: tok: pre_tokenizer has no recognised stages)
 //   jais (core42/jais-13b: gated repo: needs HF_TOKEN)
 //   jais-2 (inceptionai/Jais-2-8B-Chat: gated repo: needs HF_TOKEN)
 //   jina-v1-en (jinaai/jina-reranker-v1-tiny-en: tok: pre_tokenizer has no recognised stages)
-//   mpt (mosaicml/mpt-7b: http 404)
+//   mpt (mosaicml/mpt-7b: repo not found on HuggingFace)
 //   tiny_aya (CohereLabs/tiny-aya-base: gated repo: needs HF_TOKEN)

@@ -41,9 +41,10 @@ func TestPinnedUnicodeTables(t *testing.T) {
 		t.Error("ucToLower is wrong on the simple cases")
 	}
 
-	// The anti-revert pins drive the splitter, not the table, so a revert in
-	// tok/bpe.go is caught. U+1C89 is a letter to Go 17.0.0 and undefined in
-	// 15.1: under the pinned tables "a<U+1C89>b" is two pieces, under Go's one.
+	// The anti-revert pins drive the reference splitter (splitters_test.go),
+	// not the table, so a revert in it is caught. U+1C89 is a letter to Go
+	// 17.0.0 and undefined in 15.1: under the pinned tables "a<U+1C89>b" is two
+	// pieces, under Go's one.
 	for _, c := range []struct {
 		text string
 		want int

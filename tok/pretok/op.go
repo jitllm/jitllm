@@ -18,9 +18,8 @@ const (
 	// HuggingFace's Split on "[0-9][0-9][0-9]" with behavior Isolated, which
 	// falcon's pipeline ends with ("12345" -> "123", "45").
 	//
-	// It is a stage of its own because it is not the alternation skeleton
-	// parseSplit reads parameters off; read that way it became a second llama3
-	// split.
+	// Containers converted before every Split was stored as its own pattern
+	// carry it; a conversion now stores that Split as an OpPattern.
 	OpDigitTriples
 	// OpPunctDefault isolates each contiguous run of \p{P} and the ASCII
 	// symbols $+<=>^~| -- "[\p{P}\$\+<=>\^~\|]+", the first stage of
@@ -59,10 +58,12 @@ const (
 	//	| ?[\p{P}\p{S}]+
 	//	|[\r\n]|\s+(?!\S)|\s+
 	OpSparkSplit
-	// opUnreadable is a stage whose pattern this package does not recognise.
-	// It is never valid: Validate and buildPipeline refuse it rather than
-	// reading an unrecognised Split as the nearest skeleton.
-	opUnreadable
+	// OpPattern is a Split as the model's tokenizer.json writes it: its
+	// regex (Pattern), its behavior (Behavior, by the tokenizers library's
+	// names) and whether it is inverted. Every Split a tokenizer.json holds
+	// parses to one; the kinds above are what older containers carry, each
+	// read as the pattern it stands for (Op.Pattern).
+	OpPattern
 )
 
 type Op struct {
@@ -80,8 +81,13 @@ type Op struct {
 	// Digits. individual_digits=true isolates every digit; false groups runs.
 	Individual bool
 
-	// Punctuation behaviour, e.g. "Contiguous" or "Isolated".
+	// Punctuation behaviour, e.g. "Contiguous" or "Isolated"; a Pattern
+	// stage's split behavior.
 	Behavior string
+
+	// Pattern: the regex, and whether the split is inverted.
+	Pattern string
+	Invert  bool
 }
 
 type SplitParams struct {
@@ -183,8 +189,8 @@ func (k OpKind) String() string {
 		return "HunyuanSplit"
 	case OpSparkSplit:
 		return "SparkSplit"
-	case opUnreadable:
-		return "UnreadableSplit"
+	case OpPattern:
+		return "Pattern"
 	}
 	return "?"
 }

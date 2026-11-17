@@ -1007,7 +1007,11 @@ func encodeVocab(v *Vocab) []byte {
 	// later one follows), so every vocabulary without one writes the bytes it
 	// wrote before. First one flag per op, then the stop ids.
 	tools := len(v.Tools.Calls) > 0
-	tail := len(v.Stop) > 0 || tools
+	patterns := false
+	for _, op := range v.Pre {
+		patterns = patterns || op.Kind == PrePattern
+	}
+	tail := len(v.Stop) > 0 || tools || patterns
 	for _, op := range v.Pre {
 		tail = tail || op.PunctNoNewline
 	}
@@ -1017,7 +1021,7 @@ func encodeVocab(v *Vocab) []byte {
 			w.bool(op.PunctNoNewline)
 		}
 	}
-	if len(v.Stop) > 0 || tools {
+	if len(v.Stop) > 0 || tools || patterns {
 		w.u32(uint32(len(v.Stop)))
 		for _, id := range v.Stop {
 			w.i32(id)
@@ -1030,6 +1034,17 @@ func encodeVocab(v *Vocab) []byte {
 		// marshal.
 		b, _ := json.Marshal(v.Tools)
 		w.str(string(b))
+	} else if patterns {
+		w.str("")
+	}
+	// Then each op's pattern and invert flag, written only when a stage is a
+	// pattern.
+	if patterns {
+		w.u32(uint32(len(v.Pre)))
+		for _, op := range v.Pre {
+			w.str(op.Pattern)
+			w.bool(op.Invert)
+		}
 	}
 	return w.b
 }
@@ -1122,13 +1137,30 @@ func decodeVocab(b []byte) (*Vocab, error) {
 		}
 	}
 	if r.err == nil && len(r.b) > 0 {
-		if s := r.str(); r.err == nil {
+		if s := r.str(); r.err == nil && s != "" {
 			if err := json.Unmarshal([]byte(s), &v.Tools); err != nil {
 				return nil, fmt.Errorf("jlm: the vocabulary's tool form: %w", err)
 			}
 			if err := v.Tools.Valid(); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if n := r.count(5); n != len(v.Pre) {
+			if r.err == nil {
+				return nil, fmt.Errorf("jlm: vocab tail has %d patterns for %d ops", n, len(v.Pre))
+			}
+		} else {
+			for i := range v.Pre {
+				v.Pre[i].Pattern = r.str()
+				v.Pre[i].Invert = r.bool()
+			}
+		}
+	}
+	for _, op := range v.Pre {
+		if op.Kind == PrePattern && op.Pattern == "" && r.err == nil {
+			return nil, fmt.Errorf("jlm: a pattern stage with no pattern")
 		}
 	}
 	if r.err != nil {

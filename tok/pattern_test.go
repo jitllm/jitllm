@@ -161,6 +161,49 @@ func TestSplitIsLinearOnDigitRuns(t *testing.T) {
 	}
 }
 
+// TestTheShippedLookaheadStagesAreLinear counts the same steps through the
+// pipelines the table ships for the names whose stages look ahead along a
+// digit run (cohere2moe, afmoe, superbpe), every stage of each together.
+func TestTheShippedLookaheadStagesAreLinear(t *testing.T) {
+	const n, perRune = 40000, 128
+	digits := strings.Repeat("0123456789", n/10)
+	texts := []string{digits, digits + " x", "a " + digits[1:], digits[:n-1] + "\n" + digits}
+	table := pretok.Table()
+	looks := 0
+	for _, name := range []string{"cohere2moe", "afmoe", "superbpe"} {
+		ops := table[name]
+		p, err := buildPipeline(ops)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, op := range ops {
+			if op.Kind == pretok.OpPattern && strings.Contains(op.Pattern, "(?=") {
+				looks++
+			}
+		}
+		for _, text := range texts {
+			count := utf8.RuneCountInString(text)
+			sc := make([]runes, len(ops))
+			var pieces []string
+			p.each(text, sc, func(s string) { pieces = append(pieces, s) })
+			if strings.Join(pieces, "") != text {
+				t.Errorf("%s: the pieces of a %d-rune run do not make it up", name, count)
+			}
+			steps := 0
+			for k := range sc {
+				steps += sc[k].m.steps
+			}
+			t.Logf("%s, %d runes: %d steps, %.1f a rune", name, count, steps, float64(steps)/float64(count))
+			if steps > perRune*count {
+				t.Errorf("%s: %d steps over %d runes, more than %d a rune", name, steps, count, perRune)
+			}
+		}
+	}
+	if looks < 4 {
+		t.Errorf("the three pipelines hold %d lookahead stages, want 4: the table no longer holds the stages this gate is for", looks)
+	}
+}
+
 // patternCorpus is the text the differential gates split: multilingual prose,
 // code, every case of the tokenizer's split goldens and TestGoldens' texts,
 // the o200k and Unicode-pin cases, edge cases of each

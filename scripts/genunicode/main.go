@@ -158,7 +158,7 @@ const ucRanges = "" +`, version, version, len(ranges))
 	endPacked(&b)
 	// The uppercase map is not for uppercasing: the flag table has one letter
 	// bit, and o200k splits letter runs by case, so the two mappings separate
-	// the classes (see ucUpperClass/ucLowerClass in unicodefn.go).
+	// the classes (see ucUpperClass/ucLowerClass in tok/splitters_test.go).
 	fmt.Fprintf(&b, "\n// ucUpper is the simple uppercase mapping, %d records laid out as ucLower. It\n// exists to separate Ll from Lm/Lo, not to uppercase anything -- see genunicode.\nconst ucUpper = \"\" +\n", len(ukeys))
 	for _, k := range ukeys {
 		packed(&b, fmt.Sprintf("U+%06X", k), k, upper[k])

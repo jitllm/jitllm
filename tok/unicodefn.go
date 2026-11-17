@@ -53,14 +53,6 @@ func ucFlags(r rune) uint16 {
 	return uint16(ucRanges[i*4+3])
 }
 
-// ucIsLetter is \p{L}: every letter subcategory (Lu, Ll, Lt, Lm, Lo) in one
-// bit, which is all the pre-tokenizer patterns ask for.
-func ucIsLetter(r rune) bool { return ucFlags(r)&ucFlagLetter != 0 }
-
-// ucIsNumber is \p{N} -- decimal, letter and other numbers, as the regex class
-// means.
-func ucIsNumber(r rune) bool { return ucFlags(r)&ucFlagNumber != 0 }
-
 // ucIsSpace is \s. It is a set, not a category: Unicode's White_Space is not
 // \p{Z} (U+0009 is whitespace and not a separator).
 func ucIsSpace(r rune) bool {
@@ -100,67 +92,4 @@ func ucFold(r rune) rune {
 		return r
 	}
 	return ucToLower(r)
-}
-
-// ucUpperClass and ucLowerClass are o200k's two letter classes -- the shape the
-// gpt-4o pre-tokenizer splits a word into and the reason ucUpper is generated.
-//
-//	ucUpperClass  [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]
-//	ucLowerClass  [\p{Ll}\p{Lm}\p{Lo}\p{M}]
-//
-// The general category is not in the flag table (it folds Lu/Ll/Lt/Lm/Lo into
-// one bit). The two case
-// mappings in the same artefact separate the classes exactly:
-//
-//	Lu, Lt   have a lowercase mapping        -> upper class only
-//	Ll       has an uppercase mapping only   -> lower class only
-//	Lm, Lo   are letters with neither        -> both classes
-//	M        is ucFlagAccentMark             -> both classes
-//
-// Lt is the case that makes the test "has a lowercase mapping" rather than
-// "has no uppercase mapping": U+01C5 ǅ carries both, and it belongs with the
-// uppercase letters.
-func ucUpperClass(r rune) bool {
-	if ucFlags(r)&ucFlagAccentMark != 0 {
-		return true
-	}
-	if !ucIsLetter(r) {
-		return false
-	}
-	if _, down := ucMap(ucLower, r); down {
-		return true // Lu or Lt
-	}
-	_, up := ucMap(ucUpper, r)
-	return !up // Lm/Lo have neither mapping; Ll has only the upward one
-}
-
-func ucLowerClass(r rune) bool {
-	if ucFlags(r)&ucFlagAccentMark != 0 {
-		return true
-	}
-	if !ucIsLetter(r) {
-		return false
-	}
-	_, down := ucMap(ucLower, r)
-	return !down // everything but Lu and Lt
-}
-
-// ucIsHan is \p{Han}, the script, from the pinned Unicode 15.1.0 table. A
-// script cuts across categories, so it is a separate table (from the UCD; see
-// scripts/genunicode). A linear scan suffices: only the kimi-k2 splitter asks,
-// and Latin text exits on the first range.
-func ucIsHan(r rune) bool {
-	if r < 0x2E80 {
-		return false // below every Han range; the whole of ASCII
-	}
-	u := uint32(r)
-	for o := 0; o < len(ucHan); o += 6 {
-		if u < ucWord(ucHan, o) {
-			return false
-		}
-		if u <= ucWord(ucHan, o+3) {
-			return true
-		}
-	}
-	return false
 }

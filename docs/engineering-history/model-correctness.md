@@ -7817,6 +7817,83 @@ deliberately NOT an escape hatch for a fetch that failed: an entry belongs there
 only when there is no tokenizer.json to parse AT ALL, and it carries the
 artefact that replaces it. Everything else in that table is still parsed.
 
+### Pre-split patterns are data: the pattern engine (#407)
+
+A tokenizer.json Split used to be recognised: `pretok.parseSplit` matched its
+regex against one alternation skeleton and pulled flags off it (CaseRuns,
+SuffixContract, HanRuns, ...), and hand-written splitters implemented the
+patterns that were not the skeleton (Hunyuan's, Spark's, the digit groups,
+the kana/Han runs, the digit triples). A pattern of any other shape was read
+as the skeleton. Now every Split is its own regex, run by a backtracking
+engine with the semantics the tokenizers library runs it under (`tok/pattern.go`),
+and every older stage kind is read as the pattern it stands for
+(`pretok.Op.AsPattern`), so no container needs reconverting.
+
+**The skeleton read was wrong for thirteen generated rows.** Regenerated at the
+same directory revision, with every Split kept as its pattern: afmoe,
+cohere2moe, deepseek-coder, deepseek-llm, exaone-moe, falcon-h1, laguna,
+minicpm5, poro-chat, sarvam-moe, superbpe, viking and youtu each split from
+187 to 3,282 of 3,476 corpus texts differently from their old row (falcon-h1's
+last stage is `[0-9]`, read as a second llama3 split; deepseek-llm's are five
+whole patterns, `\s+$` among them; afmoe's group digits in threes from the
+right with lookahead, an atomic group and `\G`). The tokenizers library
+(0.23.3), run on each model's own pre_tokenizer, gave the engine's split on
+every one of the 4,235 of those texts checked and the old row's on none.
+
+**The o200k splitter had an edge-case bug.** On 56 of 3,476 texts (66 for
+kimi-k2) the hand-written case-run splitter took a combining mark before an
+uppercase letter as the optional leading character of the second alternative
+(`"́Σ"` one piece); the regex's first alternative matches the mark alone, and
+the library agrees with the regex on all 234.
+
+**The classes are the library's, code point for code point.** `\d`, `\s`,
+`\p{L}`, `\p{N}`, `\p{Nd}`, `\p{P}`, `\p{S}`, `\p{M}`, `\p{Han}` and the five
+letter subcategories match the library on every code point Unicode 15.1.0
+assigns. Its `\w` is not UTS #18's: no Join_Control, and below U+0100 every
+`\p{N}` (the superscripts and vulgar fractions) is a word character, which
+`cohere2moe`'s `\b` and afmoe's digit stages see. The library reads a later
+Unicode (1,858 Lu against 15.1.0's 1,831); the code points assigned after
+15.1.0 (4,433 of them under `\w`) belong to no class here, the pinned version
+(RULE 7m).
+
+**It is faster, and linear where backtracking is not.** At one thread on box
+50, instructions per split of a 256 KiB text (prose in fourteen scripts and
+code): llama3's 223.3M by the splitter against 168.2M by the engine, qwen2's
+224.5M against 174.8M, o200k's 451.5M against 168.5M, GPT-2's 215.6M against
+178.3M -- the engine's classes are an ASCII bitmap and one span search where
+the splitters asked the flag table per predicate. A whole encode of the same
+text (GOGC=off, 24 iterations less 4), HEAD's binary against the change's:
+Llama-3.2-1B 327.4M against 224.1M instructions, Qwen3-1.7B 444.6M against
+340.5M, gpt-oss-20b 799.7M against 352.8M, the token counts equal. A plain
+backtracking search is quadratic where a run is retried from every start and
+fails at its end: `\s+$` over 40,000 spaces and a digit, deepseek-llm's fourth
+stage, took 16.5 s. The engine keeps, per class repetition, the positions its
+continuation has failed from and the class's last run, so it takes 3.2 ms; the
+bookkeeping costs 12% of the engine's count on the long text. (These counts
+were taken before the bound and the loop-head memo below, and not since.)
+
+**A pattern and a prompt are both untrusted, so both are bounded.** A counted
+repetition compiles to that many copies of its body and nested ones multiply:
+`(?:(?:(?:ab){1000}){1000}){10}`, 33 characters, compiled to 20,000,001
+instructions, 3.6 GB and 17 s on box 50. The compiler now sizes the parse
+first and refuses past 65,536 instructions, naming the pattern; the largest a
+shipped stage compiles to is under a hundred. A lookahead re-run from every
+start of a digit run was quadratic in the run: counted in the engine's steps
+(instructions, code points scanned, frames popped) over 40,000 digits,
+cohere2moe's `\d{1,3}(?=(?:\d{3})*\b)` took 6,674 a digit and superbpe's
+`(?=(\d{3})+(?!\d))` 44,449. The memos now hold for the whole text, not one
+search, except what can reach `\G`; a loop head keeps, per position, whether
+every continuation failed and, in a lookahead's body, whether the lookahead
+matched; a class's known run is crossed without being read. The two take 7.3
+and 12.0 a digit, afmoe's stages at most 7.3, and the three shipped pipelines
+13 to 66 a rune.
+
+Evidence: `tok.TestSplitPatternsMatchTheStages`, `tok.TestEngineSplitsAsTheLibrary`
+(`tok/testdata/pattern_split.json`, `scripts/patternsplitgold.py`),
+`tok.TestClassesAreTheLibrarys` (`tok/testdata/pattern_classes.txt`,
+`scripts/patternclasses.py`), `tok.TestSplitPatternSemantics`,
+`tok.TestSplitIsLinearOnDigitRuns`, `tok.TestTheShippedLookaheadStagesAreLinear`.
+
 ## The router's renormalising divisor floor: DeepSeek's sum + 1e-20 (decided)
 
 - ~~the renormalising divisor's floor is the user's call~~ **DECIDED AND CLOSED:

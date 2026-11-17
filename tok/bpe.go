@@ -72,6 +72,9 @@ func newBPE(vc *jlm.Vocab, v *Vocab, override []pretok.Op) error {
 	if !ok {
 		ops, ok = pretok.PreOps(b.pre)
 	}
+	if !ok {
+		ops, ok = legacyOps(b.pre)
+	}
 	if len(override) > 0 {
 		ops, ok = override, true
 	}
@@ -461,365 +464,33 @@ func (v *Vocab) preSplit(text string) []string {
 // collected, which avoids most of Encode's allocation; order is preserved because
 // every stage is an order-preserving split of the piece it is given.
 func (v *Vocab) preSplitEach(text string, sc *bpeScratch, emit func(string)) {
-	// The composed pipeline from the model's tokenizer.json, when there is one.
-	if v.pipe != nil {
-		v.pipe.each(text, sc.stages(len(v.pipe.ops)), emit)
-		return
-	}
-	switch {
-	case llama3Family(v.bpe.pre):
-		splitLlama3Each(text, llama3Params(3), &sc.stages(1)[0], emit)
-	case qwen2Family(v.bpe.pre):
-		splitLlama3Each(text, llama3Params(digitGroupFor(v.bpe.pre)), &sc.stages(1)[0], emit)
-	case gpt2Family(v.bpe.pre):
-		splitGPT2Each(text, &sc.stages(1)[0], emit)
-	case starcoderFamily(v.bpe.pre):
-		st := sc.stages(2)
-		splitDigitsEach(text, &st[0], func(run string) { splitGPT2Each(run, &st[1], emit) })
-	}
 	// An unknown pre-tokenizer is an error, not a default: the patterns are not
 	// interchangeable. tok.New refuses such a vocabulary before reaching here.
+	if v.pipe != nil {
+		v.pipe.each(text, sc.stages(len(v.pipe.ops)), emit)
+	}
 }
 
-// splitLlama3 is the parameterised Split stage at llama3's settings, the
-// pattern llama3, qwen2 and qwen3 share:
-//
-//	(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}
-//	| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
-//
-// Hand-rolled because `\s+(?!\S)` is a negative lookahead RE2 cannot run.
-// It tries the pattern's alternatives in order at each position, as a
-// backtracking engine reads the pattern, where the pattern alone does not
-// settle a case.
-func splitLlama3(text string, digitGroup int) []string {
-	return splitLlama3Params(text, llama3Params(digitGroup))
+// legacyOps is the pipeline an older container that stored no stages, with a
+// name the generated table lacks, ran under its family's splitter.
+func legacyOps(pre string) ([]pretok.Op, bool) {
+	switch {
+	case llama3Family(pre):
+		return []pretok.Op{{Kind: pretok.OpSplit, Split: llama3Params(3)}}, true
+	case qwen2Family(pre):
+		return []pretok.Op{{Kind: pretok.OpSplit, Split: llama3Params(digitGroupFor(pre))}}, true
+	case gpt2Family(pre):
+		return []pretok.Op{{Kind: pretok.OpByteLevel, UseRegex: true}}, true
+	case starcoderFamily(pre):
+		return []pretok.Op{{Kind: pretok.OpDigits, Individual: true}, {Kind: pretok.OpByteLevel, UseRegex: true}}, true
+	}
+	return nil, false
 }
 
+// llama3Params is the Split the Llama 3 family stated, digits in groups of
+// digitGroup.
 func llama3Params(digitGroup int) pretok.SplitParams {
 	return pretok.SplitParams{Contractions: true, CaseFold: true, DigitGroup: digitGroup}
-}
-
-// splitLlama3Params is the Split stage. Every pattern in the wild is this
-// skeleton with different parameters; see pretok.SplitParams.
-func splitLlama3Params(text string, sp pretok.SplitParams) []string {
-	return collect(func(emit func(string)) { splitLlama3Each(text, sp, &runes{}, emit) })
-}
-
-// splitLlama3Each is the Split stage, handing each piece to emit as it is found.
-func splitLlama3Each(text string, sp pretok.SplitParams, sc *runes, emit func(string)) {
-	digitGroup := sp.DigitGroup
-	if digitGroup < 1 {
-		digitGroup = 1
-	}
-	sc.load(text)
-	rs := sc.rs
-	n := len(rs)
-	prev := 0
-	add := func(end int) {
-		if end > prev {
-			emit(sc.piece(text, prev, end))
-		}
-		prev = end
-	}
-	isLetter := func(i int) bool {
-		if i < 0 || i >= n {
-			return false
-		}
-		// qwen35's pattern is [\p{L}\p{M}]+ -- letters AND combining marks --
-		// where llama3's is \p{L}+. A mark joining the letter run or starting a
-		// new piece is a different tokenization of the same text.
-		if sp.LetterMarks && ucFlags(rs[i])&ucFlagAccentMark != 0 {
-			return true
-		}
-		return ucIsLetter(rs[i])
-	}
-	isNumber := func(i int) bool { return i >= 0 && i < n && ucIsNumber(rs[i]) }
-	isSpace := func(i int) bool { return i >= 0 && i < n && ucIsSpace(rs[i]) }
-	// isHan is \p{Han}, and under HanRuns it is subtracted from the letter
-	// classes rather than merely taken first -- see SplitParams.HanRuns for why
-	// the two halves are one flag.
-	isHan := func(i int) bool { return sp.HanRuns && i >= 0 && i < n && ucIsHan(rs[i]) }
-	// Han is \p{Lo}, a letter to every predicate below and to the upper
-	// class, so the subtraction is wrapped into the classes once rather than
-	// patched at each call site.
-	isLetterX := func(i int) bool { return isLetter(i) && !isHan(i) }
-	// plain is "in range and none of letter/number/whitespace", which is the
-	// [^\s\p{L}\p{N}] class plus a bounds check.
-	// It uses the unsubtracted isLetter on purpose: those classes are plain
-	// \p{L} in the pattern, so a Han codepoint is never punctuation.
-	plain := func(i int) bool { return i >= 0 && i < n && !isLetter(i) && !isNumber(i) && !isSpace(i) }
-
-	// contractAt matches (?i:'s|'t|'re|'ve|'m|'ll|'d) at p and returns where it
-	// ends, or p. SuffixContract decides where it may appear.
-	contractAt := func(p int) int {
-		if !sp.Contractions || p >= n || rs[p] != '\'' || p+1 >= n {
-			return p
-		}
-		c1 := ucFold(rs[p+1])
-		if c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd' {
-			return p + 2
-		}
-		if p+2 < n {
-			c2 := ucFold(rs[p+2])
-			if (c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l') {
-				return p + 3
-			}
-		}
-		return p
-	}
-	// caseRun matches o200k's two letter alternatives at s, in order:
-	//
-	//	[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]* [\p{Ll}\p{Lm}\p{Lo}\p{M}]+
-	//	[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+ [\p{Ll}\p{Lm}\p{Lo}\p{M}]*
-	//
-	// The backtrack is required: Lm, Lo and M are in both classes, so a
-	// greedy upper run can swallow what the first alternative's mandatory
-	// lower run needs. Without it every CJK word takes the second alternative.
-	upperAt := func(i int) bool { return i < n && ucUpperClass(rs[i]) && !isHan(i) }
-	lowerAt := func(i int) bool { return i < n && ucLowerClass(rs[i]) && !isHan(i) }
-	caseRun := func(s int) int {
-		u := s
-		for upperAt(u) {
-			u++
-		}
-		for k := u; k >= s; k-- {
-			if lowerAt(k) {
-				e := k
-				for lowerAt(e) {
-					e++
-				}
-				return e
-			}
-		}
-		if u > s {
-			e := u
-			for lowerAt(e) {
-				e++
-			}
-			return e
-		}
-		return s
-	}
-
-	for pos := 0; pos < n; {
-		// [\p{Han}]+ -- kimi-k2's first alternative, and first here for the same
-		// reason: a greedy alternation tries it before the letter runs, and the
-		// letter runs have had Han subtracted so they cannot take it back.
-		if isHan(pos) {
-			for isHan(pos) {
-				pos++
-			}
-			add(pos)
-			continue
-		}
-		// o200k: [^\r\n\p{L}\p{N}]? (case runs) (?i:'s|'t|...)?
-		//
-		// The optional leading character is tried first and given back if
-		// no letters follow, as a greedy `?` does.
-		if sp.CaseRuns {
-			end := pos
-			if rs[pos] != '\r' && rs[pos] != '\n' && !isLetter(pos) && !isNumber(pos) {
-				if e := caseRun(pos + 1); e > pos+1 {
-					end = e
-				}
-			}
-			if end == pos {
-				end = caseRun(pos)
-			}
-			if end > pos {
-				if sp.SuffixContract {
-					end = contractAt(end)
-				}
-				pos = end
-				add(pos)
-				continue
-			}
-		}
-		// (?i:'s|'t|'re|'ve|'m|'ll|'d), as its own leading alternative. Under
-		// SuffixContract it is not one: a lone "'t" with no letters before it is
-		// punctuation there, not a contraction.
-		if sp.Contractions && !sp.SuffixContract && rs[pos] == '\'' && pos+1 < n {
-			c1 := ucFold(rs[pos+1])
-			if c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd' {
-				pos += 2
-				add(pos)
-				continue
-			}
-			if pos+2 < n {
-				c2 := ucFold(rs[pos+2])
-				if (c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l') {
-					pos += 3
-					add(pos)
-					continue
-				}
-			}
-		}
-		// [^\r\n\p{L}\p{N}]?\p{L}+ -- an optional single non-letter, then letters.
-		if !sp.CaseRuns && rs[pos] != '\r' && rs[pos] != '\n' && !isNumber(pos) {
-			if isLetterX(pos) || isLetterX(pos+1) {
-				pos++
-				for isLetterX(pos) {
-					pos++
-				}
-				add(pos)
-				continue
-			}
-		}
-		// llama3 is \p{N}{1,3} and qwen2 a bare \p{N}; see digitGroupFor.
-		if isNumber(pos) {
-			ini := pos
-			for isNumber(pos) {
-				pos++
-				if pos-ini >= digitGroup {
-					add(pos)
-					ini = pos
-				}
-			}
-			add(pos)
-			continue
-		}
-		// ' ?[^\s\p{L}\p{N}]+[\r\n]*'
-		probe := pos
-		if rs[pos] == ' ' {
-			probe = pos + 1
-		}
-		if plain(probe) {
-			if rs[pos] == ' ' {
-				pos++
-			}
-			for plain(pos) {
-				pos++
-			}
-			for pos < n && !sp.PunctNoNewline && (rs[pos] == '\r' || rs[pos] == '\n' || (sp.PunctSlash && rs[pos] == '/')) {
-				pos++
-			}
-			add(pos)
-			continue
-		}
-		// The three whitespace alternatives, which differ only in where they stop.
-		nws, lastNL := 0, 0
-		for isSpace(pos + nws) {
-			if rs[pos+nws] == '\r' || rs[pos+nws] == '\n' {
-				lastNL = pos + nws + 1
-			}
-			nws++
-		}
-		switch {
-		case lastNL > 0: // \s*[\r\n]+
-			pos = lastNL
-		case nws > 1 && pos+nws < n: // \s+(?!\S): give the last space back
-			pos += nws - 1
-		case nws > 0: // \s+
-			pos += nws
-		default:
-			pos++
-		}
-		add(pos)
-	}
-}
-
-// splitGPT2Each implements the original GPT-2 pattern, the one the gpt-2, mpt,
-// olmo and jais tokenizers state, handing each piece to emit as it is found:
-//
-//	's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
-//
-// Unlike splitLlama3 the contractions are case-sensitive, numbers run
-// unbounded, and a newline is plain whitespace. Hand-rolled for the same
-// negative lookahead.
-func splitGPT2Each(text string, sc *runes, emit func(string)) {
-	sc.load(text)
-	rs := sc.rs
-	n := len(rs)
-	prev := 0
-	add := func(end int) {
-		if end > prev {
-			emit(sc.piece(text, prev, end))
-		}
-		prev = end
-	}
-	isLetter := func(i int) bool { return i >= 0 && i < n && ucIsLetter(rs[i]) }
-	isNumber := func(i int) bool { return i >= 0 && i < n && ucIsNumber(rs[i]) }
-	isSpace := func(i int) bool { return i >= 0 && i < n && ucIsSpace(rs[i]) }
-	plain := func(i int) bool { return i >= 0 && i < n && !isLetter(i) && !isNumber(i) && !isSpace(i) }
-
-	for pos := 0; pos < n; {
-		// 's|'t|'re|'ve|'m|'ll|'d -- no case folding, unlike llama3's.
-		if rs[pos] == '\'' && pos+1 < n {
-			c1 := rs[pos+1]
-			if c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd' {
-				pos += 2
-				add(pos)
-				continue
-			}
-			if pos+2 < n {
-				c2 := rs[pos+2]
-				if (c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l') {
-					pos += 3
-					add(pos)
-					continue
-				}
-			}
-		}
-		probe := pos
-		if rs[pos] == ' ' {
-			probe = pos + 1
-		}
-		// ' ?\p{L}+', then ' ?\p{N}+', then ' ?[^\s\p{L}\p{N}]+'
-		var cls func(int) bool
-		switch {
-		case isLetter(probe):
-			cls = isLetter
-		case isNumber(probe):
-			cls = isNumber
-		case plain(probe):
-			cls = plain
-		}
-		if cls != nil {
-			if rs[pos] == ' ' {
-				pos++
-			}
-			for cls(pos) {
-				pos++
-			}
-			add(pos)
-			continue
-		}
-		nws := 0
-		for isSpace(pos + nws) {
-			nws++
-		}
-		switch {
-		case nws > 1 && pos+nws < n: // \s+(?!\S): the last space starts the next word
-			pos += nws - 1
-		case nws > 0:
-			pos += nws
-		default:
-			pos++
-		}
-		add(pos)
-	}
-}
-
-// splitDigitsEach cuts every digit into its own piece, which is the "\p{N}"
-// first pass the starcoder family runs before the gpt2 pattern, handing each
-// piece to emit as it is found.
-func splitDigitsEach(text string, sc *runes, emit func(string)) {
-	sc.load(text)
-	rs := sc.rs
-	prev := 0
-	for i, r := range rs {
-		if !ucIsNumber(r) {
-			continue
-		}
-		if i > prev {
-			emit(sc.piece(text, prev, i))
-		}
-		emit(sc.piece(text, i, i+1))
-		prev = i + 1
-	}
-	if prev < len(rs) {
-		emit(sc.piece(text, prev, len(rs)))
-	}
 }
 
 // runes is one pre-tokenizer stage's decoded view of its input: the code
@@ -879,6 +550,7 @@ func opsFromContainer(ps []jlm.PreOp) ([]pretok.Op, bool) {
 		o := pretok.Op{
 			UseRegex: p.UseRegex, AddPrefixSpace: p.AddPrefixSpace,
 			Individual: p.Individual, Behavior: p.Behavior,
+			Pattern: p.Pattern, Invert: p.Invert,
 			Split: pretok.SplitParams{
 				Contractions: p.Contractions, CaseFold: p.CaseFold,
 				CaseRuns: p.CaseRuns, SuffixContract: p.SuffixContract,
@@ -907,6 +579,8 @@ func opsFromContainer(ps []jlm.PreOp) ([]pretok.Op, bool) {
 			o.Kind = pretok.OpHunyuanSplit
 		case jlm.PreSparkSplit:
 			o.Kind = pretok.OpSparkSplit
+		case jlm.PrePattern:
+			o.Kind = pretok.OpPattern
 		default:
 			return nil, false
 		}

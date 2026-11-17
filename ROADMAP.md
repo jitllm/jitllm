@@ -447,32 +447,22 @@ server's per-model instances.
 
 ## 21. The pre-tokenizer runs the model's own pattern
 
-**Not started.** The pre-tokenizer recognises known `tokenizer.json` Split
-patterns by their text (`tok/pretok/parse.go` `parseSplit`, `isolatedSplits`),
-hand-writes a matcher per family (`tok/hunyuan.go`), maps a GGUF's
-`tokenizer.ggml.pre` name to stages through a generated table, and keeps legacy
-name families in `tok/bpe.go` for containers that stored no stages. Every
-engine that reads `tokenizer.json` (HF tokenizers and everything on it: vLLM,
-SGLang, MLX, ExLlamaV3, TensorRT-LLM; mistral.rs and candle with fancy-regex;
-Ollama on rewritten RE2) runs the pattern on a regex engine; only llama.cpp
-hand-codes matchers, and that is what this copied.
+**Part 1 done.** Every Split is stored and run as its own pattern
+(`pretok.OpPattern`, `jlm.PrePattern`) through `tok/pattern.go`, a
+backtracking engine with the tokenizers library's semantics whose classes come
+from the pinned 15.1.0 tables, bounded in size at compile and linear on the
+retried runs the shipped patterns make; a container converted earlier runs each
+old stage kind as the pattern it stands for (`pretok.Op.AsPattern`). The
+hand-written splitters are the differential gate's reference only, in
+`tok/splitters_test.go`. Left:
 
-- **First, a bug:** `parseSplit` turns any Split pattern that is not an exact
-  known text into an `OpSplit` with whatever flags its substring checks set, so
-  `\S+` or `[^\n]+|[\n]+` silently runs as the llama3 splitter, against its own
-  comment. An unknown pattern must be refused, naming it.
-- **A matcher of our own** for the constructs these patterns use (alternation,
-  classes, `\p{..}`, quantifiers, `(?i)` with full case folding, lookahead such
-  as `\s+(?!\S)`), with its Unicode classes from `tok/unicodedata.go` so the
-  15.1.0 pin holds, refusing anything else by name; generated like the rest of
-  the JIT if that measures better. It is the definition of the split.
-  Oniguruma's behaviours to reproduce: Unicode `\s`, `\d`, `\w`; `$` is end of
-  line; an empty match is a split point that yields no piece.
-- **The container stores the pattern text**, and the GGUF name table carries
-  llama.cpp's pattern per name rather than ops.
-- **Fast paths** (llama3, o200k) stay only where a gate proves them equal to
-  the matcher; `hunyuan.go`, the other recognisers and the legacy name families
-  go.
+- **Delete the splitters**, once their split of the corpus for each old stage
+  kind is a golden holding `AsPattern` (the reference
+  `TestSplitPatternsMatchTheStages` reads moves from the splitters to it); the
+  generated `ucUpper` and `ucHan` tables and the legacy name families in
+  `tok/bpe.go` go with them.
+- **Fast paths** (llama3, o200k) only where a measurement asks for one and a
+  gate proves it equal to the engine.
 - **Oracle:** HF tokenizers on the model's own `tokenizer.json` (tiktoken for a
   model that ships a `pat_str`) replaces llama.cpp for tokenization (RULE 7m),
   llama.cpp staying the source of a GGUF name's pattern. Golden ids per

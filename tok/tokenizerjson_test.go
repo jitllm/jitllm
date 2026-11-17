@@ -103,7 +103,7 @@ func TestPreTokenizerObjectStopsAtTheObject(t *testing.T) {
 	if !strings.HasSuffix(string(obj), `"behavior":"Isolated"}`) {
 		t.Fatalf("a brace inside a string cut the object short: %s", obj)
 	}
-	if ops, err := pretok.ParsePreTokenizer(strings.NewReader(tricky)); err != nil || len(ops) != 1 || ops[0].Kind != pretok.OpSplit {
+	if ops, err := pretok.ParsePreTokenizer(strings.NewReader(tricky)); err != nil || len(ops) != 1 || ops[0].Kind != pretok.OpPattern || ops[0].Pattern != `a"}b` {
 		t.Fatalf("parsed %+v, %v", ops, err)
 	}
 }
@@ -115,7 +115,8 @@ func TestParsePreTokenizerRefuses(t *testing.T) {
 		{"no pre_tokenizer key", `{"version":"1.0","model":{"type":"BPE"}}`, "pre_tokenizer"},
 		{"truncated object", `{"pre_tokenizer":{"type":"Sequence","pretokenizers":[{"type":"Byte`, "truncated"},
 		{"unknown stage only", tok.RealTokenizerJSON(`{"type":"Metaspace","replacement":"_"}`), "no recognised stages"},
-		{"a Split with no readable pattern", tok.RealTokenizerJSON(`{"type":"Split","pattern":{"String":"x"}}`), "no recognised stages"},
+		{"a Split with no readable pattern", tok.RealTokenizerJSON(`{"type":"Split","pattern":{"Glob":"x"}}`), "no recognised stages"},
+		{"a Split with an unknown behavior", tok.RealTokenizerJSON(`{"type":"Split","pattern":{"String":"x"},"behavior":"Splitted"}`), "behavior"},
 		{"not JSON", tok.RealTokenizerJSON(`{"type":,}`), "does not parse"},
 	} {
 		ops, err := pretok.ParsePreTokenizer(strings.NewReader(c.body))
@@ -199,7 +200,7 @@ func TestWithTokenizerOverridesTheGGUF(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []pretok.Op{
-		{Kind: pretok.OpSplit, Split: pretok.SplitParams{Contractions: true, CaseFold: true, DigitGroup: 3}},
+		{Kind: pretok.OpPattern, Pattern: pat, Behavior: "Isolated"},
 		{Kind: pretok.OpByteLevel},
 	}
 	if !reflect.DeepEqual(over.PipeOps(), want) {

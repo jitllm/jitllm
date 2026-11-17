@@ -26,12 +26,18 @@ func repoLine() *regexp.Regexp {
 // new names. The generated file records the resolved SHA and is checked in, so
 // a regeneration is a reviewable diff.
 
-// fetchDirectory pulls the name -> HF repo map from llama.cpp at lcppRev, so the
-// generator needs no local checkout of anything.
-func fetchDirectory() (map[string][]string, string, error) {
-	rev, err := resolveHead()
-	if err != nil {
-		return nil, "", err
+// fetchDirectory pulls the name -> HF repo map at rev, or at the latest
+// revision when rev is "", so the generator needs no local checkout of
+// anything. A pinned rev regenerates the checked-in table's names exactly,
+// which is how a change to what a stage parses to is reviewed apart from new
+// names.
+func fetchDirectory(rev string) (map[string][]string, string, error) {
+	if rev == "" {
+		head, err := resolveHead()
+		if err != nil {
+			return nil, "", err
+		}
+		rev = head
 	}
 	url := "https://raw.githubusercontent.com/ggml-org/llama.cpp/" + rev +
 		"/convert_hf_to_gguf_update.py"

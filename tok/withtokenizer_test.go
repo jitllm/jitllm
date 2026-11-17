@@ -192,8 +192,8 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	if !reflect.DeepEqual(base.PipeOps(), pretok.Table()["qwen2"]) {
 		t.Fatalf("%s did not select the generated qwen2 row: %+v", name, base.PipeOps())
 	}
-	if g := base.PipeOps()[0].Split.DigitGroup; g != 1 {
-		t.Fatalf("qwen2 groups digits in %d; this gate is built on its being 1", g)
+	if p := base.PipeOps()[0].Pattern; !strings.Contains(p, `|\p{N}|`) {
+		t.Fatalf("qwen2's split %q does not take one digit at a time; this gate is built on it", p)
 	}
 
 	// --- arm A: the split changes, exactly and predictably.
@@ -204,8 +204,8 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	if reflect.DeepEqual(base.PipeOps(), over.PipeOps()) {
 		t.Fatalf("%s already runs the llama-bpe pipeline; both arms are the same and prove nothing", name)
 	}
-	if g := over.PipeOps()[0].Split.DigitGroup; g != 3 {
-		t.Fatalf("the override's Split groups digits in %d, want 3", g)
+	if p := over.PipeOps()[0].Pattern; !strings.Contains(p, `\p{N}{1,3}`) {
+		t.Fatalf("the override's split %q does not group digits in threes", p)
 	}
 	for _, c := range []struct {
 		text       string

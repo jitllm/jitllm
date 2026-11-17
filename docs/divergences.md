@@ -7,7 +7,7 @@ is in its evidence file (MC is `docs/engineering-history/model-correctness.md`).
 | where | llama.cpp | jitllm follows | evidence |
 |---|---|---|---|
 | contraction regex `(?i:'s...)` | `[sS]` adaptation (misses U+017F, U+212A) | the model's regex: simple case folding (`ucFold`), so `'` + U+017F is a contraction | MC "The tokenizer authorities and the kimi-k2 pre-tokenizer" |
-| kimi-k2 pre-tokenizer | one `\p{L}+` run | Moonshot's `pat_str`: o200k's case split plus Han runs (`SplitParams.HanRuns`) | same |
+| kimi-k2 pre-tokenizer | one `\p{L}+` run | Moonshot's `pat_str`, run as written: o200k's case split plus Han runs | same |
 | Han ranges | CJK Ext A-F | the UCD's Scripts.txt, Unicode 15.1.0 | same |
 | llama4 tokenizer label "default" | gpt-4o with ignore_merges false | the model's tokenizer.json (o200k, ignore_merges) | MC "llama4 IS THE FIFTEENTH ARCHITECTURE" |
 | YaRN stated `attention_factor` | never read | transformers: the stated value on cos and sin | MC "YaRN's attention_factor" |

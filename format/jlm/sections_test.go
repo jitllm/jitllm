@@ -104,6 +104,29 @@ func TestSectionsRoundTrip(t *testing.T) {
 	} else if !reflect.DeepEqual(got, &sv) {
 		t.Errorf("vocab round-trip with stop ids and no ops:\n got %+v\nwant %+v", got, &sv)
 	}
+	// A pattern stage's regex and invert flag ride the last tail, which then
+	// writes every tail before it (an empty tool form among them); with no
+	// stop ids and no tool form here, so the tail is reached on its own.
+	pv := *voc
+	pv.Stop = nil
+	pv.Pre = []PreOp{
+		{Kind: PrePattern, Pattern: `\p{N}{1,3}`, Behavior: "Isolated"},
+		{Kind: PreDigits, Individual: true},
+		{Kind: PrePattern, Pattern: "[0-9]", Behavior: "MergedWithNext", Invert: true},
+		{Kind: PreByteLevel},
+	}
+	if got, err := decodeVocab(encodeVocab(&pv)); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(got, &pv) {
+		t.Errorf("vocab round-trip with pattern stages:\n got %+v\nwant %+v", got, &pv)
+	}
+	// A pattern stage that lost its pattern is refused, not run as a split on
+	// nothing.
+	nopat := pv
+	nopat.Pre = []PreOp{{Kind: PrePattern, Behavior: "Isolated"}}
+	if _, err := decodeVocab(encodeVocab(&nopat)); err == nil {
+		t.Error("a pattern stage with no pattern was accepted")
+	}
 	// An id the token table does not hold is refused, not carried to a
 	// generation loop that compares against it forever.
 	bad := *voc
