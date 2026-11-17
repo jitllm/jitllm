@@ -101,6 +101,9 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 	if err := o.applyModelConfig(f, s, src); err != nil {
 		return nil, err
 	}
+	if err := o.applyGenerationConfig(s); err != nil {
+		return nil, err
+	}
 	if vf != nil {
 		if a := vf.Arch(); a != towerArch {
 			return nil, fmt.Errorf("convert: %s is architecture %q, not a vision tower", mmproj, a)

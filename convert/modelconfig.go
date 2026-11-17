@@ -140,6 +140,33 @@ func modelConfigOf(path string) (*hfConfig, error) {
 	return t, nil
 }
 
+// applyGenerationConfig states the draw from the publisher's
+// generation_config.json beside its config.json (WithModelConfig), where one
+// is there: what the model's own generate runs, read as a safetensors
+// directory's is (hfGeneration), in place of what the GGUF's keys and its
+// family's statement give. The GGUF's writer copied its keys from that file,
+// when it copied any; the file is the authority (RULE 7m).
+func (o *options) applyGenerationConfig(s *jlm.Source) error {
+	if o.modelConfig == "" || s.Config == nil || s.Config.Generation == nil {
+		return nil
+	}
+	dir := o.modelConfig
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "generation_config.json")); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("convert: %w", err)
+	}
+	g, err := hfGeneration(dirFiles(dir))
+	if err != nil {
+		return err
+	}
+	s.Config.Generation = g
+	return nil
+}
+
 // applyProcessorConfig states the tower's resampling filter from the
 // publisher's preprocessor_config.json beside its config.json
 // (WithModelConfig), where the mmproj names none: LiquidAI's LFM2-VL files

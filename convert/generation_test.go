@@ -175,3 +175,45 @@ func TestDoSampleIsGenerationConfigs(t *testing.T) {
 		t.Errorf("synth-seedoss.gguf: generation %+v, want %+v", *g, want)
 	}
 }
+
+// TestThePublishersGenerationConfigIsTheDraw: a GGUF converted with its
+// publisher's directory (WithModelConfig, the directory or its config.json)
+// states the draw that directory's generation_config.json states, over what
+// its keys gave; with no generation_config.json there the keys' draw stays.
+func TestThePublishersGenerationConfigIsTheDraw(t *testing.T) {
+	keys := jlm.ReferenceGeneration()
+	keys.Temperature, keys.TopK = 0, 1
+	want := jlm.ReferenceGeneration()
+	want.DoSample, want.Temperature, want.TopP = true, 0.6, 0.9
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "config.json"), []byte(`{"vocab_size": 8}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "generation_config.json"),
+		[]byte(`{"do_sample": true, "temperature": 0.6, "top_p": 0.9}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bare := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bare, "config.json"), []byte(`{"vocab_size": 8}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		config string
+		want   jlm.Generation
+	}{
+		{d, want},
+		{filepath.Join(d, "config.json"), want},
+		{bare, keys},
+		{"", keys},
+	} {
+		g := keys
+		s := &jlm.Source{Config: &jlm.Config{Generation: &g}}
+		o := &options{modelConfig: c.config}
+		if err := o.applyGenerationConfig(s); err != nil {
+			t.Fatal(err)
+		}
+		if *s.Config.Generation != c.want {
+			t.Errorf("%q: generation %+v, want %+v", c.config, *s.Config.Generation, c.want)
+		}
+	}
+}
