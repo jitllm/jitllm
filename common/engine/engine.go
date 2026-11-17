@@ -476,12 +476,19 @@ func maxSeqFor(modelCtx, want int) int {
 // 32k still opens at 4k unless asked, because the cache is allocated up front.
 const defaultMaxSeq = 4096
 
-// samplerFor turns the app's settings into the engine's sampler.
+// samplerFor turns the app's settings into the engine's sampler: the draw
+// the model's container states (g, over nctx tokens) where they are the
+// model's own, else theirs.
 //
 // Temp == 0 is greedy and is passed straight through: engine.Sampler
 // short-circuits to argmax, and every correctness comparison in the engine
-// (llama.cpp goldens, CPU vs device, verify) is a comparison of argmax.
-func samplerFor(s session.Sampling) *engine.Sampler {
+// (goldens, CPU vs device, verify) is a comparison of argmax.
+func samplerFor(s session.Sampling, g jlm.Generation, nctx int) *engine.Sampler {
+	if s.Stated {
+		sm := engine.StatedSampler(g, nctx)
+		sm.Seed = s.Seed
+		return sm
+	}
 	return &engine.Sampler{
 		Temp:        float64(s.Temp),
 		TopK:        s.TopK,
@@ -757,7 +764,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	if max <= 0 {
 		max = session.DefaultMaxTokens
 	}
-	sm := samplerFor(r.Sampling)
+	sm := samplerFor(r.Sampling, e.m.Cfg.Generation, e.sessMax)
 	out := make([]int32, 0, max)
 	var t1 time.Time
 	var fin *server.Finished

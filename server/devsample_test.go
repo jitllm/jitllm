@@ -33,7 +33,7 @@ func rowComesHome(t *testing.T, mode engine.DeviceSampleMode) {
 		t.Skipf("NO DEVICE: %v -- this gate proved nothing", err)
 	}
 	sm := engine.Sampler{Temp: 0.9, TopK: 40, TopP: 0.9, Seed: 3}
-	s, err := e.CreateSession(SessionOptions{ModelID: "inst", SessionID: "a", MaxSeq: 256, Sampling: sm})
+	s, err := e.CreateSession(SessionOptions{ModelID: "inst", SessionID: "a", MaxSeq: 256, Sampling: &sm})
 	if err != nil {
 		t.Fatal(err)
 	}

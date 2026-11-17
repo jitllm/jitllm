@@ -655,7 +655,12 @@ func (r *Remote) opensThinking(req session.ChatRequest) bool {
 	return strings.HasSuffix(strings.TrimRight(resp.Msg.GetPrompt(), " \t\r\n"), thinkOpen)
 }
 
+// samplingOf is the settings as a request asks them: none where they are the
+// model's own, which the session the service opened draws with.
 func samplingOf(s session.Sampling) *v1.SamplingParams {
+	if s.Stated {
+		return nil
+	}
 	temp, topP, minP, pen := s.Temp, s.TopP, s.MinP, s.RepeatPen
 	topK, lastN := int32(s.TopK), int32(s.RepeatLastN)
 	p := &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK, MinP: &minP,

@@ -1275,7 +1275,9 @@ type SessionOptions struct {
 	// outgrows the device: hand a block to the host. A device choice that
 	// leaves the CPU out is kept, and the token takes the device's refusal.
 	KeepOffCpu bool
-	Sampling   engine.Sampler
+	// Sampling is the session's own draw, nil for the one the model's
+	// container states (engine.StatedSampler).
+	Sampling *engine.Sampler
 	// KVStore keeps the session's prompt prefixes, so a prompt that starts as
 	// an earlier one did resumes from its cached keys and values; CacheKey
 	// names what may be shared (engine.Instance.SetCacheKey). A session with a
@@ -1401,7 +1403,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		lm:       lm,
 		ms:       ms,
 		maxSeq:   maxSeq,
-		sampling: o.Sampling,
+		sampling: sessionSampler(o.Sampling, lm, maxSeq),
 		created:  time.Now(),
 		cached:   o.KVStore != nil,
 		spec:     o.Speculation,
@@ -2702,7 +2704,8 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		if i > 0 || named == nil {
 			so := SessionOptions{ModelID: lm.id, KVStore: store, CacheKey: ns}
 			if named != nil {
-				so.MaxSeq, so.Sampling, so.Speculation = named.maxSeq, named.sampling, named.spec
+				sm := named.sampling
+				so.MaxSeq, so.Sampling, so.Speculation = named.maxSeq, &sm, named.spec
 			}
 			if s, err = e.CreateSession(so); err != nil {
 				return err

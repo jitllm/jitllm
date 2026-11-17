@@ -16,8 +16,11 @@ func KVCacheDir() string {
 	return filepath.Join(root, "jitllm", "kv")
 }
 
-// Sampling is the decode sampler's settings, persisted between runs.
+// Sampling is the decode sampler's settings, persisted between runs. Stated
+// is the open model's own draw, the one its container states, in place of
+// the fields; a front end setting a field clears it.
 type Sampling struct {
+	Stated      bool    `json:"stated"`
 	Temp        float32 `json:"temp"`
 	TopK        int     `json:"top_k"`
 	TopP        float32 `json:"top_p"`
@@ -27,18 +30,9 @@ type Sampling struct {
 	Seed        int64   `json:"seed"`
 }
 
-// DefaultSampling is the sampler a fresh install starts with.
-func DefaultSampling() Sampling {
-	return Sampling{
-		Temp:        0.8,
-		TopK:        40,
-		TopP:        0.95,
-		MinP:        0.05,
-		RepeatPen:   1.1,
-		RepeatLastN: 64,
-		Seed:        0,
-	}
-}
+// DefaultSampling is the sampler a fresh install starts with: each model's
+// own.
+func DefaultSampling() Sampling { return Sampling{Stated: true} }
 
 // Knob is one sampling setting as a front end offers it: its name, its range
 // and step, how to read and write it, and the words for its value.
@@ -51,13 +45,11 @@ type Knob struct {
 	Caption func(Sampling) string
 }
 
-// SamplingKnobs() are the sampler's settings, in the order the sampler applies
-// them. The filters run in llama.cpp's order -- top-k, top-p, min-p --
-// because the other order gives a different distribution, and matching it is
-// what makes a prompt behave comparably in both engines. The seed is not a
-// knob: it is a value, not a range.
+// SamplingKnobs() are the sampler's settings. Setting one makes the settings
+// the caller's own (Stated false), and while the model's own draw holds, each
+// says so. The seed is not a knob: it is a value, not a range.
 func SamplingKnobs() []Knob {
-	return []Knob{
+	ks := []Knob{
 		// The temperature caption names greedy: at zero engine.Sampler returns the
 		// argmax before reading any other field, so the other knobs are inert.
 		{Name: "Temperature", Min: 0, Max: 2, Step: 0.05,
@@ -105,6 +97,17 @@ func SamplingKnobs() []Knob {
 			Set:     func(s *Sampling, v float32) { s.RepeatLastN = int(v) },
 			Caption: func(s Sampling) string { return fmt.Sprintf("last %d tokens", s.RepeatLastN) }},
 	}
+	for i := range ks {
+		set, caption := ks[i].Set, ks[i].Caption
+		ks[i].Set = func(s *Sampling, v float32) { s.Stated = false; set(s, v) }
+		ks[i].Caption = func(s Sampling) string {
+			if s.Stated {
+				return "the model's own"
+			}
+			return caption(s)
+		}
+	}
+	return ks
 }
 
 // OffInt is an integer setting in words: "off" at its off value.

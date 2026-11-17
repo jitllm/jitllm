@@ -113,6 +113,9 @@ type Config struct {
 	// 50 and the output logits at 30. Zero means none. Omitting it gives fluent
 	// wrong output that only an external oracle catches.
 	AttnSoftcap, FinalSoftcap float32
+	// Generation is the draw the container states the model generates with
+	// when a caller asks nothing (jlm.Config.GenerationDefaults).
+	Generation jlm.Generation
 
 	// YarnOrigCtx is the context past which a LongRoPE turns its long
 	// factors. A scaled rotary's angles turn by the factors the container
@@ -601,6 +604,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		NExpertUsed:  int(c.NExpertUsed),
 		AttnSoftcap:  c.AttnSoftcap,
 		FinalSoftcap: c.FinalSoftcap,
+		Generation:   c.GenerationDefaults(),
 		YarnOrigCtx:  int(c.YarnOrigCtx),
 		NoPosEnc:     c.Flags.Has(jlm.FlagNoPosEnc),
 		TiedEmbd:     c.Flags.Has(jlm.FlagTiedEmbd),

@@ -41,7 +41,7 @@ func cmdRun(ctx context.Context, c cli, args []string) error {
 	queueMS := fs.Int("queue-timeout", 0,
 		"milliseconds to wait for a device another session is holding; 0 waits indefinitely")
 
-	temp := fs.Float64("temp", 0, "sampling temperature; 0 = greedy (default)")
+	temp := fs.Float64("temp", 0, "sampling temperature; 0 = greedy; unset, the draw the model states")
 	topK := fs.Int("top-k", 0, "keep only the k most likely tokens; 0 = off")
 	topP := fs.Float64("top-p", 0, "nucleus sampling; 0 or 1 = off")
 	minP := fs.Float64("min-p", 0, "keep tokens above min-p * p(best); 0 = off")

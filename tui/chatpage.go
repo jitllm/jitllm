@@ -295,7 +295,7 @@ func slashCmds() []slashCmd {
 			if err != nil || v < 0 {
 				return notify("usage: /temp 0.7")
 			}
-			c.env.cfg.Sampling.Temp = float32(v)
+			c.env.cfg.Sampling.Stated, c.env.cfg.Sampling.Temp = false, float32(v)
 			return tea.Batch(saveConfig(c.env), notify(fmt.Sprintf("temperature %.2f", v)))
 		}},
 		{"seam", "<blocks>", "blocks on the device", func(c *chatPage, a string) tea.Cmd {

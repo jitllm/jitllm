@@ -7752,6 +7752,19 @@ Pythia) and holds draw and stop set to their values;
 `convert.TestGGUFGenerationReadsItsSamplingKeys` reads HunyuanOCR's, Gemma
 4's and Llama 3.2's keys; `jlm.TestGenerationTailRoundTrips` the tail.
 
+The draw a caller does not ask for is the stated one: `model.Config.Generation`
+carries it, `engine.StatedSampler` builds the sampler (greedy where the
+reference does not sample, its repetition penalty over the whole window, as
+the reference's reads every token), a server session opened with no sampling
+draws with it (seeded apart), and the app's settings start as the model's own
+(`session.Sampling.Stated`; a knob set makes them the caller's). The settings
+the app persisted before keep their values. Not yet the reference's: the fused
+draw's cuts read the softmax at temperature 1 and the temperature applies to
+the survivors, where generate's warpers apply the temperature first, then
+top-k, top-p and min-p. Gates: `engine.TestStatedSamplerIsTheContainers` (the
+qwen3 fixture's file reaches the opened model and the sampler),
+`common/engine.TestTheDefaultSettingsAreTheModelsOwn`.
+
 ## The tokenizer authorities and the kimi-k2 pre-tokenizer (RULE 7m)
 
 ### ★ RULE 7m: llama.cpp IS A GOOD-ENOUGH ORACLE, NOT THE SPECIFICATION.

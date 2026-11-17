@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Every knob must reach the engine's sampler.
@@ -14,7 +15,7 @@ func TestEverySamplingKnobReachesTheSampler(t *testing.T) {
 		Temp: 0.7, TopK: 41, TopP: 0.93, MinP: 0.04,
 		RepeatPen: 1.15, RepeatLastN: 128, Seed: 99,
 	}
-	got := samplerFor(in)
+	got := samplerFor(in, jlm.ReferenceGeneration(), 4096)
 
 	for _, c := range []struct {
 		name      string
@@ -40,18 +41,36 @@ func TestEverySamplingKnobReachesTheSampler(t *testing.T) {
 // Temp == 0 cannot be approximated: engine.Sampler short-circuits to argmax,
 // and every correctness comparison in the engine is of argmax.
 func TestGreedyIsReachableExactly(t *testing.T) {
-	got := samplerFor(session.Sampling{Temp: 0, TopK: 40, TopP: 0.95, MinP: 0.05})
+	got := samplerFor(session.Sampling{Temp: 0, TopK: 40, TopP: 0.95, MinP: 0.05}, jlm.ReferenceGeneration(), 4096)
 	if got.Temp != 0 {
 		t.Errorf("Temp = %v, want exactly 0: anything else is not greedy", got.Temp)
 	}
 }
 
-// The app's own defaults must be the ones that reach the engine.
-func TestTheDefaultSettingsAreWhatTheEngineGets(t *testing.T) {
+// The app's own defaults are the model's: the draw its container states
+// reaches the engine, a repetition penalty over the whole window, and a knob
+// set makes the settings the caller's.
+func TestTheDefaultSettingsAreTheModelsOwn(t *testing.T) {
 	d := session.DefaultSampling()
-	got := samplerFor(d)
-	if got.MinP == 0 || got.RepeatPen <= 1 {
-		t.Errorf("MinP %v / RepeatPen %v: the defaults that were never read are "+
-			"still not read", got.MinP, got.RepeatPen)
+	g := jlm.Generation{DoSample: true, Temperature: 0.7, TopK: 20, TopP: 0.8, TypicalP: 1, RepetitionPenalty: 1.1}
+	got := samplerFor(d, g, 4096)
+	if got.Temp != 0.7 || got.TopK != 20 || got.TopP != 0.8 || got.RepeatPen != 1.1 || got.RepeatLastN != 4096 {
+		t.Errorf("the defaults reached the engine as %+v, not the model's %+v", *got, g)
+	}
+	if greedy := samplerFor(d, jlm.ReferenceGeneration(), 4096); greedy.Temp != 0 {
+		t.Errorf("a model that states no sampling drew at temperature %v, not greedily", greedy.Temp)
+	}
+	for _, k := range session.SamplingKnobs() {
+		if k.Caption(d) != "the model's own" {
+			t.Errorf("%s says %q of the model's own draw", k.Name, k.Caption(d))
+		}
+	}
+	k := session.SamplingKnobs()[0]
+	k.Set(&d, 0.5)
+	if d.Stated || samplerFor(d, g, 4096).Temp != 0.5 {
+		t.Errorf("setting %s left the model's draw in place: %+v", k.Name, d)
+	}
+	if samplingOf(session.DefaultSampling()) != nil {
+		t.Error("the model's own draw was sent to the service as settings of the app's")
 	}
 }

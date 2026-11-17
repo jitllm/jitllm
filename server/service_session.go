@@ -31,9 +31,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request
 	if m.MaxDeviceBlocks != nil {
 		o.MaxDeviceBlocks = int(*m.MaxDeviceBlocks)
 	}
-	if sp := pbSampling(m.Sampling); sp != nil {
-		o.Sampling = *sp
-	}
+	o.Sampling = pbSampling(m.Sampling)
 	if sp := pbSpeculation(m.Speculation); sp != nil {
 		o.Speculation = *sp
 	}
