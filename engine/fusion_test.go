@@ -27,8 +27,8 @@ import (
 // the largest share of its token), so a ceiling measured there can reject
 // fusion soundly but never accept it.
 func TestFusionCeiling(t *testing.T) {
-	// Opt-in: it loads every model and decodes 72 tokens through each, which
-	// does not belong in the default correctness run.
+	// Opt-in: it loads every model and decodes up to 72 tokens through each,
+	// which does not belong in the default correctness run.
 	if os.Getenv("JITLLM_FUSION") == "" {
 		t.Skip("set JITLLM_FUSION=1 to run the fusion-ceiling measurement")
 	}
@@ -79,7 +79,11 @@ func fusionCeiling(t *testing.T, path string) {
 		}
 	}
 
-	const tokens = 64
+	// The warm tokens and the timed ones share the model's context.
+	tokens := 64
+	if c := int(m.Cfg.NCtx); c > 0 {
+		tokens = min(tokens, c-8)
+	}
 	cpudev.PoolOf(s.Devices()).ResetRegions()
 	start := time.Now()
 	for i := 0; i < tokens; i++ {
@@ -89,10 +93,10 @@ func fusionCeiling(t *testing.T, path string) {
 	}
 	elapsed := time.Since(start)
 	par, ser := cpudev.PoolOf(s.Devices()).Regions()
-	perTok := elapsed / tokens
-	parPerTok := float64(par) / tokens
+	perTok := elapsed / time.Duration(tokens)
+	parPerTok := float64(par) / float64(tokens)
 	t.Logf("%d layers, %.1f parallel regions/token, %.1f inline regions/token, %v/token (%.1f tok/s)",
-		m.Cfg.NLayer, parPerTok, float64(ser)/tokens, perTok, float64(tokens)/elapsed.Seconds())
+		m.Cfg.NLayer, parPerTok, float64(ser)/float64(tokens), perTok, float64(tokens)/elapsed.Seconds())
 
 	// Per-region dispatch cost on this pool at decode's participant count, with
 	// a trivial body so the number is the round trip and not the work.
