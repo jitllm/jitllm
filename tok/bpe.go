@@ -833,6 +833,8 @@ type runes struct {
 	rs    []rune
 	off   []int32
 	valid bool
+	// m is a split pattern's backtrack scratch (pattern.go).
+	m matcher
 }
 
 func (r *runes) load(s string) {
