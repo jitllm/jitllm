@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -52,6 +53,14 @@ func TestEveryEngineErrorHasItsCode(t *testing.T) {
 		connect.CodeFailedPrecondition)
 	if got := ce.Meta().Get("jitllm-not-converted"); got != "/m/x.gguf" {
 		t.Fatalf("jitllm-not-converted metadata %q, want the GGUF's path", got)
+	}
+	// A container of another version says which fix reaches it.
+	for _, ve := range []*jlm.VersionError{{Have: 31, Want: 33, Upgradable: true}, {Have: 12, Want: 33}} {
+		want := map[bool]string{true: "upgrade", false: "convert"}[ve.Upgradable]
+		ce := wantCode(t, ve.Error(), connectErr(fmt.Errorf("load m.jlm: %w", ve)), connect.CodeFailedPrecondition)
+		if got := ce.Meta().Get("jitllm-container-version"); got != want {
+			t.Fatalf("a version %d container's metadata says %q, want %q", ve.Have, got, want)
+		}
 	}
 	wantCode(t, "invalid()", invalid("x %d", 1), connect.CodeInvalidArgument)
 	wantCode(t, "unimplemented()", unimplemented("x"), connect.CodeUnimplemented)

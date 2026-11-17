@@ -248,6 +248,23 @@ func (h *Header) encode(b []byte) {
 	le.PutUint64(b[184:], h.ExpPageSize)
 }
 
+// VersionError is a container of another version than this build reads:
+// Upgradable where a chain of migrations reaches it in place (jitllm
+// upgrade), else only a conversion from its source does.
+type VersionError struct {
+	Have, Want uint32
+	Upgradable bool
+}
+
+func (e *VersionError) Error() string {
+	if e.Upgradable {
+		return fmt.Sprintf("jlm: container is version %d and this build reads %d; "+
+			"upgrade it in place: jitllm upgrade <file.jlm>", e.Have, e.Want)
+	}
+	return fmt.Sprintf("jlm: container is version %d and this build reads %d; "+
+		"re-run `jitllm convert` (no migration reaches it)", e.Have, e.Want)
+}
+
 // decodeHeader reads and validates the header. A container is untrusted input
 // (RULE 9), so every offset and length is checked against the file size
 // before anything slices with it: a malformed container is an error, never a
@@ -260,12 +277,7 @@ func decodeHeader(b []byte, size uint64, want uint32) (*Header, error) {
 		return nil, fmt.Errorf("jlm: not a jlm container (magic %q)", b[0:8])
 	}
 	if v := binary.LittleEndian.Uint32(b[8:]); v != want {
-		if want == Version && Upgradable(v) {
-			return nil, fmt.Errorf("jlm: container is version %d and this build reads %d; "+
-				"upgrade it in place: jitllm upgrade <file.jlm>", v, Version)
-		}
-		return nil, fmt.Errorf("jlm: container is version %d and this build reads %d; "+
-			"re-run `jitllm convert` (no migration reaches it)", v, want)
+		return nil, &VersionError{Have: v, Want: want, Upgradable: want == Version && Upgradable(v)}
 	}
 	le := binary.LittleEndian
 	h := &Header{

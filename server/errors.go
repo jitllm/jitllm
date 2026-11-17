@@ -8,13 +8,16 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 )
 
 // connectErr maps an engine error onto a Connect code. A GGUF handed to Open
 // yields a *model.NotConvertedError carrying the convert command; it becomes
 // FailedPrecondition, with the command repeated in an error detail so a
-// client can show it as an action.
+// client can show it as an action. A container of another version
+// (*jlm.VersionError) is FailedPrecondition too, its fix -- upgrade or
+// convert -- in the metadata.
 func connectErr(err error) error {
 	if err == nil {
 		return nil
@@ -28,6 +31,16 @@ func connectErr(err error) error {
 	if errors.As(err, &nc) {
 		ce := connect.NewError(connect.CodeFailedPrecondition, err)
 		ce.Meta().Set("jitllm-not-converted", nc.Path)
+		return ce
+	}
+	var ve *jlm.VersionError
+	if errors.As(err, &ve) {
+		ce := connect.NewError(connect.CodeFailedPrecondition, err)
+		fix := "convert"
+		if ve.Upgradable {
+			fix = "upgrade"
+		}
+		ce.Meta().Set("jitllm-container-version", fix)
 		return ce
 	}
 	switch {
