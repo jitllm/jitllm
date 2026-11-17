@@ -3,7 +3,7 @@ package oracle
 import "math"
 
 // SparseMixer is Phi-3.5-MoE's router in eval (transformers' sparsemixer with
-// training off; vLLM's phimoe_routing_function is the same function), the
+// training off), the
 // reference cpu.EmitSparseMixer and the device's sparsemixer weights are gated
 // against:
 //
@@ -58,7 +58,7 @@ const (
 	// softmax, which the reference masks to -Inf.
 	SparseMixerFaultKeepFirst
 	// SparseMixerFaultRenormalised divides the two weights by their sum,
-	// llama.cpp's phimoe router.
+	// a renormalising top-2 router in place of the sparsemixer.
 	SparseMixerFaultRenormalised
 	// SparseMixerFaultAbsFactor drops the clamp: the gap divided by |s_j|
 	// alone.

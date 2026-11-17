@@ -15,7 +15,7 @@ const (
 	// router input's RMSNorm weight: router.scale over sqrt(n_embd), folded at
 	// conversion, since the router reads rmsnorm(x) * scale * n_embd^-1/2.
 	// RoleExpScale is one factor per expert multiplying its renormalised
-	// weight (router.per_expert_scale, llama.cpp's ffn_down_exps.scale).
+	// weight (router.per_expert_scale, a GGUF's ffn_down_exps.scale).
 	RoleFFNNorm2     Role = 301
 	RolePostFFNNorm1 Role = 302
 	RolePostFFNNorm2 Role = 303
@@ -126,8 +126,8 @@ const (
 	// block's two residual-attention score vectors (n_embd): each checkpoint
 	// in the bank and the running residual scores sum(w * rmsnorm(v)), and
 	// the sublayer reads their softmax mix. Each is the reference's
-	// <x>_res_norm.weight times <x>_res_proj.weight, which llama.cpp's
-	// converter writes as one product. RoleOutputResScore is the head's.
+	// <x>_res_norm.weight times <x>_res_proj.weight, which a GGUF
+	// stores as one product. RoleOutputResScore is the head's.
 	RoleAttnResScore   Role = 350
 	RoleFFNResScore    Role = 351
 	RoleOutputResScore Role = 352

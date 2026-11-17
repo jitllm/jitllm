@@ -84,7 +84,7 @@ func GatedDeltaChan(o, state, k, q, v, decay []float64, gate float64) {
 
 // GatedSSD applies one token of Mamba-2's selective state update to one head:
 // len(o) rows of len(k), in place on state (row-major), and writes the head's
-// output. Per row j, in llama.cpp's ssm_scan order:
+// output. Per row j, in this order:
 //
 //	S[j] = S[j]*decay + (v[j]*dt)*k
 //	o[j] = dot(S[j], q) + d*v[j]
@@ -107,7 +107,7 @@ func GatedSSD(o, state, k, q, v []float64, decay, dt, d float64) {
 
 // SelScan applies one token of Mamba-1's selective scan to len(o) channels,
 // in place on state (row-major, len(b) per channel). Per channel j, in
-// llama.cpp's ssm_scan order:
+// this order:
 //
 //	S[j][s] = S[j][s]*exp(dt[j]*A[j][s]) + (x[j]*dt[j])*B[s]
 //	o[j]    = dot(S[j], C) + d[j]*x[j]

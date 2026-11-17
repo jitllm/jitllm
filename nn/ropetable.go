@@ -18,7 +18,7 @@ type Rope struct {
 	// (rope_freqs.weight or rope_factors_short.weight): a scaling method's
 	// divisors times the factors the file ships. nil is no rescaling.
 	Freqs []float32
-	// Scale multiplies cos and sin -- ggml's mscale, from
+	// Scale multiplies cos and sin -- YaRN's mscale, from
 	// rope.scaling.attn_factor. Zero means one.
 	Scale float64
 	// Runs makes the position multi-axis: run u's pairs are turned by

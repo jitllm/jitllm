@@ -31,23 +31,24 @@ const (
 	// in it, read only by a row gather.
 	IQ4_NL Type = 20
 	BF16   Type = 30
-	// TQ1_0 and TQ2_0 are llama.cpp's ternary formats: 256 weights of {-1, 0,
+	// TQ1_0 and TQ2_0 are the GGUF's ternary formats: 256 weights of {-1, 0,
 	// 1} times one f16 scale, base-3 packed five to a byte (TQ1_0) or as 2-bit
 	// codes q+1 (TQ2_0). TQ2_0 is the engine's ternary weight type; TQ1_0
 	// converts into it exactly.
 	TQ1_0 Type = 34
 	TQ2_0 Type = 35
-	// I2_S is bitnet.cpp's ternary type, the number its fork of ggml gives it
-	// (ggml itself retired 36). It has no block: a tensor is n/4 bytes of
-	// 2-bit codes and then one f32 scale, padded to 32 bytes, so it is sized
-	// by I2SBytes rather than by blockInfo and decoded only by the converter.
+	// I2_S is the ternary type BitNet b1.58's published GGUFs carry, at the
+	// number those files give it (the GGUF type list retired 36). It has no
+	// block: a tensor is n/4 bytes of 2-bit codes and then one f32 scale,
+	// padded to 32 bytes, so it is sized by I2SBytes rather than by blockInfo
+	// and decoded only by the converter.
 	I2_S Type = 36
 	// TQ2_F32 is TQ2_0's block with its scale an f32: 64 bytes of codes and
-	// then the scale, 68 bytes a 256-block. It is the engine's own, not a
-	// ggml type -- no GGUF carries it (gguf refuses an engine type) -- and it
-	// exists so a ternary weight whose scale is not an f16 (bitnet.cpp's
-	// I2_S, a latent checkpoint ternarized in f32) converts without rounding
-	// its scale: the precision of the scale is the type's, as its grouping is.
+	// then the scale, 68 bytes a 256-block. It is the engine's own, not a GGUF
+	// type -- no GGUF carries it (gguf refuses an engine type) -- and it exists
+	// so a ternary weight whose scale is not an f16 (I2_S, a latent checkpoint
+	// ternarized in f32) converts without rounding its scale: the precision of
+	// the scale is the type's, as its grouping is.
 	TQ2_F32 Type = EngineTypes + 35
 	// MXFP4 is the OCP microscaling format gpt-oss ships its expert banks in:
 	// 32 e2m1 codes and one E8M0 exponent per block.
@@ -55,7 +56,7 @@ const (
 )
 
 // blockInfoOf is elements-per-block and bytes-per-block. A type absent from this
-// table is either removed from ggml (4, 5, 31-33, 36-38) or newer than this
+// table is either retired from the GGUF type list (4, 5, 31-33, 36-38) or newer than this
 // table; either way we cannot compute a tensor's size, so Open rejects it. That
 // is a parse-time refusal, not a "we have no fast kernel" refusal — see nn.Ref.
 func blockInfoOf(t Type) ([2]uint64, bool) {
@@ -211,7 +212,7 @@ func (t Type) String() string {
 	return "type(" + itoa(uint64(t)) + ")"
 }
 
-// EngineTypes is where the engine's own block formats start: past every ggml
+// EngineTypes is where the engine's own block formats start: past every GGUF
 // type, so a GGUF naming one is refused (Engine) rather than read.
 const EngineTypes Type = 1 << 16
 

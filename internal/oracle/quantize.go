@@ -59,7 +59,7 @@ func QuantizeQ8Range(dst []int8, pairs []float32, x []float32, biasC float64, lo
 // It changes no layout, only a value: the pair array stays (d, -sum*biasC/8)
 // at stride 8 per 32 elements, and a wider window writes the same d into every
 // pair it covers. A kernel that knows can hoist the scale out of its sub-block
-// loop. 256 matches a k-quant super-block (llama.cpp's block_q8_K), so a whole
+// loop. 256 matches a k-quant super-block (Q8_K's), so a whole
 // super-block accumulates in int32 with one float multiply.
 //
 // It is a per-model decision: a wider amax is a coarser scale, so it is taken

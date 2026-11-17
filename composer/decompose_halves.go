@@ -52,7 +52,7 @@ func decomposeWidenHalves(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // bf16Bits is a's bfloat16 in the low half of a word: rounded to nearest
-// even, a NaN its top half with the quiet bit set (ggml_compute_fp32_to_bf16).
+// even, a NaN its top half with the quiet bit set.
 func (x *exprs) bf16Bits(a int) int {
 	U := ir.U32
 	u := x.un(OpBitcast, U, a)

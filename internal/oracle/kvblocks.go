@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// BlockFormat is a llama.cpp block format named as ggml names it (q4_0,
+// BlockFormat is a GGUF block format named as the GGUF names it (q4_0,
 // q4_1, q5_0, q5_1): graph.BlockFmt, which this package cannot import (the
 // container's tests import the oracle, and graph imports the container).
 type BlockFormat interface{ String() string }
@@ -31,11 +31,10 @@ func blockOf(f BlockFormat) (bytes int, mins, fifths bool) {
 	return 0, false, false
 }
 
-// QuantizeBlocks writes x, whole blocks of 32 elements, into dst as ggml's
-// reference quantizer of format f writes them (quantize_row_q4_0_ref,
-// quantize_row_q4_1_ref, quantize_row_q5_0_ref, quantize_row_q5_1_ref): the
-// reference the composed OpBlockRows is gated against. Each product is
-// rounded before its sum, as the reference's separate statements are.
+// QuantizeBlocks writes x, whole blocks of 32 elements, into dst as the GGUF
+// type's reference quantizer of format f writes them: the reference the
+// composed OpBlockRows is gated against. Each product is rounded before its
+// sum, as the reference's separate statements are.
 func QuantizeBlocks(dst []byte, x []float32, f BlockFormat) error {
 	bb, mins, fifths := blockOf(f)
 	if bb == 0 || len(x)%32 != 0 || len(dst) < len(x)/32*bb {
@@ -107,8 +106,8 @@ func QuantizeBlocks(dst []byte, x []float32, f BlockFormat) error {
 	return nil
 }
 
-// quantizeIQ4NL is quantize_row_iq4_nl_impl at ntry -1 with no importance
-// weights (quantize_row_iq4_nl_ref): the indices from max/kvalues[0], the
+// quantizeIQ4NL is IQ4_NL's reference quantizer at ntry -1 with no
+// importance weights: the indices from max/kvalues[0], the
 // scale the weighted least squares over them, each weight the element's
 // square, the sums in order. A block whose magnitude is below 1e-15 scales
 // by zero; the reference leaves its indices as its last block's, and this
@@ -174,9 +173,9 @@ func b2i(b bool) int {
 	return 0
 }
 
-// DequantBlocks reads format f's blocks b into dst as ggml's dequantizer
-// does: the container's decoder where it reads the format, and q4_1's
-// q*d+m (dequantize_row_q4_1) where it does not.
+// DequantBlocks reads format f's blocks b into dst as the GGUF type
+// decodes them: the container's decoder where it reads the format, and
+// q4_1's q*d+m where it does not.
 func DequantBlocks(dst []float32, b []byte, f BlockFormat) error {
 	switch f.String() {
 	case "q4_0":
@@ -204,7 +203,7 @@ func DequantBlocks(dst []float32, b []byte, f BlockFormat) error {
 	return fmt.Errorf("oracle: no dequantizer for %v", f)
 }
 
-// BlockRow is ggml's blocks of a row of w floats in format f, as
+// BlockRow is the GGUF blocks of a row of w floats in format f, as
 // QuantizeBlocks writes them, laid out by kind as graph.BlockRegions states
 // it: the scales (a word a block, d low and m high, where the format has a
 // minimum, else a word two blocks), the fifth bits (a word a block), the
@@ -242,8 +241,8 @@ func BlockRow(b []byte, f BlockFormat, w int) []uint32 {
 	return out
 }
 
-// BF16 is x as ggml_compute_fp32_to_bf16 rounds it: to nearest even, a NaN
-// its top half with the quiet bit set.
+// BF16 is x rounded to bfloat16: to nearest even, a NaN its top half with
+// the quiet bit set.
 func BF16(x float32) uint16 {
 	u := math.Float32bits(x)
 	if u&0x7fffffff > 0x7f800000 {

@@ -32,7 +32,7 @@ const (
 	// carries both halves the way a k-quant's does, the minimum the high half
 	// alone, with no per-sub-block integer to multiply it by.
 	Q5_1
-	// TQ2 is a ternary weight, llama.cpp's TQ2_0: codes q+1 in {0, 1, 2} for
+	// TQ2 is a ternary weight, the GGUF's TQ2_0: codes q+1 in {0, 1, 2} for
 	// weights {-1, 0, 1} in a 2-bit plane (four fields a byte, Fields), one f16
 	// scale per 256 weights repeated on each 32-wide sub-block, and a bias of
 	// one. Ternary x int8 is an unsigned dot of the codes with the activation

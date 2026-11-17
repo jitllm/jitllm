@@ -8,7 +8,7 @@ package jlm
 // accident: a shared number would read one family's tensor as the other's.
 
 const (
-	// ProjPixtral is llama.cpp's "pixtral": Mistral's ViT (RMSNorm, a gated
+	// ProjPixtral is a GGUF's projector type "pixtral": Mistral's ViT (RMSNorm, a gated
 	// SiLU MLP, no biases, a 2-D rotary whose two halves take the even and the
 	// odd frequencies of one sequence, interleaved pairs) at the picture's own
 	// size, then -- for Mistral Small 3.1 and Ministral 3 -- an RMSNorm over
@@ -34,7 +34,7 @@ const (
 	// RMSNorm and one matrix. A picture is read at its own size within a soft
 	// token budget.
 	ProjGemma4V Projector = 65533
-	// ProjPhi4 is llama.cpp's "phi4": Phi-4-reasoning-vision-15B (NOT
+	// ProjPhi4 is a GGUF's projector type "phi4": Phi-4-reasoning-vision-15B (NOT
 	// Phi-4-multimodal-instruct, which no mmproj exists for). SigLIP2's NaFlex
 	// tower at the picture's own size, between MinPixels and MaxPixels, its
 	// square position table resized to each grid; the reference reads
@@ -52,7 +52,7 @@ const (
 	// RMSNorm, one matrix and an unweighted RMSNorm). Rows are positions and
 	// channels are a row; every convolution weight is tap-major, (ky, kx, c).
 	ProjGemma3nV Projector = 65531
-	// ProjLFM2 is llama.cpp's "lfm2": LFM2-VL's and d1's. SigLIP2's NaFlex
+	// ProjLFM2 is a GGUF's projector type "lfm2": LFM2-VL's and d1's. SigLIP2's NaFlex
 	// tower (Phi-4-reasoning-vision's, with its post-LayerNorm) at each
 	// piece's own grid, its square position table resized to the grid; then
 	// the Scale x Scale pixel unshuffle (InternVL's grouping, dy outer and dx
@@ -70,9 +70,9 @@ const (
 	// its columns into the shuffle's order, patch-major, dy outer and dx inner.
 	RoleVMerge Role = 65535
 	// RoleVImgBreak is the [IMG_BREAK] token's embedding, one text-width row
-	// the head writes after every merged grid row but the last (Pixtral).
-	// llama.cpp's converter copies it out of the text model's table into the
-	// mmproj, unquantized, which is the row the reference looks up.
+	// the head writes after every merged grid row but the last (Pixtral). A
+	// GGUF's mmproj carries a copy of the text model's row, unquantized, which
+	// is the row the reference looks up.
 	RoleVImgBreak Role = 65534
 	// RoleVProj3 is a projector's third matrix, after RoleVProj and
 	// RoleVProj2: Llama 4's multi_modal_projector, after its adapter's two.

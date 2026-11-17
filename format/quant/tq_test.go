@@ -57,7 +57,7 @@ func TestTernaryMatchesGGUFPy(t *testing.T) {
 			for i, want := range e.Bits {
 				w := math.Float32frombits(want)
 				if math.Float32bits(got32[i]) != want {
-					t.Fatalf("element %d (block %d): got %#08x (%g), gguf-py %#08x (%g)",
+					t.Fatalf("element %d (block %d): got %#08x (%g), golden %#08x (%g)",
 						i, i/256, math.Float32bits(got32[i]), got32[i], want, w)
 				}
 				if !math.IsInf(float64(w), 0) && float32(got64[i]) != w {
@@ -80,7 +80,7 @@ func TestTernaryMatchesGGUFPy(t *testing.T) {
 			if !Dequantable(ty) {
 				t.Fatalf("%s decodes and Dequantable says otherwise", ty)
 			}
-			t.Logf("%d blocks bit-identical to gguf-py (%s)", len(src)/bb, e.Source)
+			t.Logf("%d blocks bit-identical to the golden (%s)", len(src)/bb, e.Source)
 		})
 	}
 }

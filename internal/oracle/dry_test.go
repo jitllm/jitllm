@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// TestDryMatchesLlamaCppsCases: Dry over llama.cpp's own DRY cases
-// (tests/test-sampling.cpp test_dry, a context of 1024): the logits the
-// probabilities' logs, the history accepted, then the softmax, sorted, held
-// to llama.cpp's expected probabilities within its 1e-3.
-func TestDryMatchesLlamaCppsCases(t *testing.T) {
+// TestDryMatchesTheOraclesCases: Dry over the GGUF oracle's own DRY cases
+// (its sampling tests, a context of 1024): the logits the probabilities'
+// logs, the history accepted, then the softmax, sorted, held to the cases'
+// expected probabilities within their 1e-3.
+func TestDryMatchesTheOraclesCases(t *testing.T) {
 	for i, c := range []struct {
 		probs    []float32
 		last     []int32
@@ -55,7 +55,7 @@ func TestDryMatchesLlamaCppsCases(t *testing.T) {
 		})
 		for j := range got {
 			if math.Abs(float64(got[j]-c.want[j])) >= 1e-3 {
-				t.Errorf("case %d: probabilities %v, llama.cpp's %v", i, got, c.want)
+				t.Errorf("case %d: probabilities %v, want %v", i, got, c.want)
 				break
 			}
 		}

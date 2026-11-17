@@ -80,7 +80,7 @@ func Row(dst []float32, wt quant.Type, w []byte, r, k int) error {
 // RMSNorm computes y = x / sqrt(mean(x^2) + eps) * w.
 //
 // The mean is over the whole vector and the reciprocal square root is applied
-// before the weight, matching ggml_rms_norm followed by ggml_mul. Note that some
+// before the weight, as the models' reference RMSNorm computes it. Note that some
 // architectures bake a +1 into the stored weight at conversion time, so this
 // never adds one itself — see model.Config.
 func RMSNorm(y, x, w []float64, eps float64) {
@@ -127,8 +127,8 @@ func LayerNorm(y, x, w, b []float64, eps float64) {
 // SiLU is x * sigmoid(x), the SwiGLU gate activation.
 func SiLU(x float64) float64 { return x / (1 + math.Exp(-x)) }
 
-// GELUTanh is the tanh approximation of GELU, which is what gemma uses and what
-// ggml's GGML_UNARY_OP_GELU computes.
+// GELUTanh is the tanh approximation of GELU, which is what gemma uses
+// (transformers' gelu_pytorch_tanh).
 func GELUTanh(x float64) float64 {
 	const c = 0.7978845608028654 // sqrt(2/pi)
 	return 0.5 * x * (1 + math.Tanh(c*(x+0.044715*x*x*x)))

@@ -10,12 +10,12 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
-// TestComposedCPUPenaltiesFollowLlamaCpp holds the sampler's penalized row
-// on the CPU device to llama.cpp's penalties (oracle.Penalize), bit for bit:
+// TestComposedCPUPenaltiesFollowTheOracle holds the sampler's penalized row
+// on the CPU device to the oracle's penalties (oracle.Penalize), bit for bit:
 // over random logits and windows, the repeat penalty once a windowed token,
 // then frequency times its count plus presence subtracted, each alone and
 // together. Its violation, the two subtracted penalties swapped, is seen.
-func TestComposedCPUPenaltiesFollowLlamaCpp(t *testing.T) {
+func TestComposedCPUPenaltiesFollowTheOracle(t *testing.T) {
 	const n = 64
 	g := (&graph.SampleTopK{NVocab: n, K: n}).Build()
 	if err := graph.Verify(g, graph.Facts{}); err != nil {

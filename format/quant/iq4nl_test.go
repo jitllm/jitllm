@@ -47,7 +47,7 @@ func TestIQ4NLMatchesGGUFPy(t *testing.T) {
 	for i, want := range g.Bits {
 		w := math.Float32frombits(want)
 		if math.Float32bits(got32[i]) != want {
-			t.Fatalf("element %d (block %d): got %#08x (%g), gguf-py %#08x (%g)",
+			t.Fatalf("element %d (block %d): got %#08x (%g), golden %#08x (%g)",
 				i, i/32, math.Float32bits(got32[i]), got32[i], want, w)
 		}
 		if !math.IsInf(float64(w), 0) && float32(got64[i]) != w {
@@ -67,5 +67,5 @@ func TestIQ4NLMatchesGGUFPy(t *testing.T) {
 	if !Dequantable(IQ4_NL) {
 		t.Fatal("IQ4_NL decodes and Dequantable says otherwise")
 	}
-	t.Logf("%d blocks bit-identical to gguf-py (%s)", len(src)/18, g.Source)
+	t.Logf("%d blocks bit-identical to the golden (%s)", len(src)/18, g.Source)
 }

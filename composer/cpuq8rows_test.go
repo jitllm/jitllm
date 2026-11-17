@@ -31,8 +31,8 @@ func q8RowsCase(R, W int) []float32 {
 
 // TestComposedCPUQ8Rows executes OpQ8Rows and OpWidenQ8Rows on the CPU at
 // head widths whole blocks and ragged, over a step of several rows: each row
-// word for word as oracle.QuantizeQ8 writes the zero-padded row (llama.cpp's
-// quantize_row_q8_0: amax/127, halves away from zero) with the pair's sum
+// word for word as oracle.QuantizeQ8 writes the zero-padded row (the Q8_0
+// reference quantizer's amax/127, halves away from zero) with the pair's sum
 // term at Q8_0's bias, and each element widened as d*q.
 func TestComposedCPUQ8Rows(t *testing.T) { gateComposedCPUQ8Rows(t, hostArm()) }
 func gateComposedCPUQ8Rows(t *testing.T, cpuOn cpuArm) {

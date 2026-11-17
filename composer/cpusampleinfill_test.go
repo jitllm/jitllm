@@ -15,8 +15,8 @@ import (
 )
 
 // TestComposedCPUSampleInfill holds graph.SampleWalk's infill form on the CPU
-// device to its definition (oracle.SampleInfill, llama.cpp's infill sampler
-// over the walk's survivors): the token of every draw whose comparisons clear
+// device to its definition (oracle.SampleInfill, the fill-in-the-middle
+// sampler over the walk's survivors): the token of every draw whose comparisons clear
 // float32 rounding, over a vocabulary built to be full of prefixes -- every
 // piece of one to four letters over two, repeats of them, empty pieces, and
 // end-of-generation tokens with and without a piece -- and random logits, k,

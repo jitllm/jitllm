@@ -38,7 +38,7 @@ func PenalizeOnce(v []float32, hist []int, pen float32) {
 	}
 }
 
-// Penalize is v with llama.cpp's penalties on each token hist holds: the
+// Penalize is v with the penalties on each token hist holds: the
 // repeat penalty once (PenalizeOnce), then frequency times its count plus
 // presence subtracted, each step rounded to float32.
 func Penalize(v []float32, hist []int, rep, presence, frequency float32) {
@@ -95,7 +95,7 @@ func SampleRow(logits []float32, hist []int, pen float32, invT float32, u float6
 	return tok, margin
 }
 
-// typicalCut is llama.cpp's locally typical cut over p, the candidates'
+// typicalCut is the locally typical cut (Meister et al., 2023) over p, the candidates'
 // probabilities: of the candidates in (in), in the order of their surprise
 // -log p's distance from the entropy, the nearest first (the earlier of two
 // equal), each while the mass before it is at most typ, the nearest always;
@@ -138,7 +138,7 @@ func typicalCut(p []float64, in []bool, typ float64, minKeep int) (keep []bool, 
 	return keep, margin
 }
 
-// TopNSigma is v with llama.cpp's top-n-sigma: every value under the largest
+// TopNSigma is v with top-n-sigma (Tang et al., 2024): every value under the largest
 // less n standard deviations of the finite values at -Inf (none where n is
 // not above 0), and how near a value is to that edge.
 func TopNSigma(v []float32, n float64) ([]float32, float64) {
@@ -171,7 +171,7 @@ func TopNSigma(v []float32, n float64) ([]float32, float64) {
 
 // DynTemp is the reciprocal temperature a draw over survivors of
 // probabilities p (any scale) runs at: invT, or where dyn's range dyn[0] is
-// above 0 and two or more survive llama.cpp's dynamic temperature, lo + (hi
+// above 0 and two or more survive the entropy-scaled dynamic temperature, lo + (hi
 // - lo)*(H/log n)^dyn[1] with T = 1/invT, lo = max(0, T - range), hi = T +
 // range; its reciprocal held to 1e30.
 func DynTemp(p []float64, invT float64, dyn [2]float64) float64 {
@@ -196,7 +196,7 @@ func DynTemp(p []float64, invT float64, dyn [2]float64) float64 {
 	return min(1/(lo+(hi-lo)*pw), 1e30)
 }
 
-// SampleMirostat is llama.cpp's Mirostat draw (graph.SampleMirostat) in
+// SampleMirostat is the Mirostat draw (Basu et al., 2021; graph.SampleMirostat) in
 // float64 over the row's softmax at 1/T (each logit times 1/T in float32):
 // version 2 the tokens of at most mu bits, the best always; version 1 the k
 // most likely, k from the 100 best's Zipf estimate; the walk at u over the
@@ -293,7 +293,7 @@ func mirostatKeep(q []float64, order []int, v1 bool, mu float64) (keep int, marg
 	return max(keep, 1), margin
 }
 
-// xtcCut is llama.cpp's XTC over the survivors surv (in their order, largest
+// xtcCut is XTC (exclude top choices) over the survivors surv (in their order, largest
 // first) with probabilities p, the share of their softmax at the temperature:
 // those at or above thr, every one but the last of them, where two or more
 // are, and where at least minKeep are left; +Inf cuts none. It returns what
@@ -334,7 +334,7 @@ func SampleWalk(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, 
 	return SampleWalkMinKeep(logits, K, k, invT, topp, minp, typ, xtc, dyn, u, 0)
 }
 
-// SampleWalkMinKeep is SampleWalk with llama.cpp's min_keep: typical-p,
+// SampleWalkMinKeep is SampleWalk with a min_keep: typical-p,
 // top-p, min-p and XTC each leave at least minKeep of their candidates.
 func SampleWalkMinKeep(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64, u float64, minKeep int) (tok uint32, margin float64) {
 	ids, et, margin := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn, minKeep)
@@ -442,8 +442,8 @@ func walkAt(ids []uint32, w []float64, in []bool, u float64) (tok uint32, margin
 	return tok, margin
 }
 
-// SampleInfill is SampleWalk's draw through llama.cpp's infill sampler
-// (llama_sampler_infill_apply), read as written: top-n-sigma at sigma (on
+// SampleInfill is SampleWalk's draw through the fill-in-the-middle
+// sampler: top-n-sigma at sigma (on
 // above 0) over the row first, SampleWalk's survivors, then over their
 // softmax at the temperature, with each token's piece and whether it ends a
 // generation (piece, eog), either the end-of-generation survivors alone
@@ -460,7 +460,7 @@ func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma 
 	return SampleInfillMinKeep(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, u, piece, eog, eot, 0)
 }
 
-// SampleInfillMinKeep is SampleInfill with llama.cpp's min_keep over the
+// SampleInfillMinKeep is SampleInfill with a min_keep over the
 // walk's cuts (SampleWalkMinKeep).
 func SampleInfillMinKeep(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64, u float64,
 	piece func(int) string, eog func(int) bool, eot, minKeep int) (tok uint32, branch int, margin float64) {
@@ -603,7 +603,7 @@ func SampleCut(logits []float32, hist []int, pen, invT float32, topp, minp, typ,
 	return SampleCutMinKeep(logits, hist, pen, invT, topp, minp, typ, xtc, dyn, u, 0)
 }
 
-// SampleCutMinKeep is SampleCut with llama.cpp's min_keep: typical-p,
+// SampleCutMinKeep is SampleCut with a min_keep: typical-p,
 // top-p, min-p and XTC each leave at least minKeep of their candidates.
 func SampleCutMinKeep(logits []float32, hist []int, pen, invT float32, topp, minp, typ, xtc float64, dyn [2]float64, u float64, minKeep int) (tok uint32, margin float64) {
 	v := append([]float32(nil), logits...)
@@ -722,7 +722,7 @@ func SampleProb(logits []float32, hist []int, pen, invT float32, k int, topp, mi
 	return SampleProbMinKeep(logits, hist, pen, invT, k, topp, minp, typ, xtc, mix, dyn, x, 0)
 }
 
-// SampleProbMinKeep is SampleProb with llama.cpp's min_keep: typical-p,
+// SampleProbMinKeep is SampleProb with a min_keep: typical-p,
 // top-p, min-p and XTC each leave at least minKeep of their candidates.
 func SampleProbMinKeep(logits []float32, hist []int, pen, invT float32, k int, topp, minp, typ, xtc, mix float64, dyn [2]float64, x, minKeep int) (p, margin float64) {
 	v := append([]float32(nil), logits...)
@@ -801,11 +801,10 @@ func SampleProbMinKeep(logits []float32, hist []int, pen, invT float32, k int, t
 	return pc + (share(cut)-pc)*mix, min(margin, xm)
 }
 
-// AdaptiveP is llama.cpp's adaptive-p transform (llama_sampler_adaptive_p_apply)
-// of a draw's distribution p, 0 off its survivors, with the moving average at
-// sum over weight: the adapted target 2*target - sum/weight within [0, 1]
-// (target held to [0, 1]), each survivor's logit 5 - 10*d*d/(1+d) at
-// d = |p - adapted|/0.3, in float32 as llama.cpp computes it, the rest -Inf.
+// AdaptiveP is the adaptive-p transform of a draw's distribution p, 0 off its
+// survivors, with the moving average at sum over weight: the adapted target
+// 2*target - sum/weight within [0, 1] (target held to [0, 1]), each survivor's
+// logit 5 - 10*d*d/(1+d) at d = |p - adapted|/0.3, in float32, the rest -Inf.
 // It returns the logits and how near a survivor is to the adapted target's
 // kink, which a float32 rounding could move.
 func AdaptiveP(p []float64, target, sum, weight float64) (logits []float32, margin float64) {

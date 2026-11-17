@@ -8,10 +8,10 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// blockElems is the elements one llama.cpp block holds.
+// blockElems is the elements one GGUF block holds.
 const blockElems = 32
 
-// decomposeBlockRows is each row's floats in Attr.Block's llama.cpp blocks.
+// decomposeBlockRows is each row's floats in Attr.Block's GGUF blocks.
 func decomposeBlockRows(o graph.Op, c *Context) ([]Prim, error) {
 	f := o.Attr.Block
 	if len(o.In) != 1 || len(o.Out) != 1 || f.Bytes() == 0 || c.width(o.Out[0]) != graph.BlockRowWords(f, c.width(o.In[0])) {
@@ -23,7 +23,7 @@ func decomposeBlockRows(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // blockRows is each of src's sh rows of floats into out's words in format
-// f, as ggml's reference quantizer (quantize_row_q4_0_ref and its kin)
+// f, as the GGUF type's reference quantizer (oracle.QuantizeBlocks)
 // quantizes a row zero-padded to whole blocks: each block's scale from its
 // signed extreme (the first element of the greatest magnitude) or from its
 // range, the scale's reciprocal, each element's code truncated as the
@@ -239,14 +239,12 @@ func blockRegions(c *Context, sh []int, out Operand, f graph.BlockFmt, d, lo, co
 			Stores: []PrimStore{{Out: out, Index: ix, Value: word, Extent: ext}}})
 }
 
-// iq4nlRows is each of src's sh rows in iq4_nl's blocks, as ggml's
-// reference quantizer (quantize_row_iq4_nl_ref, quantize_row_iq4_nl_impl
-// at ntry -1) quantizes a row zero-padded to whole blocks: from the signed
-// extreme's quotient by kvalues_iq4nl's first (d0), each element's
-// index the value nearest it times 1/d0 (best_index_int8), and the scale
-// the weighted least squares of the values against the elements, each
-// weighted by its square; a block whose magnitude is below 1e-15 scales by
-// zero.
+// iq4nlRows is each of src's sh rows in iq4_nl's blocks, as the GGUF type's
+// reference quantizer (at ntry -1) quantizes a row zero-padded to whole blocks:
+// from the signed extreme's quotient by IQ4_NL's first table value (d0), each
+// element's index the value nearest it times 1/d0 (iq4Index), and the scale the
+// weighted least squares of the values against the elements, each weighted by
+// its square; a block whose magnitude is below 1e-15 scales by zero.
 func iq4nlRows(c *Context, src Operand, sh []int, out, amax, d0 Operand,
 	quot func(*exprs, int, int) int, recip func(*exprs, int) int) []Prim {
 	U, F := ir.U32, ir.F32
@@ -312,7 +310,7 @@ func iq4nlRows(c *Context, src Operand, sh []int, out, amax, d0 Operand,
 	return append(prims, blockRegions(c, sh, out, graph.BlockIQ4NL, d, Operand{}, codes)...)
 }
 
-// iq4Value is kvalues_iq4nl[q] as a float: the values packed four to a
+// iq4Value is IQ4_NL's table value q as a float: the values packed four to a
 // word, the word picked by q's top bits and the byte by its low two.
 func (x *exprs) iq4Value(q int) int {
 	U := ir.U32
@@ -327,7 +325,7 @@ func (x *exprs) iq4Value(q int) int {
 	return x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, x.op(OpSub, U, x.op(OpXor, U, b, x.u(128)), x.u(128))))
 }
 
-// iq4Index is best_index_int8 over kvalues_iq4nl: the greatest index whose
+// iq4Index is the nearest-value index into IQ4_NL's table: the greatest index whose
 // value is not above al, found in four halvings, then that index or the
 // next, whichever value is nearer, the next on a tie.
 func (x *exprs) iq4Index(al int) int {
@@ -369,7 +367,7 @@ func (x *exprs) halfBits(a int) int {
 // blockElem is element e of a row held in format f's regions, its words
 // read by word: the element's code from its nibble (and fifth bit), less
 // the format's bias times the block's scale, or times the scale plus the
-// block's minimum, as ggml's dequantizer reads it.
+// block's minimum, as the GGUF type decodes it.
 func blockElem(x *exprs, f graph.BlockFmt, w int, word func(i int) int, e int) int {
 	U, F := ir.U32, ir.F32
 	scales, fifths, nibbles := graph.BlockRegions(f, w)

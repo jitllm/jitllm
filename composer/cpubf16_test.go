@@ -11,7 +11,7 @@ import (
 
 // TestComposedCPUBF16Halves executes OpHalves and OpWidenHalves under
 // Attrs.BF16 on the CPU at ragged widths over several rows: each word the
-// two bfloat16s oracle.BF16 rounds its floats to (ggml's rounding, ties to
+// two bfloat16s oracle.BF16 rounds its floats to (round to nearest, ties to
 // even, a NaN quieted), and each element widened back as the float whose top
 // half it is. The rows hold ties both ways, a NaN and the infinities.
 func TestComposedCPUBF16Halves(t *testing.T) {

@@ -5,17 +5,15 @@ import (
 	"sort"
 )
 
-// ChainStage is one of llama.cpp's samplers as common_sampler_init chains
-// them in a samplers list's order. Name is the list's: "penalties",
-// "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc" or
-// "temperature". P is top-p, min-p, typical-p, top-n-sigma's n, or XTC's
-// threshold where its chance fell (+Inf where it did not); InvT the
-// reciprocal temperature as the draw reads it (binary32) and Dyn the
-// dynamic temperature's range and exponent; Hist the penalties' window;
-// the Dry fields DRY's (Dry): its multiplier and base, allowed length,
-// window (-1 the context, DryCtx), history and breakers; MinKeep
-// llama.cpp's min_keep, at least that many of a cut's candidates left by
-// typical-p, top-p, min-p and XTC.
+// ChainStage is one sampler of a chain, run in a samplers list's order. Name is
+// the list's: "penalties", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p",
+// "xtc" or "temperature". P is top-p, min-p, typical-p, top-n-sigma's n, or
+// XTC's threshold where its chance fell (+Inf where it did not); InvT the
+// reciprocal temperature as the draw reads it (binary32) and Dyn the dynamic
+// temperature's range and exponent; Hist the penalties' window; the Dry fields
+// DRY's (Dry): its multiplier and base, allowed length, window (-1 the context,
+// DryCtx), history and breakers; MinKeep the min_keep, at least that many of a
+// cut's candidates left by typical-p, top-p, min-p and XTC.
 type ChainStage struct {
 	Name                         string
 	K, MinKeep                   int
@@ -29,9 +27,8 @@ type ChainStage struct {
 	DryBreakers                  map[int32][][]int32
 }
 
-// Chain runs stages over logits in their order, as llama.cpp's chain runs
-// its samplers over the candidates (llama_sampler_*_apply), a token a stage
-// removes -Inf: the penalties (Penalize); top-n-sigma (TopNSigma); top-k,
+// Chain runs stages over logits in their order, a token a stage removes
+// -Inf: the penalties (Penalize); top-n-sigma (TopNSigma); top-k,
 // the k largest (the lower id of two equal); typical-p (typicalCut) over
 // the survivors' softmax; top-p, those before the first whose mass up to
 // and including it reaches p, it kept, over the survivors' softmax in

@@ -300,7 +300,7 @@ const (
 	// OpHalves is In[0]'s floats as binary16, two a word (Out[0], u32, half
 	// In[0]'s width), the lower element in the low half, rounded to nearest
 	// even as a binary16 history's pages store them; as bfloat16 where
-	// Attr.BF16 says, a NaN quieted, as ggml_compute_fp32_to_bf16 rounds. A
+	// Attr.BF16 says, a NaN quieted. A
 	// primitive.
 	OpHalves
 	// OpWidenHalves is In[0]'s binary16 halves, two a word (u32), as floats
@@ -362,14 +362,14 @@ const (
 	// rematrix and resample (composer.SWR, composer.MonoMix), at most Taps
 	// taps times channels. A primitive.
 	OpSound
-	// OpBlockRows is each row of In[0]'s floats in llama.cpp's blocks of
+	// OpBlockRows is each row of In[0]'s floats in GGUF blocks of
 	// Attr.Block's format (Out[0], u32, BlockRowWords): the row's
-	// ceil(W/32) blocks, the last zero past W, each quantized as ggml's
-	// reference quantizer does, their fields in BlockRegions' order. A
+	// ceil(W/32) blocks, the last zero past W, each quantized as the GGUF
+	// type's reference quantizer does (internal/oracle), their fields in BlockRegions' order. A
 	// primitive.
 	OpBlockRows
 	// OpWidenBlockRows is OpBlockRows' rows (In[0], u32) as floats (Out[0],
-	// the rows' W elements), each element as ggml's dequantizer reads it.
+	// the rows' W elements), each element as the GGUF type decodes it.
 	// A primitive.
 	OpWidenBlockRows
 	// OpGatherRows is each row of Out[0] a row of its sources -- In[0]'s rows
@@ -531,20 +531,20 @@ func (k OpKind) String() string {
 // of ceil(w/32) blocks four to a word, then a pair a block.
 func Q8RowWords(w int) int { return (w + 31) / 32 * 10 }
 
-// BlockFmt is a llama.cpp block format a row of floats is held in
-// (OpBlockRows): 32 elements a block, each block's fields ggml's.
+// BlockFmt is a GGUF block format a row of floats is held in
+// (OpBlockRows): 32 elements a block, each block's fields the GGUF type's.
 //
 //	BlockQ4_0  binary16 d, 16 bytes of nibbles: (q-8)*d
 //	BlockQ4_1  binary16 d and m, 16 bytes of nibbles: q*d+m
 //	BlockQ5_0  binary16 d, 4 bytes of fifth bits, 16 of nibbles: (q-16)*d
 //	BlockQ5_1  binary16 d and m, 4 bytes of fifth bits, 16 of nibbles: q*d+m
-//	BlockIQ4NL binary16 d, 16 bytes of nibbles indexing ggml's
-//	           kvalues_iq4nl: kv[q]*d
+//	BlockIQ4NL binary16 d, 16 bytes of nibbles indexing IQ4_NL's
+//	           code table: kv[q]*d
 //
 // Element j < 16 of a block is nibble byte j's low half and element j+16
 // its high half; element j's fifth bit is bit j of the block's word. A row
 // holds its blocks' fields by kind rather than block by block, so that no
-// field crosses a word (BlockRegions): the same bytes as ggml's row of
+// field crosses a word (BlockRegions): the same bytes as a GGUF row of
 // blocks rounded up to a word.
 type BlockFmt uint8
 
@@ -556,7 +556,7 @@ const (
 	BlockIQ4NL
 )
 
-// IQ4NLValues is ggml's kvalues_iq4nl, the values an iq4_nl code indexes.
+// IQ4NLValues is IQ4_NL's code table, the values an iq4_nl code indexes.
 func IQ4NLValues() [16]int8 {
 	return [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
 }

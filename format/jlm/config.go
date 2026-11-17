@@ -236,8 +236,8 @@ type Config struct {
 	// YarnLogMul is the multiplier on YaRN's magnitude correction, ln(factor).
 	// Zero means the standard 0.1.
 	//
-	// It is 0.1*mscale_all_dim, the convention llama.cpp writes into
-	// rope.scaling.yarn_log_multiplier (and divides by 0.1 at load). It reaches
+	// It is 0.1*mscale_all_dim, the value a GGUF's
+	// rope.scaling.yarn_log_multiplier holds (mscale_all_dim is it over 0.1). It reaches
 	// two places: AttnFactor scales cos and sin, and the attention softmax is
 	// scaled by the square of the same correction.
 	YarnLogMul float32
@@ -727,8 +727,8 @@ const (
 
 	// FlagNonCausal says every position attends to every position of its
 	// input: an encoder's attention (BERT, EmbeddingGemma). With a sliding
-	// window it is symmetric, |i - j| <= SWAWindow/2, as llama.cpp's
-	// LLAMA_SWA_TYPE_SYMMETRIC and transformers compute.
+	// window it is symmetric, |i - j| <= SWAWindow/2, as the model's
+	// transformers class computes.
 	FlagNonCausal Flags = 1 << 15
 
 	// The pooling bits say how an embedding is read out of the last residual,
@@ -766,9 +766,8 @@ const (
 	FlagExpertWeightIn Flags = 1 << 22
 	// FlagDeltaKeyTiled pairs value head vh of a gated delta rule with key head
 	// vh % n_k_heads (tiled) instead of vh / (n_v_heads/n_k_heads) (grouped).
-	// It records how the file orders its value heads: llama.cpp's qwen35
-	// converter reorders them to tiled (so ggml_repeat can broadcast the keys)
-	// and its qwen3next converter does not. Undoing the reorder would split
+	// It records how the file orders its value heads: a qwen35 GGUF
+	// holds them reordered to tiled and a qwen3next GGUF does not. Undoing the reorder would split
 	// Q4_K super-blocks of ssm_out, so the container states the pairing. With
 	// one value head per key head the pairings coincide and the flag is unset.
 	FlagDeltaKeyTiled Flags = 1 << 23
@@ -885,7 +884,7 @@ type Vision struct {
 
 	// WinPattern and WinSize are Qwen2.5-VL's window attention: every block
 	// attends inside windows of WinSize x WinSize pixels except each
-	// WinPattern'th, which attends to the whole image (llama.cpp's n_wa_pattern;
+	// WinPattern'th, which attends to the whole image (a GGUF's clip.vision.n_wa_pattern;
 	// transformers' fullatt_block_indexes are its multiples, less one). Zero
 	// for a tower whose every block sees every patch. An optional tail of the
 	// record, written only when set, so every other tower's section is the
@@ -926,13 +925,13 @@ const (
 	// two-matrix MLP. Scale x Scale neighbouring patches are concatenated into
 	// one row of NEmbd*Scale^2, then linear, GELU, linear.
 	//
-	// llama.cpp permutes the patch grid before block 0 so each 2x2 group lands
+	// The reference's processor orders the patches so each 2x2 group lands
 	// in consecutive rows; this keeps raster order and groups spatially at the
 	// merger. Attention is permutation-equivariant and the rotary takes each
 	// patch's own (row, column), so the embeddings are the same with no
 	// permutation kernels. The group's internal order must still match:
-	// row-major, dy outer and dx inner, as llama.cpp's permute chain
-	// {1280,8,8} -> {2560,4,8} -> {2560,4,2,4} -> {2560,2,4,4} spells out.
+	// row-major, dy outer and dx inner, as Qwen2VLImageProcessor's transpose
+	// (grid_h/2, grid_w/2, dy, dx) spells out.
 	ProjQwen2VL Projector = 3
 	// ProjGemma3 is Gemma 3's: the SigLIP grid average-pooled Scale x Scale
 	// (64x64 patches to 16x16 tokens), an RMSNorm, and one matrix with no
@@ -951,7 +950,7 @@ const (
 	// groups CONSECUTIVE rows where qwen2vl_merger groups spatial ones, and the
 	// merged rows are put back into raster order at the end.
 	ProjQwen25VL Projector = 6
-	// ProjResampler is MiniCPM-V's (llama.cpp's "resampler"): a fixed set of
+	// ProjResampler is MiniCPM-V's (a GGUF's projector type "resampler"): a fixed set of
 	// learned queries cross-attends over the tower's patches, keys carrying a
 	// 2-D sin/cos position, so every image or slice becomes the same number of
 	// tokens whatever its grid. The tower's own positions are a learned table

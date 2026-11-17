@@ -2,18 +2,17 @@ package oracle
 
 import "math"
 
-// Dry is llama.cpp's DRY sampler over v (llama_sampler_dry_apply), in
-// place. hist is the history, of which the last lastN tokens are read (ctx
-// where lastN is -1); breakers maps a restart sequence's head to its tails.
-// The nearest restart sequence limits how far back a repeat reaches; each
-// earlier place the history's tail repeats is found by matching back from
-// it token by token -- what llama.cpp's Z-algorithm computes; the token
-// after a repeat at least allowed long would extend it, and falls by mult
-// times base to the longest such repeat's length past allowed, as llama.cpp
-// computes it (the power in double, the product rounded to binary32), the
-// length clamped where base to it passes binary32's largest. A token that
-// is a breaker alone is not penalized. Off at mult 0, base below 1 or lastN
-// 0.
+// Dry is the DRY ("don't repeat yourself") sampler over v, in place. hist is
+// the history, of which the last lastN tokens are read (ctx where lastN is -1);
+// breakers maps a restart sequence's head to its tails. The nearest restart
+// sequence limits how far back a repeat reaches; each earlier place the
+// history's tail repeats is found by matching back from it token by token --
+// what a Z-algorithm over the reversed history computes; the token after a
+// repeat at least allowed long would extend it, and falls by mult times base to
+// the longest such repeat's length past allowed (the power in double, the
+// product rounded to binary32), the length clamped where base to it passes
+// binary32's largest. A token that is a breaker alone is not penalized. Off at
+// mult 0, base below 1 or lastN 0.
 func Dry(v []float32, hist []int32, mult, base float32, allowed, lastN, ctx int, breakers map[int32][][]int32) {
 	if mult == 0 || base < 1 || lastN == 0 {
 		return

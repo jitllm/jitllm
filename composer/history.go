@@ -12,7 +12,7 @@ import (
 // [page][width]; Half stores binary16, two halves to a 32-bit word, the
 // lower element in the low half; Row, past 0, stores a position's row as
 // its heads' rows of Row elements each: q8 rows as OpQ8Rows writes them, or
-// llama.cpp's blocks of format Block as OpBlockRows writes them. BF16 with
+// GGUF blocks of format Block as OpBlockRows writes them. BF16 with
 // Half stores bfloat16 halves, as OpHalves writes them under Attrs.BF16.
 type Pool struct {
 	ByDim, Half, BF16 bool

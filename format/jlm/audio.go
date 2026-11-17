@@ -1,6 +1,6 @@
 package jlm
 
-// An audio tower: d1-omni's (its audio.py; llama.cpp's "d1omni_a"), the
+// An audio tower: d1-omni's (its audio.py; a GGUF's projector type "d1omni_a"), the
 // container's first. It rides the tower's page array after the vision
 // blocks -- audio block j is tower block Vision.NLayer+j -- and its
 // description is an optional tail of the Vision record (Vision.Audio), so a
@@ -41,7 +41,7 @@ type Audio struct {
 	Tower *Tower
 }
 
-// ProjD1OmniA is d1-omni's audio half (llama.cpp's "d1omni_a"); see Audio.
+// ProjD1OmniA is d1-omni's audio half (a GGUF's projector type "d1omni_a"); see Audio.
 const ProjD1OmniA Projector = 65529
 
 // The audio tower's roles. Every one is a tower tensor (Role.Vision) and

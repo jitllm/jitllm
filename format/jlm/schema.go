@@ -72,7 +72,7 @@ const (
 	TypeIQ4NL Type = 13
 
 	// TypeTQ2 is a ternary weight (GGUF's TQ2_0, into which TQ1_0 and
-	// bitnet.cpp's I2_S convert): a 2-bit plane, four codes a byte a quarter
+	// I2_S convert): a 2-bit plane, four codes a byte a quarter
 	// sub-block apart (kernels.Fields), with a constant bias of one, so the
 	// payload is q in {0, 1, 2} for {-1, 0, 1}, and one f16 scale per 32-wide
 	// sub-block (the source block's, repeated): 2.5 bits a weight. Its
@@ -328,8 +328,8 @@ const (
 	// RoleExpProbsB is DeepSeek's e_score_correction_bias: one value per
 	// expert, added to the gated scores and moving the selection only. It is
 	// not RoleRouterBias: gpt-oss's ffn_gate_inp.bias biases the router
-	// logits before gating and reaches the weights. llama.cpp keeps two tensors
-	// for the same reason; one role would give each model the other's mixture.
+	// logits before gating and reaches the weights. A GGUF stores them as two
+	// tensors; one role would give each model the other's mixture.
 	RoleExpProbsB Role = 111
 
 	// RoleAttnKVB is MLA's fused up-projection, which no container carries:
@@ -392,7 +392,7 @@ const (
 	RoleVProj2Bias Role = 91
 	// RoleVProjNorm/Bias is a norm the projector applies before its first
 	// matrix: gemma3's soft_emb_norm (an RMSNorm, no bias, with Gemma's +1
-	// already folded in by llama.cpp's converter) and InternVL's mlp1.0 (a
+	// already folded in by the GGUF) and InternVL's mlp1.0 (a
 	// LayerNorm with a bias over the pixel-shuffled row).
 	RoleVProjNorm     Role = 92
 	RoleVProjNormBias Role = 93

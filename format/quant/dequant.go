@@ -102,7 +102,7 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 		// block_q5_0 { ggml_half d; uint8_t qh[4]; uint8_t qs[16]; } — 32
 		// elements in 22 bytes. Q4_0's nibbles plus a 32-bit plane holding each
 		// weight's fifth bit, so the quant is 0..31 and the offset is -16.
-		// Element l takes bit l of qh, for all 32 (ggml's (qh >> (j+12)) & 0x10
+		// Element l takes bit l of qh, for all 32 (reading it as (qh >> (j+12)) & 0x10
 		// is bit j+16 written differently).
 		for b := uint64(0); b < blocks; b++ {
 			blk := src[b*22:]
@@ -162,7 +162,7 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 		//
 		// The code is an e2m1 float, not an affine integer: bit 3 is the sign and
 		// the low three bits index {0, 0.5, 1, 1.5, 2, 3, 4, 6}. MXFP4Values holds
-		// those doubled, so the scale is 2^(e-128) (ggml's e8m0_to_fp32_half).
+		// those doubled, so the scale is 2^(e-128): E8M0's 2^(e-127), halved.
 		for b := uint64(0); b < blocks; b++ {
 			blk := src[b*17:]
 			d := math.Ldexp(1, int(blk[0])-128)
@@ -192,7 +192,7 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 		// block_tq2_0 { uint8_t qs[64]; ggml_half d; } -- 256 elements in 66
 		// bytes. Each byte holds four 2-bit codes q+1 for elements 32 apart:
 		// element 128*(j/32) + 32*l + j%32 is bits 2l..2l+1 of qs[j]. A code of
-		// 3 is not written by any quantizer and decodes, as ggml's does, to 2d.
+		// 3 is not written by any quantizer and decodes as (q-1)*d does, to 2d.
 		for b := uint64(0); b < blocks; b++ {
 			blk := src[b*66:]
 			d := f16(binary.LittleEndian.Uint16(blk[64:]))
@@ -263,11 +263,12 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 	return nil
 }
 
-// MXFP4Values is the e2m1 code table, doubled so every entry is an integer --
-// ggml's kvalues_mxfp4. The scale that goes with it is 2^(e-128), not 2^(e-127).
+// MXFP4Values is the e2m1 code table, doubled so every entry is an integer. The
+// scale that goes with it is 2^(e-128), not 2^(e-127).
 func MXFP4Values() [16]int8 { return codeTable(mxfp4Values) }
 
-// IQ4NLValues is IQ4_NL's code table, ggml's kvalues_iq4nl.
+// IQ4NLValues is IQ4_NL's code table: the sixteen values the GGUF type's
+// codes index.
 func IQ4NLValues() [16]int8 { return codeTable(iq4nlValues) }
 
 const (
@@ -306,9 +307,9 @@ func Dequantable(t Type) bool {
 // element j). The float32 intermediates are the format's natural width; as
 // Dequant32 explains, f64 would round to the same float32 output.
 //
-// The strongest test is raw uint32 comparison against libggml with no
-// tolerance: a tolerance wide enough to absorb f32 rounding would hide a
-// sub-scale read from the next nibble.
+// The strongest test is raw uint32 comparison against the reference
+// dequantizer's goldens with no tolerance: a tolerance wide enough to absorb
+// f32 rounding would hide a sub-scale read from the next nibble.
 
 const qkK = 256
 

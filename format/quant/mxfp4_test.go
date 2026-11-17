@@ -45,7 +45,7 @@ func TestMXFP4MatchesGGUFPy(t *testing.T) {
 	nonzero := 0
 	for i, want := range g.Bits {
 		if math.Float32bits(got32[i]) != want {
-			t.Fatalf("element %d (block %d, e=%d): got %#08x (%g), gguf-py %#08x (%g)",
+			t.Fatalf("element %d (block %d, e=%d): got %#08x (%g), golden %#08x (%g)",
 				i, i/32, src[i/32*17], math.Float32bits(got32[i]), got32[i], want, math.Float32frombits(want))
 		}
 		// The f64 destination must be the same value wherever f32 holds it.
@@ -62,5 +62,5 @@ func TestMXFP4MatchesGGUFPy(t *testing.T) {
 	if !Dequantable(MXFP4) {
 		t.Fatal("MXFP4 decodes and Dequantable says otherwise")
 	}
-	t.Logf("%d blocks bit-identical to gguf-py", len(src)/17)
+	t.Logf("%d blocks bit-identical to the golden", len(src)/17)
 }

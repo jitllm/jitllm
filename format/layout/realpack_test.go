@@ -16,7 +16,7 @@ import (
 // kernel. Synthetic blocks once passed while a model decoded wrong (the bug was
 // in subnormal scales); real weights exercise the scale tables, bit layouts and
 // exponent ranges models contain, and quant.Dequant is verified bit-exact
-// against libggml.
+// against the reference dequantizer's goldens (TestDequantGoldens).
 func TestPackAgainstRealWeights(t *testing.T) {
 	models := testmodels.Glob("*.gguf")
 	if len(models) == 0 {

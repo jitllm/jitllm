@@ -14,7 +14,7 @@ import (
 // top-n-sigma and a dynamic temperature -- a top-k
 // draw's walk, the cut with no top-k and its top-k variant past the walk's
 // bound (graph.SampleCut's Typical forms) -- on the CPU device to their
-// definition (internal/oracle): llama.cpp's locally typical cut, the
+// definition (internal/oracle): the locally typical cut, the
 // candidates whose surprise is nearest the entropy until the mass before one
 // passes typical-p, then top-p and min-p over the survivors renormalized, then
 // XTC's cut of all but the least of those past its threshold; top-n-sigma,

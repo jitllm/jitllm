@@ -81,7 +81,7 @@ const (
 	// pretok.OpDigitTriples. No parameters, so a new code, not a new record
 	// layout; an older reader falls back to its own table row for the name.
 	PreDigitTriples PreOpKind = 6
-	// PrePunctDefault isolates runs of llama.cpp's "[\p{P}\$\+<=>\^~\|]",
+	// PrePunctDefault isolates runs of "[\p{P}\$\+<=>\^~\|]",
 	// the first stage of the pipeline a vocabulary with no pre name gets
 	// (pretok.DefaultBPE). No parameters; a new code, as above.
 	PrePunctDefault PreOpKind = 7
@@ -174,7 +174,7 @@ type Vocab struct {
 	// Stop is every id besides EOS that the source states ends a generation:
 	// a GGUF's tokenizer.ggml.eot/eom and FIM pad/repo/sep ids, a safetensors
 	// model's generation_config eos_token_id list. The tokenizer adds the ids
-	// llama.cpp recognises by name (tok.Vocab.IsEOG). Absent from a container
+	// it recognises by name (tok.Vocab.IsEOG). Absent from a container
 	// written before it, which then stops on EOS and the names alone.
 	Stop []int32
 

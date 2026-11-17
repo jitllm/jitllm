@@ -1,7 +1,7 @@
 package jlm
 
 // Clef's joint schema head (Cloudflare/clef-flash, joint_schema_model.py's
-// JointSchemaHead), as llama.cpp's converter names it (conversion/clef.py):
+// JointSchemaHead), as its GGUF names it:
 // the decision.* tensors are model-level, and the head's blocks, dec.blk.N,
 // are model-level too under roles of their own (RoleDecBlock) -- the routing
 // blocks first (Config.DecisionRouting of them), then the joint ones

@@ -20,16 +20,16 @@ import (
 // A q8 row is laid out as the activation quantizer writes it
 // (QuantActKernels.Run over Q8_0 at a 32-element window: the int8 run, then
 // one pair a block), so the append is that generated kernel and nothing else,
-// and its rounding is llama.cpp's quantize_row_q8_0 (amax/127, round half
+// and its rounding is the Q8_0 reference quantizer's (amax/127, round half
 // away from zero). The pair's second float is the quantizer's block-sum term,
 // which no attention kernel reads: the row costs 40 bytes a block where
-// llama.cpp's block_q8_0 costs 34. A store kernel writing the scale alone (36)
+// a GGUF Q8_0 block costs 34. A store kernel writing the scale alone (36)
 // or as binary16 (34) is the upgrade.
 //
-//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1, KVIQ4NL  llama.cpp's blocks per head row
+//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1, KVIQ4NL  GGUF blocks per head row
 //	       (graph.BlockFmt): a row of hd elements is ceil(hd/32) blocks in
-//	       ggml's layout, the last zero-padded, quantized as ggml's
-//	       reference quantizer does and rounded up to a float32 slot
+//	       the GGUF type's layout, the last zero-padded, quantized as the
+//	       type's reference quantizer does and rounded up to a float32 slot
 //
 // A q8 or block row is the quantization unit, so such a cache is addressed in whole rows:
 // kvStride must be a multiple of hd, and a kernel's hd is the row's width (an
@@ -56,7 +56,7 @@ const KVFormats = int(KVBF16) + 1
 // bfloat16, converted in rows of any width.
 func (f KVFmt) Halves() bool { return f == KVF16 || f == KVBF16 }
 
-// Block is f's llama.cpp block format, 0 for one that is not blocks.
+// Block is f's GGUF block format, 0 for one that is not blocks.
 func (f KVFmt) Block() graph.BlockFmt {
 	switch f {
 	case KVQ4_0:

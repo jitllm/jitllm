@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
-// blockFmts is every llama.cpp block format a history row is held in.
+// blockFmts is every GGUF block format a history row is held in.
 func blockFmts() []graph.BlockFmt {
 	return []graph.BlockFmt{graph.BlockQ4_0, graph.BlockQ4_1, graph.BlockQ5_0, graph.BlockQ5_1, graph.BlockIQ4NL}
 }
@@ -19,7 +19,7 @@ func blockFmts() []graph.BlockFmt {
 // CPU in each block format at head widths whole blocks and ragged, over a
 // step of several rows (q8RowsCase's: a zero block and a block of halves):
 // each row byte for byte as oracle.QuantizeBlocks writes the zero-padded row
-// (ggml's reference quantizers), and each element widened as the
+// (the GGUF types' reference quantizers), and each element widened as the
 // container's decoder reads the same bytes.
 func TestComposedCPUBlockRows(t *testing.T) { gateComposedCPUBlockRows(t, hostArm()) }
 func gateComposedCPUBlockRows(t *testing.T, cpuOn cpuArm) {
@@ -62,14 +62,14 @@ func gateComposedCPUBlockRows(t *testing.T, cpuOn cpuArm) {
 			}
 			rows := run(graph.OpBlockRows, f32Words(floats), R*rw)
 			pad := make([]float32, nb*32)
-			ggml := make([][]byte, R)
+			ref := make([][]byte, R)
 			for r := 0; r < R; r++ {
 				clear(pad[copy(pad, floats[r*W:(r+1)*W]):])
-				ggml[r] = make([]byte, nb*f.Bytes())
-				if err := oracle.QuantizeBlocks(ggml[r], pad, f); err != nil {
+				ref[r] = make([]byte, nb*f.Bytes())
+				if err := oracle.QuantizeBlocks(ref[r], pad, f); err != nil {
 					t.Fatal(err)
 				}
-				for j, w := range oracle.BlockRow(ggml[r], f, W) {
+				for j, w := range oracle.BlockRow(ref[r], f, W) {
 					if got := rows[r*rw+j]; got != w && !(f == graph.BlockIQ4NL && j < (nb+1)/2 && halvesWithinAnUlp(got, w)) {
 						t.Fatalf("%v width %d: row %d word %d is %#x, want %#x", f, W, r, j, got, w)
 					}
@@ -78,7 +78,7 @@ func gateComposedCPUBlockRows(t *testing.T, cpuOn cpuArm) {
 			back := run(graph.OpWidenBlockRows, rows, R*W)
 			deq := make([]float32, nb*32)
 			for r := 0; r < R; r++ {
-				if err := oracle.DequantBlocks(deq, ggml[r], f); err != nil {
+				if err := oracle.DequantBlocks(deq, ref[r], f); err != nil {
 					t.Fatal(err)
 				}
 				for i := 0; i < W; i++ {
