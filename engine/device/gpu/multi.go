@@ -1345,11 +1345,20 @@ func (g *GPU) ChunkRows() int {
 }
 
 // promptOneRow reports whether the device takes a prompt a row a call: the
-// composer serves its blocks' prompts and no width is reserved for them.
+// composer serves its blocks' prompts and a geometry set holding one of them
+// reserved no width for them.
 func (g *devTier) promptOneRow() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return !g.ComposedWidths && !g.NoScratchReserve && g.promptW < 2 && len(g.layers) > 0
+	if g.ComposedWidths || g.NoScratchReserve {
+		return false
+	}
+	for _, l := range g.layers {
+		if l != nil && l.ok && !l.nonCausal && g.setPromptW(l.geo) < 2 {
+			return true
+		}
+	}
+	return false
 }
 
 // PipelineDepth is how many devices hold blocks (nn.Pipeliner): a prompt chunk
@@ -1541,9 +1550,9 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTa
 	e := len(x) / n / ns
 	sides := make([]sideRows, len(rs))
 	for i, rn := range rs {
-		sides[i] = rn.dev.side()
-		defer rn.dev.sideAt(sides[i], 0, n)
-		if ns > 1 && !rn.dev.realEmbed() {
+		sides[i] = rn.dev.sideOf(sid)
+		defer rn.dev.sideAtOf(sid, sides[i], 0, n)
+		if ns > 1 && !rn.dev.realEmbedOf(sid) {
 			return false
 		}
 	}
@@ -1555,10 +1564,13 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTa
 				h = tail
 			}
 			xs := rn.dev.streamCut(x, ns, e, lo, cnt, n)
-			rn.dev.sideAt(sides[i], lo, n)
+			rn.dev.sideAtOf(sid, sides[i], lo, n)
 			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, xs, rn.tables(cs.Rows(lo, lo+cnt, n)), h) {
 				return false
 			}
+			rn.dev.mu.Lock()
+			rn.dev.Stats.SplitPieces++
+			rn.dev.mu.Unlock()
 			streamPut(x, xs, ns, e, lo, cnt, n)
 		}
 	}

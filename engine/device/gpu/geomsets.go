@@ -114,6 +114,14 @@ func (g *devTier) useGeom(k geoKey) {
 	g.geoCur = k
 }
 
+// setPromptW is set k's reserved prompt width. Callers hold g.mu.
+func (g *devTier) setPromptW(k geoKey) int {
+	if k == g.geoCur {
+		return g.promptW
+	}
+	return g.geoSets[k].promptW
+}
+
 // homeScratch is the home set's decode scratch, which holds the head,
 // whichever set is in use. Callers hold g.mu.
 func (g *devTier) homeScratch() *blockScratch {
