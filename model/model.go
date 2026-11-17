@@ -114,8 +114,10 @@ type Config struct {
 	// wrong output that only an external oracle catches.
 	AttnSoftcap, FinalSoftcap float32
 	// Generation is the draw the container states the model generates with
-	// when a caller asks nothing (jlm.Config.GenerationDefaults).
-	Generation jlm.Generation
+	// when a caller asks nothing; nil for a container converted before its
+	// converter stated one, where a caller asking nothing is refused
+	// (NoStatedDrawError).
+	Generation *jlm.Generation
 
 	// YarnOrigCtx is the context past which a LongRoPE turns its long
 	// factors. A scaled rotary's angles turn by the factors the container
@@ -604,7 +606,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		NExpertUsed:  int(c.NExpertUsed),
 		AttnSoftcap:  c.AttnSoftcap,
 		FinalSoftcap: c.FinalSoftcap,
-		Generation:   c.GenerationDefaults(),
+		Generation:   c.Generation,
 		YarnOrigCtx:  int(c.YarnOrigCtx),
 		NoPosEnc:     c.Flags.Has(jlm.FlagNoPosEnc),
 		TiedEmbd:     c.Flags.Has(jlm.FlagTiedEmbd),
@@ -1018,6 +1020,18 @@ func (e *UpgradeRequiredError) Error() string {
 	}
 	return fmt.Sprintf("jitllm: %s was written before this build states %s, which the composer reads.\n"+
 		"  Upgrade it once:  jitllm upgrade %s", e.Path, e.What, e.Path)
+}
+
+// NoStatedDrawError is a generate that asks for no draw of a model whose
+// container states none: one converted before its converter stated the
+// model's own. The caller states a sampler, or the model is converted again
+// from its source.
+type NoStatedDrawError struct{ Name string }
+
+// Error names the model and both ways on.
+func (e *NoStatedDrawError) Error() string {
+	return fmt.Sprintf("jitllm: %s was converted before its container stated the model's own draw, and the "+
+		"request asks for none: state a sampler, or convert it again from its source:  jitllm convert", e.Name)
 }
 
 // Option configures a model's load: its vocabulary, where its weights

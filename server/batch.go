@@ -1301,9 +1301,9 @@ func (lp *stepLoop) finish(r *row, reason FinishReason, stop string, err error) 
 func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, o GenerateOptions,
 	ids []int32, ephemeral, store bool, emit func(Event) error) error {
 	lm := s.lm
-	sampler := s.sampling
-	if o.Sampling != nil {
-		sampler = *o.Sampling
+	sampler, err := s.draw(o.Sampling)
+	if err != nil {
+		return err
 	}
 	sampler.Prime(ids)
 	// The row's prompt starts where the session is, or at 0 when it resets.

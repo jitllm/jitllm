@@ -33,13 +33,15 @@ const (
 //
 // The cases are told apart structurally, not by matching the message: a GGUF
 // is a *model.NotConvertedError, a system prompt the model's chat format has
-// no place for a *model.SystemRoleError, and a stale container is detected
+// no place for a *model.SystemRoleError, a model converted before it stated
+// its own draw a *model.NoStatedDrawError, and a stale container is detected
 // from its version word with catalog.ReadVersion. The original error stays in
 // the detail wherever it adds anything.
 func explain(stage, path string, err error) (title, detail string, f fix) {
 	name := short(path)
 	var nc *model.NotConvertedError
 	var sr *model.SystemRoleError
+	var nd *model.NoStatedDrawError
 	switch {
 	case errors.As(err, &nc):
 		return "This file needs converting first",
@@ -50,6 +52,11 @@ func explain(stage, path string, err error) (title, detail string, f fix) {
 			name + "'s chat format has no place for a system prompt, so the message was not sent. " +
 				"Clear the system prompt in Settings, or put its text in your message.",
 			fixSystem
+	case errors.As(err, &nd):
+		return "This model doesn't say how it samples",
+			name + " was converted by an older jitllm, before a model's own sampling was kept with it. " +
+				"Reconvert it from the file it came from, or set your own sampling in Settings.",
+			fixReconvert
 	case stage == stageOpen:
 		if v, verr := catalog.ReadVersion(path); verr == nil && v > catalog.CurrentVersion {
 			return "This model was made by a newer jitllm",

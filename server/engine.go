@@ -1198,7 +1198,10 @@ type Session struct {
 	tier atomic.Pointer[tierBox]
 
 	sampling engine.Sampler
-	created  time.Time
+	// undrawn is why the session has no draw of its own to give a generate
+	// that asks for none (sessionSampler), nil where it has one.
+	undrawn error
+	created time.Time
 	// cached is a session with a prompt store: it prefills through it, alone.
 	cached bool
 	// storeOn says the instance is attached to the model's memory cache for the
@@ -1397,13 +1400,15 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		}
 	}
 
+	sampling, undrawn := sessionSampler(o.Sampling, lm, maxSeq, o.modelName)
 	s := &Session{
 		id:       id,
 		modelID:  lm.id,
 		lm:       lm,
 		ms:       ms,
 		maxSeq:   maxSeq,
-		sampling: sessionSampler(o.Sampling, lm, maxSeq),
+		sampling: sampling,
+		undrawn:  undrawn,
 		created:  time.Now(),
 		cached:   o.KVStore != nil,
 		spec:     o.Speculation,
@@ -2333,9 +2338,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if !o.Continue {
 		s.specRan = false
 	}
-	sampler := s.sampling
-	if o.Sampling != nil {
-		sampler = *o.Sampling
+	sampler, err := s.draw(o.Sampling)
+	if err != nil {
+		return err
 	}
 	if spans {
 		sampler.PrimeSpans(o.Prompt.Spans)
@@ -2704,8 +2709,11 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		if i > 0 || named == nil {
 			so := SessionOptions{ModelID: lm.id, KVStore: store, CacheKey: ns}
 			if named != nil {
-				sm := named.sampling
-				so.MaxSeq, so.Sampling, so.Speculation = named.maxSeq, &sm, named.spec
+				so.MaxSeq, so.Speculation = named.maxSeq, named.spec
+				if named.undrawn == nil {
+					sm := named.sampling
+					so.Sampling = &sm
+				}
 			}
 			if s, err = e.CreateSession(so); err != nil {
 				return err
@@ -2713,9 +2721,9 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 			oi.Prompt, oi.from, oi.Continue = fork, from, false
 		}
 		oi.ModelID, oi.SessionID = "", s.id
-		sm := s.sampling
-		if o.Sampling != nil {
-			sm = *o.Sampling
+		sm, err := s.draw(o.Sampling)
+		if err != nil {
+			return err
 		}
 		sm.Seed = seed
 		oi.Sampling = &sm

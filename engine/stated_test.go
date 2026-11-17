@@ -26,10 +26,10 @@ func TestStatedSamplerIsTheContainers(t *testing.T) {
 	}
 	defer m.Close()
 	want := jlm.Generation{DoSample: true, Temperature: 0.6, TopK: 20, TopP: 0.95, TypicalP: 1, RepetitionPenalty: 1}
-	if m.Cfg.Generation != want {
+	if m.Cfg.Generation == nil || *m.Cfg.Generation != want {
 		t.Fatalf("the model opened with the draw %+v, its file states %+v", m.Cfg.Generation, want)
 	}
-	s := StatedSampler(m.Cfg.Generation, 512)
+	s := StatedSampler(*m.Cfg.Generation, 512)
 	if s.Temp != 0.6 || s.TopK != 20 || s.TopP != 0.95 || s.MinP != 0 || s.RepeatPen != 1 || s.RepeatLastN != 0 {
 		t.Errorf("the stated draw samples as %+v", *s)
 	}

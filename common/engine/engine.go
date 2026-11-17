@@ -478,16 +478,20 @@ const defaultMaxSeq = 4096
 
 // samplerFor turns the app's settings into the engine's sampler: the draw
 // the model's container states (g, over nctx tokens) where they are the
-// model's own, else theirs.
+// model's own, else theirs. Settings that are the model's own, of a model
+// whose container states no draw (g nil), are refused naming it.
 //
 // Temp == 0 is greedy and is passed straight through: engine.Sampler
 // short-circuits to argmax, and every correctness comparison in the engine
 // (goldens, CPU vs device, verify) is a comparison of argmax.
-func samplerFor(s session.Sampling, g jlm.Generation, nctx int) *engine.Sampler {
+func samplerFor(s session.Sampling, g *jlm.Generation, nctx int, name string) (*engine.Sampler, error) {
 	if s.Stated {
-		sm := engine.StatedSampler(g, nctx)
+		if g == nil {
+			return nil, &model.NoStatedDrawError{Name: name}
+		}
+		sm := engine.StatedSampler(*g, nctx)
 		sm.Seed = s.Seed
-		return sm
+		return sm, nil
 	}
 	return &engine.Sampler{
 		Temp:        float64(s.Temp),
@@ -497,7 +501,7 @@ func samplerFor(s session.Sampling, g jlm.Generation, nctx int) *engine.Sampler 
 		RepeatPen:   float64(s.RepeatPen),
 		RepeatLastN: s.RepeatLastN,
 		Seed:        s.Seed,
-	}
+	}, nil
 }
 
 func short(p string) string {
@@ -764,7 +768,11 @@ func (e *Engine) generate(r session.ChatRequest) {
 	if max <= 0 {
 		max = session.DefaultMaxTokens
 	}
-	sm := samplerFor(r.Sampling, e.m.Cfg.Generation, e.sessMax)
+	sm, err := samplerFor(r.Sampling, e.m.Cfg.Generation, e.sessMax, short(e.path))
+	if err != nil {
+		e.report(stagePrompt, e.path, err)
+		return
+	}
 	out := make([]int32, 0, max)
 	var t1 time.Time
 	var fin *server.Finished

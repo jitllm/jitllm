@@ -24,8 +24,8 @@ func TestGenerationTailRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.Generation != nil || plain.GenerationDefaults() != ReferenceGeneration() {
-		t.Fatalf("a config without the tail states %+v and generates with %+v", plain.Generation, plain.GenerationDefaults())
+	if plain.Generation != nil {
+		t.Fatalf("a config without the tail states %+v", *plain.Generation)
 	}
 	if len(encodeConfig(base())) >= len(encodeConfig(c)) {
 		t.Fatal("the stated draw wrote no tail")

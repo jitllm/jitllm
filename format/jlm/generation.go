@@ -27,15 +27,6 @@ func ReferenceGeneration() Generation {
 	return Generation{Temperature: 1, TopK: 50, TopP: 1, TypicalP: 1, RepetitionPenalty: 1}
 }
 
-// GenerationDefaults is the draw the container states, ReferenceGeneration
-// for one written before it states any.
-func (c *Config) GenerationDefaults() Generation {
-	if c == nil || c.Generation == nil {
-		return ReferenceGeneration()
-	}
-	return *c.Generation
-}
-
 // Valid refuses a field GenerationConfig refuses: a number that is not
 // finite, a negative one, a top-p, typical-p or min-p past 1, or a
 // repetition penalty of 0.
