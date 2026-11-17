@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -84,33 +83,30 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 			for _, prompt := range prompts {
 				ids := m.Vocab.Encode(prompt, true)
 				sess := filepath.Join(t.TempDir(), "session.bin")
-				ngl := "99"
-				if fi, err := os.Stat(path); err == nil && fi.Size() > 3<<30/2 {
-					ngl = "0"
-				}
-				// The GGUF oracle's Metal scan is not its CPU's: on the M4
-				// mamba-130m's Metal run put "\"\"\"" at token 27 where its CPU
-				// run, and jitllm by 0.75, put ":". The CPU arm is the oracle the
-				// Linux hosts hold every SSM to, so a Mac takes it too.
-				if runtime.GOOS == "darwin" {
-					ngl = "0"
-				}
+				// The GGUF oracle's CPU arm is the oracle every SSM is held to:
+				// its card arm's reduction order moves with the cards it sees
+				// (granite-4.0-h-1b and LFM2-8B-A1B read another text on one
+				// card than on two), and its CUDA build offloads a long batch
+				// to a visible card even at -ngl 0, so no card is visible to it
+				// unless JITLLM_SSM_NGL asks for another split.
+				ngl, hide := "0", true
 				if v := os.Getenv("JITLLM_SSM_NGL"); v != "" {
-					ngl = v
+					ngl, hide = v, false
+				}
+				oracleEnv := func() []string {
+					env := append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
+					if hide {
+						env = append(env, "CUDA_VISIBLE_DEVICES=")
+					}
+					return env
 				}
 				run := func(ngl string) ([]byte, error) {
 					cmd := exec.Command(bin, "-m", path, "-p", prompt, "-n", itoa(n), "--temp", "0", "-no-cnv",
 						"--no-warmup", "--ignore-eos", "-ngl", ngl, "-c", "512", "--prompt-cache", sess, "--prompt-cache-all")
-					cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
+					cmd.Env = oracleEnv()
 					return cmd.CombinedOutput()
 				}
 				out, err := run(ngl)
-				if err != nil && ngl != "0" && strings.Contains(string(out), "unable to allocate CUDA") {
-					// A card someone else is using: the GGUF oracle's CPU arm
-					// is as much an oracle as its CUDA one.
-					t.Logf("%q: the card is full, the GGUF oracle runs on its CPU", prompt)
-					out, err = run("0")
-				}
 				if err != nil {
 					t.Fatalf("llama-completion: %v\n%s", err, out)
 				}
@@ -133,7 +129,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 				// to where the session run leaves it.
 				plain := exec.Command(bin, "-m", path, "-p", prompt, "-n", itoa(n), "--temp", "0", "-no-cnv",
 					"--no-warmup", "--ignore-eos", "-ngl", ngl, "-c", "512")
-				plain.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("LD_LIBRARY_PATH"))
+				plain.Env = oracleEnv()
 				if pout, err := plain.Output(); err == nil {
 					text := strings.TrimSpace(strings.ReplaceAll(string(pout), "[end of text]", ""))
 					for i := range want {
