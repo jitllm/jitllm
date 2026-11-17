@@ -1,4 +1,5 @@
 {
+  "describe": {"glm4moe": "GLM-4.5, GLM-4.6, GLM-4.5-Air; with M-RoPE sections the text model of GLM-4.5V and GLM-4.6V (the glm4vmoe graph)", "Glm4MoeForCausalLM": "GLM-4.5, GLM-4.6, GLM-4.5-Air"},
   "classes": ["Glm4MoeForCausalLM"],
   "gguf": ["glm4moe"],
   "container": {

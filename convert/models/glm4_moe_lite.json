@@ -1,4 +1,5 @@
 {
+  "describe": {"Glm4MoeLiteForCausalLM": "GLM-4.7-Flash"},
   "classes": ["Glm4MoeLiteForCausalLM"],
   "config": {
     "defaults": {"max_position_embeddings": 202752, "q_lora_rank": 768, "n_shared_experts": 1, "first_k_dense_replace": 1, "norm_topk_prob": true, "routed_scaling_factor": 1.8, "n_group": 1, "topk_group": 1, "rms_norm_eps": 1e-5},

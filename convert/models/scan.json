@@ -1,4 +1,5 @@
 {
+  "describe": {"mamba": "Mamba, FalconMamba", "jamba": "Jamba (Mamba-1 beside attention)"},
   "gguf": ["mamba", "jamba"],
   "container": {
     "mamba": {"tensors": {"gather": [{"role": "ssm_dt_norm.weight", "every": true, "if": "(ssm.dt_b_c_rms ?? false) == true", "from": [{"fill": 1, "shape": ["ssm.time_step_rank"]}]},

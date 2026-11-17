@@ -26,8 +26,8 @@ const Path = "docs/models.md"
 // Command regenerates it.
 const Command = "go run ./scripts/genmodels " + Path
 
-// lines is the human half of the page (describe.go), passed in so a test can
-// take one away.
+// lines is the human half of the page, each name's describe in the library
+// (convert.Descriptions), passed in so a test can take one away.
 type lines struct {
 	gguf, hf, projector, audio map[string]string
 }
@@ -35,7 +35,11 @@ type lines struct {
 // Render is docs/models.md as the code makes it now. It fails when a name in
 // the converter's lists has no line in describe.go, or a line names nothing.
 func Render() ([]byte, error) {
-	return render(lines{gguf: ggufModels(), hf: hfModels(), projector: projectorModels(), audio: audioModels()})
+	d, err := convert.Descriptions()
+	if err != nil {
+		return nil, err
+	}
+	return render(lines{gguf: d.GGUF, hf: d.Classes, projector: d.Projectors, audio: d.Audio})
 }
 
 // covered checks that the keys of have are exactly names.
@@ -55,11 +59,11 @@ func covered(what string, names []string, have map[string]string) error {
 	}
 	sort.Strings(stale)
 	if len(missing) > 0 {
-		return fmt.Errorf("modelsdoc: %s %s in the code with no line in internal/modelsdoc/describe.go: "+
-			"say which models it covers", what, strings.Join(missing, ", "))
+		return fmt.Errorf("modelsdoc: %s %s in the code with no describe in the library "+
+			"(convert/models, convert/projectors.json): say which models it covers", what, strings.Join(missing, ", "))
 	}
 	if len(stale) > 0 {
-		return fmt.Errorf("modelsdoc: internal/modelsdoc/describe.go describes %s %s, which the code does not have",
+		return fmt.Errorf("modelsdoc: the library describes %s %s, which the code does not have",
 			what, strings.Join(stale, ", "))
 	}
 	return nil

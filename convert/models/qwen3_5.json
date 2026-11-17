@@ -1,4 +1,5 @@
 {
+  "describe": {"qwen35": "Qwen3.5 dense", "qwen35moe": "Qwen3.5 and Qwen3.6 mixtures", "qwen3next": "Qwen3-Next 80B-A3B", "qwen4exp": "Qwen3.8-Flash-Next (text)", "clef": "Clef-Flash (decision model, /v1/systemone)", "Qwen3_5ForConditionalGeneration": "Qwen3.5 dense and Qwen3.8's text model, by convert/models/qwen3_5.json"},
   "classes": ["Qwen3_5ForConditionalGeneration"],
   "gguf": ["qwen35", "qwen35moe", "qwen3next", "qwen4exp", "clef"],
   "container": {

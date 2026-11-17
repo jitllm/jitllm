@@ -1,4 +1,5 @@
 {
+  "describe": {"GPTNeoXForCausalLM": "Pythia, GPT-NeoX-20B (safetensors only)"},
   "classes": ["GPTNeoXForCausalLM"],
   "container": {
     "gptneox": {"flags": {"layer_norm": "true", "rope_neox": "true", "parallel": "true"},

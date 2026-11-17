@@ -1,4 +1,5 @@
 {
+  "describe": {"KimiLinearForCausalLM": "Kimi Linear (Kimi Delta Attention beside MLA; safetensors only)"},
   "classes": ["KimiLinearForCausalLM"],
   "config": {
     "defaults": {

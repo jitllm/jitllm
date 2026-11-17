@@ -1,4 +1,5 @@
 {
+  "describe": {"mamba2": "Mamba-2, Mamba-Codestral", "granitehybrid": "Granite 4.0 hybrids (Mamba-2 beside attention)", "nemotron_h": "Nemotron-H, Nemotron Nano 2", "nemotron_h_moe": "Nemotron 3 Nano", "falcon-h1": "Falcon-H1"},
   "gguf": ["mamba2", "granitehybrid", "nemotron_h", "nemotron_h_moe", "falcon-h1"],
   "container": {
     "mamba2": {"tensors": {"block": {

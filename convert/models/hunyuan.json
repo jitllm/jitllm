@@ -1,4 +1,5 @@
 {
+  "describe": {"HunYuanDenseV1ForCausalLM": "Hunyuan dense", "HunYuanMoEV1ForCausalLM": "Hunyuan-A13B"},
   "classes": ["HunYuanDenseV1ForCausalLM", "HunYuanMoEV1ForCausalLM"],
   "config": {
     "arch": "hunyuan-moe",

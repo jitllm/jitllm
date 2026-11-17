@@ -22,6 +22,9 @@ var projectorsJSON []byte
 // over the file's keys (src), its tensors' shapes (shape) and, for the
 // geometry, the tower's patch, picture and merge (tower).
 type projStates struct {
+	// Describe is docs/models.md's line for the projector: the models it
+	// covers.
+	Describe string `json:"describe"`
 	// As names another entry whose statements this one takes.
 	As   string `json:"as"`
 	Code uint16 `json:"code"`
@@ -221,6 +224,9 @@ func projResizes() map[string]jlm.Flags {
 // clip.projector_type, and the audio towers (clip.audio.projector_type) that
 // convert.
 type projectorFile struct {
+	// Describe is docs/models.md's line for the vision tower's own name
+	// (towerArch).
+	Describe   string                  `json:"describe"`
 	Audio      map[string]*audioStates `json:"audio"`
 	Projectors map[string]*projStates  `json:"projectors"`
 }
@@ -526,6 +532,7 @@ func AudioProjectors() []string {
 // and layouts, what the geometry must satisfy once the tensors have stated
 // their widths, and its tower as its reference runs it.
 type audioStates struct {
+	Describe    string            `json:"describe"`
 	Code        uint16            `json:"code"`
 	Geometry    map[string]string `json:"geometry"`
 	Require     []mjRequire       `json:"require"`

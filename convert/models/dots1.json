@@ -1,4 +1,5 @@
 {
+  "describe": {"dots1": "dots.llm1", "bailingmoe2": "Ling 2.0 and Ring 2.0", "Dots1ForCausalLM": "dots.llm1"},
   "classes": ["Dots1ForCausalLM"],
   "gguf": ["dots1", "bailingmoe2"],
   "container": {

@@ -1,4 +1,5 @@
 {
+  "describe": {"lfm2": "LFM2", "lfm2moe": "LFM2-8B-A1B, LFM2-24B-A2B"},
   "gguf": ["lfm2", "lfm2moe"],
   "container": {
     "lfm2": {"tensors": {"sizes": {"q": "embedding_length", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},

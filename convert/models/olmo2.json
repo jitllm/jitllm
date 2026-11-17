@@ -1,4 +1,5 @@
 {
+  "describe": {"olmo2": "OLMo 2; OLMo 3 (its sliding window makes it the olmo3 graph)", "Olmo2ForCausalLM": "OLMo 2"},
   "classes": ["Olmo2ForCausalLM"],
   "gguf": ["olmo2"],
   "container": {

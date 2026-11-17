@@ -1,4 +1,5 @@
 {
+  "describe": {"Ministral3ForCausalLM": "Ministral 3's text model"},
   "classes": ["Ministral3ForCausalLM"],
   "config": {
     "defaults": {

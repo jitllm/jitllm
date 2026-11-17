@@ -1,4 +1,5 @@
 {
+  "describe": {"gemma": "Gemma 1", "GemmaForCausalLM": "Gemma 1"},
   "classes": ["GemmaForCausalLM"],
   "gguf": ["gemma"],
   "container": {

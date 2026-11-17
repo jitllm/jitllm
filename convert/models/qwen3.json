@@ -1,4 +1,5 @@
 {
+  "describe": {"qwen3": "Qwen3 dense; Qwen3-Embedding (pooled)", "qwen3vl": "Qwen3-VL dense text models", "Qwen3ForCausalLM": "Qwen3 dense"},
   "classes": ["Qwen3ForCausalLM"],
   "gguf": ["qwen3", "qwen3vl"],
   "container": {

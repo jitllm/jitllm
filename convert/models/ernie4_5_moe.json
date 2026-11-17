@@ -1,4 +1,5 @@
 {
+  "describe": {"ernie4_5-moe": "ERNIE 4.5 mixtures (21B-A3B, 300B-A47B)", "Ernie4_5_MoeForCausalLM": "ERNIE 4.5 mixtures"},
   "classes": ["Ernie4_5_MoeForCausalLM"],
   "gguf": ["ernie4_5-moe"],
   "container": {

@@ -1,4 +1,5 @@
 {
+  "describe": {"OPTForCausalLM": "OPT 125M to 66B with pre-norm blocks (safetensors only)"},
   "classes": ["OPTForCausalLM"],
   "container": {
     "opt": {"flags": {"layer_norm": "true", "no_pos_enc": "true"},

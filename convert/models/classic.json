@@ -1,4 +1,5 @@
 {
+  "describe": {"phi2": "Phi-2", "starcoder": "StarCoder, StarCoderBase, SantaCoder", "starcoder2": "StarCoder2", "stablelm": "StableLM 2, StableLM 3B", "falcon": "Falcon 7B, 40B, 180B", "nemotron": "Nemotron-4 Minitron, Nemotron-Mini", "command-r": "Command-R, Aya, Aya Expanse", "cohere2": "Command R7B, Command A", "dbrx": "DBRX", "phimoe": "Phi-3.5-MoE, Phi-mini-MoE", "bert": "all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings)", "nomic-bert": "nomic-embed-text (embeddings)", "modern-bert": "Laya (decision model, /v1/systemone)"},
   "gguf": ["phi2", "starcoder", "starcoder2", "stablelm", "falcon", "nemotron", "command-r", "cohere2", "dbrx", "phimoe", "bert", "nomic-bert", "modern-bert"],
   "container": {
     "command-r": {"tensors": {"sizes": {"q": "embedding_length",

@@ -1,4 +1,5 @@
 {
+  "describe": {"deepseek4": "DeepSeek V4"},
   "gguf": ["deepseek4"],
   "container": {
     "deepseek4": {"yarn_magnitude": "softmax", "compressed_blocks": true,

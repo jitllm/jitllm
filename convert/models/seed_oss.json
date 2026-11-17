@@ -1,4 +1,5 @@
 {
+  "describe": {"seed_oss": "Seed-OSS 36B", "SeedOssForCausalLM": "Seed-OSS"},
   "classes": ["SeedOssForCausalLM"],
   "gguf": ["seed_oss"],
   "container": {

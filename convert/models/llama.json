@@ -1,4 +1,5 @@
 {
+  "describe": {"LlamaForCausalLM": "Llama 2 and 3, Mistral 7B, SmolLM2, TinyLlama"},
   "classes": ["LlamaForCausalLM"],
   "config": {
     "arch": "llama",

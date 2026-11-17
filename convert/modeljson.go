@@ -34,7 +34,10 @@ import (
 var modelLibraryFS embed.FS
 
 type modelJSON struct {
-	Classes []string `json:"classes"`
+	// Describe is the line docs/models.md gives each class and GGUF
+	// architecture the file names: which well-known models it covers.
+	Describe map[string]string `json:"describe"`
+	Classes  []string          `json:"classes"`
 	// Template is the class's chat template, a file of the library
 	// (convert/models) where the release ships none a conversion finds.
 	Template string    `json:"template"`
@@ -409,6 +412,11 @@ func parseModelJSON(b []byte, name string, names tensorNames) (*modelJSON, error
 	}
 	if err := mj.checkStates(); err != nil {
 		return nil, err
+	}
+	for n := range mj.Describe {
+		if !slices.Contains(mj.Classes, n) && !slices.Contains(mj.GGUF, n) {
+			return nil, fmt.Errorf("convert: %s describes %s, which it does not name", name, n)
+		}
 	}
 	// A file of no class states a GGUF architecture's graph alone, or a
 	// graph other files' blocks use (mjUse).

@@ -1,4 +1,5 @@
 {
+  "describe": {"DeepseekV2ForCausalLM": "DeepSeek-V2, V2-Lite, Coder-V2"},
   "classes": ["DeepseekV2ForCausalLM"],
   "config": {
     "defaults": {"max_position_embeddings": 2048, "q_lora_rank": 1536, "n_shared_experts": 2, "first_k_dense_replace": 0, "norm_topk_prob": false, "routed_scaling_factor": 1.0, "rms_norm_eps": 1e-6},

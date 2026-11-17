@@ -1,4 +1,5 @@
 {
+  "describe": {"PhiMoEForCausalLM": "Phi-3.5-MoE and its siblings, under their remote code's class name", "PhimoeForCausalLM": "Phi-3.5-MoE and its siblings, under transformers' class name"},
   "classes": ["PhiMoEForCausalLM", "PhimoeForCausalLM"],
   "config": {
     "arch": "phimoe",

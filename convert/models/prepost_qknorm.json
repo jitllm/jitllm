@@ -1,4 +1,5 @@
 {
+  "describe": {"gemma3": "Gemma 3; EmbeddingGemma (pooled)"},
   "gguf": ["gemma3"],
   "container": {
     "gemma3": {"tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",

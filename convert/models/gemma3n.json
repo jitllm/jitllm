@@ -1,4 +1,5 @@
 {
+  "describe": {"gemma3n": "Gemma 3n E2B, E4B"},
   "gguf": ["gemma3n"],
   "container": {
     "gemma3n": {"flags": {"rope_neox": "true", "qk_norm": "true", "v_norm": "true"},

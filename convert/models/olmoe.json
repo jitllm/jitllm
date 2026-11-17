@@ -1,4 +1,5 @@
 {
+  "describe": {"olmoe": "OLMoE", "OlmoeForCausalLM": "OLMoE"},
   "classes": ["OlmoeForCausalLM"],
   "gguf": ["olmoe"],
   "container": {

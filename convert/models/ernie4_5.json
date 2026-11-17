@@ -1,4 +1,5 @@
 {
+  "describe": {"ernie4_5": "ERNIE 4.5 dense models", "Ernie4_5ForCausalLM": "ERNIE 4.5 dense models"},
   "classes": ["Ernie4_5ForCausalLM"],
   "gguf": ["ernie4_5"],
   "container": {

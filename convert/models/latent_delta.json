@@ -1,4 +1,5 @@
 {
+  "describe": {"kimi-k3": "Kimi-K3", "KimiK3ForConditionalGeneration": "Kimi-K3's text model, its experts compressed-tensors MXFP4"},
   "classes": ["KimiK3ForConditionalGeneration"],
   "template": "kimi_k3_chat.jinja",
   "config": {

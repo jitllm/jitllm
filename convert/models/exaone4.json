@@ -1,4 +1,5 @@
 {
+  "describe": {"exaone4": "EXAONE 4.0", "Exaone4ForCausalLM": "EXAONE 4.0"},
   "classes": ["Exaone4ForCausalLM"],
   "gguf": ["exaone4"],
   "container": {

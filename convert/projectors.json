@@ -1,6 +1,7 @@
 {
+ "describe": "a vision tower (mmproj), converted into its text model's container",
  "audio": {
-  "d1omni_a": {
+  "d1omni_a": {"describe": "d1-omni-600M's audio half (a log-mel front end, FastConformer blocks; its rows a prefix of the decision prompt)", 
    "code": 65529,
    "geometry": {"layers": "src['audio.block_count'] | default(0)", "embd": "src['audio.embedding_length'] | default(0)", "heads": "src['audio.attention.head_count'] | default(0)", "ffn": "src['audio.feed_forward_length'] | default(0)", "mel_bins": "src['audio.num_mel_bins'] | default(0)", "proj_dim": "src['audio.projection_dim'] | default(0)", "eps": "src['audio.attention.layer_norm_epsilon'] | default(0)", "sample_rate": "16000", "n_fft": "512", "window": "400", "hop": "160", "max_samples": "30 * 16000"},
    "require": [{"that": "a.layers != 0 and a.embd != 0 and a.heads != 0 and a.embd % a.heads == 0 and a.ffn != 0 and a.mel_bins != 0 and a.proj_dim != 0 and a.eps > 0", "else": "states no blocks, no width, heads that do not divide it, no FFN, no mel bins, no projection or no epsilon"}],
@@ -93,7 +94,7 @@
   }
  },
  "projectors": {
-  "idefics3": {
+  "idefics3": {"describe": "SmolVLM, Idefics3", 
    "code": 1,
    "output": {"tensor": "mm.model.fc.weight", "dim": 1},
    "tower": {
@@ -154,7 +155,7 @@
     }
    }
   },
-  "mlp": {
+  "mlp": {"describe": "LLaVA and LLaVA-style models (a CLIP tower and a two-matrix MLP), llava-phi-3", 
    "code": 2,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "tower": {
@@ -192,7 +193,7 @@
     "span": {"mark": "<image>\n", "after": "\n"}
    }
   },
-  "qwen2vl_merger": {
+  "qwen2vl_merger": {"describe": "Qwen2-VL", 
    "code": 3,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
@@ -256,7 +257,7 @@
     }
    }
   },
-  "gemma3": {
+  "gemma3": {"describe": "Gemma 3 (SigLIP)", 
    "code": 4,
    "output": {"tensor": "mm.input_projection.weight", "dim": 0},
    "scale": "src['vision.projector.scale_factor'] | default(4)",
@@ -294,7 +295,7 @@
     "span": {"before": "\n\n<start_of_image>", "after": "<end_of_image>\n\n", "bidir": true}
    }
   },
-  "internvl": {
+  "internvl": {"describe": "InternVL 2.5 and 3 (InternViT-300M; the 6B tower is refused)", 
    "code": 5,
    "when": "'v.blk.0.attn_q_norm.weight' not in shape",
    "states": "InternViT-300M; a q/k norm in the blocks is the 6B tower's",
@@ -351,7 +352,7 @@
     }
    }
   },
-  "qwen2.5vl_merger": {
+  "qwen2.5vl_merger": {"describe": "Qwen2.5-VL", 
    "code": 6,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
@@ -421,7 +422,7 @@
     }
    }
   },
-  "resampler": {
+  "resampler": {"describe": "MiniCPM-V 2.6, o-2.6, 4.0, 4.5", 
    "code": 32,
    "when": "(src['minicpmv_version'] | default(2)) in [3, 4, 5, 6]",
    "states": "minicpmv_version 3 to 6: MiniCPM-V 2.6, o-2.6, 4.0, 4.5",
@@ -472,7 +473,7 @@
     "span": {"mark": "(<image>./</image>)", "index_before": "<image_id>", "index_after": "</image_id>"}
    }
   },
-  "janus_pro": {
+  "janus_pro": {"describe": "Janus-Pro", 
    "code": 33,
    "output": {"tensor": "mm.1.weight", "dim": 1},
    "tower": {
@@ -507,7 +508,7 @@
     "span": {"mark": "<image_placeholder>", "before_marks": ["<begin_of_image>"], "after_marks": ["<end_of_image>"]}
    }
   },
-  "qwen3vl_merger": {"tensors": {"sizes": {"e": "vision.embedding_length"},
+  "qwen3vl_merger": {"describe": "Qwen3-VL, Qwen3.5", "tensors": {"sizes": {"e": "vision.embedding_length"},
           "block": {"v.attn_qkv.weight": [
             {"role": "v.attn_q.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, 0, "size.e"]}]},
             {"role": "v.attn_k.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, "size.e", "size.e"]}]},
@@ -596,7 +597,7 @@
     }
    }
   },
-  "glm4v": {"tensors": {"sizes": {"e": "vision.embedding_length"},
+  "glm4v": {"describe": "GLM-4.1V, GLM-4.5V, GLM-4.6V", "tensors": {"sizes": {"e": "vision.embedding_length"},
           "block": {"v.attn_qkv.weight": [
             {"role": "v.attn_q.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, 0, "size.e"]}]},
             {"role": "v.attn_k.weight", "do": [{"reshape": ["3 * size.e", "size.e"]}, {"slice": [0, "size.e", "size.e"]}]},
@@ -683,7 +684,7 @@
     }
    }
   },
-  "kimivl": {
+  "kimivl": {"describe": "Kimi-VL (MoonViT)", 
    "code": 50,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
@@ -724,7 +725,7 @@
     "span": {"mark": "<|media_start|>image<|media_content|><|media_pad|><|media_end|>", "before_marks": ["<|media_start|>", "image", "<|media_content|>"], "after_marks": ["<|media_end|>"]}
    }
   },
-  "hunyuanvl": {
+  "hunyuanvl": {"describe": "HunyuanOCR (HunyuanVL)", 
    "code": 51,
    "output": {"tensor": "mm.model.fc.weight", "dim": 1},
    "requires": ["v.position_embd.weight"],
@@ -772,7 +773,7 @@
     "span": {"mark": "<｜hy_place▁holder▁no▁100｜><｜hy_place▁holder▁no▁102｜><｜hy_place▁holder▁no▁101｜>", "before_marks": ["<｜hy_place▁holder▁no▁100｜>"], "after_marks": ["<｜hy_place▁holder▁no▁101｜>"], "grid_div": "v.scale"}
    }
   },
-  "lfm2": {
+  "lfm2": {"describe": "LFM2-VL, LFM2.5-VL and d1-3B (SigLIP2 NaFlex, tiles and a thumbnail)", 
    "code": 65530,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "scale": "src['vision.projector.scale_factor'] | default(2)",
@@ -815,10 +816,10 @@
     "span": {"mark": "<image>", "before_marks": ["<|image_start|>"], "after_marks": ["<|image_end|>"]}
    }
   },
-  "d1omni_v": {
+  "d1omni_v": {"describe": "d1-omni-600M's vision half (LFM2-VL's tower and projector, bilinear tiles; its rows a prefix of the decision prompt)", 
    "as": "lfm2"
   },
-  "gemma3nv": {
+  "gemma3nv": {"describe": "Gemma 3n E2B, E4B (MobileNet-V5)", 
    "code": 65531,
    "output": {"tensor": "mm.input_projection.weight", "dim": 1},
    "flags": ["gelu"],
@@ -990,7 +991,7 @@
     "drops": ["v.mn_geom", "mm.hard_offset"]
    }
   },
-  "phi4": {
+  "phi4": {"describe": "Phi-4-reasoning-vision-15B", 
    "code": 65532,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "pixels": {"min": "src['vision.image_min_pixels'] | default(0)", "max": "src['vision.image_max_pixels'] | default(0)"},
@@ -1024,7 +1025,7 @@
     "span": {"mark": "<image>"}
    }
   },
-  "gemma4v": {
+  "gemma4v": {"describe": "Gemma 4", 
    "code": 65533,
    "output": {"tensor": "mm.input_projection.weight", "dim": 1},
    "flags": ["vision_rope", "gelu"],
@@ -1096,7 +1097,7 @@
     }
    }
   },
-  "llama4": {
+  "llama4": {"describe": "Llama 4 Scout, Maverick", 
    "code": 65534,
    "output": {"tensor": "mm.model.fc.weight", "dim": 1},
    "flags": ["vision_rope"],
@@ -1142,7 +1143,7 @@
     "span": {"mark": "<|image|>", "before_marks": ["<|image_start|>"], "after_marks": ["<|image_end|>"]}
    }
   },
-  "pixtral": {
+  "pixtral": {"describe": "Pixtral-12B, Mistral Small 3.x, Ministral 3", 
    "code": 65535,
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "flags": ["vision_rope"],
