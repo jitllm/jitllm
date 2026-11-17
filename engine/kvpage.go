@@ -109,16 +109,17 @@ const kvPageTarget = 256
 
 // kvPagePositions is how many positions one page of layer li holds, or 0 when
 // the layer keeps no attention history at all. pin, when positive, replaces
-// kvPageTarget (the model's kvPage option).
-func kvPagePositions(c *model.Config, li, pin int) int {
+// kvPageTarget (the model's kvPage option); win is the window the layer's
+// graph states (attendWindows), 0 for none.
+func kvPagePositions(c *model.Config, li, pin, win int) int {
 	if !c.LayerKind(li).Attends() {
 		// A recurrent layer keeps a fixed-size summary, not a history.
 		return 0
 	}
 	// Only a window shorter than the context sizes a page (Phi-3.5 declares
 	// a window larger than its context, which would be gigabytes a layer).
-	if c.SWA(li) && c.SWAWindow > 0 && (c.NCtx == 0 || c.SWAWindow < c.NCtx) {
-		return align(c.SWAWindow, kvKeyTile)
+	if win > 0 && (c.NCtx == 0 || win < c.NCtx) {
+		return align(win, kvKeyTile)
 	}
 	p := align(kvPageTarget, kvKeyTile)
 	if pin > 0 {
@@ -201,8 +202,8 @@ type kvPages struct {
 	cowFault bool
 }
 
-// keyStart is the first key position pos attends on this layer: the window's
-// start, as Config.AttnWindow places it, or 0 on a layer with no window.
+// keyStart is the first key position pos attends on this layer: the start of
+// the window its block's attention states, or 0 on a layer with no window.
 func (s *kvPages) keyStart(pos int) int {
 	switch {
 	case s.win <= 0 || pos <= 0:
@@ -543,7 +544,7 @@ func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.K
 }
 
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
-	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil)
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil, nil)
 }
 
 // newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
@@ -553,8 +554,8 @@ func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore,
 //
 // A block keeping a history past its rows' (planes) keeps it in a slot past
 // the blocks, hi+i for planes[i], its pages the block's positions
-// (kvCache.hs).
-func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, planes []histPlane) *kvCache {
+// (kvCache.hs). wins are the blocks' windows (attendWindows), nil for none.
+func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, planes []histPlane, wins []blockWindow) *kvCache {
 	if store == nil {
 		store = NoStore{}
 	}
@@ -563,7 +564,7 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 		view = history.NewView(n)
 	}
 	kc := &kvCache{id: id, store: store, layers: make([]kvPages, n), lo: lo, kvl: l, cfg: c,
-		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, pool: pool, src: make([]int, n), hs: make([][]int, hi), hb: make([][]nn.HistTable, hi)}
+		bh: map[int][]string{}, geom: geomDigest(c, nseq, l, wins), view: view, pool: pool, src: make([]int, n), hs: make([][]int, hi), hb: make([][]nn.HistTable, hi)}
 	for li := range kc.src {
 		kc.src[li] = li
 		if li < hi && li < len(hsrc) {
@@ -579,17 +580,19 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 		}
 	}
 	for li := kc.lo; li < hi; li++ {
-		p := kvPagePositions(c, li, pin)
+		var w blockWindow
+		if li < len(wins) {
+			w = wins[li]
+		}
+		p := kvPagePositions(c, li, pin, w.w)
 		kc.layers[li].p = p
 		kc.layers[li].latent = c.MLA()
 		// A block reading another's history (kc.src) holds none of its own:
 		// its positions are its source's, and it sizes no page.
 		if p > 0 && kc.src[li] == li {
 			kc.layers[li].pp = l.atLayer(c, li).slots(nseq * p * c.KVRowAt(li))
-			// The window Config.AttnWindow applies, whatever sized the page.
-			if c.SWA(li) && c.SWAWindow > 0 {
-				kc.layers[li].win, kc.layers[li].chunked = c.SWAWindow, c.SWAChunked
-			}
+			// The window the block's attention applies, whatever sized the page.
+			kc.layers[li].win, kc.layers[li].chunked = w.w, w.chunked
 		}
 	}
 	for i, e := range planes {
@@ -2251,12 +2254,19 @@ func (kv *kvCache) writable(li, pos int) {
 // and head-major versus row-major layouts produce same-sized pages, so the
 // geometry is hashed into every key and a mismatch is a clean miss. Model
 // identity (two fine-tunes of one architecture) remains the namespace's job.
-func geomDigest(c *model.Config, nseq int, l kvLayout) []byte {
+func geomDigest(c *model.Config, nseq int, l kvLayout, wins []blockWindow) []byte {
 	h := sha256.New()
-	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%s|hm=false|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/%d|exp=%d/%d",
+	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%s|hm=false|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/0|exp=%d/%d",
 		nseq, l.elemTag(), c.NKVHead, c.HeadDim, c.NLayer,
 		c.NEmbd, c.NHead, c.NRot, c.NFFN, c.NVocab, c.RopeBase,
-		c.SWAWindow, c.SWAPeriod, c.NExpert, c.NExpertUsed)
+		modelWindow(wins), c.NExpert, c.NExpertUsed)
+	// Which blocks slide, only where some do: a model that slides nowhere
+	// digests as it did.
+	for li, w := range wins {
+		if w.w > 0 {
+			fmt.Fprintf(h, "|win%d=%d/%t", li, w.w, w.chunked)
+		}
+	}
 	// The blocks' own geometries, only where they have them: every other
 	// model's digest, and so every page it stored, is unchanged.
 	if c.MixedGeom() {

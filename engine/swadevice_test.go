@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -67,10 +68,18 @@ func swaRun(t *testing.T, m *model.Model, g *gpu.GPU, ids []int32, batched bool,
 
 const swaMaxSeq = 1024
 
-// swaWindow states m with a window of w keys: a config of its own, as every
-// restatement of the model is, so the front end builds the blocks' graphs
-// again from it (frontKey).
-func swaWindow(m *model.Model, w int) { cfgMut(m, func(c *model.Config) { c.SWAWindow = w }) }
+// swaWindow has m's blocks state a window of w keys (jlmMut), every
+// period-th layer the global one where period is set and the container's
+// own pattern otherwise: each restatement starts from the container, so a
+// narrowed pattern is restated with every window.
+func swaWindow(m *model.Model, w int, period uint32) {
+	jlmMut(m, func(c *jlm.Config) {
+		c.SWAWindow = uint32(w)
+		if period != 0 {
+			c.SWAPeriod = period
+		}
+	})
+}
 
 func swaNMSE(a, b []float32) float64 {
 	var num, den float64
@@ -170,19 +179,21 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
+			var period uint32
 			if c.window > 0 {
-				cfgMut(m, func(cf *model.Config) { cf.SWAWindow, cf.SWAPeriod = c.window, cf.NLayer+1 })
+				period = m.Container.Config().NLayer + 1
+				swaWindow(m, c.window, period)
 			}
-			w := m.Cfg.SWAWindow
+			w := windowOf(m)
 			if w <= 0 || w >= c.n {
 				t.Fatalf("window %d does not bite at %d positions: the gate would prove nothing", w, c.n)
 			}
 			ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:c.n]
 
 			host := swaRun(t, m, nil, ids, false)
-			swaWindow(m, swaMaxSeq*4)
+			swaWindow(m, swaMaxSeq*4, period)
 			open := swaRun(t, m, nil, ids, false)
-			swaWindow(m, w)
+			swaWindow(m, w, period)
 			for _, batched := range []bool{false, true} {
 				href, oref := host, open
 				if batched {
@@ -192,9 +203,9 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 				// The bound is this device's own band, measured with a window
 				// that cannot bite, on its own tier.
 				gb := swaTier(t)
-				swaWindow(m, swaMaxSeq*4)
+				swaWindow(m, swaMaxSeq*4, period)
 				base := swaMedian(swaRun(t, m, gb, ids, batched), oref, w)
-				swaWindow(m, w)
+				swaWindow(m, w, period)
 				gb.Close()
 				// At least a twentieth of what the window itself moves, because
 				// base is one noisy sample and rounding amplifies over many
@@ -236,16 +247,16 @@ func TestATierServesALargerSecondSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	w := m.Cfg.SWAWindow
+	w := windowOf(m)
 	const short, n = 400, 712
 	if w <= short || w >= n {
 		t.Fatalf("window %d must lie between the short session (%d) and the run (%d)", w, short, n)
 	}
 	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:n]
 	host := swaRun(t, m, nil, ids, false)
-	swaWindow(m, swaMaxSeq*4)
+	swaWindow(m, swaMaxSeq*4, 0)
 	open := swaRun(t, m, nil, ids, false)
-	swaWindow(m, w)
+	swaWindow(m, w, 0)
 
 	g := swaTier(t)
 	defer g.Close()

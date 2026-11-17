@@ -123,10 +123,10 @@ func prefillOnDevice(t *testing.T, path, dev string, parts nn.Parts, windows boo
 	defer m.Close()
 	minTok := 0
 	if windows {
-		if m.Cfg.SWAWindow == 0 {
+		if windowOf(m) == 0 {
 			t.Fatalf("%s states no sliding window: this arm would read no windowed descriptor", path)
 		}
-		minTok = m.Cfg.SWAWindow + 96
+		minTok = windowOf(m) + 96
 	}
 	// JITLLM_TEST_MINTOK lengthens the prompt to at least that many tokens,
 	// which JITLLM_TEST_NTOK then cuts to the length a run holds.
@@ -353,12 +353,14 @@ func maxAbsDiff(a, b []float32) float64 {
 // three paths share on a synthetic config with alternating local and global
 // layers.
 func TestSlidingWindowIsHonouredEverywhere(t *testing.T) {
-	c := &model.Config{NLayer: 4, NCtx: 4096, SWAWindow: 8, SWAPeriod: 2}
+	const window = 8
+	wins := []int{window, 0, window, 0}
+	slide := func(li int) bool { return wins[li] > 0 }
 	// The pattern must actually alternate, or every layer is global and the
 	// comparison below is between two identical things.
 	local, global := 0, 0
-	for li := 0; li < c.NLayer; li++ {
-		if c.SWA(li) {
+	for li := range wins {
+		if slide(li) {
 			local++
 		} else {
 			global++
@@ -371,26 +373,20 @@ func TestSlidingWindowIsHonouredEverywhere(t *testing.T) {
 
 	// The window arithmetic the three paths share; decode's form (forward.go)
 	// is the reference.
-	win := func(li, n int) (w0, an int) {
-		w0, an = 0, n
-		if c.SWA(li) && c.SWAWindow < an {
-			w0, an = an-c.SWAWindow, c.SWAWindow
-		}
-		return
-	}
+	win := func(li, n int) (w0, an int) { return attnWindow(wins[li], false, n-1) }
 	for _, n := range []int{1, 7, 8, 9, 64} {
-		for li := 0; li < c.NLayer; li++ {
+		for li := range wins {
 			w0, an := win(li, n)
 			if w0+an != n {
 				t.Fatalf("layer %d at n=%d: window [%d,%d) does not end at the current "+
 					"position -- a local layer must include the token being generated",
 					li, n, w0, w0+an)
 			}
-			if c.SWA(li) && n > c.SWAWindow && an != c.SWAWindow {
+			if slide(li) && n > window && an != window {
 				t.Fatalf("layer %d at n=%d: local layer read %d keys, want the %d-key window",
-					li, n, an, c.SWAWindow)
+					li, n, an, window)
 			}
-			if !c.SWA(li) && an != n {
+			if !slide(li) && an != n {
 				t.Fatalf("layer %d at n=%d: a GLOBAL layer was narrowed to %d keys", li, n, an)
 			}
 		}

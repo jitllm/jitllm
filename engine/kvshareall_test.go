@@ -51,7 +51,9 @@ func TestKVSharingOnEveryBlockKind(t *testing.T) {
 				}
 				if share {
 					c.NKVShared = c.NLayer - last
-					src := c.KVSource(last)
+					jc := *m.Container.Config()
+					jc.NKVShared = uint32(c.NKVShared)
+					src := jc.KVSource(last)
 					if !c.KVShared(last) || src < 0 || src >= last || !c.LayerKind(src).Attends() {
 						t.Fatalf("block %d shares %v from %d", last, c.KVShared(last), src)
 					}

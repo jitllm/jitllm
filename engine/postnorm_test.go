@@ -254,7 +254,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			// can be placed alone.
 			free := nl
 			for li := nl - shared; li < nl; li++ {
-				free = min(free, c.Cfg.KVSource(li))
+				free = min(free, kvSourceOf(c, li))
 			}
 			// The method is RULE 11c's and holds for any block; the violation
 			// bends the last block's post-FFN norm, so that is what a model

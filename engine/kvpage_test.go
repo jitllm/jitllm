@@ -66,7 +66,7 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 	// pos/P is a shift.
 	c := &model.Config{NLayer: 4, NCtx: 4096}
 	for li := 0; li < c.NLayer; li++ {
-		p := kvPagePositions(c, li, 0)
+		p := kvPagePositions(c, li, 0, 0)
 		if p <= 0 {
 			t.Fatalf("layer %d: attention layer got %d positions per page", li, p)
 		}
@@ -81,16 +81,22 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 	}
 	// A context shorter than a page does not get a page bigger than the context.
 	short := &model.Config{NLayer: 1, NCtx: 64}
-	if p := kvPagePositions(short, 0, 0); p > align(64, kvKeyTile) {
+	if p := kvPagePositions(short, 0, 0, 0); p > align(64, kvKeyTile) {
 		t.Errorf("NCtx=64 gave a %d-position page", p)
 	}
-	// A sliding-window layer is one page of its window, forever.
-	swa := &model.Config{NLayer: 2, NCtx: 8192, SWAWindow: 512, SWAPeriod: 2}
-	if !swa.SWA(0) {
-		t.Fatal("the SWA arm is unreachable in this config; the gate proves nothing about it")
-	}
-	if p := kvPagePositions(swa, 0, 0); p != 512 {
+	// A sliding-window layer is one page of its window, forever; a window no
+	// shorter than the context sizes nothing.
+	swa := &model.Config{NLayer: 2, NCtx: 8192}
+	if p := kvPagePositions(swa, 0, 0, 512); p != 512 {
 		t.Errorf("a 512-key local layer got a %d-position page", p)
+	}
+	if p, q := kvPagePositions(swa, 0, 0, 8192), kvPagePositions(swa, 0, 0, 0); p != q {
+		t.Errorf("a window as long as the context got a %d-position page, a layer with none %d", p, q)
+	}
+	kw := newKVCacheRange(swa, "geom", 1, kvLayout{}, nil, 0, 0, swa.NLayer, nil, nil, nil, nil, []blockWindow{{w: 512}, {}})
+	if kw.layers[0].p != 512 || kw.layers[0].win != 512 || kw.layers[1].win != 0 || kw.layers[1].p == 512 {
+		t.Errorf("windows {512, none}: pages %d and %d, windows %d and %d",
+			kw.layers[0].p, kw.layers[1].p, kw.layers[0].win, kw.layers[1].win)
 	}
 
 	// A linear-attention layer keeps no pages at all, asserted through
@@ -104,7 +110,7 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 	}
 	kc := newKVCache(hyb, "geom", 1, kvLayout{}, nil, 0)
 	for li, want := range []bool{false, true, false} {
-		got := kvPagePositions(hyb, li, 0) > 0
+		got := kvPagePositions(hyb, li, 0, 0) > 0
 		if got != want {
 			t.Errorf("layer %d (%v): pages=%v, want %v", li, hyb.LayerKind(li), got, want)
 		}

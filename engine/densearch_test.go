@@ -36,8 +36,8 @@ func denseFixtures() []struct {
 		{"synth-smollm3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return !c.LayerNorm && !c.RopeNeox && c.NoPEGlobal &&
-				c.SWAWindow == 0 && c.SWAPeriod == 4 && c.RopeAt(0) && c.RopeAt(2) && !c.RopeAt(3) &&
-				!c.SWA(0) && c.NKVHead < c.NHead && l.Gate.E != nil && c.TiedEmbd
+				windowOf(m) == 0 && m.Container.Config().SWAPeriod == 4 && ropesAt(m, 0) && ropesAt(m, 2) && !ropesAt(m, 3) &&
+				!slides(m, 0) && c.NKVHead < c.NHead && l.Gate.E != nil && c.TiedEmbd
 		}},
 		{"synth-arcee", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -61,7 +61,7 @@ func denseFixtures() []struct {
 			return c.RopeNeox && c.QKNorm && !c.QKNormWide &&
 				len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && c.NoPEGlobal &&
-				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.RopeAt(2) && !c.RopeAt(3) &&
+				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && !slides(m, 3) && ropesAt(m, 2) && !ropesAt(m, 3) &&
 				c.NKVHead < c.NHead
 		}},
 		{"synth-mistral3", func(m *model.Model) bool {
@@ -78,7 +78,7 @@ func denseFixtures() []struct {
 		{"synth-olmo3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.QKNormWide && c.NKVHead < c.NHead && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim &&
-				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.YarnFactor == 8 &&
+				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && !slides(m, 3) && c.YarnFactor == 8 &&
 				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
 				len(m.Ropes) == 1 && m.Ropes[0].Scale == 1 && m.Ropes[0].Freqs == nil && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},
@@ -119,7 +119,9 @@ func localYarn(m *model.Model) func() {
 // windowBy is the model with its sliding window d keys wider: a window off
 // by one position, which the device arm must see past the window.
 func windowBy(d int) func(m *model.Model) func() {
-	return func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow += d }) }
+	return func(m *model.Model) func() {
+		return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = uint32(int(c.SWAWindow) + d) })
+	}
 }
 
 func localScaled(m *model.Model) func() {
@@ -138,12 +140,12 @@ func denseViolations() map[string][]c6Violation {
 			{"YaRN on the sliding layers", localYarn},
 			{"YaRN's magnitude on the sliding layers", localScaled},
 			{"no YaRN magnitude on the global layers", unitRopeScale},
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
 			{"k's norm read from q's weight", kFromQ},
 		},
 		"synth-smollm3": {
 			{"rotary on the NoPE layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
-			{"NoPE every second layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAPeriod = 2 }) }},
+			{"NoPE every second layer", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAPeriod = 2 }) }},
 		},
 		"synth-arcee": {
 			{"SiLU for relu2", actSwap(0)},
@@ -165,7 +167,7 @@ func denseViolations() map[string][]c6Violation {
 		},
 		"synth-exaone4": {
 			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
 			{"no q/k norm", noQKNorm},
 			{"no post-FFN norm", noPostFFNNorm},
 			{"the post-norms as pre-norms", postAsPre},
@@ -303,7 +305,7 @@ func denseDevViolations() map[string][]c6Violation {
 		"synth-olmo3": {
 			{"YaRN on the sliding layers", localYarn},
 			{"YaRN's magnitude on the sliding layers", localScaled},
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
 			{"a window one key wider", windowBy(1)},
 			{"a window one key narrower", windowBy(-1)},
 		},
@@ -324,7 +326,7 @@ func denseDevViolations() map[string][]c6Violation {
 		},
 		"synth-exaone4": {
 			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
 			{"a window one key wider", windowBy(1)},
 			{"a window one key narrower", windowBy(-1)},
 			{"the post-norms as pre-norms", postAsPre},

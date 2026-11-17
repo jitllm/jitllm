@@ -1551,7 +1551,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.layers = map[int]*layer{}
 	}
 	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph, cut: p.Cut}
-	l.win, l.chunked = attendWindow(p.Graph)
+	l.win, l.chunked = p.Graph.AttendWindow()
 	mkw := func(slot int, x nn.Weight) *resident {
 		q, ok := quantOf(x.T)
 		if !ok || x.Rows <= 0 || len(x.Data) == 0 {
@@ -5500,7 +5500,7 @@ func (g *devTier) planConflict(p *nn.LayerPlan) string {
 		return fmt.Sprintf("a sliding window of %d keys on a tier built for %d", b, a)
 	}
 	// A chunk is a window staged another way (pagedStage).
-	if w, chunked := attendWindow(p.Graph); w > 0 {
+	if w, chunked := p.Graph.AttendWindow(); w > 0 {
 		for _, l := range g.layers {
 			if l != nil && l.win > 0 && l.chunked != chunked {
 				return "a chunked attention of a different shape from the one this tier was built for"

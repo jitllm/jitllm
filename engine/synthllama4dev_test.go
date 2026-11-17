@@ -5,6 +5,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -206,7 +207,9 @@ func TestSynthLlama4ServesComposed(t *testing.T) {
 		{"no attention temperature", mut(func(c *model.Config) { c.AttnTempScale = 0 })},
 		{"the temperature offset a floor further", mut(func(c *model.Config) { c.AttnTempOffs += c.AttnTempFloor })},
 		{"the temperature's floor doubled", mut(func(c *model.Config) { c.AttnTempFloor *= 2 })},
-		{"no chunk at all", mut(func(c *model.Config) { c.SWAWindow, c.SWAChunked = 0, false })},
+		{"no chunk at all", func(m *model.Model) func() {
+			return jlmMut(m, func(c *jlm.Config) { c.SWAWindow, c.Flags = 0, c.Flags&^jlm.FlagSWAChunked })
+		}},
 	}
 	if servesComposed(t, m, g.IDs, 1e-6, vs, true, openOpts...) == 0 {
 		t.Skip("no device on this host")

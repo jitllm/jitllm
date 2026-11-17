@@ -1190,6 +1190,20 @@ func (g *Graph) AttendNoRuns() bool {
 	return false
 }
 
+// AttendWindow is the window g's attention states (Attrs.Window) and whether
+// it is an aligned chunk (Attrs.Chunked): 0 for a nil graph, one that does
+// not attend, or one whose attention sees every key.
+func (g *Graph) AttendWindow() (int, bool) {
+	if g != nil {
+		for _, o := range g.Ops {
+			if o.Kind == OpAttend {
+				return o.Attr.Window, o.Attr.Chunked
+			}
+		}
+	}
+	return 0, false
+}
+
 // op appends o, an output stating no rows over its first input's grid.
 func (g *Graph) op(o Op) {
 	if len(o.In) > 0 {

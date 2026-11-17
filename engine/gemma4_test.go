@@ -37,12 +37,12 @@ func gemma4Fixtures() []struct {
 			c := m.Cfg
 			ok := c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
 				c.NKVHead == 1 && c.NKVHeadAt(0) == 2 && c.NRot == 32 && c.NRotAt(0) == 16 &&
-				c.VNorm && c.AttnScale == 1 && c.RopeNeox && c.QKNorm && c.SWAWindow == 4 &&
-				c.SWAPeriod == 3 && c.FinalSoftcap == 30 && c.TiedEmbd && len(m.Ropes) == 1 &&
+				c.VNorm && c.AttnScale == 1 && c.RopeNeox && c.QKNorm && windowOf(m) == 4 &&
+				m.Container.Config().SWAPeriod == 3 && c.FinalSoftcap == 30 && c.TiedEmbd && len(m.Ropes) == 1 &&
 				len(m.Rope.Freqs) == c.HeadDim/2 && m.Ropes[0].Freqs == nil
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.VFromK == !c.SWA(i) && len(l.Vector(jlm.RoleLayerOutScale)) == 1 && l.Vector(jlm.RoleLayerOutScale)[0] != 0 && l.Vector(jlm.RoleLayerOutScale)[0] != 1 &&
+				ok = ok && l.VFromK == !slides(m, i) && len(l.Vector(jlm.RoleLayerOutScale)) == 1 && l.Vector(jlm.RoleLayerOutScale)[0] != 0 && l.Vector(jlm.RoleLayerOutScale)[0] != 1 &&
 					len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDimAt(i) && l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil
 			}
 			return ok
@@ -68,7 +68,7 @@ func gemma4Fixtures() []struct {
 			c := m.Cfg
 			ok := c.MixedGeom() && c.PLEDim == 32 && c.NKVShared == 2 &&
 				c.NFFNAt(4) == 2*c.NFFN && c.NFFNAt(3) == c.NFFN &&
-				c.KVSource(4) == 3 && c.KVSource(5) == 2 && c.KVSource(1) == 1 &&
+				kvSourceOf(m, 4) == 3 && kvSourceOf(m, 5) == 2 && kvSourceOf(m, 1) == 1 &&
 				m.DenseMatrix(jlm.RolePLETokEmbd).K == 6*32 && m.DenseMatrix(jlm.RolePLEModelProj).Rows == 6*32 && len(m.Vector(jlm.RolePLEProjNorm)) == 32
 			for i := range m.Layers {
 				l := &m.Layers[i]
@@ -116,8 +116,8 @@ func gemma4Violations() map[string][]c6Violation {
 				return cfgMut(m, func(c *model.Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
 			}},
 			// A window no prompt reaches: the sliding layers keep their geometry
-			// (Config.SWA) and attend to everything.
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 1 << 20 }) }},
+			// and attend to everything.
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 1 << 20 }) }},
 			{"no final softcap", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.FinalSoftcap = 0 }) }},
 			{"NORM rotary for NEOX", hostNormRotary},
 		},

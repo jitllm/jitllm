@@ -137,17 +137,6 @@ type Config struct {
 	// weight: the container's SSM.Groups, as mamba_ssm and llama.cpp group it.
 	SSMNormGroups int
 
-	// Sliding-window attention. SWAWindow is how many keys a local layer may
-	// attend to, counting back from the current position and including it;
-	// SWAPeriod is the repeat length of the local/global pattern. Zero for
-	// either means every layer attends to the whole history.
-	//
-	// Neither the pattern nor the local rope base is in a GGUF, so the
-	// converter supplies them from llama.cpp's architecture knowledge.
-	SWAWindow, SWAPeriod int
-	// SWAGlobalFirst makes the first layer of each period the global one
-	// (ModernBERT's), not the last.
-	SWAGlobalFirst bool
 	// MarkPointer is a pointer readout (jlm.Flag2MarkerPointer).
 	MarkPointer bool
 	// Joint is a joint head's readout (jlm.JointHead).
@@ -247,7 +236,7 @@ type Config struct {
 	// is every layer.
 	bidir []bool
 	// The last NKVShared layers attend to an earlier layer's history
-	// (KVSource); PLEDim is each layer's slice of the per-layer embeddings,
+	// (KVShared); PLEDim is each layer's slice of the per-layer embeddings,
 	// zero for none.
 	NKVShared, PLEDim int
 	// DeepTaps is how many of the first blocks add a picture's tap rows into
@@ -303,70 +292,6 @@ func (c *Config) at(li int) *Config {
 		return c.Head
 	}
 	return c
-}
-
-// RopeAt reports whether layer il rotates q and k at all.
-//
-// Roping a NoPE layer anyway is exact at position 0, where the rotation is the
-// identity, and wrong after it.
-func (c *Config) RopeAt(il int) bool {
-	if h := c.at(il); h != c {
-		return h.RopeAt(il)
-	}
-	if c.NoPosEnc {
-		return false
-	}
-	return !(c.NoPEGlobal && !c.periodLocal(il))
-}
-
-// periodLocal reports whether layer il is not the last of its SWAPeriod:
-// the windowed layers of a sliding pattern, and where no layer slides
-// (SmolLM3's SWAWindow 0) the layers FlagNoPEGlobal leaves rotating. It is SWA
-// wherever a window exists, so every windowed model reads as before.
-func (c *Config) periodLocal(il int) bool {
-	return c.SWAPeriod > 0 && il%c.SWAPeriod < c.SWAPeriod-1
-}
-
-// AttnWindow is the key range layer il attends to from position pos: w0 is
-// the first key and an how many there are, so the keys are w0..w0+an-1 and
-// the last is pos itself. A layer that sees the whole history gets 0, pos+1.
-//
-// Decode, prefill and the batch all call this rather than spelling the window
-// themselves. A chunked layer's start is floor(pos/W)*W: at pos = W it sees
-// one key, where a sliding one sees W.
-func (c *Config) AttnWindow(il, pos int) (w0, an int) {
-	an = pos + 1
-	if !c.SWA(il) || c.SWAWindow <= 0 {
-		return 0, an
-	}
-	if c.SWAChunked {
-		w0 = pos / c.SWAWindow * c.SWAWindow
-		return w0, pos + 1 - w0
-	}
-	if c.SWAWindow < an {
-		return an - c.SWAWindow, c.SWAWindow
-	}
-	return 0, an
-}
-
-// SWA reports whether layer il attends to a window rather than the whole
-// history.
-//
-// The last layer of each period is the global one, as in
-// llama_hparams::set_swa_pattern:
-//
-//	is_swa_impl[il] = il % n_pattern < (n_pattern - 1)
-//
-// so at period 6 layers 0..4 are local and layer 5 is global; under
-// SWAGlobalFirst layer 0 is global and 1..5 local.
-func (c *Config) SWA(il int) bool {
-	if h := c.at(il); h != c {
-		return h.SWA(il)
-	}
-	if c.SWAGlobalFirst {
-		return c.SWAWindow > 0 && c.SWAPeriod > 1 && il%c.SWAPeriod != 0
-	}
-	return c.SWAWindow > 0 && c.SWAPeriod > 0 && il%c.SWAPeriod < c.SWAPeriod-1
 }
 
 // MoE reports whether this model's FFN is a mixture of experts.
@@ -463,12 +388,13 @@ func (c *Config) MixedGeom() bool { return c.mixed }
 // own; a marker head's geometry, its blocks' set's, is not one.
 func (c *Config) OwnGeoms() bool { return c.ownGeoms }
 
-// setGeoms takes the blocks' own geometries, gs one per block or none.
-func (c *Config) setGeoms(gs []jlm.Geom) {
+// setGeoms takes the blocks' own geometries, gs one per block or none;
+// sliding says which blocks turn by the sliding layers' rotary.
+func (c *Config) setGeoms(gs []jlm.Geom, sliding func(int) bool) {
 	c.geoms, c.mixed, c.localNRot = gs, false, 0
 	for li := range gs {
 		c.mixed = c.mixed || c.HeadDimAt(li) != c.HeadDim || c.NKVHeadAt(li) != c.NKVHead || c.NRotAt(li) != c.NRot
-		if c.SWA(li) {
+		if sliding(li) {
 			c.localNRot = max(c.localNRot, c.NRotAt(li))
 		}
 	}
@@ -559,29 +485,14 @@ func (c *Config) MaxHeadDim() int {
 }
 
 // KVShared reports that block li computes no k and v of its own and attends
-// to KVSource(li)'s history (Gemma 4's E2B/E4B). A recurrent block in the
-// shared run keeps no history and is its own.
+// to an earlier block's history, the one its graph reads (Gemma 4's E2B/E4B;
+// graph.Graph.ReadsHistoryOf). A recurrent block in the shared run keeps no
+// history and is its own.
 func (c *Config) KVShared(li int) bool {
 	if h := c.at(li); h != c {
 		return h.KVShared(li)
 	}
 	return c.NKVShared != 0 && li >= c.NLayer-c.NKVShared && li < c.NLayer && c.LayerKind(li).Attends()
-}
-
-// KVSource is the block whose history block li attends to: li itself, or for
-// a KV-sharing block the last block before the shared run of li's own kind
-// that attends -- a hybrid's recurrent blocks keep no history
-// (jlm.Config.KVSource). -1 when there is none, which load refuses.
-func (c *Config) KVSource(li int) int {
-	if !c.KVShared(li) {
-		return li
-	}
-	for j := c.NLayer - c.NKVShared - 1; j >= 0; j-- {
-		if c.SWA(j) == c.SWA(li) && c.LayerKind(j).Attends() {
-			return j
-		}
-	}
-	return -1
 }
 
 // NFFNAt is block li's feed-forward width: its own where the container
@@ -781,8 +692,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		NExpert:      int(c.NExpert),
 		NExpertUsed:  int(c.NExpertUsed),
 		NFFNExp:      int(c.NFFNExp),
-		SWAWindow:    int(c.SWAWindow),
-		SWAPeriod:    int(c.SWAPeriod),
 		RopeBaseSWA:  float64(c.RopeBaseSWA),
 		RopeScaleSWA: float64(c.RopeScaleSWA),
 		AttnSoftcap:  c.AttnSoftcap,
@@ -813,7 +722,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		KeyValue:         c.Flags2.Has(jlm.Flag2KeyValue),
 		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
 		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
-		SWAGlobalFirst:   c.Flags2.Has(jlm.Flag2SWAGlobalFirst),
 		MarkPointer:      c.Flags2.Has(jlm.Flag2MarkerPointer),
 		RowWindowed:      c.Flags2.Has(jlm.Flag2MediaPrefix),
 		Joint:            c.JointHead != nil,
@@ -843,17 +751,13 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 
 		HCMult: int(c.HCMult),
 	}
-	out.setGeoms(c.Geoms)
+	out.setGeoms(c.Geoms, c.Sliding)
 	out.VNorm = c.Flags2.Has(jlm.Flag2VNorm)
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
 	out.bidir = c.BidirLayers
 	out.sel = c.Selection
 	out.compKinds, out.compRate = c.CompKinds, [3]int{0, int(c.CompRateCSA), int(c.CompRateHCA)}
-	for li := out.NLayer - out.NKVShared; li < out.NLayer; li++ {
-		if out.KVSource(li) < 0 {
-			return nil, fmt.Errorf("model: KV-sharing block %d has no earlier block of its kind", li)
-		}
-	}
+
 	for _, k := range c.LayerKinds {
 		switch k {
 		case jlm.LayerSSD:
@@ -2870,7 +2774,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		for _, spec := range want {
 			// A KV-sharing block has no k or v projection: it attends to an
-			// earlier block's history (Config.KVSource).
+			// earlier block's history (Config.KVShared).
 			if cfg.KVShared(i) && (spec.role == jlm.RoleAttnK || spec.role == jlm.RoleAttnV) {
 				continue
 			}

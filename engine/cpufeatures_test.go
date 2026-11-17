@@ -20,7 +20,7 @@ import (
 // whole).
 func cpuFeatureFixtures() map[string][]c6Violation {
 	window := func(w int) func(m *model.Model) func() {
-		return func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = w }) }
+		return func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = uint32(w) }) }
 	}
 	return map[string][]c6Violation{
 		"synth-cohere2": {

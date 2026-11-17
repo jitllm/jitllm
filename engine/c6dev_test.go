@@ -81,7 +81,7 @@ func c6BaseDevViolations() map[string][]c6Violation {
 		},
 		"synth-cohere2": {
 			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
 			{"serial residual", serialFromShared},
 		},
 	}

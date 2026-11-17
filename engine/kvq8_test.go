@@ -156,8 +156,8 @@ func TestCPUAttendsAQ8History(t *testing.T) {
 				}
 				cpuServed(t, s, fmt.Sprintf("%v: a prompt of %d", kv, n), (1+decode)*c.NLayer, true)
 				h := 16
-				if c.SWA(li) && c.SWAWindow > 0 {
-					h = min(h, c.SWAWindow)
+				if w, _ := windowAt(m, li); w > 0 {
+					h = min(h, w)
 				}
 				hs := testInstance(t, m, h+1, WithKVType(kv))
 				defer hs.Close()

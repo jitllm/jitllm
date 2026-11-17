@@ -78,7 +78,7 @@ func TestSplitPiecesReadTheirSessionsRows(t *testing.T) {
 	// upper half reads: a block sharing another's history runs beside it.
 	lo := nl / 2
 	for li := nl / 2; li < nl; li++ {
-		lo = min(lo, m.Cfg.KVSource(li))
+		lo = min(lo, kvSourceOf(m, li))
 	}
 	up := map[int]Place{}
 	for li := lo; li < nl; li++ {

@@ -31,7 +31,7 @@ func gemma3nFixtures() []struct {
 		{"synth-gemma3n", func(m *model.Model) bool {
 			c, jc := m.Cfg, m.Container.Config()
 			ok := c.Streams() == 4 && len(jc.Streams.Expand) == 3 && c.PLEDim == 32 &&
-				c.NKVShared == 2 && jc.NSparse == 3 && jc.SparseStd > 1.64 && jc.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5
+				c.NKVShared == 2 && jc.NSparse == 3 && jc.SparseStd > 1.64 && jc.SparseStd < 1.65 && c.VNorm && m.Container.Config().SWAPeriod == 5
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && matRows(l, jlm.RoleLowRankIn) == 32 && matRows(l, jlm.RoleStreamRouter) == 4 &&

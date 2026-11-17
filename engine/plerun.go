@@ -65,6 +65,38 @@ func historySources(m *model.Model, hi int) ([]int, error) {
 	return src, nil
 }
 
+// blockWindow is a block's attention window as its graph states it
+// (graph.Graph.AttendWindow): w keys back from a row, or the aligned chunk
+// of w keys it is in where chunked; w 0 for a block that sees its whole
+// history.
+type blockWindow struct {
+	w       int
+	chunked bool
+}
+
+// attendWindows is each block's window in [lo, hi), as its graph states it. A
+// tower's blocks attend over one picture's rows and slide over none.
+func attendWindows(m *model.Model, lo, hi int) []blockWindow {
+	out := make([]blockWindow, max(hi, 0))
+	for li := max(lo, 0); li < len(out); li++ {
+		if t := m.Tower; t != nil && li >= m.TowerBase && li < m.TowerBase+len(t.Blocks) {
+			continue
+		}
+		out[li].w, out[li].chunked = m.Composing().BlockGraph(li).AttendWindow()
+	}
+	return out
+}
+
+// modelWindow is the window the model's sliding blocks state, 0 where none
+// slides: a model states one.
+func modelWindow(wins []blockWindow) int {
+	w := 0
+	for _, b := range wins {
+		w = max(w, b.w)
+	}
+	return w
+}
+
 // histSrc is the block whose history block li attends to.
 func (s *Instance) histSrc(li int) int {
 	if li < 0 || li >= len(s.histOf) {

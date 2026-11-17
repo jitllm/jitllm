@@ -154,7 +154,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 	half := c.NLayer / 2
 	// A KV-sharing model's seam may not part a source from its readers
 	// (fixKVGroups): the half is the nearest cut below that does not.
-	for half > 0 && !kvLegalCut(c, half) {
+	for half > 0 && !kvLegalCut(m, half) {
 		half--
 	}
 	type move struct{ at, n int }
@@ -496,9 +496,10 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 
 // kvLegalCut reports that a seam at n keeps every KV-sharing block on the
 // side of its source.
-func kvLegalCut(c *model.Config, n int) bool {
+func kvLegalCut(m *model.Model, n int) bool {
+	c := m.Cfg
 	for li := c.NLayer - c.NKVShared; li < c.NLayer; li++ {
-		if (li < n) != (c.KVSource(li) < n) {
+		if (li < n) != (kvSourceOf(m, li) < n) {
 			return false
 		}
 	}

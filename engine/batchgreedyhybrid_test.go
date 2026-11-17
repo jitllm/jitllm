@@ -21,7 +21,7 @@ import (
 // parity. JITLLM_HYBRID_BATCH_MODEL names another hybrid container.
 func TestForwardBatchGreedyHybridMatchesEachSequenceAlone(t *testing.T) {
 	batchAloneGate(t, "JITLLM_HYBRID_BATCH_MODEL", "qwen35/Qwen3.5-0.8B-Q4_K_M.jlm",
-		"a hybrid", func(c model.Config) bool { return c.Hybrid() }, false)
+		"a hybrid", func(m *model.Model) bool { return m.Cfg.Hybrid() }, false)
 }
 
 // TestForwardBatchGreedyMixtureMatchesEachSequenceAlone is the same gate on a
@@ -36,7 +36,7 @@ func TestForwardBatchGreedyHybridMatchesEachSequenceAlone(t *testing.T) {
 // combine per row.
 func TestForwardBatchGreedyMixtureMatchesEachSequenceAlone(t *testing.T) {
 	batchAloneGate(t, "JITLLM_MOE_BATCH_MODEL", "Qwen3-MOE-4x0.6B-Q4_K_M.jlm",
-		"a mixture", func(c model.Config) bool { return c.NExpert > 1 }, true)
+		"a mixture", func(m *model.Model) bool { return m.Cfg.NExpert > 1 }, true)
 }
 
 // TestForwardBatchGreedyWindowedMatchesEachSequenceAlone is the gate on a
@@ -45,13 +45,13 @@ func TestForwardBatchGreedyMixtureMatchesEachSequenceAlone(t *testing.T) {
 // sequence crosses it within its prompt. JITLLM_SWA_BATCH_MODEL names another.
 func TestForwardBatchGreedyWindowedMatchesEachSequenceAlone(t *testing.T) {
 	batchAloneGate(t, "JITLLM_SWA_BATCH_MODEL", "synth-gptoss.gguf",
-		"a sliding-window model", func(c model.Config) bool { return c.SWAWindow > 0 }, false)
+		"a sliding-window model", func(m *model.Model) bool { return windowOf(m) > 0 }, false)
 }
 
 // batchAloneGate decodes five sequences batched on the device against each
 // decoded alone on the device -- or, exact, against each batched alone, bit for
 // bit; is says the model is the kind the gate is for.
-func batchAloneGate(t *testing.T, env, def, kind string, is func(model.Config) bool, exact bool) {
+func batchAloneGate(t *testing.T, env, def, kind string, is func(*model.Model) bool, exact bool) {
 	name := os.Getenv(env)
 	if name == "" {
 		name = def
@@ -68,7 +68,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(model.Config) b
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if !is(*m.Cfg) {
+	if !is(m) {
 		t.Fatalf("%s is not %s: this gate would test nothing it exists for", name, kind)
 	}
 	prompts := []string{

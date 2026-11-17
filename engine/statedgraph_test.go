@@ -39,10 +39,15 @@ func relowered(m *model.Model) func() {
 // refuses: the blocks then state no graph, and the reason is printed, until
 // an edit after it states one; a violation that ends there is refused by
 // the front end.
-func statedAgain(m *model.Model) func() {
+func statedAgain(m *model.Model) func() { return statedWith(m, nil) }
+
+// statedWith is statedAgain with edit made to the container's config before
+// the library states the graphs: a violation of a field only the graphs
+// carry (a block's window), which no config field of m's reaches.
+func statedWith(m *model.Model, edit func(*jlm.Config)) func() {
 	jc := m.Container.Config()
 	was := jc.Blocks
-	blocks, err := restatedBlocks(m)
+	blocks, err := restatedBlocks(m, edit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "statedAgain: %v\n", err)
 	}
@@ -72,8 +77,9 @@ func withCfg(m *model.Model, c *model.Config) func() {
 // has changed from the one the container states (statedFields; a field with
 // none is the lowering's to read), and the stored tensors its front end
 // reads in place of the container's (restate). Each changed field must read
-// back from the restated container as the violation set it.
-func restatedBlocks(m *model.Model) (jlm.BlockGraphs, error) {
+// back from the restated container as the violation set it. edit, where not
+// nil, is made to the container's config after them.
+func restatedBlocks(m *model.Model, edit func(*jlm.Config)) (jlm.BlockGraphs, error) {
 	src, err := convertedFrom(m)
 	if err != nil {
 		return jlm.BlockGraphs{}, err
@@ -101,6 +107,9 @@ func restatedBlocks(m *model.Model) (jlm.BlockGraphs, error) {
 			if state, ok := fields[f]; ok {
 				state(s.Config, m.Cfg)
 			}
+		}
+		if edit != nil {
+			edit(s.Config)
 		}
 		restatedTensors(s, hook)
 	}); err != nil {
@@ -211,8 +220,7 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 				c.RopeSections[i] = uint32(v)
 			}
 		},
-		"SWAWindow":        func(c *jlm.Config, mc *model.Config) { c.SWAWindow = uint32(mc.SWAWindow) },
-		"SWAPeriod":        func(c *jlm.Config, mc *model.Config) { c.SWAPeriod = uint32(mc.SWAPeriod) },
+
 		"NRot":             func(c *jlm.Config, mc *model.Config) { c.NRot = uint32(mc.NRot) },
 		"NMTP":             func(c *jlm.Config, mc *model.Config) { c.NMTP = uint32(mc.NMTP) },
 		"NFFNShExp":        func(c *jlm.Config, mc *model.Config) { c.NFFNShExp = uint32(mc.NFFNShExp) },
@@ -258,6 +266,74 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 			}
 		},
 	}
+}
+
+// jlmMut has m's blocks state the graphs the library states with f made to
+// its container's config (statedWith), until the returned undo: the
+// violation of a field the graphs carry and no config field of m's does.
+func jlmMut(m *model.Model, f func(c *jlm.Config)) func() { return statedWith(m, f) }
+
+// windowAt is block li's attention window as its graph states it, and
+// whether it is an aligned chunk.
+func windowAt(m *model.Model, li int) (int, bool) {
+	return m.Composing().BlockGraph(li).AttendWindow()
+}
+
+// slides reports that block li's graph attends over a window.
+func slides(m *model.Model, li int) bool {
+	w, _ := windowAt(m, li)
+	return w > 0
+}
+
+// windowOf is the window m's sliding blocks state, 0 where none slides.
+func windowOf(m *model.Model) int {
+	w := 0
+	for li := range m.Cfg.NLayer {
+		v, _ := windowAt(m, li)
+		w = max(w, v)
+	}
+	return w
+}
+
+// ropesAt reports that block li's graph turns its queries and keys by a
+// rotary.
+func ropesAt(m *model.Model, li int) bool {
+	if g := m.Composing().BlockGraph(li); g != nil {
+		for _, o := range g.Ops {
+			if o.Kind == graph.OpRope {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// kvSourceOf is the block whose history block li's graph reads: li where it
+// reads its own.
+func kvSourceOf(m *model.Model, li int) int {
+	if n, err := m.Composing().BlockGraph(li).ReadsHistoryOf(); err == nil && n >= 0 {
+		return n
+	}
+	return li
+}
+
+// attnWindow is the key range a block of window w (chunked where it is an
+// aligned chunk) attends to from position pos: w0 the first key and an how
+// many, so the keys are w0..w0+an-1 and the last is pos itself. A block
+// that sees the whole history gets 0, pos+1; a chunked block's start is
+// floor(pos/w)*w.
+func attnWindow(w int, chunked bool, pos int) (w0, an int) {
+	an = pos + 1
+	switch {
+	case w <= 0:
+		return 0, an
+	case chunked:
+		w0 = pos / w * w
+		return w0, pos + 1 - w0
+	case w < an:
+		return an - w, w
+	}
+	return 0, an
 }
 
 // restatedTensors has s's tensors read as the front end reads m's through
@@ -368,7 +444,7 @@ func TestAnUnviolatedModelIsStatedAgainAsItWas(t *testing.T) {
 			same := func() bool {
 				return slices.Equal(jc.Blocks.Of, was.Of) && slices.Equal(jc.Blocks.Graphs, was.Graphs)
 			}
-			got, err := restatedBlocks(m)
+			got, err := restatedBlocks(m, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -85,12 +86,12 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 	c := m.Cfg
 	// Selection first: every knob must be the one the script set, or the
 	// reference is compared against a different model.
-	if !c.SWAChunked || !c.NoPEGlobal || !c.QKL2Norm || !c.ExpertWeightIn ||
-		c.SWAWindow != 4 || c.SWAPeriod != 4 || c.MoEStep != 2 || c.AttnTempFloor != 4 ||
+	if w, chunked := windowAt(m, 0); !c.SWAChunked || !chunked || !c.NoPEGlobal || !c.QKL2Norm || !c.ExpertWeightIn ||
+		w != 4 || m.Container.Config().SWAPeriod != 4 || c.MoEStep != 2 || c.AttnTempFloor != 4 ||
 		c.AttnTempScale == 0 || c.NFFNShExp != c.NFFNExp || m.Rope.Freqs == nil {
 		t.Fatalf("the container does not carry the fixture's graph: %+v", c)
 	}
-	if !c.MoEAt(1) || !c.MoEAt(3) || c.MoEAt(0) || c.MoEAt(2) || c.RopeAt(3) || !c.RopeAt(2) {
+	if !c.MoEAt(1) || !c.MoEAt(3) || c.MoEAt(0) || c.MoEAt(2) || ropesAt(m, 3) || !ropesAt(m, 2) || slides(m, 3) || !slides(m, 2) {
 		t.Fatal("the per-layer rules do not select the fixture's layers")
 	}
 	if m.Vocab == nil {
@@ -168,19 +169,26 @@ func TestSynthLlama4FeaturesAreLoadBearing(t *testing.T) {
 	for _, v := range []struct {
 		name string
 		mut  func(c *model.Config)
+		// edit is a violation of what only the graphs carry, made to the
+		// container's config.
+		edit func(c *jlm.Config)
 	}{
-		{"sliding window instead of a chunk", func(c *model.Config) { c.SWAChunked = false }},
-		{"every layer rotated", func(c *model.Config) { c.NoPEGlobal = false }},
-		{"no QK L2 norm", func(c *model.Config) { c.QKL2Norm = false }},
-		{"weight on the expert's output", func(c *model.Config) { c.ExpertWeightIn = false }},
-		{"no attention temperature", func(c *model.Config) { c.AttnTempScale = 0 }},
-		{"temperature offset 0", func(c *model.Config) { c.AttnTempOffs = 0 }},
-		{"no chunk at all", func(c *model.Config) { c.SWAWindow, c.SWAChunked = 0, false }},
+		{"sliding window instead of a chunk", func(c *model.Config) { c.SWAChunked = false }, nil},
+		{"every layer rotated", func(c *model.Config) { c.NoPEGlobal = false }, nil},
+		{"no QK L2 norm", func(c *model.Config) { c.QKL2Norm = false }, nil},
+		{"weight on the expert's output", func(c *model.Config) { c.ExpertWeightIn = false }, nil},
+		{"no attention temperature", func(c *model.Config) { c.AttnTempScale = 0 }, nil},
+		{"temperature offset 0", func(c *model.Config) { c.AttnTempOffs = 0 }, nil},
+		{"no chunk at all", nil, func(c *jlm.Config) { c.SWAWindow, c.Flags = 0, c.Flags&^jlm.FlagSWAChunked }},
 	} {
 		t.Run(v.name, func(t *testing.T) {
-			c := cfg
-			v.mut(&c)
-			defer withCfg(m, &c)()
+			if v.edit != nil {
+				defer jlmMut(m, v.edit)()
+			} else {
+				c := cfg
+				v.mut(&c)
+				defer withCfg(m, &c)()
+			}
 			st := testInstance(t, m, len(g.IDs)+1, openOpts...)
 			defer st.Close()
 			worst := 0.0

@@ -50,7 +50,7 @@ func sessionSeamMoves(t *testing.T, p string, bound float64) {
 		}
 	}
 	half := cfg.NLayer / 2
-	for half > 0 && !kvLegalCut(cfg, half) {
+	for half > 0 && !kvLegalCut(m, half) {
 		half--
 	}
 	type move struct{ at, n int }

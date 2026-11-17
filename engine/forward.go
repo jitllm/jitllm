@@ -92,8 +92,9 @@ type Instance struct {
 	draft   *Instance
 	draftOn nn.LayerDevice
 	// histOf is each block's history block, as its graph reads it
-	// (historySources).
+	// (historySources), and winOf its window (attendWindows).
 	histOf []int
+	winOf  []blockWindow
 	// mu is held by a call running on the instance: sessions leasing it run
 	// one call at a time, or together as one step's rows (StepRuns).
 	mu sync.Mutex
@@ -630,6 +631,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		return nil, err
 	}
 	s.histOf = hist
+	s.winOf = attendWindows(m, lo, hi)
 	if err := m.BindDense(fr, &s.dense); err != nil {
 		return nil, err
 	}
@@ -705,7 +707,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	// kvl.fmt sizes every page.
-	s.kv = newKVCacheRange(c, s.nextCacheID(), 1, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.histOf, s.histPlanes())
+	s.kv = newKVCacheRange(c, s.nextCacheID(), 1, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.histOf, s.histPlanes(), s.winOf)
 	s.makeRec(s.kv.view, 1)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
@@ -980,7 +982,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		Rotaries:   s.rotaries(),
 		RopePairs:  c.RopePairs,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
-		SWAWindow: windowFor(c, s.maxSeq),
+		SWAWindow: windowFor(s.winOf, s.maxSeq),
 		// Zero for a dense model, which is what makes every existing plan
 		// unchanged.
 		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
@@ -2796,7 +2798,7 @@ func (s *Instance) setKVFmt(f nn.KVFmt) {
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
-	s.kv = newKVCacheRange(s.c, old.id, 1, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.histOf, s.histPlanes())
+	s.kv = newKVCacheRange(s.c, old.id, 1, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.histOf, s.histPlanes(), s.winOf)
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget, s.kv.spent = old.ns, old.budget, old.spent
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
@@ -3324,11 +3326,11 @@ func (s *Instance) ropeTabs() [][]float32 {
 // windowFor is the sliding window a device must apply in a session of maxSeq
 // positions: none when the window is no shorter than the session, since then it
 // never truncates anything and the windowed kernels would only cost a select.
-func windowFor(c *model.Config, maxSeq int) int {
-	if c.SWAWindow <= 0 || c.SWAWindow >= maxSeq {
-		return 0
+func windowFor(wins []blockWindow, maxSeq int) int {
+	if w := modelWindow(wins); w < maxSeq {
+		return w
 	}
-	return c.SWAWindow
+	return 0
 }
 
 // narrow copies one run of f32 into the f32 cache.

@@ -287,7 +287,7 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 			// Only the golden's long text is past the window, which is why it
 			// is in the golden. Widening the window moves only the mask.
 			{"a sliding window four times too wide", func(m *model.Model) func() {
-				return cfgMut(m, func(c *model.Config) { c.SWAWindow *= 4 })
+				return jlmMut(m, func(c *jlm.Config) { c.SWAWindow *= 4 })
 			}},
 			{"no dense heads", func(m *model.Model) func() {
 				undoM := dropDenseMats(m, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2)

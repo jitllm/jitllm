@@ -47,7 +47,7 @@ func moe2Fixtures() []struct {
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*c.NFFNExp &&
 				c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
-				c.SWAWindow == 0 && dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
+				windowOf(m) == 0 && dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
 				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
 				moe.Vector(jlm.RoleShRouter) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil && moe.Vector(jlm.RoleAttnKNorm) != nil &&
 				moe.Vector(jlm.RoleAttnQBias) == nil && moe.Vector(jlm.RoleAttnKBias) == nil && moe.Vector(jlm.RoleAttnVBias) == nil && moe.Vector(jlm.RoleAttnOutBias) == nil
@@ -57,7 +57,7 @@ func moe2Fixtures() []struct {
 			ok := c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
 				len(m.Container.Config().RouterWeight.Terms) != 0 && c.NoExpertNorm && !c.ExpertSigmoid && c.NExpertGroup <= 1 &&
 				c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 &&
-				c.NKVHead < c.NHead && !c.TiedEmbd && c.SWAWindow == 0 &&
+				c.NKVHead < c.NHead && !c.TiedEmbd && windowOf(m) == 0 &&
 				math.Abs(c.AttnFactor-math.Sqrt(1+math.Log(8)/math.Log(512))) < 1e-6 &&
 				len(m.Rope.Freqs) == c.NRot/2 && m.Vector(jlm.RoleOutputBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 			for i := range m.Layers {

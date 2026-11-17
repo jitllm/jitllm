@@ -52,10 +52,11 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 			c := m.Cfg
 			var win, full []int
 			for li := 0; li < c.NLayer; li++ {
-				if kvPagePositions(c, li, 0) == 0 {
+				w, _ := windowAt(m, li)
+				if kvPagePositions(c, li, 0, w) == 0 {
 					continue // a recurrent layer keeps no history
 				}
-				if c.SWA(li) && c.SWAWindow > 0 {
+				if w > 0 {
 					win = append(win, li)
 				} else {
 					full = append(full, li)
@@ -205,7 +206,7 @@ func windowOnDevice(t *testing.T, m *model.Model, spec string, run windowRun, wi
 		if c.KVShared(li) {
 			continue
 		}
-		want += keyStartOf(c, li, max(0, n-1-nn.KVWindowSlack)) / P
+		want += keyStartOf(m, li, max(0, n-1-nn.KVWindowSlack)) / P
 	}
 	t.Logf("%s: %d of %d blocks placed, page %d: %d page(s) released behind windows (want %d); the "+
 		"last logits NMSE %.3e from the host's", g.Name(), placed, c.NLayer, P, rel, want, logitNMSE(last, host))
@@ -234,8 +235,9 @@ func devKVPage(maxSeq int) int {
 }
 
 // keyStartOf is the first key layer li attends at pos.
-func keyStartOf(c *model.Config, li, pos int) int {
-	w0, _ := c.AttnWindow(li, pos)
+func keyStartOf(m *model.Model, li, pos int) int {
+	w, chunked := windowAt(m, li)
+	w0, _ := attnWindow(w, chunked, pos)
 	return w0
 }
 

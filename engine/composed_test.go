@@ -568,8 +568,8 @@ func TestComposedBlocksServe(t *testing.T) {
 			const windowPast = 64
 			w, c := 0, int(m.Cfg.NCtx)
 			for li := range m.Cfg.NLayer {
-				if m.Cfg.SWA(li) {
-					w = m.Cfg.SWAWindow
+				if v, _ := windowAt(m, li); v > 0 {
+					w = v
 				}
 			}
 			type prompt struct{ ids, toks []int32 }

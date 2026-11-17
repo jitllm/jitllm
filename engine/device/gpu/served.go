@@ -2262,19 +2262,6 @@ func (g *devTier) servedSampleAt(gr *graph.Graph, rows int) (*servedPart, error)
 	})
 }
 
-// attendWindow is the window gr's attention states, and whether it is an
-// aligned chunk.
-func attendWindow(gr *graph.Graph) (int, bool) {
-	if gr != nil {
-		for _, o := range gr.Ops {
-			if o.Kind == graph.OpAttend {
-				return o.Attr.Window, o.Attr.Chunked
-			}
-		}
-	}
-	return 0, false
-}
-
 // expertsOwnWidth reports that gr's routed experts write rows of a width of
 // their own, not the residual's embd: their down bank's output.
 func expertsOwnWidth(gr *graph.Graph, embd int) bool {

@@ -180,7 +180,7 @@ func c6BaseFixtures() []struct {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && c.Parallel && !c.RopeNeox &&
 				c.LogitScale == 16 && c.TiedEmbd && l.Vector(jlm.RoleFFNNorm) == nil && l.Gate.E != nil &&
-				l.Vector(jlm.RoleAttnNormBias) == nil && m.Vector(jlm.RoleOutputNormBias) == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
+				l.Vector(jlm.RoleAttnNormBias) == nil && m.Vector(jlm.RoleOutputNormBias) == nil && c.NKVHead < c.NHead && windowOf(m) == 0
 		}},
 		{"synth-dbrx", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -192,8 +192,8 @@ func c6BaseFixtures() []struct {
 		{"synth-cohere2", func(m *model.Model) bool {
 			c := m.Cfg
 			return c.LayerNorm && c.Parallel && c.NoPEGlobal &&
-				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.LogitScale == 4 &&
-				c.SWA(0) && !c.SWA(3) && c.RopeAt(0) && !c.RopeAt(3)
+				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && c.LogitScale == 4 &&
+				slides(m, 0) && !slides(m, 3) && ropesAt(m, 0) && !ropesAt(m, 3)
 		}},
 	}
 }
@@ -628,7 +628,7 @@ func c6BaseViolations() map[string][]c6Violation {
 		},
 		"synth-cohere2": {
 			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
-			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
 			{"serial residual", serialFromShared},
 			{"no logit scale", logitScale},
 		},
