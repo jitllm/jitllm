@@ -1821,6 +1821,15 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 		// gets its own submission.
 		tail = nil
 	}
+	// A chunk's last run on the head's device in a set of its own carries
+	// the head all the same, folded into the home set's decode scratch
+	// (devTier.layersOnce). A token's head reads the decode scratch its
+	// last block wrote, another set's, and keeps its own submission; so
+	// does a head over every row, whose per-row head is the home set's.
+	ride := tail
+	if head != nil && !head.RowLogits && n > 1 && rs[len(rs)-1].dev == hd {
+		ride = head
+	}
 	if n > 1 && !rs[0].dev.nonCausalAt(lo) && g.cutsRun(sid, rs, pos, n) {
 		if !g.phased(sid, rs, pos, n, x, cs) {
 			return false
@@ -1857,13 +1866,13 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 	for i, r := range rs {
 		h := (*nn.Head)(nil)
 		if i == len(rs)-1 {
-			h = tail
+			h = ride
 		}
 		if !r.dev.layersFor(sid, r.lo, r.hi, pos, n, x, r.tables(cs), h) {
 			return false
 		}
 	}
-	if head != nil && tail == nil {
+	if head != nil && ride == nil {
 		// A head-only submission: the blocks are done, x is back on the host,
 		// and the device holding the projection takes it from there. A split
 		// model's head runs in the global layers' set, with their table.

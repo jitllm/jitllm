@@ -2759,14 +2759,15 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 			}
 		}
 		// The fold copies the last row into the decode scratch and projects it
-		// there (layersOnce), which a resident float head cannot take. Only a
-		// resident head: the split runs the chunk before the head, and a head
-		// that then failed would send a hybrid's advanced rows round again.
-		// Never for a head over every row, which the per-row head above serves
-		// and the split, projecting the last row alone, cannot.
+		// there with decode's head (layersOnce), whatever the head's format,
+		// so only a chunk of another width than the decode scratch's cannot
+		// take it. Only a resident head: the split runs the chunk before the
+		// head, and a head that then failed would send a hybrid's advanced
+		// rows round again. Never for a head over every row, which the per-row
+		// head above serves and the split, projecting the last row alone,
+		// cannot.
 		noFold := dbs != nil && dbs.head != nil && dbs.head.ok && bbs != nil &&
-			!(head != nil && head.RowLogits) &&
-			(layout.IsFloat(dbs.head.t) || dbs.p.NEmbd != bbs.p.NEmbd)
+			!(head != nil && head.RowLogits) && dbs.p.NEmbd != bbs.p.NEmbd
 		g.mu.Unlock()
 		if head != nil && head.RowLogits && (!ok || bbs == nil) {
 			if g.LastErr == "" {
@@ -3154,14 +3155,16 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	// never the resident ones in their place.
 	var hVecs []roleBuf
 	hVecsID := 0
-	if head != nil && g.bs != nil {
+	if head != nil && g.homeScratch() != nil {
 		var ok bool
 		if hVecs, hVecsID, ok = g.headVecsFor(head); !ok {
 			return refuse("the head brings vectors this device was not given (PrepHead)")
 		}
 	}
 	if fold {
-		hb = g.bs
+		// The head's decode scratch: a chunk of a block in a set of its own
+		// geometry folds its last row into the home set's (geomsets.go).
+		hb = g.homeScratch()
 		switch {
 		case hb == nil || hb.head == nil || !hb.head.ok:
 			return refuse("the head is not resident on this device")
@@ -3845,8 +3848,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	// counter drift.
 	streamed := false
 	for li := lo; li < hi && !streamed; li++ {
-		// A batched mixture reads its selection back too.
-		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.holds(jlm.RoleRouter))) {
+		// A batched mixture reads its selection back too, and a block
+		// gathering a row table's rows its ids (rowsRun).
+		if l := g.layers[li]; l != nil && (l.stream != nil || len(l.rowTabs) > 0 || (R > 1 && l.holds(jlm.RoleRouter))) {
 			streamed = true
 		}
 	}
@@ -4160,7 +4164,8 @@ func (g *devTier) layersSession(s backend.Session) {
 		// - A paging device: a graph holds device addresses, and a page-in
 		//   allocates the buffers afresh.
 		// - A streamed block: the mid-FFN host readback and upload have no place
-		//   in a replay.
+		//   in a replay, nor a row table's ids read back and its rows read in
+		//   (rowsRun), whose wait a capture refuses.
 		// - History streamed from host memory: its uploads and waits are per call.
 		// - A failure injected at a block (jitllmfault): it lands between
 		//   blocks only when they are issued one by one.

@@ -129,10 +129,10 @@ func (g *devTier) formHeads() bool {
 // device was never given (its PrepHead was not asked). Callers hold g.mu.
 func (g *devTier) headVecsFor(h *nn.Head) ([]roleBuf, int, bool) {
 	if h == nil {
-		return g.bs.hVecs, 0, true
+		return g.homeScratch().hVecs, 0, true
 	}
 	if sameSrc(g.headVecSrc, h) {
-		return g.bs.hVecs, 0, true
+		return g.homeScratch().hVecs, 0, true
 	}
 	same := true
 	for _, hv := range g.headVecHost {
@@ -142,7 +142,7 @@ func (g *devTier) headVecsFor(h *nn.Head) ([]roleBuf, int, bool) {
 		}
 	}
 	if same {
-		return g.bs.hVecs, 0, true
+		return g.homeScratch().hVecs, 0, true
 	}
 	for i, a := range g.altVecs {
 		if sameSrc(a.src, h) {

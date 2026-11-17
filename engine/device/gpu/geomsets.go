@@ -114,6 +114,15 @@ func (g *devTier) useGeom(k geoKey) {
 	g.geoCur = k
 }
 
+// homeScratch is the home set's decode scratch, which holds the head,
+// whichever set is in use. Callers hold g.mu.
+func (g *devTier) homeScratch() *blockScratch {
+	if g.geoCur == (geoKey{}) {
+		return g.bs
+	}
+	return g.geoSets[geoKey{}].bs
+}
+
 // geoKeys is the keys of the sets not in use. Callers hold g.mu.
 func (g *devTier) geoKeys() []geoKey {
 	ks := make([]geoKey, 0, len(g.geoSets))

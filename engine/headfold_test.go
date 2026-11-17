@@ -22,10 +22,12 @@ import (
 // its rows. Stats.HeadFolds must move on the folded arm only. gemma-2-2b
 // carries a final softcap, which the fold must apply too; synth-gemma3n and
 // synth-qwen4exp a residual of several streams, every plane's last row the
-// folded head's.
+// folded head's. synth-qwen4exp's last block and synth-gemma4-e's run in a
+// scratch set of their own geometry (a selecting block's, a feed-forward
+// width's), whose chunk folds into the head's set.
 func TestPrefillFoldsTheHead(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "gemma-2-2b-it-Q4_K_M",
-		"synth-gemma3n", "synth-qwen4exp"} {
+		"synth-gemma3n", "synth-qwen4exp", "synth-gemma4-e"} {
 		t.Run(name, func(t *testing.T) {
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) { foldsTheHead(t, name, spec) })
@@ -61,7 +63,7 @@ func foldsTheHead(t *testing.T, name, spec string) {
 	}
 	ids = ids[:700]
 
-	run := func(fold bool) (logits []float32, toks []int32, folds int) {
+	run := func(fold bool) (logits []float32, toks []int32, folds int, gs gpu.Stats) {
 		st := testInstance(t, m, len(ids)+16, instOpts...)
 		defer st.Close()
 		st.SetDevice(g)
@@ -83,7 +85,8 @@ func foldsTheHead(t *testing.T, name, spec string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		folds = g.Stats().HeadFolds - before
+		gs = g.Stats()
+		folds = gs.HeadFolds - before
 		if st.DeviceDemotions() != 0 {
 			t.Fatalf("the device demoted during the prefill: %s", g.Err())
 		}
@@ -96,10 +99,10 @@ func foldsTheHead(t *testing.T, name, spec string) {
 			}
 			next = Greedy(lg)
 		}
-		return logits, toks, folds
+		return logits, toks, folds, gs
 	}
-	want, wantToks, tailFolds := run(false)
-	got, gotToks, folds := run(true)
+	want, wantToks, tailFolds, _ := run(false)
+	got, gotToks, folds, gs := run(true)
 	if tailFolds != 0 || folds == 0 {
 		// The fold rides a batched chunk, whose scratch the device reserves at
 		// placement (tier/scratch.go): a card the model nearly fills
@@ -107,7 +110,7 @@ func foldsTheHead(t *testing.T, name, spec string) {
 		// a row at a time with nothing to fold.
 		t.Fatalf("folds: %d on the tail-call arm, %d on the folded one -- the arms are not two arms "+
 			"(%d chunk(s) split, %d bytes of scratch for %d rows: %s)", tailFolds, folds,
-			g.Stats().PromptSplits, g.Stats().ScratchBytes, g.Stats().ReservedPrompt, g.Err())
+			gs.PromptSplits, gs.ScratchBytes, gs.ReservedPrompt, g.Err())
 	}
 	var num, den float64
 	for i := range want {
