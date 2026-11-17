@@ -43,6 +43,8 @@ func migrationFor(v uint32, st Stating) func(path string) error {
 		return migrate29
 	case 30:
 		return func(path string) error { return migrate30(path, st) }
+	case 31:
+		return migrate31
 	}
 	return nil
 }
@@ -181,6 +183,20 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// migrate31 is version 31 to 32. v32 added PrePattern, a pre-tokenizer stage
+// that is its Split's regex, carried in the vocab record's last tail: a stage
+// kind no v31 reader knew. A v31 container's stages are kinds every v32
+// reader runs (as the patterns they stand for), and nothing it holds moved or
+// changed meaning, so only the version word changes, in place.
+func migrate31(path string) error {
+	f, err := openAt(path, 31)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return setVersion(path, 32)
 }
 
 // migrate30 is version 30 to 31. v31's config record names no

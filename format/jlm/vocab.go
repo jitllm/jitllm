@@ -101,9 +101,7 @@ const (
 	// pattern engine. The pattern and the invert flag travel in the vocab
 	// record's last optional tail, after a tool form that is then always
 	// written, empty when the model has none. A reader that predates the kind
-	// reads that empty tool form as JSON and fails to open the container;
-	// given a tool form, it skips the tail and splits by its own table row
-	// for PreName.
+	// refuses the container by its version (v32).
 	PrePattern PreOpKind = 12
 )
 
