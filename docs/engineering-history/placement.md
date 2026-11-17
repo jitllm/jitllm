@@ -4836,3 +4836,24 @@ its page-out freed (a stale slot), the card faults (illegal memory access)
 and hands its blocks back. On a card with room the projection is a page no
 page-in wants: TestDecodeDoesNotAllocate's streamed-head arm, olmoe-1b-7b,
 0 engine allocations over 64 warm tokens.
+
+## A split-geometry model's wide prompt on two cards
+
+GPU.pieces runs a prompt chunk wider than a submission over blocks at two
+geometries, each piece through every run before the next. No gate reached
+it: synth-gemma4-e with every block on two cards (placed [2 4]) took a
+1300-row prompt in no pipelined piece and no split piece. A probe that
+logged each call found why: the card holding blocks 0 and 1 answered
+ChunkRows 1, so the prompt ran as 1300 one-row calls. Its blocks sit in the
+sliding layers' geometry set while the home set, holding none of them and
+reserving no prompt width, was the set in use, and promptOneRow read the
+width of the set in use. It now asks each set holding a placed causal
+block for that set's width (setPromptW).
+
+With the chunk wide, the path the open question had parked was reached and
+was wrong as it said: GPU.pieces cut the per-layer inputs and settled the
+embedding promise of the device's own session, so a second instance's
+1300-token prompt stood at NMSE 1.245 from the CPU's, its greedy token
+another. On the calling session's rows (sideOf, sideAtOf, realEmbedOf), as
+GPU.phased takes them, the same prompt runs in 15 pieces at NMSE 8.3e-7,
+one card's 8.1e-7 (TestSplitPiecesReadTheirSessionsRows, Stats.SplitPieces).
