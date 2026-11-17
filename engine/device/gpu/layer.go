@@ -5592,8 +5592,8 @@ func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratc
 		return err
 	}
 	for k := range staged {
-		g.rows.takeIn[0], g.rows.takeOut[0] = xs[k], staged[k]
-		if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
+		g.takeIn[0], g.takeOut[0] = xs[k], staged[k]
+		if err := tk.run(g, lc, tk.inst, g.takeIn[:], g.takeOut[:]); err != nil {
 			return err
 		}
 	}

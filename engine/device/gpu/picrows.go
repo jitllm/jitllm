@@ -41,11 +41,6 @@ type rowsState struct {
 	// at is the view the call is the session of (see embRead.at).
 	at        *devTier
 	ins, outs [1]backend.Buf
-	// headX is a head's one input, the residual of one plane
-	// (headIns).
-	headX [1]backend.Buf
-	// takeIn and takeOut are the folded head's row take's (servedRowTake).
-	takeIn, takeOut [1]backend.Buf
 }
 
 // RunRows runs p over a picture's live rows on the card holding the

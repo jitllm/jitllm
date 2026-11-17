@@ -72,8 +72,8 @@ func (g *devTier) foldTake(lc *launcher, bs, hb *blockScratch, rows int) error {
 	}
 	ns := bs.p.Streams()
 	if ns == 1 {
-		g.rows.takeIn[0], g.rows.takeOut[0] = bs.x, hb.x
-		return tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:])
+		g.takeIn[0], g.takeOut[0] = bs.x, hb.x
+		return tk.run(g, lc, tk.inst, g.takeIn[:], g.takeOut[:])
 	}
 	_, src, err := bs.servedStreams(rows, ns)
 	if err != nil {
@@ -84,8 +84,8 @@ func (g *devTier) foldTake(lc *launcher, bs, hb *blockScratch, rows int) error {
 		return err
 	}
 	for k := range ns {
-		g.rows.takeIn[0], g.rows.takeOut[0] = src[k], dst[k]
-		if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
+		g.takeIn[0], g.takeOut[0] = src[k], dst[k]
+		if err := tk.run(g, lc, tk.inst, g.takeIn[:], g.takeOut[:]); err != nil {
 			return err
 		}
 	}
@@ -96,8 +96,8 @@ func (g *devTier) foldTake(lc *launcher, bs, hb *blockScratch, rows int) error {
 // for one plane, each plane's view of it otherwise.
 func (g *devTier) headIns(bs *blockScratch, rows int) ([]backend.Buf, error) {
 	if bs.p.Streams() == 1 {
-		g.rows.headX[0] = bs.x
-		return g.rows.headX[:], nil
+		g.headX[0] = bs.x
+		return g.headX[:], nil
 	}
 	_, out, err := bs.servedStreams(rows, bs.p.Streams())
 	return out, err

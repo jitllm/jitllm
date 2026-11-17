@@ -153,6 +153,10 @@ type devSess struct {
 	// staging bytes; see submitArgs and stagingBytes.
 	sub      submitArgs
 	subBytes stagingBytes
+	// headX is the head's one input, the residual of one plane (headIns),
+	// and takeIn and takeOut a row take's (servedRowTake): bound by a
+	// submission that runs beside other sessions', so the session's own.
+	headX, takeIn, takeOut [1]backend.Buf
 	// launchTo is the submission's launch target; see launcher.
 	launchTo launchTo
 	// recDescW is recDesc's words between submissions, recDescC the
