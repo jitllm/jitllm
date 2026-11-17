@@ -410,30 +410,23 @@ func TestNativeRefusesAPictureTheSameWay(t *testing.T) {
 	}
 }
 
-// TestNativeConstraintsAreOneEach: a response_format, a grammar and a
-// json_schema are one constraint each, and a forced tool call is a fourth.
+// TestNativeConstraintsAreOneEach: a response_format and a json_schema are
+// one constraint each, and a forced tool call is a third.
 func TestNativeConstraintsAreOneEach(t *testing.T) {
 	p := newPair(t)
 	rf := &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_JSON_OBJECT}
-	for name, mod := range map[string]func(*v1.GenerateRequest, *v1.ChatPrompt){
-		"response_format and grammar": func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
-			m.ResponseFormat, m.Grammar = rf, `root ::= "a"`
-		},
-		"response_format and json_schema": func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
-			m.ResponseFormat, m.JsonSchema = rf, `{"type":"object"}`
-		},
-	} {
-		_, err := p.viaConnect(t, chat(parityMessages(), mod))
-		ce := wantCode(t, name, err, connect.CodeInvalidArgument)
-		if !strings.Contains(ce.Message(), "one constraint each") {
-			t.Fatalf("%s: %q", name, ce.Message())
-		}
+	_, err := p.viaConnect(t, chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
+		m.ResponseFormat, m.JsonSchema = rf, `{"type":"object"}`
+	}))
+	ce := wantCode(t, "response_format and json_schema", err, connect.CodeInvalidArgument)
+	if !strings.Contains(ce.Message(), "one constraint each") {
+		t.Fatalf("response_format and json_schema: %q", ce.Message())
 	}
-	// text constrains nothing, so it sits beside a grammar.
+	// text constrains nothing, so it sits beside a json_schema.
 	if _, err := p.viaConnect(t, chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
-		m.ResponseFormat, m.Grammar = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_TEXT}, `root ::= "a"`
+		m.ResponseFormat, m.JsonSchema = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_TEXT}, `{"enum":["a"]}`
 	})); err != nil {
-		t.Fatalf("text beside a grammar: %v", err)
+		t.Fatalf("text beside a json_schema: %v", err)
 	}
 }
 

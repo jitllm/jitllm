@@ -157,17 +157,18 @@ message GenerateRequest {
   // Speculative decoding for this generate; unset takes the session's.
   SpeculationParams speculation = 30;
 
-  // Structured output: the reply is a sentence of this GBNF grammar
-  // (llama.cpp's format, root rule `root`), and ends where it does. A
+  // 31 held grammar text; native structured output is JSON Schema, and grammar
+  // text is taken by the compatibility endpoints alone.
+  reserved 31;
+  reserved "grammar";
+  // Structured output: the reply is a JSON value valid under this JSON Schema
+  // (2020-12), compiled by jitllm's grammar compiler, and ends where the value
+  // does. A keyword the compiler does not build is refused by name. A
   // constrained generate runs alone and without speculation.
-  string grammar = 31;
-  // Structured output by JSON Schema, compiled to a grammar: the subset
-  // llama.cpp's json-schema-to-grammar builds, anything else refused by
-  // name. Not with `grammar`.
   string json_schema = 32;
 
-  // The OpenAI API's response_format. Not with `grammar` or `json_schema`, and
-  // not with a forced tool call: each is one constraint.
+  // The OpenAI API's response_format. Not with `json_schema`, and not with a
+  // forced tool call: each is one constraint.
   ResponseFormat response_format = 33;
 
   // The number of continuations of one prompt (the API's `n`), 0 or 1 for one.

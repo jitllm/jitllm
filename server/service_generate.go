@@ -210,10 +210,8 @@ func generateOptionsWith(ctx context.Context, m *v1.GenerateRequest, p ImagePoli
 		return o, connectErr(err)
 	}
 	switch {
-	case m.Grammar != "" && m.JsonSchema != "":
-		return o, invalid("generate: grammar and json_schema are one constraint each; give one")
-	case rf != "" && (m.Grammar != "" || m.JsonSchema != ""):
-		return o, invalid("generate: response_format, grammar and json_schema are one constraint each; give one")
+	case rf != "" && m.JsonSchema != "":
+		return o, invalid("generate: response_format and json_schema are one constraint each; give one")
 	case rf != "":
 		o.Grammar = rf
 	case m.JsonSchema != "":
@@ -222,8 +220,6 @@ func generateOptionsWith(ctx context.Context, m *v1.GenerateRequest, p ImagePoli
 			return o, invalid("generate: json_schema: %v", err)
 		}
 		o.Grammar = g
-	default:
-		o.Grammar = m.Grammar
 	}
 	switch in := m.Prompt.GetInput().(type) {
 	case *v1.PromptInput_Text:

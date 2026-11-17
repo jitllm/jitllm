@@ -155,10 +155,13 @@ interrupted is reported failed.
 
 Structured output: OpenAI's `response_format` (`json_object`, or
 `json_schema` with its `schema`) on `/v1/chat/completions` and
-`/v1/completions`, and `grammar` (GBNF) or `json_schema` on the Connect
-`GenerateRequest`. Every sampled token keeps the reply inside the grammar and
-the reply ends where the grammar does. A schema keyword the converter does not
-build (`pattern`, `format`, numeric bounds, `allOf`, ...) is a 400 naming it;
+`/v1/completions`, and `json_schema` (JSON Schema 2020-12, compiled by
+`grammar.FromJSONSchema`) on the Connect `GenerateRequest`; grammar text
+(`grammar`) is taken by the compatibility endpoints alone.
+Every sampled token keeps the reply inside the grammar and the reply ends
+where the grammar does. A schema keyword the compiler does not build
+(`uniqueItems`, a number's bounds, `multipleOf`, a oneOf whose branches may
+overlap, ...) is a 400 naming it;
 the supported subset is in
 [model-correctness.md](engineering-history/model-correctness.md),
 "grammar". A constrained generate decodes alone and without
@@ -313,7 +316,7 @@ the same text, finish reason, usage, log-probabilities and tool calls.
 | assistant `tool_calls`, `tool` turns | `ChatMessage.tool_calls`, `tool_call_id`, `name` | |
 | reply `tool_calls` | `GenerateToolCalls` events; `CompleteChoice.tool_calls` | each call is sent when its markup closes; the text carries none of it |
 | `finish_reason` `stop`, `length`, `tool_calls` | `FinishReason` `STOP` or `EOS`, `MAX_TOKENS`, `TOOL_CALLS` | |
-| `response_format` `text`, `json_object`, `json_schema` | `ResponseFormat.type`, `json_schema`, `name`, `strict` | `strict` is accepted and always so: the grammar always holds the reply; with `grammar`, `json_schema` or a forced tool call it is refused as one constraint each |
+| `response_format` `text`, `json_object`, `json_schema` | `ResponseFormat.type`, `json_schema`, `name`, `strict` | `strict` is accepted and always so: the grammar always holds the reply; with `json_schema` or a forced tool call it is refused as one constraint each |
 | `logprobs`, `top_logprobs` | `logprobs`, `top_logprobs` (0 to 20) | `GenerateToken.logprob`, `CompleteChoice.logprobs`; the raw distribution; refused with `echo_prompt` |
 | `/v1/completions` `logprobs: N` | `logprobs: true`, `top_logprobs: N` | |
 | `n` (1 to 128) | `n` | `GenerateResponse.choice`, `CompleteResponse.choices`; choice `i` samples with seed + `i` |

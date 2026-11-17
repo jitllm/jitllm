@@ -1743,7 +1743,8 @@ type GenerateOptions struct {
 	DecodeGroups int
 	// Speculation overrides the session's; nil takes it.
 	Speculation *Speculation
-	// Grammar constrains the output to GBNF text (grammar.go): every
+	// Grammar constrains the output to a grammar's text (grammar.Parse, the
+	// compiled JSON Schema or a compatibility endpoint's grammar): every
 	// sampled token keeps it inside the grammar, and the reply ends where the
 	// grammar does. A constrained generate decodes alone, plainly: not as a
 	// row of the step loop, and not speculatively.

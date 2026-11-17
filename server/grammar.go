@@ -14,8 +14,9 @@ import (
 	"github.com/jitllm/jitllm/tok"
 )
 
-// Structured output: a generate constrained to a grammar (GBNF, or a JSON
-// Schema compiled to it). Each step the tokens the grammar does not allow go
+// Structured output: a generate constrained to a grammar (a JSON Schema
+// compiled by grammar.FromJSONSchema, or the grammar text a compatibility
+// endpoint takes). Each step the tokens the grammar does not allow go
 // to -inf in a copy of the logits before the sampler reads them, and the
 // sampled token advances the grammar. A grammar is compiled, and its states'
 // allowed sets kept, once per (model, grammar text): JSON revisits its states,
