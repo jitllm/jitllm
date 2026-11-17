@@ -49,15 +49,9 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 	if err != nil {
 		return d, err
 	}
-	code, err := e.readKernel()
-	if err != nil {
-		return d, err
-	}
-	read, err := h.Map(code)
-	if err != nil {
-		return d, err
-	}
-	defer read.Close()
+	fm := newFormer(h)
+	read := &reader{fm: fm, forms: map[int]*formed{}}
+	defer read.close()
 	chase, err := e.chaseKernel()
 	if err != nil {
 		return d, err
@@ -67,7 +61,6 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		return d, err
 	}
 	defer walk.Close()
-	fm := newFormer(h)
 	largest := sizes[len(sizes)-1].bytes
 	evict := make([]byte, 2*largest)
 	nearer := int64(0)
@@ -87,25 +80,44 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		if err != nil {
 			return d, err
 		}
-		rate := readRate(read, set, 1)
-		d.Caches[l] = cost.Cache{Bytes: c.bytes, Rate: cost.Rate{Thread: rate, Total: readRate(read, all, workers)}, Latency: lat}
+		rate, err := readRate(read, set, 1)
+		if err != nil {
+			return d, err
+		}
+		total, err := readRate(read, all, workers)
+		if err != nil {
+			return d, err
+		}
+		d.Caches[l] = cost.Cache{Bytes: c.bytes, Rate: cost.Rate{Thread: rate, Total: total}, Latency: lat}
 		if nearer > 0 {
-			d.Caches[l].Start = streamStart(read, rate, evict[:2*nearer])
+			if d.Caches[l].Start, err = streamStart(read, rate, evict[:2*nearer]); err != nil {
+				return d, err
+			}
 		}
 		nearer = c.bytes
 	}
 	const dram = 512 << 20
-	d.Thread = readRate(read, dram/int64(workers), 1)
-	d.Bandwidth = readRate(read, dram/int64(workers), workers)
-	d.Start = streamStart(read, d.Thread, evict)
+	if d.Thread, err = readRate(read, dram/int64(workers), 1); err != nil {
+		return d, err
+	}
+	if d.Bandwidth, err = readRate(read, dram/int64(workers), workers); err != nil {
+		return d, err
+	}
+	if d.Start, err = streamStart(read, d.Thread, evict); err != nil {
+		return d, err
+	}
 	for l := 1; l < len(sizes) && l < len(d.Caches); l++ {
 		c := d.Caches[l]
 		rate, start := d.Thread, d.Start
 		if l+1 < len(sizes) && l+1 < len(d.Caches) {
 			rate, start = d.Caches[l+1].Rate.Thread, d.Caches[l+1].Start
 		}
-		d.Caches[l].Retain = retention(read, c, rate, start, evict)
-		d.Caches[l].Cycle = cycling(read, c, rate, evict)
+		if d.Caches[l].Retain, err = retention(read, c, rate, start, evict); err != nil {
+			return d, err
+		}
+		if d.Caches[l].Cycle, err = cycling(read, c, rate, evict); err != nil {
+			return d, err
+		}
 	}
 	if d.Latency, err = chaseLatency(walk, dram); err != nil {
 		return d, err
@@ -143,7 +155,7 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		d.Delay[cl] = 1 / issueRate(k, 8, 1)
 		k.Close()
 	}
-	code, err = e.mixKernel()
+	code, err := e.mixKernel()
 	if err != nil {
 		return d, err
 	}
@@ -207,21 +219,27 @@ func chaseLatency(k *cpu.Code, set int64) (float64, error) {
 // made, the buffer read again and timed, its time placed between all of it
 // served by c and all of it by the level beyond, which serves at rate
 // after start.
-func retention(k *cpu.Code, c cost.Cache, rate, start float64, evict []byte) float64 {
+func retention(r *reader, c cost.Cache, rate, start float64, evict []byte) (float64, error) {
 	n := max(256, c.Bytes/8&^255)
 	buf := make([]byte, n)
 	for i := range buf {
 		buf[i] = byte(i)
 	}
-	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[0]))), uint64(n / 256)}
-	out := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(min(int64(len(evict)), 2*c.Bytes) / 256)}
+	at, err := r.on(buf)
+	if err != nil {
+		return 0, err
+	}
+	out, err := r.on(evict[:min(int64(len(evict)), 2*c.Bytes)&^255])
+	if err != nil {
+		return 0, err
+	}
 	clock := clockCost()
 	var times []float64
 	for range 4 * rounds {
-		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
-		k.Call((*cpu.Args)(unsafe.Pointer(&out[0])))
+		at.run()
+		out.run()
 		t0 := time.Now()
-		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		at.run()
 		times = append(times, time.Since(t0).Seconds()-clock)
 	}
 	runtime.KeepAlive(buf)
@@ -229,31 +247,34 @@ func retention(k *cpu.Code, c cost.Cache, rate, start float64, evict []byte) flo
 	hit := float64(n)/c.Rate.Thread + c.Start
 	miss := float64(n)/rate + start
 	if miss <= hit {
-		return 0
+		return 0, nil
 	}
-	return min(1, max(0, (miss-times[len(times)/2])/(miss-hit)))
+	return min(1, max(0, (miss-times[len(times)/2])/(miss-hit))), nil
 }
 
 // cycling is the share of cache c's capacity a buffer twice its size,
 // read over and over, finds in it: each pass's time placed between all of
 // it served by c and all of it by the level beyond, at rate.
-func cycling(k *cpu.Code, c cost.Cache, rate float64, evict []byte) float64 {
+func cycling(r *reader, c cost.Cache, rate float64, evict []byte) (float64, error) {
 	n := min(int64(len(evict)), 2*c.Bytes) &^ 255
-	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(n / 256)}
+	at, err := r.on(evict[:n])
+	if err != nil {
+		return 0, err
+	}
 	var times []float64
 	for range 2 * rounds {
 		t0 := time.Now()
-		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		at.run()
 		times = append(times, time.Since(t0).Seconds())
 	}
 	runtime.KeepAlive(evict)
 	slices.Sort(times)
 	hit, miss := float64(n)/c.Rate.Thread, float64(n)/rate
 	if miss <= hit {
-		return 0
+		return 0, nil
 	}
 	h := min(1, max(0, (miss-times[len(times)/2])/(miss-hit)))
-	return h * float64(n) / float64(c.Bytes)
+	return h * float64(n) / float64(c.Bytes), nil
 }
 
 // clockCost is the seconds reading the clock twice adds to what it times.
@@ -271,7 +292,7 @@ func clockCost() float64 {
 // bytes at the level's rate: a 32 KB buffer read, then evict read so the
 // buffer leaves every nearer level, then the buffer read again and timed,
 // the prefetchers starting cold on it.
-func streamStart(k *cpu.Code, rate float64, evict []byte) float64 {
+func streamStart(r *reader, rate float64, evict []byte) (float64, error) {
 	const n = 32 << 10
 	buf := make([]byte, n)
 	for i := range buf {
@@ -280,44 +301,55 @@ func streamStart(k *cpu.Code, rate float64, evict []byte) float64 {
 	for i := range evict {
 		evict[i] = byte(i)
 	}
-	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[0]))), n / 256}
-	out := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(len(evict) / 256)}
+	at, err := r.on(buf)
+	if err != nil {
+		return 0, err
+	}
+	out, err := r.on(evict[:len(evict)&^255])
+	if err != nil {
+		return 0, err
+	}
 	clock := clockCost()
 	var times []float64
 	for range 4 * rounds {
-		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
-		k.Call((*cpu.Args)(unsafe.Pointer(&out[0])))
+		at.run()
+		out.run()
 		t0 := time.Now()
-		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		at.run()
 		times = append(times, time.Since(t0).Seconds()-clock)
 	}
 	runtime.KeepAlive(buf)
 	runtime.KeepAlive(evict)
 	slices.Sort(times)
-	return max(0, times[len(times)/2]-n/rate)
+	return max(0, times[len(times)/2]-n/rate), nil
 }
 
 // readRate is the bytes a second threads reading set bytes each, over and
-// over, get together: the median of the timed rounds.
-func readRate(k *cpu.Code, set int64, threads int) float64 {
+// over, get together through the composed sum: the median of the timed
+// rounds.
+func readRate(r *reader, set int64, threads int) (float64, error) {
 	set = max(256, set&^255)
 	reps := max(1, int((256<<20)/set))
 	bufs := make([][]byte, threads)
+	runs := make([]*bound, threads)
 	for t := range bufs {
 		bufs[t] = make([]byte, set)
 		for i := range bufs[t] {
 			bufs[t][i] = byte(i)
 		}
+		var err error
+		if runs[t], err = r.on(bufs[t]); err != nil {
+			return 0, err
+		}
 	}
 	run := func(t int) {
-		block := [2]uint64{uint64(uintptr(unsafe.Pointer(&bufs[t][0]))), uint64(set / 256)}
 		for range reps {
-			k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
+			runs[t].run()
 		}
 		runtime.KeepAlive(bufs[t])
 	}
 	secs := parallel(threads, run)
-	return float64(set) * float64(reps) * float64(threads) / secs
+	return float64(set) * float64(reps) * float64(threads) / secs, nil
 }
 
 // issueRate is the instructions a second threads issue together, each trip

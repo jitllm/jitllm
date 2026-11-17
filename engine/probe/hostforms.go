@@ -12,6 +12,61 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
+// readGraph sums a row of n words: the composer vectorizes the reduction
+// and unrolls it, a sum for each copy, so the loads bind the sum and not
+// the adds. The words are integers because a core issues integer adds on
+// more ports than float ones (Broadwell adds floats on one), and a read's
+// rate is its loads'.
+func readGraph(n int) *graph.Graph {
+	b := graph.New()
+	x := b.In("x", n)
+	b.G.Values[x].Elem = graph.ElemU32
+	s := b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: "sum", Width: 1}}, nil,
+		graph.Attrs{Fn: graph.MapAdd, Span: n}, nil, nil)[0]
+	b.G.Values[s].Elem = graph.ElemU32
+	b.Out(s)
+	return b.G
+}
+
+// reader reads buffers through the composed sum, one form a buffer size.
+type reader struct {
+	fm    former
+	forms map[int]*formed
+}
+
+// on is a run reading buf whole, a whole number of words; the word it
+// stores the sum in is the last it keeps.
+func (r *reader) on(buf []byte) (*bound, error) {
+	n := len(buf) / 4
+	f, ok := r.forms[n]
+	if !ok {
+		var err error
+		if f, err = r.fm.form(readGraph(n), 1); err != nil {
+			return nil, err
+		}
+		if f.count(cost.ClassMem) == 0 {
+			f.close()
+			return nil, fmt.Errorf("probe: the read form issues no load")
+		}
+		r.forms[n] = f
+	}
+	// A line of its own: threads storing their sums on one line would pass
+	// it between cores every call.
+	out := make([]uint32, 16)
+	b, err := f.bind(map[graph.ValueID]unsafe.Pointer{0: unsafe.Pointer(&buf[0]), 1: unsafe.Pointer(&out[0])})
+	if err != nil {
+		return nil, err
+	}
+	b.keep = append(b.keep, out)
+	return b, nil
+}
+
+func (r *reader) close() {
+	for _, f := range r.forms {
+		f.close()
+	}
+}
+
 // chainWidth is a chain's row, one vector of the composer's, and
 // chainDepth its terms: deep enough that a call's own cost is a small part
 // of the chain's.

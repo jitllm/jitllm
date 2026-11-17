@@ -19,30 +19,6 @@ func (e emitter) emptyKernel() ([]byte, error) {
 	return a.Bytes()
 }
 
-// readKernel sums words [0] for [1] blocks of 256 bytes: sixteen loads a
-// trip into sixteen accumulators, so the loads, not the adds, bind it.
-func (e emitter) readKernel() ([]byte, error) {
-	var a a64.A64
-	a.LDRx(a64.X1, a64.X0, 0)
-	a.LDRx(a64.X2, a64.X0, 8)
-	for r := range 16 {
-		a.MOVIzero(a64.V0 + a64.VReg(r))
-	}
-	top := a.Label()
-	a.Bind(top)
-	for r := range 16 {
-		a.LDRq(a64.V16+a64.VReg(r), a64.X1, int32(16*r))
-	}
-	for r := range 16 {
-		a.FADD4s(a64.V0+a64.VReg(r), a64.V0+a64.VReg(r), a64.V16+a64.VReg(r))
-	}
-	a.ADDimm(a64.X1, a64.X1, 256)
-	a.SUBimm(a64.X2, a64.X2, 1)
-	a.CBNZ(a64.X2, top)
-	a.RET()
-	return a.Bytes()
-}
-
 // chaseKernel follows [1] pointers from the address in [0], each read
 // waiting for the one before.
 func (e emitter) chaseKernel() ([]byte, error) {

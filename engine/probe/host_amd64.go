@@ -62,36 +62,6 @@ func (e emitter) done(a *x86.Buf) {
 	a.RET()
 }
 
-// readKernel sums words [0] for [1] blocks of 256 bytes: eight loads a
-// trip into eight accumulators (sixteen on SSE, whose vectors are half as
-// wide), so the loads, not the adds, bind it.
-func (e emitter) readKernel() ([]byte, error) {
-	a := e.buf()
-	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 0))
-	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 8))
-	for r := range 8 {
-		e.zero(a, x86.Y0+x86.Reg(r))
-	}
-	top := a.Label()
-	a.Bind(top)
-	if e.sse {
-		for r := range 16 {
-			acc, tmp := x86.Y0+x86.Reg(r%8), x86.Y8+x86.Reg(r%8)
-			a.LDDQU(tmp, x86.At(x86.RSI, int32(16*r)))
-			a.ADDPS(acc, acc, tmp)
-		}
-	} else {
-		for r := range 8 {
-			a.VADDPSMem(x86.Y0+x86.Reg(r), x86.Y0+x86.Reg(r), x86.At(x86.RSI, int32(32*r)))
-		}
-	}
-	a.ADDimm(x86.RSI, 256)
-	a.DEC(x86.RCX)
-	a.JNZ(top)
-	e.done(a)
-	return a.Bytes()
-}
-
 // chaseKernel follows [1] pointers from the address in [0], each read
 // waiting for the one before.
 func (e emitter) chaseKernel() ([]byte, error) {
