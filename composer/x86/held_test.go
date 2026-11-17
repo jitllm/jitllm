@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestReloadsAreElidedOnlyWhileHeld holds MOVLoad's elision to a register
@@ -110,6 +112,7 @@ func TestReloadsAreElidedOnlyWhileHeld(t *testing.T) {
 // the loads held, to a load or a computation: a method named as a store
 // goes through vopStore.
 func TestNoStoreTakesTheLoadPath(t *testing.T) {
+	testmodels.SourceTree(t)
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
