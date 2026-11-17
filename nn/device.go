@@ -698,21 +698,12 @@ type LayerPlan struct {
 // none. A block is recurrent when Conv is set; whether it attends beside its
 // recurrence is its graph's (an op appending to a history).
 type RecurrentPlan struct {
-	Conv      int // causal convolution width, in positions
-	Chans     int // convolved channels
 	StateLen  int // the recurrence's state and any tail its graph states, floats per sequence, CONSTANT in context
-	ConvState int // (Conv-1)*Chans floats, per sequence
-	// ChanDecay is Kimi Delta Attention rather than qwen3next's gated delta
-	// rule: the state decays at a rate per channel instead of one per head,
-	// both gates come off a low-rank bottleneck, and the output gate is a
-	// sigmoid where qwen3next's is a SiLU. The geometry above is identical for
-	// both, so no shape field can say it.
-	ChanDecay bool
-	// Scan is the per-element selective scan (jlm.LayerScan): each channel's
-	// own state row, B and C shared, the decay a vector exp(dt*A) per
-	// channel.
-	Scan bool
+	ConvState int // the convolution's window, floats per sequence
 }
+
+// Keeps reports whether the block keeps a recurrent state.
+func (r RecurrentPlan) Keeps() bool { return r.StateLen > 0 || r.ConvState > 0 }
 
 // LayerDevice runs a whole transformer block without returning the residual
 // stream to the host between its matvecs.

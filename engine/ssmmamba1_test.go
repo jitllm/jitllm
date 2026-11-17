@@ -84,10 +84,10 @@ func mamba1Violations() []c6Violation {
 			return ssdScaled(m, jlm.RoleSSMDtBias, func(v []float32) { clear(v) })
 		}},
 		{"B and C exchanged", func(m *model.Model) func() {
-			return eachLayer(m, func(l *model.Layer) { l.SsmXB, l.SsmXC = l.SsmXC, l.SsmXB })
+			return eachSwap(m, jlm.RoleSSMXB, jlm.RoleSSMXC)
 		}},
 		{"one decay rate a channel (Mamba-2's form)", func(m *model.Model) func() {
-			n := m.Cfg.Delta().KDim
+			n := deltaOf(m.Cfg).KDim
 			return ssdScaled(m, jlm.RoleSSMA, func(v []float32) {
 				for j := 0; j < len(v); j += n {
 					for i := 1; i < n; i++ {

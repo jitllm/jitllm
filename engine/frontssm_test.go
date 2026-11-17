@@ -24,7 +24,7 @@ func TestFrontStatesTheStateSpaceMixers(t *testing.T) {
 	for _, fx := range ssmFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			m := frontModel(t, fx.name+".gguf")
-			dg := m.Cfg.Delta()
+			dg := deltaOf(m.Cfg)
 			byKind := map[jlm.LayerKind][]int{}
 			for li := range m.Cfg.NLayer {
 				k := m.Cfg.LayerKind(li)

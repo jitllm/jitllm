@@ -102,7 +102,7 @@ func ssdScaled(m *model.Model, r jlm.Role, f func(v []float32)) func() {
 // F32 weights, whose rows are byte ranges.
 func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 	return func(m *model.Model) func() {
-		g := m.Cfg.Delta()
+		g := deltaOf(m.Cfg)
 		n := g.QkBytes
 		// A block a device took gave its host page up; the swap reads it.
 		fr := testFrames(t, m)
@@ -116,11 +116,8 @@ func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 			if l.Vector(jlm.RoleSSMD) == nil {
 				return
 			}
-			w := &l.Wq
-			if l.SsmIn.Rows != 0 {
-				w = &l.SsmIn
-			}
-			if w.Packed != nil || len(w.Data) != w.Rows*w.K*4 {
+			w := l.Matrix(jlm.RoleAttnQKV)
+			if w == nil || w.Packed != nil || len(w.Data) != w.Rows*w.K*4 {
 				t.Fatalf("ssdSwapBC needs an F32 mixed projection, have %v", w.Typ)
 			}
 			rb := w.K * 4

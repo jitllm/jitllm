@@ -306,7 +306,7 @@ func k3RealSelected(t *testing.T, m *model.Model) {
 	for i := range m.Layers {
 		l := &m.Layers[i]
 		rec := c.LayerKind(i).Recurrent()
-		ok = ok && (l.Matrix(jlm.RoleAttnGate) != nil && l.SsmGate.E == nil) == !rec && (l.SsmGate.E != nil) == rec && l.SsmGA.E == nil &&
+		ok = ok && l.Matrix(jlm.RoleAttnGate) != nil && l.Matrix(jlm.RoleSSMGA) == nil && (l.Matrix(jlm.RoleSSMFA) != nil) == rec &&
 			(l.Matrix(jlm.RoleFFNRoutedDown) != nil) == (i >= 1)
 	}
 	if !ok {

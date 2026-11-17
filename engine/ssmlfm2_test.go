@@ -28,8 +28,8 @@ func lfm2Fixtures() []struct {
 				l := &m.Layers[i]
 				ok = ok && c.LayerKind(i).Recurrent() == conv && !l.NoFFN && l.Gate.E != nil
 				if conv {
-					ok = ok && c.LayerKind(i) == jlm.LayerShortConv && l.Wq.Rows == 64 && l.SsmGate.Rows == 64 &&
-						l.SsmBA.Rows == 64 && l.SsmOut.Rows == 64 && convTaps(l) == 3*64 && l.Vector(jlm.RoleSSMA) == nil
+					ok = ok && c.LayerKind(i) == jlm.LayerShortConv && matrixRows(l, jlm.RoleSCX) == 64 && matrixRows(l, jlm.RoleSCB) == 64 &&
+						matrixRows(l, jlm.RoleSCC) == 64 && matrixRows(l, jlm.RoleSSMOut) == 64 && convTaps(l) == 3*64 && l.Vector(jlm.RoleSSMA) == nil
 				}
 			}
 			return ok
@@ -51,18 +51,10 @@ func lfm2Fixtures() []struct {
 func lfm2Violations(bool) []c6Violation {
 	return []c6Violation{
 		{"B and C exchanged", func(m *model.Model) func() {
-			return eachLayer(m, func(l *model.Layer) {
-				if l.Matrix(jlm.RoleSSMConv1d) != nil {
-					l.SsmGate, l.SsmBA = l.SsmBA, l.SsmGate
-				}
-			})
+			return eachSwap(m, jlm.RoleSCB, jlm.RoleSCC)
 		}},
 		{"x and C exchanged (x gating after the convolution)", func(m *model.Model) func() {
-			return eachLayer(m, func(l *model.Layer) {
-				if l.Matrix(jlm.RoleSSMConv1d) != nil {
-					l.Wq, l.SsmBA = l.SsmBA, l.Wq
-				}
-			})
+			return eachSwap(m, jlm.RoleSCX, jlm.RoleSCC)
 		}},
 		{"the window's taps reversed", func(m *model.Model) func() {
 			var undo []func()

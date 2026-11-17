@@ -30,10 +30,7 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 	t.Cleanup(g.Close)
 	dt := g.devs[0]
 	p := pagePlan()
-	p.Recurrent = nn.RecurrentPlan{
-		Conv: 4, Chans: 96,
-		StateLen: 4 * 8 * 8, ConvState: 3 * 96,
-	}
+	p.Recurrent = nn.RecurrentPlan{StateLen: 4 * 8 * 8, ConvState: 3 * 96}
 	slot := uint64(2 * (p.Recurrent.StateLen + p.Recurrent.ConvState) * 4)
 	l0, l1 := &layer{linear: true, ok: true}, &layer{linear: true, ok: true}
 	dt.layers = map[int]*layer{0: l0, 1: l1}
@@ -210,10 +207,7 @@ func TestMigrateRecMovesOnlyItsSeat(t *testing.T) {
 func migrateRecCase(t *testing.T, dt *devTier, shared bool) {
 	dt.SharedRec = shared
 	p := pagePlan()
-	p.Recurrent = nn.RecurrentPlan{
-		Conv: 4, Chans: 97,
-		StateLen: 3 * 5 * 7, ConvState: 3 * 97,
-	}
+	p.Recurrent = nn.RecurrentPlan{StateLen: 3 * 5 * 7, ConvState: 3 * 97}
 	S, C := p.Recurrent.StateLen, p.Recurrent.ConvState
 	l := &layer{linear: true, ok: true}
 	dt.layers = map[int]*layer{0: l}

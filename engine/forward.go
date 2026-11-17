@@ -254,8 +254,10 @@ type Instance struct {
 	// declines counts, by reason, the blocks no device took. See DeviceDeclines.
 	declines map[string]int
 
-	// dg is the geometry of a hybrid's linear layers' recurrent state.
-	dg model.DeltaGeom
+	// recConv and recState are a hybrid's recurrent blocks' state for one
+	// sequence, as their stated graphs keep it: the convolution's window and
+	// the scan's slot, in floats (graph.Graph.RecurrentState).
+	recConv, recState int
 
 	// res keeps the hot experts resident and drops the rest; nil when the model
 	// fits its budget, which is every model but a large MoE on a small one.
@@ -680,11 +682,13 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	}
 	s.bpos = make([]int, 1)
 	s.rmarks = model.RopeMarks{}
-	s.allocRecurrent(1)
+	if err := s.allocRecurrent(); err != nil {
+		return nil, err
+	}
 
 	s.setPlace(routeLanes, g.dev.AttachExecution(nn.ExecutionSetup{Model: m.Id, Frames: fr,
 		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q,
-		Width: c.NEmbd, Seqs: 1, Streams: c.Streams(), ConvLen: s.dg.ConvStateLen(),
+		Width: c.NEmbd, Seqs: 1, Streams: c.Streams(), ConvLen: s.recConv,
 		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }}))
 	s.placeRange(routeLanes)
 	s.holdFrames()
@@ -1985,13 +1989,8 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.NExpert, plan.NExpertUsed, plan.NFFNShExp = 0, 0, 0
 	}
 	if c.LayerKind(li).Recurrent() {
-		g := c.Delta()
-		plan.Recurrent = nn.RecurrentPlan{
-			Conv: g.Conv, Chans: g.Chans,
-			StateLen: g.StateStride(), ConvState: g.ConvStateLen(),
-			ChanDecay: c.ChanDecay(),
-		}
-		plan.Recurrent.Scan = g.Scan
+		conv, state := s.m.Composing().BlockGraph(li).RecurrentState()
+		plan.Recurrent = nn.RecurrentPlan{StateLen: state, ConvState: conv}
 	}
 	plan.NStreams = c.Streams()
 	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {

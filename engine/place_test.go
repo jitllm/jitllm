@@ -31,9 +31,7 @@ func TestBlockReadBytesIsNotBlockSize(t *testing.T) {
 				t.Skip("no blocks")
 			}
 			l := &m.Layers[0]
-			size := model.TensorBytes(l.Wq) + model.TensorBytes(l.Wk) + model.TensorBytes(l.Wv) +
-				model.TensorBytes(l.Wo) + roleBytes(l, jlm.RoleRouter) +
-				model.TensorBytes(l.Gate) + model.TensorBytes(l.Up) + model.TensorBytes(l.Down)
+			size, exp := blockBytes(l)
 			read := m.BlockReadBytes(0)
 			if read == 0 || size == 0 {
 				t.Fatalf("read %d size %d: neither may be zero", read, size)
@@ -42,10 +40,9 @@ func TestBlockReadBytesIsNotBlockSize(t *testing.T) {
 				t.Fatalf("read %d exceeds size %d: a token cannot read more than the block holds", read, size)
 			}
 			c := m.Cfg
-			if c.MoE() {
+			if exp > 0 {
 				// The expert banks are the whole difference, so the ratio is
 				// pinned by the architecture rather than approximated.
-				exp := model.TensorBytes(l.Gate) + model.TensorBytes(l.Up) + model.TensorBytes(l.Down)
 				want := size - exp + exp/uint64(c.NExpert)*uint64(c.NExpertUsed)
 				if read != want {
 					t.Errorf("MoE read %d, want %d (%d of %d experts)", read, want, c.NExpertUsed, c.NExpert)
@@ -136,8 +133,7 @@ func TestMoEDiscountBuysMoreBlocks(t *testing.T) {
 		t.Skip("not a mixture of experts")
 	}
 	l := &m.Layers[0]
-	full := model.TensorBytes(l.Wq) + model.TensorBytes(l.Wk) + model.TensorBytes(l.Wv) + model.TensorBytes(l.Wo) +
-		roleBytes(l, jlm.RoleRouter) + model.TensorBytes(l.Gate) + model.TensorBytes(l.Up) + model.TensorBytes(l.Down)
+	full, _ := blockBytes(l)
 	head := m.HeadReadBytes()
 	// headReadBytes is zero on a tied embedding, and `head - seamCrossBytes` on
 	// uint64 would underflow to an astronomical budget, so refuse explicitly.
@@ -159,6 +155,19 @@ func TestMoEDiscountBuysMoreBlocks(t *testing.T) {
 	if got <= naive {
 		t.Errorf("read-priced %d blocks, size-priced %d: discounting the banks must buy more", got, naive)
 	}
+}
+
+// blockBytes is the bytes of every matrix block l stores, and of its routed
+// banks among them.
+func blockBytes(l *model.Layer) (all, banks uint64) {
+	for _, mt := range l.Mats {
+		b := model.TensorBytes(*mt.T)
+		all += b
+		if jlm.ExpertBank(mt.Role) {
+			banks += b
+		}
+	}
+	return all, banks
 }
 
 // roleBytes is the bytes of block l's matrix under r, 0 for none.

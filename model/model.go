@@ -749,30 +749,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 			out.scan = true
 		}
 	}
-	if out.scan {
-		for i, k := range c.LayerKinds {
-			if k.Recurrent() && k != jlm.LayerScan {
-				return nil, fmt.Errorf("model: layer %d is %v in a Mamba-1 model", i, k)
-			}
-		}
-	}
-	if out.shortConv {
-		for i, k := range c.LayerKinds {
-			if k.Recurrent() && k != jlm.LayerShortConv {
-				return nil, fmt.Errorf("model: layer %d is %v in a short-convolution model", i, k)
-			}
-		}
-	}
 	out.SSMNormGroups = max(int(c.SSM.Groups), 1)
-	// One recurrence a model: every recurrent layer is a gated delta rule or
-	// every one is Mamba-2's, since the two share one state geometry.
-	if out.ssd {
-		for i, k := range c.LayerKinds {
-			if k == jlm.LayerLinearAttn {
-				return nil, fmt.Errorf("model: layer %d is a gated delta rule in a Mamba-2 model", i)
-			}
-		}
-	}
 	if out.ResidualScale == 0 {
 		out.ResidualScale = 1
 	}
@@ -939,28 +916,6 @@ type Layer struct {
 	// gate, where it has one, is a vector in vecs.
 	ShGate, ShUp, ShDown Tensor
 
-	// The linear layer's weights. A hybrid's recurrent block projects the
-	// residual into one fused q|k|v vector, which lives in wq; the layer kind
-	// decides what reads it.
-	//
-	// ssmGate is the z projection whose SiLU gates the block's output; the full
-	// attention layers of the same model fold their gate into wq instead and
-	// activate it with sigmoid. nil on every non-hybrid.
-	SsmGate, SsmBA, SsmOut Tensor
-	// ssmIn is a Mamba-2 mixer's x|B|C projection on a block that also runs
-	// attention (Falcon-H1), where wq is the attention's query. Every other
-	// recurrent block carries it in wq; mixIn picks.
-	SsmIn Tensor
-	// ssmFA/ssmFB and ssmGA/ssmGB are Kimi Delta Attention's two low-rank
-	// gates: the forget gate, whose softplus becomes the per-channel decay,
-	// and the output gate that replaces ssmGate. nil on qwen3next, which has
-	// one matrix for the second and derives the first from ssmBA's interleaved
-	// alpha stream.
-	SsmFA, SsmFB, SsmGA, SsmGB Tensor
-	// ssmXDt, ssmXB and ssmXC are a Mamba-1 block's x_proj (the dt
-	// bottleneck, B and C, each of the convolved x), and ssmDtProj takes the
-	// bottleneck back up to the channels.
-	SsmXDt, SsmXB, SsmXC, SsmDtProj Tensor
 	// noFFN is a block that is its mixer alone: plain Mamba-2's, and a
 	// Nemotron-H mixer layer not followed by an MLP. It ends at the first
 	// residual on every entry point and every tier.
@@ -2315,16 +2270,11 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(i), -1)
 		}
 	}
-	// Mamba-1's dt rank is its x_proj's dt rows.
-	if cfg.Scan() {
-		for i, k := range c.Config().LayerKinds {
-			if e, ok := c.Find(jlm.RoleSSMXDt, int32(i), -1); ok && k == jlm.LayerScan {
-				cfg.DtRank = int(e.Dims[1])
-				break
-			}
-		}
-		if cfg.DtRank == 0 {
-			return nil, fmt.Errorf("model: a Mamba-1 model with no x_proj")
+	// The dt rank is the dt rows of the x projection a block stores.
+	for i := range c.Config().LayerKinds {
+		if e, ok := c.Find(jlm.RoleSSMXDt, int32(i), -1); ok {
+			cfg.DtRank = int(e.Dims[1])
+			break
 		}
 	}
 	m := &Model{Cfg: cfg}
@@ -2629,49 +2579,11 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			want[0] = bind{jlm.RoleAttnQB, &l.Wqb}
 			want = append([]bind{{jlm.RoleAttnQA, &l.Wqa}}, want...)
 		}
-		if linear {
-			head := []bind{
-				{jlm.RoleAttnQKV, &l.Wq},
-				{jlm.RoleSSMBA, &l.SsmBA},
-				{jlm.RoleSSMOut, &l.SsmOut},
-			}
-			// A block that attends as well keeps the attention four, and its
-			// mixer's projection goes beside them.
-			attends := cfg.LayerKind(i).Attends()
-			if attends {
-				head[0].dst = &l.SsmIn
-			}
-			switch {
-			case cfg.Scan():
-				// x convolves (wq), z gates the output (ssmGate); dt, B and C
-				// come off the convolved x, and there is no ssm_ba.
-				head = []bind{{jlm.RoleAttnQKV, &l.Wq}, {jlm.RoleAttnGate, &l.SsmGate},
-					{jlm.RoleSSMOut, &l.SsmOut}, {jlm.RoleSSMXDt, &l.SsmXDt},
-					{jlm.RoleSSMXB, &l.SsmXB}, {jlm.RoleSSMXC, &l.SsmXC},
-					{jlm.RoleSSMDtProj, &l.SsmDtProj}}
-			case cfg.ShortConv():
-				// x convolves (wq, the mixed projection's place), B and C gate
-				// it before and after (the two gate slots).
-				head = []bind{{jlm.RoleSCX, &l.Wq}, {jlm.RoleSCB, &l.SsmGate},
-					{jlm.RoleSCC, &l.SsmBA}, {jlm.RoleSSMOut, &l.SsmOut}}
-			case cfg.ChanDecay() && !c.Has(jlm.RoleSSMGA, bi, -1) && c.Has(jlm.RoleAttnGate, bi, -1):
-				// Kimi-K3's full-rank output gate: one matrix where Kimi-Linear
-				// factors it, in the z projection's place.
-				head = append(head,
-					bind{jlm.RoleSSMFA, &l.SsmFA}, bind{jlm.RoleSSMFB, &l.SsmFB},
-					bind{jlm.RoleAttnGate, &l.SsmGate})
-			case cfg.ChanDecay():
-				head = append(head,
-					bind{jlm.RoleSSMFA, &l.SsmFA}, bind{jlm.RoleSSMFB, &l.SsmFB},
-					bind{jlm.RoleSSMGA, &l.SsmGA}, bind{jlm.RoleSSMGB, &l.SsmGB})
-			default:
-				head = append(head, bind{jlm.RoleAttnGate, &l.SsmGate})
-			}
-			if attends {
-				want = append(head, want...)
-			} else {
-				want = append(head, want[4:]...)
-			}
+		// A recurrent block's mixer is whatever else it stores, bound with
+		// the block's other matrices below; one that attends as well keeps
+		// the attention four.
+		if linear && !cfg.LayerKind(i).Attends() {
+			want = want[4:]
 		}
 		// A block with no FFN at all (no up projection and no mixture) is its
 		// mixer alone; the FFN triple and its norm are not bound.
@@ -2865,112 +2777,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if b.v != nil && len(b.v) != b.want {
 				return nil, fmt.Errorf("model: block %d %s has %d values, want %d",
 					bi, b.name, len(b.v), b.want)
-			}
-		}
-		// The recurrent vectors are small and dense; the convolution's taps,
-		// a matrix by shape, are bound as one below.
-		if linear {
-			var conv, discard []float32
-			for _, v := range []struct {
-				role jlm.Role
-				dst  *[]float32
-			}{
-				{jlm.RoleSSMConv1d, &conv}, {jlm.RoleSSMA, &discard},
-				{jlm.RoleSSMDtBias, &discard}, {jlm.RoleSSMNorm, &discard},
-			} {
-				// A short convolution has its window and nothing else.
-				if cfg.ShortConv() && v.role != jlm.RoleSSMConv1d {
-					continue
-				}
-				// A Mamba-2 block may have no gated norm at all (Falcon-H1's
-				// mamba_rms_norm false): y*silu(z) goes straight to ssm_out.
-				if v.role == jlm.RoleSSMNorm && cfg.Scan() {
-					continue // Mamba-1 has no gated norm
-				}
-				if v.role == jlm.RoleSSMNorm && cfg.SSD() {
-					if *v.dst, err = optVec(v.role, bi); err != nil {
-						return nil, err
-					}
-					continue
-				}
-				if *v.dst, err = vec(v.role, bi); err != nil {
-					return nil, err
-				}
-			}
-			g := cfg.Delta()
-			if len(conv) != g.Conv*g.Chans {
-				return nil, fmt.Errorf("model: block %d convolution is %d wide, want %d (%d positions x %d channels)",
-					bi, len(conv), g.Conv*g.Chans, g.Conv, g.Chans)
-			}
-			gateWidth, dtWidth := g.VHeads, g.VHeads
-			if cfg.ChanDecay() {
-				gateWidth, dtWidth = g.VHeads*g.KDim, g.VHeads*g.KDim
-			}
-			normWidth, dWidth, cbWidth := g.VDim, 0, 0
-			if g.Scan {
-				// A is a row of the state per channel; D, dt's bias and the
-				// convolution's bias one per channel; no gated norm.
-				gateWidth, normWidth = g.VHeads*g.KDim, 0
-				if _, err = vec(jlm.RoleSSMD, bi); err != nil {
-					return nil, err
-				}
-				if _, err = optVec(jlm.RoleSSMConvBias, bi); err != nil {
-					return nil, err
-				}
-				dWidth, cbWidth = g.VHeads, g.Chans
-				for _, v := range []struct {
-					role jlm.Role
-					want int
-				}{{jlm.RoleSSMDtNorm, g.Rank}, {jlm.RoleSSMBNorm, g.KDim}, {jlm.RoleSSMCNorm, g.KDim}} {
-					if got := l.Vector(v.role); got != nil && len(got) != v.want {
-						return nil, fmt.Errorf("model: block %d %v is %d wide, want %d", bi, v.role, len(got), v.want)
-					}
-				}
-				// The three norms come together or not at all, as llama.cpp
-				// applies them.
-				if (l.Vector(jlm.RoleSSMDtNorm) == nil) != (l.Vector(jlm.RoleSSMBNorm) == nil) || (l.Vector(jlm.RoleSSMDtNorm) == nil) != (l.Vector(jlm.RoleSSMCNorm) == nil) {
-					return nil, fmt.Errorf("model: block %d carries some of Mamba-1's dt/B/C norms and not all", bi)
-				}
-				for _, m := range []struct {
-					name    string
-					t       Tensor
-					k, rows int
-				}{{"ssm_x.dt", l.SsmXDt, g.Chans, g.Rank}, {"ssm_x.b", l.SsmXB, g.Chans, g.KDim},
-					{"ssm_x.c", l.SsmXC, g.Chans, g.KDim}, {"ssm_dt", l.SsmDtProj, g.Rank, g.VHeads}} {
-					if m.t.K != m.k || m.t.Rows != m.rows {
-						return nil, fmt.Errorf("model: block %d %s is %dx%d, want %dx%d",
-							bi, m.name, m.t.K, m.t.Rows, m.k, m.rows)
-					}
-				}
-			}
-			if g.Ssd {
-				// Mamba-2's two vectors more, and its gated norm's weight is
-				// every channel of y, a group of Inner/Groups at a time.
-				if _, err = vec(jlm.RoleSSMD, bi); err != nil {
-					return nil, err
-				}
-				if _, err = optVec(jlm.RoleSSMConvBias, bi); err != nil {
-					return nil, err
-				}
-				normWidth, dWidth, cbWidth = g.VHeads*g.VDim, g.VHeads, g.Chans
-				if l.Vector(jlm.RoleSSMNorm) == nil {
-					normWidth = 0
-				}
-			}
-			for _, v := range []struct {
-				name string
-				have int
-				want int
-			}{
-				// KDA carries one decay rate and delta-t bias per (head,
-				// channel); qwen3next one per head.
-				{"ssm_a", len(l.Vector(jlm.RoleSSMA)), gateWidth}, {"ssm_dt.bias", len(l.Vector(jlm.RoleSSMDtBias)), dtWidth},
-				{"ssm_norm", len(l.Vector(jlm.RoleSSMNorm)), normWidth},
-				{"ssm_d", len(l.Vector(jlm.RoleSSMD)), dWidth}, {"ssm_conv1d.bias", len(l.Vector(jlm.RoleSSMConvBias)), cbWidth},
-			} {
-				if v.have != v.want {
-					return nil, fmt.Errorf("model: block %d %s is %d wide, want %d", bi, v.name, v.have, v.want)
-				}
 			}
 		}
 		if mla {
@@ -3343,23 +3149,21 @@ func (m *Model) MaxMatVec() (rows, k int) {
 	return rows, k
 }
 
-// blockReadBytes is how many file bytes of block li a single token reads. On a
-// mixture it is far less than the block's size: a placement removes the read
-// from the host but costs the size on the device.
+// blockReadBytes is how many file bytes of block li a single token reads:
+// every matrix the block stores, a routed bank only for the experts a token
+// picks. On a mixture it is far less than the block's size: a placement
+// removes the read from the host but costs the size on the device.
 func (m *Model) BlockReadBytes(li int) uint64 {
-	l := &m.Layers[li]
+	c := m.Cfg
 	var n uint64
-	for _, t := range []Tensor{l.Wq, l.Wk, l.Wv, l.Wo} {
-		n += TensorBytes(t)
+	for _, mt := range m.Layers[li].Mats {
+		b := TensorBytes(*mt.T)
+		if jlm.ExpertBank(mt.Role) && c.NExpert > 0 {
+			b = b / uint64(c.NExpert) * uint64(c.NExpertUsed)
+		}
+		n += b
 	}
-	if r := l.Matrix(jlm.RoleRouter); r != nil {
-		n += TensorBytes(*r)
-	}
-	dense := TensorBytes(l.Gate) + TensorBytes(l.Up) + TensorBytes(l.Down)
-	if c := m.Cfg; c.MoE() && c.NExpert > 0 {
-		dense = dense / uint64(c.NExpert) * uint64(c.NExpertUsed)
-	}
-	return n + dense
+	return n
 }
 
 // expertReadBytes is what a token reads of block li's routed experts: the

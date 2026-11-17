@@ -187,7 +187,7 @@ func checkDeltaMixer(t *testing.T, m *model.Model, li int) {
 		t.Fatalf("block %d, a delta rule, is refused by %q (%v)", li, why, m.UncoveredErr(li))
 	}
 	g := m.Composing().BlockGraph(li)
-	dg := m.Cfg.Delta()
+	dg := deltaOf(m.Cfg)
 	convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpStateScan)
 	if len(convs) != 1 || len(rules) != 1 {
 		t.Fatalf("block %d states %d state convolutions and %d delta rules, want one each", li, len(convs), len(rules))

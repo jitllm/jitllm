@@ -60,7 +60,7 @@ func TestDeltaKeyTiledIsTheDeltaRulesPairing(t *testing.T) {
 		t.Fatalf("the flag did not survive the container: grouped=%v tiled=%v",
 			grouped.Cfg.DeltaKeyTiled, tiled.Cfg.DeltaKeyTiled)
 	}
-	g := tiled.Cfg.Delta()
+	g := deltaOf(tiled.Cfg)
 	if g.Rep < 2 {
 		t.Fatalf("the fixture has %d value head(s) per key head; the pairings coincide and this proves nothing", g.Rep)
 	}

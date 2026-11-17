@@ -339,6 +339,33 @@ func eachLayer(m *model.Model, f func(l *model.Layer)) func() {
 	return func() { copy(m.Layers, was) }
 }
 
+// eachSwap exchanges the tensors every block stores under roles a and b,
+// where it stores both, and returns the undo.
+func eachSwap(m *model.Model, a, b jlm.Role) func() {
+	var undo []func()
+	for i := range m.Layers {
+		x, y := m.Layers[i].Matrix(a), m.Layers[i].Matrix(b)
+		if x == nil || y == nil {
+			continue
+		}
+		*x, *y = *y, *x
+		undo = append(undo, func() { *x, *y = *y, *x })
+	}
+	return func() {
+		for _, u := range undo {
+			u()
+		}
+	}
+}
+
+// matrixRows is the rows of block l's matrix under r, 0 where it stores none.
+func matrixRows(l *model.Layer, r jlm.Role) int {
+	if mt := l.Matrix(r); mt != nil {
+		return mt.Rows
+	}
+	return 0
+}
+
 // setConvTaps replaces block l's convolution taps (its RoleSSMConv1d
 // matrix, a channel's taps a row) with what f makes of a copy of them, and
 // returns the undo; a block with no taps is left alone.

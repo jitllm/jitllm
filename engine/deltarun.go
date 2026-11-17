@@ -11,12 +11,35 @@ import (
 //
 // It is per sequence, like the KV cache: a batched session's rows share the
 // weights and nothing else.
-func (s *Instance) allocRecurrent(nseq int) {
+func (s *Instance) allocRecurrent() error {
 	c := s.c
 	if !c.Hybrid() || !s.linearIn() {
-		return
+		return nil
 	}
-	s.dg = c.Delta()
+	g := s.m.Composing()
+	first := -1
+	for li := range c.NLayer {
+		if !c.LayerKind(li).Recurrent() {
+			continue
+		}
+		conv, state := g.BlockGraph(li).RecurrentState()
+		if conv == 0 && state == 0 {
+			// A block of a recurrent kind whose graph keeps nothing (a
+			// bidirectional model's convolution over its rows) needs none.
+			continue
+		}
+		if first < 0 {
+			first, s.recConv, s.recState = li, conv, state
+			continue
+		}
+		// The instance stages one block's state at a time in one buffer
+		// (recStaged), sized once: a choice of this code, not of the model.
+		if conv != s.recConv || state != s.recState {
+			return fmt.Errorf("engine: block %d keeps %d window and %d state floats a sequence, block %d %d and %d: "+
+				"an instance stages one size of recurrent state", li, conv, state, first, s.recConv, s.recState)
+		}
+	}
+	return nil
 }
 
 // makeRec makes each recurrent block's state for nseq sequences in v, a
@@ -24,7 +47,7 @@ func (s *Instance) allocRecurrent(nseq int) {
 func (s *Instance) makeRec(v *history.View, nseq int) {
 	for li := range s.c.NLayer {
 		if s.keepsRec(li) {
-			v.MakeRec(li, nseq*s.dg.ConvStateLen(), nseq*s.dg.StateStride())
+			v.MakeRec(li, nseq*s.recConv, nseq*s.recState)
 		}
 	}
 }
@@ -48,7 +71,7 @@ func (s *Instance) linearIn() bool {
 // it holds; any other's state comes up, is cleared and goes back. A device
 // that cannot is the next call's error.
 func (s *Instance) ResetRecurrent(row int) {
-	nc, ns := s.dg.ConvStateLen(), s.dg.StateStride()
+	nc, ns := s.recConv, s.recState
 	conv, state := s.recStaged()
 	var zeroed [len(s.routes)]bool
 	s.recRow[0] = row

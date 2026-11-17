@@ -320,11 +320,17 @@ func (s *Instance) blockErr(li int) (nn.Decline, error) {
 	case c.MoEAt(li) && (s.m.Container == nil ||
 		!s.places[routeLanes].(nn.BankViewer).BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
 		return nn.DeclineNotFormed, fmt.Errorf("block %d: its expert banks have no view in the frames' expert pages", li)
-	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
+	case c.LayerKind(li).Recurrent() && !s.keepsRec(li) && keepsState(g):
 		return nn.DeclineNotFormed, fmt.Errorf("block %d: a recurrent block whose state the instance keeps none of", li)
 	case pg.p > 0 && pg.arena() == nil:
 		// A paged history with no arena is one with no room for its pages.
 		return nn.DeclineNoRoom, nil
 	}
 	return nn.DeclineServes, nil
+}
+
+// keepsState says g keeps a recurrent state.
+func keepsState(g *graph.Graph) bool {
+	conv, state := g.RecurrentState()
+	return conv > 0 || state > 0
 }

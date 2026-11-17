@@ -17,7 +17,7 @@ func falconh1Block(m *model.Model, norm bool) bool {
 		c.NHead == 4 && c.NKVHead == 2 && !c.TiedEmbd
 	for i := range m.Layers {
 		l := &m.Layers[i]
-		ok = ok && c.LayerKind(i) == jlm.LayerSSDAttn && !l.NoFFN && l.SsmIn.Rows == 128+2*int(c.SSM.Groups)*16 &&
+		ok = ok && c.LayerKind(i) == jlm.LayerSSDAttn && !l.NoFFN && matrixRows(l, jlm.RoleAttnQKV) == 128+2*int(c.SSM.Groups)*16 &&
 			l.Wq.Rows == 64 && l.Wk.Rows == 32 && len(l.Vector(jlm.RoleSSMD)) == 8 && (l.Vector(jlm.RoleSSMNorm) != nil) == norm
 	}
 	return ok

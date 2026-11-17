@@ -9,7 +9,7 @@ import "github.com/jitllm/jitllm/nn"
 
 // recurrent reports that this session carries a linear block's running state,
 // which is what makes re-running a block from the embeddings unsound.
-func (s *Instance) recurrent() bool { return s.dg.ConvStateLen() > 0 || s.dg.StateStride() > 0 }
+func (s *Instance) recurrent() bool { return s.recConv > 0 || s.recState > 0 }
 
 // keepsRec says block li keeps a recurrent state.
 func (s *Instance) keepsRec(li int) bool {
@@ -19,7 +19,7 @@ func (s *Instance) keepsRec(li int) bool {
 // recLens is a block's recurrent state's widths: its convolution rows' and
 // its summary's, every sequence's.
 func (s *Instance) recLens() (conv, state int) {
-	return s.dg.ConvStateLen(), s.dg.StateStride()
+	return s.recConv, s.recState
 }
 
 // recStaged is the instance's buffer for one block's state, kept so a warm

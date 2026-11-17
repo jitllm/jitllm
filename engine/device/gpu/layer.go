@@ -918,7 +918,7 @@ func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 			n += uint64(4 * len(v.V))
 		}
 	}
-	if r := p.Recurrent; r.Conv > 0 {
+	if p.Recurrent.Keeps() {
 		return n + g.sessions()*recHist(p)
 	}
 	if g.pagedPlan(p) {
@@ -976,7 +976,7 @@ func (g *devTier) reserved() uint64 {
 // and every token after it is fluent and wrong (RULE 13).
 func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	r := p.Recurrent
-	if r.Conv == 0 {
+	if !r.Keeps() {
 		return true // not a linear block; nothing to carry
 	}
 	g.recS, g.recC = r.StateLen, r.ConvState
@@ -1530,7 +1530,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if g.bs = g.initScratch(sp, 1); g.bs == nil {
 			return false
 		}
-	} else if want := g.bs.p; p.NonCausal && sp.Recurrent.Conv > 0 && want.Recurrent.Conv == 0 {
+	} else if want := g.bs.p; p.NonCausal && sp.Recurrent.Keeps() && !want.Recurrent.Keeps() {
 		// An encoder's convolution blocks and attention blocks share a set:
 		// it carries the convolution's descriptors, whichever came first, and
 		// every block runs its own composed part inside it.
@@ -1828,7 +1828,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	//
 	// A linear block takes no KV cache at all: it keeps a running summary, and
 	// the plan's NKVHead/HeadDim are the model-wide attention shape.
-	linear := p.Recurrent.Conv > 0
+	linear := p.Recurrent.Keeps()
 	l.linear = linear
 	l.withAttn = linear && graphAttends(p.Graph)
 	l.noRuns = p.Graph.AttendNoRuns()
@@ -2164,7 +2164,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// A linear block's run descriptors (composer.RunDescWords): its rows and
 	// each sequence's slots in the block's pool, and the composer's, where
 	// the pool is one shared half its forms step in place.
-	if r := cp.Recurrent; r.Conv > 0 {
+	if r := cp.Recurrent; r.Keeps() {
 		bs.rec = r
 		al(&bs.dRows, 4*composer.RunDescWords(rows))
 		al(&bs.cRows, 4*composer.RunDescWords(rows))
@@ -5465,7 +5465,7 @@ func (g *devTier) rebuildScratch(plan *nn.LayerPlan) bool {
 // part's own, so a plan's FFN, mixture and expert widths widen nothing.
 func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 	grew := false
-	if b.Recurrent.Conv > 0 && a.Recurrent.Conv == 0 {
+	if b.Recurrent.Keeps() && !a.Recurrent.Keeps() {
 		a.Recurrent, grew = b.Recurrent, true
 	}
 	// A window is a mask: a session that never reaches it computes the same
