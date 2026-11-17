@@ -134,9 +134,6 @@ type Config struct {
 	// HeadDimV is the value head's width, filled in even where the container
 	// stores zero for "same as HeadDim".
 	KVLoraRank int
-	// RopeTail, KeyValue, QUnitNorm and OutUnrotated are the container's
-	// attention statements (jlm.Flag2RopeTail, ...).
-	RopeTail, KeyValue, QUnitNorm, OutUnrotated bool
 	HeadDimV                                    int
 
 	// The DeepSeek router: sigmoid gating, a selection-only bias, grouped
@@ -621,10 +618,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		LayerKinds:   c.LayerKinds,
 		SSM:          c.SSM,
 
-		RopeTail:         c.Flags2.Has(jlm.Flag2RopeTail),
-		KeyValue:         c.Flags2.Has(jlm.Flag2KeyValue),
-		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
-		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
 		MarkPointer:      c.Flags2.Has(jlm.Flag2MarkerPointer),
 		Joint:            c.JointHead != nil,
 		KVLoraRank:       int(c.KVLoraRank),

@@ -200,9 +200,6 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 		"AttnOutGate":    flag(jlm.FlagAttnOutGate, func(mc *model.Config) bool { return mc.AttnOutGate }),
 		"NonCausal":      flag(jlm.FlagNonCausal, func(mc *model.Config) bool { return mc.NonCausal }),
 		"VNorm":          flag2(jlm.Flag2VNorm, func(mc *model.Config) bool { return mc.VNorm }),
-		"RopeTail":       flag2(jlm.Flag2RopeTail, func(mc *model.Config) bool { return mc.RopeTail }),
-		"QUnitNorm":      flag2(jlm.Flag2QUnitNorm, func(mc *model.Config) bool { return mc.QUnitNorm }),
-		"OutUnrotated":   flag2(jlm.Flag2OutUnrotated, func(mc *model.Config) bool { return mc.OutUnrotated }),
 		"Pooling": func(c *jlm.Config, mc *model.Config) {
 			c.Flags &^= jlm.FlagPoolMean | jlm.FlagPoolCLS | jlm.FlagPoolLast
 			switch mc.Pooling {
