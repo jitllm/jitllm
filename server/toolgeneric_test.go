@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/model"
 )
 
 // Models whose chat template reads no tools are served llama.cpp's generic
@@ -21,6 +23,13 @@ import (
 // model.
 func genericModels() []string {
 	return []string{"gemma-2-2b-it-Q4_K_M", "Qwen2-1.5B-Instruct-Q4_K_M", "Mistral-7B-Instruct-v0.3-Q4_K_M"}
+}
+
+// noSystemRole says the generic model's template has no system role: its
+// request with a system turn is refused (model.SystemRoleError), and its tools
+// are stated before the first turn's text.
+func noSystemRole(stem string) bool {
+	return stem == "gemma-2-2b-it-Q4_K_M" || stem == "Mistral-7B-Instruct-v0.3-Q4_K_M"
 }
 
 type genericGolden struct {
@@ -46,8 +55,9 @@ func compact(t *testing.T, s string) string {
 // each request renders the prompt llama.cpp renders for it and is answered as
 // llama.cpp answers -- the same tool call, arguments and all, or the same
 // content -- through the server's own chat completions, on the CPU and on a
-// card. The violation is the system message left out of the prompt, or the
-// reply left unconstrained.
+// card. A request with a system turn to a template with no system role is
+// refused instead, as a 400 naming the role. The violation is the system
+// message left out of the prompt, or the reply left unconstrained.
 func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 	dir := filepath.Join("testdata", "golden", "generic")
 	reqs, err := filepath.Glob(filepath.Join(dir, "*.request.json"))
@@ -71,13 +81,34 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 				}
 				bos, eos := lm.m.SpecialText()
 				before := lm.grammars.toolForced.Load()
-				ran, skipped := 0, 0
+				ran, skipped, refused := 0, 0, 0
 				for _, rf := range reqs {
 					name := strings.TrimSuffix(filepath.Base(rf), ".request.json")
 					t.Run(name, func(t *testing.T) {
 						body, err := os.ReadFile(rf)
 						if err != nil {
 							t.Fatal(err)
+						}
+
+						// The prompt: the request the server read, rendered by the model.
+						f := &fakeBackend{tokens: []string{"ok"}, reason: FinishEOS}
+						r := post(t, serve(t, f), "/v1/chat/completions", string(body))
+						r.Body.Close()
+						ch := f.opts().Prompt.Chat
+						prompt, err := lm.m.ChatPromptToolChoice(ch.Messages, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
+						var sr *model.SystemRoleError
+						if errors.As(err, &sr) && noSystemRole(stem) {
+							// A system turn to a template with no system role is the
+							// caller's to change: refused, and answered as a 400.
+							status, b := postRaw(t, c.url+"/v1/chat/completions", string(body))
+							if status != http.StatusBadRequest || !strings.Contains(b, "no system role") {
+								t.Fatalf("%s: %d %s, want a 400 naming the missing system role", name, status, b)
+							}
+							refused++
+							return
+						}
+						if err != nil {
+							t.Fatalf("%s: %v", name, err)
 						}
 						wantPrompt, err := os.ReadFile(filepath.Join(dir, name+"."+stem+".prompt.txt"))
 						if err != nil {
@@ -87,16 +118,6 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 						gb, err := os.ReadFile(filepath.Join(dir, name+"."+stem+".response.json"))
 						if err != nil || json.Unmarshal(gb, &want) != nil {
 							t.Fatalf("%s: no golden answer (%v)", name, err)
-						}
-
-						// The prompt: the request the server read, rendered by the model.
-						f := &fakeBackend{tokens: []string{"ok"}, reason: FinishEOS}
-						r := post(t, serve(t, f), "/v1/chat/completions", string(body))
-						r.Body.Close()
-						ch := f.opts().Prompt.Chat
-						prompt, err := lm.m.ChatPromptToolChoice(ch.Messages, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
-						if err != nil {
-							t.Fatalf("%s: %v", name, err)
 						}
 						// llama.cpp hands its template an empty bos_token (the tokenizer adds it)
 						// and an empty eos_token, where the chat path renders both as the template
@@ -147,9 +168,13 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 						ran++
 					})
 				}
-				if ran+skipped != len(reqs) || skipped > 1 || lm.grammars.toolForced.Load() == before {
-					t.Fatalf("ran %d and skipped %d of %d requests with %d constrained replies", ran, skipped, len(reqs),
-						lm.grammars.toolForced.Load()-before)
+				want := 0
+				if noSystemRole(stem) {
+					want = 1
+				}
+				if ran+skipped+refused != len(reqs) || skipped > 1 || refused != want || lm.grammars.toolForced.Load() == before {
+					t.Fatalf("ran %d, skipped %d and refused %d (want %d) of %d requests with %d constrained replies",
+						ran, skipped, refused, want, len(reqs), lm.grammars.toolForced.Load()-before)
 				}
 			})
 		}

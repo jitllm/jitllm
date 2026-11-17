@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -172,8 +173,9 @@ const genericCallText = "{\n  \"tool_calls\": [\n    {\n      \"name\": \"tool_n
 
 // TestGenericPromptTellsTheModel: a request with tools to a template that
 // reads none renders with the tools, the example call and the sentence that
-// tells the model how to answer in the system message, folded into the first
-// turn where the template has no system role; a request that forbids calls
+// tells the model how to answer in the system message, or before the first
+// turn's text where the template has no system role, and a system message the
+// request carries to such a template is refused; a request that forbids calls
 // renders as a plain conversation; a call and its result are written into
 // their turns; and a template that does read tools is rendered as before.
 func TestGenericPromptTellsTheModel(t *testing.T) {
@@ -221,6 +223,14 @@ func TestGenericPromptTellsTheModel(t *testing.T) {
 	want = "<u>" + system(genericCallText+"</a>") + "\nWhat is the weather in Paris?</u><a>"
 	if got := render(noSystemTemplate, user, genericTools, ToolChoice{}); got != want {
 		t.Errorf("a template with no system role:\n got %q\nwant %q", got, want)
+	}
+	tpl, err := jinja.Compile(noSystemTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RenderCompiled(tpl, noSystemTemplate, "", "", nil, sys, []byte(genericTools), ToolChoice{}, true, false, "")
+	if sr := (*SystemRoleError)(nil); !errors.As(err, &sr) || sr.Message != 0 {
+		t.Errorf("a system turn to a template with no system role: %q (%v), want it refused", out, err)
 	}
 	// The conversation after a call, with and without the tools declared: the
 	// call is the text of its turn and the result a user turn.

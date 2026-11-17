@@ -167,7 +167,7 @@ func chatSettings(sh *app.Shell) widget.Widget {
 		note(sh, "Chat wraps each message in the model's own chat format. Completion continues the text exactly as typed."),
 		label(sh, "System prompt"),
 		p.Field(system),
-		note(sh, "Sent before every chat with a model that has a chat format."),
+		note(sh, "Sent before every chat with a model that has a chat format. A format with no system prompt refuses it."),
 		checkbox.New(
 			checkbox.LabelOpt("Remember prompts between runs"),
 			checkbox.CheckedSignal(st.KVCache),

@@ -56,6 +56,27 @@ func connectErr(err error) error {
 	return connect.NewError(connect.CodeInternal, err)
 }
 
+// chatErr is a chat render's error as the server answers it: a system message
+// the model's chat template has no role for is the caller's to change.
+func chatErr(err error) error {
+	var sr *model.SystemRoleError
+	if errors.As(err, &sr) {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return err
+}
+
+// systemPromptError is the refusal of a system prompt a request sends apart
+// from its messages, for a chat template with no system role.
+type systemPromptError struct{ role *model.SystemRoleError }
+
+func (e *systemPromptError) Error() string {
+	return "the request's system prompt has no place in this chat template, which has no system role; " +
+		"send its text in a user message"
+}
+
+func (e *systemPromptError) Unwrap() error { return e.role }
+
 func invalid(format string, a ...any) error {
 	return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf(format, a...))
 }

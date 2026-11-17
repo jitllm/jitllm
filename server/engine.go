@@ -2823,13 +2823,9 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error)
 				"would run as a RAW COMPLETION -- which produces fluent output and no signal at all; "+
 				"send a text prompt instead", ErrInvalid, lm.called(name))
 		}
-		msgs := p.Chat.Messages
-		if p.Chat.HasSystem {
-			// Anthropic puts the system prompt in a top-level field; the
-			// template takes a message list, so it is prepended.
-			msgs = append([]model.ChatMessage{{Role: "system", Content: p.Chat.System}}, msgs...)
-		}
-		return lm.m.ChatIDsToolChoice(msgs, p.Chat.Tools, p.Chat.ToolChoice, p.Chat.AddGenerationPrompt)
+		ids, err := lm.m.ChatIDsToolChoice(p.Chat.messages(), p.Chat.Tools, p.Chat.ToolChoice,
+			p.Chat.AddGenerationPrompt)
+		return ids, chatErr(p.Chat.named(err))
 	case PromptNone, PromptSpans:
 		return nil, nil
 	}
@@ -2838,6 +2834,34 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error)
 
 // carriesMedia says the chat holds a picture or a video.
 func (ch *ChatInput) carriesMedia() bool { return ch != nil && len(ch.Images)+len(ch.Videos) > 0 }
+
+// carriesSystem says the chat holds a system prompt, apart or as a message.
+func (ch *ChatInput) carriesSystem() bool {
+	return ch != nil && (ch.HasSystem || slices.ContainsFunc(ch.Messages, func(x model.ChatMessage) bool {
+		return x.Role == "system"
+	}))
+}
+
+// messages is the chat as the template takes it: a system prompt sent apart
+// from the messages (Anthropic's top-level system, the native ChatPrompt's)
+// goes first.
+func (ch *ChatInput) messages() []model.ChatMessage {
+	if !ch.HasSystem {
+		return ch.Messages
+	}
+	return append([]model.ChatMessage{{Role: "system", Content: ch.System}}, ch.Messages...)
+}
+
+// named is the error of a render of messages() with the refusal of a system
+// prompt sent apart named as the caller sent it: with one, the first system
+// message the template was handed is that prompt.
+func (ch *ChatInput) named(err error) error {
+	var sr *model.SystemRoleError
+	if ch.HasSystem && errors.As(err, &sr) {
+		return &systemPromptError{sr}
+	}
+	return err
+}
 
 // pictureSpans lays a chat with pictures and videos out as spans: the
 // template's text, and each picture where its message's image part stands
@@ -2869,13 +2893,9 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 		}
 		videos[i] = vp
 	}
-	msgs := ch.Messages
-	if ch.HasSystem {
-		msgs = append([]model.ChatMessage{{Role: "system", Content: ch.System}}, msgs...)
-	}
-	sp, err := m.ChatSpansMedia(msgs, pics, videos, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
+	sp, err := m.ChatSpansMedia(ch.messages(), pics, videos, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, ch.named(err))
 	}
 	return sp, nil
 }

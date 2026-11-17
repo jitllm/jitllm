@@ -1,9 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -16,11 +16,10 @@ import (
 )
 
 // Mistral-7B-Instruct-v0.3's GGUF carries a template with no system role, so a
-// system prompt is folded into the first user turn; Mistral's own
+// system prompt is refused (*model.SystemRoleError); Mistral's own
 // tokenizer_config.json puts it before the LAST user turn with a blank line,
 // and only there. Converted with -chat-template, the container renders the
-// publisher's prompt and the fold stands aside; converted without, it still
-// folds.
+// publisher's prompt; converted without, it still refuses one.
 //
 // Both templates are the real ones -- the GGUF's read out of the GGUF, the
 // publisher's out of its repo -- carried on the committed stories260K, whose
@@ -66,9 +65,9 @@ func TestChatTemplateOptionReplacesTheGGUFs(t *testing.T) {
 	sys := []model.ChatMessage{{Role: "system", Content: "be terse"}, {Role: "user", Content: "hi"}}
 	turns := []model.ChatMessage{{Role: "system", Content: "be terse"},
 		{Role: "user", Content: "one"}, {Role: "assistant", Content: "1"}, {Role: "user", Content: "two"}}
-	// probe reports whether the fold leaves msgs alone, through the same
-	// context renderChat builds.
-	probe := func(m *model.Model, msgs []model.ChatMessage) bool {
+	// probe reports whether the template renders a system message, through the
+	// same context renderChat builds.
+	probe := func(m *model.Model) bool {
 		src, _ := m.ChatTemplate("")
 		tpl, err := jinja.Compile(src)
 		if err != nil {
@@ -77,7 +76,7 @@ func TestChatTemplateOptionReplacesTheGGUFs(t *testing.T) {
 		bos, eos := m.SpecialText()
 		ctx := map[string]any{"add_generation_prompt": true, "bos_token": bos, "eos_token": eos}
 		parts := model.WantsContentParts(tpl)
-		return model.SystemRendered(tpl, ctx, parts) && reflect.DeepEqual(model.FoldSystem(tpl, ctx, parts, msgs), msgs)
+		return !model.LacksSystemRole(tpl, ctx, parts)
 	}
 	render := func(m *model.Model, msgs []model.ChatMessage) string {
 		t.Helper()
@@ -93,8 +92,8 @@ func TestChatTemplateOptionReplacesTheGGUFs(t *testing.T) {
 	if bos != "<s>" || eos != "</s>" {
 		t.Fatalf("the carrier spells bos %q and eos %q, not Mistral's", bos, eos)
 	}
-	if !probe(pub, sys) {
-		t.Error("Mistral's own template: the system prompt was folded")
+	if !probe(pub) {
+		t.Error("Mistral's own template: no system role")
 	}
 	if got, want := render(pub, sys), "<s>[INST] be terse\n\nhi[/INST]"; got != want {
 		t.Errorf("Mistral's own template:\n got %q\nwant %q", got, want)
@@ -104,12 +103,16 @@ func TestChatTemplateOptionReplacesTheGGUFs(t *testing.T) {
 	}
 
 	gg := open(oldPath)
-	if probe(gg, sys) {
+	if probe(gg) {
 		t.Error("the GGUF's template takes a system role; this gate's control proved nothing")
 	}
-	if got, want := render(gg, sys), "<s>[INST] be terse\nhi [/INST]"; got != want {
+	var sr *model.SystemRoleError
+	if out, err := gg.ChatPrompt(sys, true); !errors.As(err, &sr) || sr.Message != 0 {
+		t.Errorf("the GGUF's template: %q (%v), want the system prompt refused", out, err)
+	}
+	if got, want := render(gg, sys[1:]), "<s>[INST] hi [/INST]"; got != want {
 		t.Errorf("the GGUF's template:\n got %q\nwant %q", got, want)
 	}
 	t.Logf("publisher %q", render(pub, turns))
-	t.Logf("gguf      %q", render(gg, turns))
+	t.Logf("gguf      %q", render(gg, turns[1:]))
 }

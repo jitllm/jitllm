@@ -245,7 +245,7 @@ func (e *Engine) report(stage, path string, err error) {
 		p.Action, p.Do = "Convert\u2026", func() { e.sh.OfferConvert(path) }
 	case fixReconvert:
 		p.Action, p.Do = "Reconvert", func() { e.sh.OfferReconvert(path) }
-	case fixDevices:
+	case fixDevices, fixSystem:
 		p.Action, p.Do = "Open Settings", e.sh.GoSettings
 	}
 	e.sh.Report(p)

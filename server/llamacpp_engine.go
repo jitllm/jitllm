@@ -102,7 +102,7 @@ func (e *Engine) ApplyTemplate(name string, msgs []model.ChatMessage, tools []by
 	}
 	text, err := lm.m.ChatPromptTools(msgs, tools, true)
 	if err != nil {
-		return "", err
+		return "", chatErr(err)
 	}
 	// llama-server drops the BOS the template wrote when the tokenizer adds
 	// one, so the prompt can go straight to /completion without a double BOS.

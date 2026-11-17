@@ -97,10 +97,12 @@ func dump2(v any) string {
 
 // genericMessages is the conversation as the template is handed it: each
 // call and result written into the turn's content, and, where the request
-// has tools, the system message holding the sentence, the tools and the
-// example (the sentence goes first, as llama.cpp adds it before minja adds
-// the tools).
-func genericMessages(msgs []ChatMessage, tools []byte, example string) []ChatMessage {
+// has tools, the sentence, then the tools and the example, in the system
+// message. role says the template has a system role; one that has none is
+// handed them before the first turn's text, the form's own words written into
+// a turn as its calls and results are. A system message the request carries
+// is the caller's, and the render refuses it there (SystemRoleError).
+func genericMessages(msgs []ChatMessage, tools []byte, example string, role bool) []ChatMessage {
 	out := slices.Clone(msgs)
 	for i, x := range out {
 		switch {
@@ -132,11 +134,15 @@ func genericMessages(msgs []ChatMessage, tools []byte, example string) []ChatMes
 	if example != "" {
 		system += "\n\nExample tool call syntax:\n\n" + example + "\n\n"
 	}
-	if len(out) > 0 && out[0].Role == "system" {
+	switch {
+	case len(out) > 0 && out[0].Role == "system":
 		out[0].Content += "\n\n" + system
-		return out
+	case !role && len(out) > 0:
+		out[0].Content = system + "\n" + out[0].Content
+	case role:
+		out = append([]ChatMessage{{Role: "system", Content: system}}, out...)
 	}
-	return append([]ChatMessage{{Role: "system", Content: system}}, out...)
+	return out
 }
 
 // genericExample is the call the template shows the model: what it writes for

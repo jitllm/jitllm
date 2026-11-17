@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/model"
 )
 
 // What a request pays before its first token, and the four things here that
@@ -99,14 +100,22 @@ func (e *Engine) modelOf(o GenerateOptions) *LoadedModel {
 }
 
 // CheckAdmission reports the ErrOverloaded a generate of o would get now,
-// and the refusal of a picture for a model with no tower.
+// the refusal of a picture for a model with no tower, and of a system prompt
+// for a chat template with no system role.
 func (e *Engine) CheckAdmission(o GenerateOptions) error {
 	lm := e.modelOf(o)
 	if lm == nil {
 		return nil
 	}
-	if o.Prompt.Chat.carriesMedia() && !lm.m.SeesPictures() {
+	ch := o.Prompt.Chat
+	if ch.carriesMedia() && !lm.m.SeesPictures() {
 		return fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid, lm.id)
+	}
+	if o.Prompt.Kind == PromptChat && ch.carriesSystem() {
+		_, err := lm.m.ChatPromptToolChoice(ch.messages(), ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
+		if errors.As(err, new(*model.SystemRoleError)) {
+			return chatErr(ch.named(err))
+		}
 	}
 	if t := &lm.ttft; t.queueCap > 0 && int(t.inflight.Load()) >= t.queueCap {
 		t.refused.Add(1)

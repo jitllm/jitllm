@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
@@ -368,6 +369,16 @@ type chatSpec struct {
 	repl   bool
 }
 
+// systemErr names -system when the model's chat template has no system role,
+// so the refusal points at the flag that sent the message.
+func systemErr(err error) error {
+	var sr *model.SystemRoleError
+	if errors.As(err, &sr) {
+		return fmt.Errorf("-system: %w", err)
+	}
+	return err
+}
+
 func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *engine.Sampler, media mediaSpec, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *engine.Placement, specOpts []engine.SpecOption, open ...engine.Option) error {
 	if v := os.Getenv("JITLLM_N"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
@@ -476,7 +487,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// wrongly: the rendered text carries its own specials and must be
 		// encoded with addSpecial=false. See model.ChatPrompt.
 		if ids, err = m.ChatIDs(msgs, true); err != nil {
-			return err
+			return systemErr(err)
 		}
 	}
 	// -depth measures decode at a context length, where attention grows with
@@ -1983,7 +1994,8 @@ func mediaSpans(m *model.Model, media mediaSpec, prompt string, chat *chatSpec) 
 		msgs = append(msgs, model.ChatMessage{Role: "system", Content: chat.system})
 	}
 	msgs = append(msgs, model.ChatMessage{Role: "user", Content: prompt, Images: len(pics), Videos: len(videos)})
-	return m.ChatSpansMedia(msgs, pics, videos, nil, model.ToolChoice{}, true)
+	sp, err := m.ChatSpansMedia(msgs, pics, videos, nil, model.ToolChoice{}, true)
+	return sp, systemErr(err)
 }
 
 // mediaSpec is what -image, -video and -video-fps place in the prompt.

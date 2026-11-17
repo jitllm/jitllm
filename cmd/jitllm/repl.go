@@ -146,7 +146,7 @@ func repl(m *model.Model, st *engine.Instance, sm *engine.Sampler, system string
 		turn := append(msgs, model.ChatMessage{Role: "user", Content: text})
 		ids, err := m.ChatIDs(turn, true)
 		if err != nil {
-			return err
+			return systemErr(err)
 		}
 		if len(ids) >= st.MaxSeq() {
 			fmt.Fprintf(out, "The conversation is %d positions and fills the context of %d; /clear starts again.\n",

@@ -1961,6 +1961,7 @@ input	model/chat.go	"model: message %d carries %d image(s) and %d video(s); Chat
 input	model/chat.go	"model: message %d carries %d image(s) and this chat template reads a message as a string, so it writes no image part"
 input	model/chat.go	"model: message %d carries %d video(s) and this chat template reads a message as a string, so it writes no video part"
 input	model/chat.go	"model: message %d carries a picture or a video; ChatSpans is the path for that, since its rows are embeddings and not ids"
+input	model/chat.go	"model: message %d is a system message and this chat template has no system role; send its text in a user message"
 context	model/chat.go	"model: message %d: %w"
 input	model/chat.go	"model: no tokenizer: %v"
 input	model/chat.go	"model: picture %d is %d values, not rows of the model's %d"

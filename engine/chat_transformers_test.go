@@ -2,8 +2,10 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +30,10 @@ func chatGold() string { return filepath.Join("..", "tok", "jinja", "testdata") 
 // call's arguments handed as a mapping, or as the request's JSON text to a
 // template that only reads text (DeepSeek-V3.2); and the request's floats.
 // Two of this package's choices part from transformers on purpose and are
-// counted rather than compared: a system turn folded into the next turn where
-// the template has no system role (foldSystem, llama.cpp's choice), and tools
-// to a template that never reads them, served the generic tool form. The image case is ChatSpans'
+// counted rather than compared: a system turn to a template with no system
+// role, refused by name (*model.SystemRoleError) where transformers raises or
+// renders the prompt without it, and tools to a template that never reads
+// them, served the generic tool form. The image case is ChatSpans'
 // and the documents case has no field in a request, so neither runs here.
 func TestChatPromptMatchesTransformers(t *testing.T) {
 	read := func(name string, v any) {
@@ -66,7 +69,7 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 	read("conversations.json", &conv)
 	clock := func() time.Time { return time.Date(2024, 7, 26, 0, 0, 0, 0, time.UTC) }
 
-	compared, raised, folded, generic, stringArgs := 0, 0, 0, 0, 0
+	compared, raised, refused, generic, stringArgs := 0, 0, 0, 0, 0
 	for _, e := range manifest {
 		srcB, err := os.ReadFile(filepath.Join(chatGold(), "templates", e.File))
 		if err != nil {
@@ -115,8 +118,19 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 				}
 				probe["tools"] = tv
 			}
-			fold := msgs[0].Role == "system" && !model.SystemRendered(tpl, probe, parts)
+			refuse := slices.ContainsFunc(msgs, func(m model.ChatMessage) bool { return m.Role == "system" }) &&
+				model.LacksSystemRole(tpl, probe, parts)
+			var sr *model.SystemRoleError
 			switch {
+			case refuse:
+				refused++
+				if !errors.As(err, &sr) {
+					t.Errorf("%s: a system turn to a template with no system role was not refused (%v):\n%s", name, err, got)
+				}
+				i := slices.IndexFunc(msgs, func(m model.ChatMessage) bool { return m.Role == "system" })
+				if want.Raise == "" && strings.Contains(want.Out, msgs[i].Content) {
+					t.Errorf("%s: refused, but transformers renders the system turn:\n%s", name, want.Out)
+				}
 			case tools != nil && !strings.Contains(src, "tools") && !strings.Contains(src, "tool_calls"):
 				generic++
 				if err != nil || !strings.Contains(got, "Respond in JSON format, either with `tool_call`") {
@@ -124,13 +138,6 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 				}
 			case want.Raise != "" && err != nil:
 				raised++
-			case fold:
-				// transformers renders the system turn or refuses it; this
-				// package folds it into the next turn and must render.
-				folded++
-				if err != nil || got == "" {
-					t.Errorf("%s: the system turn should fold into the next one: %v", name, err)
-				}
 			case want.Raise != "":
 				t.Errorf("%s: transformers raises %q and this rendered %d bytes", name, want.Raise, len(got))
 			case err != nil:
@@ -151,12 +158,12 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 		}
 	}
 	// The DeepSeek-V3.2 row is what proves the string fallback ran.
-	if compared < 250 || folded == 0 || generic == 0 || stringArgs == 0 {
-		t.Fatalf("%d renderings matched, %d folded, %d generic, %d with string arguments: the gate is not reaching what it covers",
-			compared, folded, generic, stringArgs)
+	if compared < 250 || refused == 0 || generic == 0 || stringArgs == 0 {
+		t.Fatalf("%d renderings matched, %d refused, %d generic, %d with string arguments: the gate is not reaching what it covers",
+			compared, refused, generic, stringArgs)
 	}
-	t.Logf("%d renderings byte-identical to transformers, %d raising in both, %d with the system folded, "+
-		"%d with tools served the generic form, %d with string arguments", compared, raised, folded, generic, stringArgs)
+	t.Logf("%d renderings byte-identical to transformers, %d raising in both, %d with the system turn refused, "+
+		"%d with tools served the generic form, %d with string arguments", compared, raised, refused, generic, stringArgs)
 }
 
 // chatMessagesOf reads OpenAI-shaped messages into ChatMessages, a tool

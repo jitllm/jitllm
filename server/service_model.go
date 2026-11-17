@@ -367,7 +367,7 @@ func (s *ModelService) ApplyChatTemplate(ctx context.Context, req *connect.Reque
 	}
 	prompt, err := lm.m.ChatPrompt(msgs, req.Msg.AddGenerationPrompt)
 	if err != nil {
-		return nil, connectErr(err)
+		return nil, connectErr(chatErr(err))
 	}
 	ids, err := lm.m.ChatIDs(msgs, req.Msg.AddGenerationPrompt)
 	if err != nil {

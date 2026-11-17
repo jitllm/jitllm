@@ -65,7 +65,8 @@ func (m *Model) ChatCapable() bool {
 // The result is a complete prompt carrying its own special tokens (Llama-3.2
 // renders bos_token, Qwen3 emits none), so it must be encoded with
 // addSpecial=false; ChatIDs does that pairing. bos_token and eos_token are
-// bound from the container's own ids.
+// bound from the container's own ids. A system message to a template with no
+// system role is refused with a *SystemRoleError.
 func (m *Model) ChatPrompt(msgs []ChatMessage, addGenerationPrompt bool) (string, error) {
 	return m.ChatPromptTools(msgs, nil, addGenerationPrompt)
 }
@@ -191,8 +192,9 @@ func RenderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 	if !readsTools(src) && (len(tools) > 0 && choice.Mode != ToolChoiceNone || carriesToolTurns(msgs)) {
 		// A template that reads no tools is served the generic form
 		// (toolgeneric.go): the tools and how to answer in the system
-		// message, a call and its result as the text of their turns. A
-		// request that forbids calls is told nothing of its tools.
+		// message, or the first turn where the template has no system role,
+		// and a call and its result as the text of their turns. A request
+		// that forbids calls is told nothing of its tools.
 		render := func(ms []ChatMessage, gen bool) (string, error) {
 			return RenderCompiled(tpl, src, bos, eos, clock, ms, nil, ToolChoice{}, gen, pics, mark)
 		}
@@ -202,18 +204,13 @@ func RenderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 		} else if len(tools) > 0 {
 			example = genericExample(render, eos)
 		}
-		return render(genericMessages(msgs, tools, example), addGenerationPrompt)
+		// A leading system message takes the form's words either way, and the
+		// render below probes the role for it.
+		role := len(tools) == 0 || len(msgs) > 0 && msgs[0].Role == "system" ||
+			!LacksSystemRole(tpl, chatContext(bos, eos, clock, true), WantsContentParts(tpl))
+		return render(genericMessages(msgs, tools, example, role), addGenerationPrompt)
 	}
-	ctx := map[string]any{
-		"tools":                 nil,
-		"documents":             nil,
-		"add_generation_prompt": addGenerationPrompt,
-		"bos_token":             bos,
-		"eos_token":             eos,
-	}
-	if clock != nil {
-		ctx["strftime_now"] = jinja.StrftimeNow(clock)
-	}
+	ctx := chatContext(bos, eos, clock, addGenerationPrompt)
 	if len(tools) > 0 {
 		// A template that renders tool calls was trained to call them, even
 		// when its definitions travel outside the template -- DeepSeek-V3's
@@ -230,7 +227,10 @@ func RenderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 	}
 	parts := WantsContentParts(tpl)
 	typed := parts || readsContentParts(tpl)
-	msgs = FoldSystem(tpl, ctx, parts, msgs)
+	if i := slices.IndexFunc(msgs, func(x ChatMessage) bool { return x.Role == "system" }); i >= 0 &&
+		LacksSystemRole(tpl, ctx, parts) {
+		return "", &SystemRoleError{Message: i}
+	}
 	messages := func(stringArgs bool) ([]any, error) {
 		ms := make([]any, len(msgs))
 		for i, x := range msgs {
@@ -297,47 +297,67 @@ func CarriesToolCalls(msgs []ChatMessage) bool {
 	return false
 }
 
-// foldSystem merges a leading system message into the first message after it
-// when the template has no system role, and drops it when nothing follows.
-//
-// Mistral's own templates and others of their age raise on any role but user
-// and assistant, so a system prompt makes every turn fail to render; some
-// others render the turn and silently leave the system text out. Both are told
-// apart from a template that takes it by one probe render, and the merge is
-// llama.cpp's (system_message_not_supported in common/chat.cpp: the system
-// text, a newline, then the message) -- RULE 7m: the reference most people run, chosen
-// rather than inherited. transformers raises instead, which would leave a
-// system prompt unusable with these models.
-//
-// ctx is the render's context without its messages and parts its content
-// shape (wantsContentParts); the probe renders with both, so a template that
-// reads strftime_now, the special tokens or typed parts is probed as it will
-// run -- SmolVLM's renders "System: ..." only from parts.
-func FoldSystem(tpl *jinja.Template, ctx map[string]any, parts bool, msgs []ChatMessage) []ChatMessage {
-	if len(msgs) == 0 || msgs[0].Role != "system" || SystemRendered(tpl, ctx, parts) {
-		return msgs
+// chatContext is a render's context before its messages and tools: tools and
+// documents bound None, as apply_chat_template binds them for a request that
+// carries none, the special tokens, and strftime_now when clock is set.
+func chatContext(bos, eos string, clock func() time.Time, addGenerationPrompt bool) map[string]any {
+	ctx := map[string]any{
+		"tools":                 nil,
+		"documents":             nil,
+		"add_generation_prompt": addGenerationPrompt,
+		"bos_token":             bos,
+		"eos_token":             eos,
 	}
-	if len(msgs) == 1 {
-		return nil
+	if clock != nil {
+		ctx["strftime_now"] = jinja.StrftimeNow(clock)
 	}
-	out := append([]ChatMessage(nil), msgs[1:]...)
-	out[0].Content = msgs[0].Content + "\n" + out[0].Content
-	return out
+	return ctx
 }
 
-// systemRendered reports whether the template puts a system message's text
-// in its output: a probe render of a system and a user message, as llama.cpp's
-// supports_system_role capability check does.
-func SystemRendered(tpl *jinja.Template, ctx map[string]any, parts bool) bool {
-	const probe = "jitllm-system-probe"
-	pc := maps.Clone(ctx)
-	pc["messages"] = []any{
-		map[string]any{"role": "system", "content": contentValue(probe, 0, 0, parts)},
-		map[string]any{"role": "user", "content": contentValue("User message", 0, 0, parts)},
+// A SystemRoleError is a system message handed to a chat template that has no
+// system role. Mistral-7B-Instruct-v0.3's GGUF template raises on any role but
+// user and assistant, and others render the turn without its text, so the
+// prompt would run without the instructions it was sent with. The message is
+// refused rather than moved into another turn, which would be a prompt the
+// model's own template never writes.
+type SystemRoleError struct{ Message int }
+
+// Error names the message and the role the template lacks.
+func (e *SystemRoleError) Error() string {
+	return fmt.Sprintf("model: message %d is a system message and this chat template has no system role; "+
+		"send its text in a user message", e.Message)
+}
+
+// LacksSystemRole reports whether the template has no system role: it writes
+// a user message's text in this context and not a system message's, each asked
+// of the template itself by one render. A template that writes no user message
+// here either -- Command-R's tool_use template raises without tools -- is not
+// one without the role, and its own error stands.
+//
+// ctx is the render's context without its messages and parts its content
+// shape (WantsContentParts); the probes render with both, so a template that
+// reads strftime_now, the special tokens or typed parts is probed as it will
+// run -- SmolVLM's renders "System: ..." only from parts.
+func LacksSystemRole(tpl *jinja.Template, ctx map[string]any, parts bool) bool {
+	return !rendersProbe(tpl, ctx, parts, true) && rendersProbe(tpl, ctx, parts, false)
+}
+
+// rendersProbe reports whether the template writes a probe message's text: the
+// system message's before a user message when system is set, else the user
+// message's alone.
+func rendersProbe(tpl *jinja.Template, ctx map[string]any, parts, system bool) bool {
+	const sys, user = "jitllm-system-probe", "jitllm-user-probe"
+	msgs := []any{map[string]any{"role": "user", "content": contentValue(user, 0, 0, parts)}}
+	want := user
+	if system {
+		msgs = append([]any{map[string]any{"role": "system", "content": contentValue(sys, 0, 0, parts)}}, msgs...)
+		want = sys
 	}
+	pc := maps.Clone(ctx)
+	pc["messages"] = msgs
 	pc["add_generation_prompt"] = true
 	out, err := tpl.Render(pc)
-	return err == nil && strings.Contains(out, probe)
+	return err == nil && strings.Contains(out, want)
 }
 
 // ChatIDs is ChatPrompt plus the tokenization, and it exists so the two cannot
@@ -375,10 +395,10 @@ func (m *Model) ChatIDsToolChoice(msgs []ChatMessage, tools []byte, choice ToolC
 	return m.Vocab.EncodeSpecial(text, false), nil
 }
 
-// specialText resolves BOS and EOS to their literal piece text, which is what a
-// template interpolates. Empty when the container names no such token, which a
-// template referring to it will then render as the empty string rather than
-// failing -- the same thing llama.cpp does.
+// SpecialText resolves BOS and EOS to their literal piece text, which is what a
+// template interpolates. A token the container does not name has no text, so
+// it is the empty string: a template that writes it writes nothing there, and
+// the render does not fail over a token the model does not have.
 func (m *Model) SpecialText() (bos, eos string) {
 	v := m.Container.Vocab()
 	if v == nil {
@@ -393,13 +413,13 @@ func (m *Model) SpecialText() (bos, eos string) {
 	return at(v.BOS), at(v.EOS)
 }
 
-// wantsContentParts asks the template which shape of `content` it reads, by
+// WantsContentParts asks the template which shape of `content` it reads, by
 // rendering a sentinel through it, rather than guessing from the model's name.
 //
 // A VLM template (SmolVLM's) reads content as a list of typed parts and a text
 // one reads a string; the wrong shape fails silently, e.g. a loop over a Go
-// string iterates characters and the message renders empty. Probing asks the
-// template itself, as llama.cpp's minja does, for one extra render per turn.
+// string iterates characters and the message renders empty. The sentinel asks
+// the template itself, for one extra render per turn.
 func WantsContentParts(tpl *jinja.Template) bool {
 	const probe = "\x00jitllm-probe\x00"
 	out, err := tpl.Render(map[string]any{

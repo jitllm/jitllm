@@ -7610,6 +7610,34 @@ fluently -- and the only visible trace was token 60535 leading the id list.
 `misplacedFlag` refuses it in every subcommand, matching the flags the SET
 DEFINES rather than a leading dash, so `"-42 degrees is"` still runs as a prompt.
 
+### A system prompt the template has no role for
+
+Some templates have no system role: Mistral-7B-Instruct-v0.3's GGUF template
+and Gemma 2's raise on one, and others render the turn without its text. The
+engine used to merge a leading system message into the first user turn
+(`FoldSystem`), a prompt no template of those models writes. On the user's
+decision it is refused instead: a system message, wherever it stands, to a
+template that does not render one is a `*model.SystemRoleError` naming the
+message, told apart by two probe renders (`model.LacksSystemRole`): a user
+message alone is written and a system message before it is not. A template
+that writes neither in the request's context is not refused for the role:
+Command-R's tool_use and rag templates raise without tools or documents, and
+that error is the one the caller sees. The server answers it as the caller's to change
+(Connect's InvalidArgument, HTTP 400 on every compat route), a streamed request
+before its stream opens (`Engine.CheckAdmission`), since past the 200 a refusal
+is only an error frame; a system prompt sent apart from the messages
+(Anthropic's top-level `system`, the native ChatPrompt's) is named as that
+prompt, not as message 0. `jitllm run -chat
+-system` names the flag, and the app points at its system prompt setting. The
+generic tool form's own sentence, tools and example are the form's words, not
+the caller's, and go before the first turn's text where there is no system
+role. Gated by `model.TestASystemPromptIsRefusedWhereTheTemplateHasNoSystemRole`,
+`engine.TestEveryChatModelTakesOrRefusesASystemPrompt`,
+`engine.TestChatTemplateOptionReplacesTheGGUFs` (Mistral's publisher template
+takes the role, its GGUF's refuses it), `server.TestASystemPromptWithNoRoleIsTheCallersToChange`,
+`cmd/jitllm.TestSystemIsRefusedWhereTheTemplateHasNoSystemRole` and
+`common/engine.TestEngineErrorsAreExplainedWithTheirFix`.
+
 ### A video in a chat turn
 
 The front ends took pictures and no video until the chat path learned one:
@@ -10882,8 +10910,11 @@ What b4689 does, and `model/toolgeneric.go` does after it:
   call -- and keeping what the second adds after the text they share, so the
   example carries the template's own turn markup (Gemma's `<end_of_turn>` is in
   its system message). `genericExample` does the same through the engine's own
-  renderer. A template with no system role folds the system message into the
-  first turn as before (`FoldSystem`). A call an assistant turn made is written
+  renderer. A template with no system role is handed the sentence, the tools
+  and the example before the first turn's text, the form's own words written
+  into a turn as its calls and results are; a system message the request
+  carries to such a template is refused ("A system prompt the template has no
+  role for"). A call an assistant turn made is written
   into the turn's content as `{"tool_calls": [{"name", "arguments", "id"}]}`
   and a tool's result becomes a user turn holding `{"tool_response": {...}}`,
   whether or not the request carries tools, since the template renders neither.
