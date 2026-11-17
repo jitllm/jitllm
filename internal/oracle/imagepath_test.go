@@ -21,17 +21,16 @@ import (
 // as goComputeAllowed()'s do.
 func imagePathAllowed() map[string]string {
 	return map[string]string{
-		"model.go:AttnTemp":        "Llama 4's attention temperature at a position, the config's statement its gates read; the composed blocks state it as ops",
-		"model.go:configFrom":      "YaRN's attention scale from the config, once at open",
-		"hotness.go:ExpertUses":    "expert-use accounting for the report",
-		"decide.go:answer":         "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
-		"tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
-		"video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry from its frames and rate",
-		"video.go:evalTerms":       "a video's or a picture's stated sizes, count, indices, stride and times evaluated over its frames, rate and sides: geometry",
-		"video.go:formatValue":     "a value the video's prompt writes, rounded to its stated decimals: text the prompt prints",
-		"video.go:pieces":          "the video's prompt pieces, each value evaluated and written: text the prompt prints",
-		"picture.go:square":        "a picture square's fields, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
-		"picture.go:stage":         "a whole-picture resize stage's sides, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
+		"hotness.go:ExpertUses": "expert-use accounting for the report",
+		"decide.go:answer":      "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
+		"cpuhead.go:staged":     "a draw's DRY base as its logarithm, a scalar the generated stage reads, once a stage of a draw: no pixel's arithmetic",
+		"dry.go:dryRow":         "the DRY penalty's repeat lengths, a row of counts the generated stage reads, and its exponent's bound from the log of its base, once a draw: no pixel's arithmetic",
+		"video.go:SampleVideo":  "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry from its frames and rate",
+		"video.go:evalTerms":    "a video's or a picture's stated sizes, count, indices, stride and times evaluated over its frames, rate and sides: geometry",
+		"video.go:formatValue":  "a value the video's prompt writes, rounded to its stated decimals: text the prompt prints",
+		"video.go:pieces":       "the video's prompt pieces, each value evaluated and written: text the prompt prints",
+		"picture.go:square":     "a picture square's fields, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
+		"picture.go:stage":      "a whole-picture resize stage's sides, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
 	}
 }
 
@@ -42,11 +41,9 @@ func imagePathAllowed() map[string]string {
 func imagePathCallees() map[string]string {
 	return map[string]string{
 		"prefillstream.go:after":   "the prompt streamer's timing of a chunk, once a chunk (RULE 8b's measurement)",
-		"delta.go:Delta":           "a recurrent block's geometry and scale from the config, once a block at open",
 		"tower.go:towerEntry":      "a tower's entry stated as a graph, once at open: its constants are the graph's",
 		"tower.go:towerBlock":      "a tower's block stated as a graph, once a block at open: its constants are the graph's",
 		"tower.go:stageClass":      "a resize stage's class stated as graphs, its taps from the class's pixel bound, once a class at open",
-		"front.go:blockGraph":      "a block's graph stated from the config, once a block at open: its constants are the graph's",
 		"markprompt.go:promptStep": "a prompt template's integer division, a number the prompt prints: no pixel's arithmetic",
 		"video.go:videoEntry":      "a video's entry graph, its normalisation constants from the container and its taps from the frames' bounds",
 	}

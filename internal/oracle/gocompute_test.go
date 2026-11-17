@@ -30,15 +30,19 @@ func goComputeAllowed() map[string]string {
 		"nn/ropetable.go:foldRopeTab": "the rotary table's folded constant planes, once per configuration",
 		"nn/ropeaxes.go:runFreqs":     "a multi-axis rotary's per-pair frequencies, once per configuration",
 		"graph/sample.go:selection":   "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
+		// A draw's parameters: kernel scalars once a draw.
+		"engine/cpuhead.go:staged": "a draw's DRY base as its logarithm, a scalar the generated stage reads, once a stage of a draw",
+		// Composition: an op's statement checked as it is decomposed.
+		"composer/decompose_expr.go:exprPrim": "a term's constant checked to be a whole word as its expression is decomposed: composition, once a term",
 		// A clip's resample: libswresample's filter bank, once a pair of rates,
 		// as Pillow's taps are once a size (the sound op reads it).
 		"composer/swr.go:swrBank": "libswresample's polyphase filter bank, built once a pair of rates as resample.c builds it: a constant table the sound op reads",
 		"composer/swr.go:poly":    "av_bessel_i0's rational approximation, evaluated for the bank's Kaiser window once a tap",
 		// A request's and a picture's geometry, and a graph's attributes.
-		"engine/decide.go:answer":        "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
-		"model/tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
-		"model/video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
-		"model/video.go:evalTerms":       "a video's or a picture's stated size, count, index, stride or time, evaluated over its sides, frames and rate: geometry",
+		"engine/decide.go:answer":    "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
+		"graph/lower.go:LowerValues": "a tower op's attention scale, 1/sqrt of its head width, once an op as the tower is lowered: the graph's attribute",
+		"model/video.go:SampleVideo": "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
+		"model/video.go:evalTerms":   "a video's or a picture's stated size, count, index, stride or time, evaluated over its sides, frames and rate: geometry",
 	}
 }
 
