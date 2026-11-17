@@ -34,7 +34,8 @@ const (
 	// that order.
 	PreTile
 	// PreSmartResize resamples the picture to a size of its own, each side a
-	// multiple of Ints[0] pixels: each rounded half to even to one; then,
+	// multiple of Ints[0] pixels: each rounded half to even to one, none for
+	// a side under half of one; then,
 	// where the area passes Ints[2] pixels, both scaled down by
 	// sqrt(area / Ints[2]) and floored to one, or where it falls short of
 	// Ints[1], scaled up by sqrt(Ints[1] / area) and ceiled to one

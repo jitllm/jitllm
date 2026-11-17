@@ -10942,3 +10942,36 @@ NMSE 1.1e-05 and 9.3e-06 on CUDA (a V100) and Metal (the M4), 2.1e-07 and
 1.8e-07 on Vulkan. The M4's arm64 CPU reads llama.cpp's dump at the same
 0.028. The census's two runners, picked to tinyopenjev, run the paired tower
 on the CPU device and on a card.
+
+## The smart resize against transformers 5.17
+
+The resize of a picture at its own size (`PreSmartResize`: Qwen2-VL,
+Qwen2.5-VL, Qwen3-VL and the towers that state its geometry, HunyuanVL;
+GLM-4V with its lift) rounded each side to at least one factor before the
+area test. No processor of those families does that in transformers 5.17:
+Qwen2VLImageProcessor's smart_resize, and HunyuanVL's copy of it, round a
+side to `round(side / factor) * factor`, none for a side under half a
+factor, and a zero area falls short of the minimum, which scales both
+sides up. LFM2-VL's smart_resize does floor each side at one factor
+(`max(total_factor, round_by_factor(...))`), so the tiled step keeps the
+floor and the picture step drops it (`convert.smartSize`'s floor).
+
+Held over the picture sweep (engine/picturegeom_test.go's 39 sides each
+way, 1521 pictures) against that function at each family's bounds -- 28
+and 3136 to 1003520 pixels; 32 and 65536 to 16777216; synth-hunyuanvl's
+4096 to 65536; HunyuanOCR's two 262144-pixel minimums -- the resize
+differed at 8 of each Qwen3-VL tower's 1407 pictures (13 x 2048: 32 x 2048
+against 32 x 3232). With the floor gone the 16 towers of those families
+agree with transformers at all 22,512 pictures it resizes; the 1,824 past
+an aspect of 200, which it refuses, are resized by the same arithmetic
+(docs/divergences.md). GLM-4V's lift makes every side a factor first, so
+the floor never bound there; HunyuanOCR's minimum scales every thin
+picture up either way, so its sums did not move. Three sums moved, the
+Qwen2-VL family's, the Qwen3-VL family's and synth-hunyuanvl's, and
+tinyopenjev-for-testing's tower, a Qwen3-VL merger joined to the census
+in f153a44b5 with no sum recorded, is recorded with its family's.
+
+llama.cpp's own grid for tinyopenjev (libmtmd, at the mmproj's 8192 to
+4194304 pixels) agrees with the published processor's at 552 of 1521
+pictures: the bounds divergence recorded for Qwen3-VL.
+

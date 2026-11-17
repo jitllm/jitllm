@@ -217,10 +217,11 @@ func shortCropGeometry(short, w, h, side int) *jlm.PictureGeometry {
 // smartSize binds a picture's own size under Qwen2-VL's smart_resize: where
 // lift, a side shorter than factor scaled up first so that side is factor
 // and each truncated; each side rounded half to even to a multiple of
-// factor, at least one; then past maxPix both scaled down by sqrt(area /
-// maxPix) and floored to factors, at least one, or short of minPix scaled up
-// by sqrt(minPix / area) and ceiled.
-func (b *geom) smartSize(w, h jlm.Arg, factor, minPix, maxPix int, lift bool) (ow, oh jlm.Arg) {
+// factor -- none for a side under half of one, or at least one where floor
+// (LFM2-VL's); then past maxPix both scaled down by sqrt(area / maxPix) and
+// floored to factors, at least one, or short of minPix scaled up by
+// sqrt(minPix / area) and ceiled.
+func (b *geom) smartSize(w, h jlm.Arg, factor, minPix, maxPix int, lift, floor bool) (ow, oh jlm.Arg) {
 	fa := k(float64(factor))
 	if lift {
 		small := func(e *sizes) jlm.Arg { return e.add(e.less(w, fa), e.less(h, fa)) }
@@ -229,7 +230,13 @@ func (b *geom) smartSize(w, h jlm.Arg, factor, minPix, maxPix int, lift bool) (o
 		lh := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(h, scale(e))), h) })
 		w, h = lw, lh
 	}
-	round := func(e *sizes, v jlm.Arg) jlm.Arg { return e.mul(e.max(e.roundEven(e.div(v, fa)), k(1)), fa) }
+	round := func(e *sizes, v jlm.Arg) jlm.Arg {
+		n := e.roundEven(e.div(v, fa))
+		if floor {
+			n = e.max(n, k(1))
+		}
+		return e.mul(n, fa)
+	}
 	rw := b.value(func(e *sizes) jlm.Arg { return round(e, w) })
 	rh := b.value(func(e *sizes) jlm.Arg { return round(e, h) })
 	// Side v of the picture, r its rounding.
@@ -324,7 +331,7 @@ func videoGeometry(factor, minPix, maxPix, per int, alone bool, patch int) *jlm.
 // read in patches of patch pixels.
 func smartGeometry(factor, minPix, maxPix int, lift bool, patch int) *jlm.PictureGeometry {
 	b := newGeom()
-	ow, oh := b.smartSize(pw(), ph(), factor, minPix, maxPix, lift)
+	ow, oh := b.smartSize(pw(), ph(), factor, minPix, maxPix, lift, false)
 	b.ownSize(ow, oh, patch)
 	return b.done(factor, maxPix, maxPix/(patch*patch))
 }
@@ -695,7 +702,7 @@ func canvasGeometry(most, s, side int, marks bool) *jlm.PictureGeometry {
 }
 
 // smartTileGeometry is LFM2-VL's: the picture at its own size (smartSize
-// over unit, minPix and maxPix, no lift); where its sides, rounded half to
+// over unit, minPix and maxPix, no lift, each side at least a unit); where its sides, rounded half to
 // even to units and at least a patch each, hold more than tolerance times
 // maxPix pixels, cut into the grid of minT to maxT s-pixel tiles closest to
 // its aspect, resized onto it and cut row-major, each tile marked by its
@@ -703,7 +710,7 @@ func canvasGeometry(most, s, side int, marks bool) *jlm.PictureGeometry {
 // marked after them; else the one piece at its own size.
 func smartTileGeometry(s, minT, maxT, smartPatch, unit, minPix, maxPix int, tolerance float32, patch int) *jlm.PictureGeometry {
 	b := newGeom()
-	ow, oh := b.smartSize(pw(), ph(), unit, minPix, maxPix, false)
+	ow, oh := b.smartSize(pw(), ph(), unit, minPix, maxPix, false, true)
 	u := k(float64(unit))
 	round := func(e *sizes, v jlm.Arg) jlm.Arg {
 		return e.max(k(float64(smartPatch)), e.mul(e.roundEven(e.div(v, u)), u))
