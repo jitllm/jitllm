@@ -259,11 +259,10 @@ type Config struct {
 	expWidth int
 	// LatentNormEps is the MLA latent norms' epsilon.
 	LatentNormEps float64
-	// noRouter marks the blocks of a mixture model that carry no router:
-	// Nemotron 3's mixer-only layers and Jamba's dense blocks between its
-	// mixtures. MoEAt is false there. Read off the container at build(), nil
-	// when no block is one.
-	noRouter []bool
+	// routed marks the blocks that store a router, the mixture blocks
+	// (MoEAt): read off the container at build(), nil on a model with no
+	// mixture.
+	routed []bool
 
 	// The classic block (C6); see jlm.FlagLayerNorm and jlm.FlagParallel.
 	// LayerNorm makes every text-graph norm mean-centred, with the norm's
@@ -539,17 +538,13 @@ func (c *Config) RopeW() int {
 	return c.NRot
 }
 
-// MoEAt reports whether block li has a mixture feed-forward. MoE() is a
-// property of the model and this of the block: DeepSeek's first NDenseLead
-// blocks are dense, and Llama 4 interleaves with period MoEStep.
-//
-// The forward paths branch on the router tensor's presence instead; the loader
-// asks this because it runs before the tensors are bound.
+// MoEAt reports whether block li has a mixture feed-forward: it stores the
+// router its stated graph routes its experts by. MoE() is a property of the
+// model and this of the block: DeepSeek's leading blocks are dense, Llama 4
+// interleaves, Nemotron 3's mixer-only layers and Jamba's dense blocks carry
+// no router, and each is a block that stores none.
 func (c *Config) MoEAt(li int) bool {
-	if !c.MoE() || li < c.NDenseLead || li < len(c.noRouter) && c.noRouter[li] {
-		return false
-	}
-	return c.MoEStep <= 1 || (li+1)%c.MoEStep == 0
+	return c.MoE() && li >= 0 && li < len(c.routed) && c.routed[li]
 }
 
 // QKNormShape gives the q and k RMSNorm loops their group counts and widths.
@@ -2323,18 +2318,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, fmt.Errorf("model: %d tap rows added after the first of %d blocks", cfg.DeepTaps, cfg.NLayer)
 		}
 	}
-	// A block of a mixture model with no router is not a mixture: its mixer
-	// alone (Nemotron 3) or a dense FFN (Jamba). Read off the tensors: the
-	// container states the mixture model-wide.
+	// A block of a mixture model is a mixture where it stores a router: the
+	// container states the mixture model-wide, and a block with none runs
+	// its mixer alone (Nemotron 3) or a dense FFN (Jamba, DeepSeek's lead).
 	if cfg.MoE() {
-		absent := make([]bool, cfg.NLayer+cfg.NMTP)
-		some := false
-		for i := range absent {
-			absent[i] = !c.Has(jlm.RoleRouter, int32(i), -1)
-			some = some || absent[i]
-		}
-		if some {
-			cfg.noRouter = absent
+		cfg.routed = make([]bool, cfg.NLayer+cfg.NMTP)
+		for i := range cfg.routed {
+			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(i), -1)
 		}
 	}
 	// Mamba-1's dt rank is its x_proj's dt rows.
