@@ -109,10 +109,9 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 			}
 			old := func() string {
 				p := filepath.Join(t.TempDir(), "old"+Ext)
-				if _, err := Write(p, migrateSource(audio, true), fp); err != nil {
-					t.Fatal(err)
-				}
-				if err := setVersion(p, 29); err != nil {
+				// v29's config record, which carries the prediction blocks'
+				// count v33's does not.
+				if _, err := writeAt(p, migrateSource(audio, true), fp, 29); err != nil {
 					t.Fatal(err)
 				}
 				return p

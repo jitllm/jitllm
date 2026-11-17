@@ -109,9 +109,9 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := s.Config
-	if c.NLayer != 1 || c.NMTP != 1 {
-		t.Fatalf("NLayer %d, NMTP %d: the MTP block must be one prediction block past a one-block trunk",
-			c.NLayer, c.NMTP)
+	if np := predictionBlocks(c, s.Tensors); c.NLayer != 1 || np != 1 {
+		t.Fatalf("NLayer %d, %d prediction blocks: the MTP block must be one prediction block past a one-block trunk",
+			c.NLayer, np)
 	}
 	mtp := map[jlm.Role]bool{}
 	for i := range s.Tensors {
@@ -119,8 +119,8 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 			mtp[e.Role] = true
 		}
 	}
-	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RoleNextnEHProj, jlm.RoleNextnENorm,
-		jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm} {
+	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RolePredictProj, jlm.RolePredictTokenNorm,
+		jlm.RolePredictHiddenNorm, jlm.RolePredictHeadNorm} {
 		if !mtp[r] {
 			t.Fatalf("the prediction block lost its %v", r)
 		}

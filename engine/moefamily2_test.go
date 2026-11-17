@@ -32,7 +32,7 @@ func moe2Fixtures() []struct {
 			return c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
 				!c.QKNormWide && c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 &&
 				c.NExpert == 16 && c.NExpertUsed == 4 && c.NExpertGroup == 4 && c.NExpertGroupUsed == 2 &&
-				c.NFFNShExp == int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 &&
+				c.NFFNShExp == int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 && c.NLayer == 3 && c.NPredict == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd &&
 				dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
 				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.Matrix(jlm.RoleShExpGate) != nil &&
@@ -46,7 +46,7 @@ func moe2Fixtures() []struct {
 			return c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && !c.QKNormWide &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) &&
-				c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
+				c.NDenseLead == 1 && c.NLayer == 3 && c.NPredict == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
 				windowOf(m) == 0 && dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
 				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.Matrix(jlm.RoleShExpGate) != nil &&
 				moe.Vector(jlm.RoleShRouter) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil && moe.Vector(jlm.RoleAttnKNorm) != nil &&

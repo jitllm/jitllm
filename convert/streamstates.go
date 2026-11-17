@@ -225,7 +225,7 @@ func stateGraphStreams(c *jlm.Config, s *jlm.Source, g *mjGraph, src jinja.Value
 	if c.Streams.Head, err = streamSub(st.Head, sp, held, int(n)); err != nil {
 		return err
 	}
-	c.Streams.Blocks = make([]jlm.BlockStreams, c.NLayer+c.NMTP)
+	c.Streams.Blocks = make([]jlm.BlockStreams, c.NLayer+predictionBlocks(c, s.Tensors))
 	for li := range c.Streams.Blocks {
 		bf, vars := facts(li)
 		sp, held := builder(bf, vars, fmt.Sprintf("block %d's streams", li))

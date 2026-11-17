@@ -381,7 +381,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	s.Tensors = append(s.Tensors, bs...)
-	if s.Tensors, err = nextnTensors(s.Tensors, c); err != nil {
+	if s.Tensors, err = predictTensors(s.Tensors, c); err != nil {
 		return nil, err
 	}
 	// A tower's staged blocks carry their places, {stage, place in the stage}.
@@ -429,7 +429,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		return nil, err
 	}
 	storeRowTables(c.Config, s)
-	if err := StateSelection(c.Config, sourceStores(s)); err != nil {
+	if err := StateSelection(c.Config, predictionBlocks(c.Config, s.Tensors), sourceStores(s)); err != nil {
 		return nil, err
 	}
 	if err := expertsFit(c, s); err != nil {

@@ -418,19 +418,20 @@ const (
 	RoleAttnNorm2     Role = 122
 	RoleAttnNorm2Bias Role = 123
 
-	// A multi-token-prediction block's own tensors (Config.NMTP). eh_proj takes
-	// the normed embedding of the next token concatenated with the normed
-	// hidden state, in that order, to one residual row; the two norms are
+	// A prediction block's own tensors (Config.PredictionBlocks). The
+	// projection takes the normed embedding of the next token concatenated
+	// with the trunk's normed hidden state, in that order, to one residual
+	// row; the two norms are
 	// vectors. The head norm and the head are optional: absent, the trunk's
 	// output norm and output projection serve, which is what every Qwen3.5
-	// file means. RoleNextnEmbd is a prediction block's own embedding table,
+	// file means. RolePredictEmbd is a prediction block's own embedding table,
 	// absent where the trunk's serves.
-	RoleNextnEHProj   Role = 124 // [k=2*n_embd, rows=n_embd]
-	RoleNextnENorm    Role = 125
-	RoleNextnHNorm    Role = 126
-	RoleNextnHeadNorm Role = 127
-	RoleNextnHead     Role = 128 // [k=n_embd, rows=n_vocab]
-	RoleNextnEmbd     Role = 129 // [k=n_embd, rows=n_vocab]
+	RolePredictProj       Role = 124 // [k=2*n_embd, rows=n_embd]
+	RolePredictTokenNorm  Role = 125
+	RolePredictHiddenNorm Role = 126
+	RolePredictHeadNorm   Role = 127
+	RolePredictHead       Role = 128 // [k=n_embd, rows=n_vocab]
+	RolePredictEmbd       Role = 129 // [k=n_embd, rows=n_vocab]
 
 	// MiniCPM-V's resampler projector: a perceiver with one cross-attention
 	// layer whose Queries learned queries attend over the tower's patches. Its
@@ -716,18 +717,18 @@ func coreRoleName(r Role) (string, bool) {
 		return "attn_norm_2", true
 	case RoleAttnNorm2Bias:
 		return "attn_norm_2.bias", true
-	case RoleNextnEHProj:
-		return "nextn.eh_proj", true
-	case RoleNextnENorm:
-		return "nextn.enorm", true
-	case RoleNextnHNorm:
-		return "nextn.hnorm", true
-	case RoleNextnHeadNorm:
-		return "nextn.shared_head_norm", true
-	case RoleNextnHead:
-		return "nextn.shared_head_head", true
-	case RoleNextnEmbd:
-		return "nextn.embed_tokens", true
+	case RolePredictProj:
+		return "predict.proj", true
+	case RolePredictTokenNorm:
+		return "predict.token_norm", true
+	case RolePredictHiddenNorm:
+		return "predict.hidden_norm", true
+	case RolePredictHeadNorm:
+		return "predict.head_norm", true
+	case RolePredictHead:
+		return "predict.head", true
+	case RolePredictEmbd:
+		return "predict.embd", true
 	case RoleVRsQuery:
 		return "v_rs_query", true
 	case RoleVRsKV:
@@ -977,7 +978,7 @@ func (r Role) Expanded() bool {
 		// them. The head's bias is a dense-block tensor and resident anyway.
 		RoleAttnNormBias, RoleFFNNormBias, RoleOutputNormBias, RoleOutputBias,
 		// A prediction block's three norms, vectors like every norm here.
-		RoleNextnENorm, RoleNextnHNorm, RoleNextnHeadNorm:
+		RolePredictTokenNorm, RolePredictHiddenNorm, RolePredictHeadNorm:
 		return true
 	}
 	return r == RoleXIELU || r == RoleAttnSubNorm || r == RoleFFNSubNorm || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r) ||

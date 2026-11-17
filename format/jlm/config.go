@@ -257,21 +257,11 @@ type Config struct {
 	NExpertGroup     uint32
 	NExpertGroupUsed uint32
 
-	// NMTP is how many multi-token-prediction blocks follow the trunk: blocks
-	// NLayer..NLayer+NMTP-1 of the text page array. Zero means none. A block
-	// of that range is an ordinary attention block of this architecture (its
-	// layer kind is LayerFullAttn whatever LayerKinds says of the trunk, and a
-	// mixture where MoEAt says so) plus the roles only a prediction block has:
-	//
-	//	enorm(embedding of the next token)   RoleNextnENorm
-	//	hnorm(the trunk's normed hidden)     RoleNextnHNorm
-	//	eh_proj([enorm ; hnorm])             RoleNextnEHProj, 2*NEmbd -> NEmbd
-	//	the block, then its own head norm    RoleNextnHeadNorm (optional:
-	//	                                     the trunk's output norm otherwise)
-	//
-	// and the head is the trunk's unless the block carries RoleNextnHead. The
-	// blocks serve speculative drafting only; nothing in the trunk reads them.
-	NMTP uint32
+	// legacyPredict is the count of prediction blocks a record written before
+	// v33 carried, which the migration to v33 holds to the blocks the graph
+	// statement states past the trunk (PredictionBlocks). A v33 record
+	// carries no count.
+	legacyPredict uint32
 
 	// MoEStep interleaves dense and mixture blocks: block il has a mixture
 	// feed-forward when (il+1) % MoEStep == 0. Zero or one means every block

@@ -73,7 +73,7 @@ func openSpecModel(t *testing.T, name string, opts ...Option) (*model.Model, []O
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Cfg.NMTP == 0 {
+	if m.Cfg.NPredict == 0 {
 		m.Close()
 		t.Fatalf("%s carries no prediction block: the gate would test nothing it exists for", name)
 	}

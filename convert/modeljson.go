@@ -1641,7 +1641,7 @@ func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
 		return nil
 	}
 	step := max(cfg.MoEStep, 1)
-	for b := range int(cfg.NLayer + cfg.NMTP) {
+	for b := range int(cfg.NLayer + cfg.NPredict) {
 		want := uint32(b) >= cfg.NDenseLead && uint32(b+1)%step == 0
 		var what string
 		switch {

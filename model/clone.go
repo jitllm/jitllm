@@ -65,7 +65,7 @@ func (l *Layer) CloneTo(dst *Layer) {
 		own(&dst.Experts[i].Down)
 	}
 	if w != nil {
-		own(&w.EhProj)
+		own(&w.Proj)
 		own(&w.Head)
 		own(&w.Embd)
 	}

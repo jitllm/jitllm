@@ -535,11 +535,11 @@ func TestGlm4MoeThroughTheLibrary(t *testing.T) {
 			t.Fatalf("%s: %v", r.name, err)
 		}
 		want := jlm.FlagRopeNeox | jlm.FlagExpertSigmoid
-		if cfg.Name != "glm4moe" || cfg.NLayer != 3 || cfg.NMTP != r.mtp || cfg.NRot != 8 || cfg.HeadDim != 16 ||
+		if cfg.Name != "glm4moe" || cfg.NLayer != 3 || cfg.NPredict != r.mtp || cfg.NRot != 8 || cfg.HeadDim != 16 ||
 			cfg.Flags&want != want || cfg.Flags.Has(jlm.FlagQKNorm) != r.qk || cfg.NDenseLead != 1 ||
 			cfg.ExpertScale != 2.5 || cfg.NFFNShExp != 32 || cfg.Flags.Has(jlm.FlagNoExpertNorm) {
 			t.Errorf("%s: %d blocks and %d predicting, rotary %d of %d, lead %d, scale %v, shared %d, flags %v",
-				r.name, cfg.NLayer, cfg.NMTP, cfg.NRot, cfg.HeadDim, cfg.NDenseLead, cfg.ExpertScale, cfg.NFFNShExp, cfg.Flags)
+				r.name, cfg.NLayer, cfg.NPredict, cfg.NRot, cfg.HeadDim, cfg.NDenseLead, cfg.ExpertScale, cfg.NFFNShExp, cfg.Flags)
 		}
 	}
 	whole := slices.Concat(trunk, qk, mtp)

@@ -12,7 +12,7 @@ import (
 // holds one no block reads.
 func TestBlockGraphsRoundTrip(t *testing.T) {
 	g := BlockGraphs{Graphs: []string{"first", "second"}, Of: []uint16{0, 1, 1, 0}}
-	c := &Config{NLayer: 3, NMTP: 1, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16,
+	c := &Config{NLayer: 3, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16,
 		NVocab: 32, NCtx: 64, Blocks: g}
 	got, err := decodeConfig(encodeConfig(c))
 	if err != nil {
@@ -37,7 +37,7 @@ func TestBlockGraphsRoundTrip(t *testing.T) {
 		name, want string
 		g          BlockGraphs
 	}{
-		{"a block left out", "for 3 blocks of 4", BlockGraphs{Graphs: []string{"a"}, Of: []uint16{0, 0, 0}}},
+		{"a block left out", "for 2 blocks of 3", BlockGraphs{Graphs: []string{"a"}, Of: []uint16{0, 0}}},
 		{"a graph it does not hold", "is 2 of 2", BlockGraphs{Graphs: []string{"a", "b"}, Of: []uint16{0, 1, 2, 0}}},
 		{"a graph no block reads", "no block's", BlockGraphs{Graphs: []string{"a", "b"}, Of: []uint16{0, 0, 0, 0}}},
 		{"an empty graph", "0 bytes", BlockGraphs{Graphs: []string{""}, Of: []uint16{0, 0, 0, 0}}},

@@ -3415,7 +3415,7 @@ the choice is named.
 | post_attention_norm = the FFN's input norm | `retarget` |
 | sigmoid, selection bias, renormalise, routed scale | DeepSeek-V3's router, unchanged |
 | one ungated shared expert, one dense lead | keys, read for every mixture |
-| one prediction block | `NMTP`, set aside by `nextnOf` |
+| one prediction block | `PredictionBlocks`, set aside by `predictOf` |
 
 The router, four implementations:
 
@@ -3613,7 +3613,7 @@ AND THE WORK IS READING EACH ROUTER OFF ITS REFERENCE.** **glm4moe** (GLM-4.5,
 4.6, 4.5-Air) is DeepSeek-V3's router -- sigmoid, the selection-only bias,
 renormalised, a routed scale -- on GQA attention with biased q/k/v, an
 optional per-head q/k norm and NEOX rotary on half the head, after a dense
-lead, with a prediction block set aside (`NMTP`). Its `post_attention_norm` is
+lead, with a prediction block set aside (`PredictionBlocks`). Its `post_attention_norm` is
 the FFN norm (`retarget`). The gate is sigmoid WHATEVER the file says:
 transformers' `Glm4MoeTopkRouter`, vLLM and SGLang all hardcode it, and a file
 stating softmax is refused (`convert/moefamily.go`). Gated on `synth-glm4moe`
@@ -9737,7 +9737,7 @@ residency, paging and placement cannot treat it as KV.
 
 Speculative decoding with the model's own multi-token-prediction block.
 
-A model that ships prediction blocks (jlm.Config.NMTP: Qwen3.5/3.6,
+A model that ships prediction blocks (jlm.Config.PredictionBlocks: Qwen3.5/3.6,
 DeepSeek-V3-class, GLM-4.7-Flash) carries a one-block drafter trained beside
 it. Row q of the draft is the token at q and the trunk's normed hidden state
 at q-1 (zero at q = 0), and it predicts the token at q+1:

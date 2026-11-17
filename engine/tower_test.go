@@ -118,7 +118,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	}
 	defer m.Close()
 	v := m.Container.Vision()
-	if m.TowerBase != m.Cfg.NLayer+m.Cfg.NMTP || m.Blocks() != m.TowerBase+int(v.NLayer) {
+	if m.TowerBase != m.Cfg.NLayer+m.Cfg.NPredict || m.Blocks() != m.TowerBase+int(v.NLayer) {
 		t.Fatalf("the tower's %d blocks start at %d of %d, want after the %d text blocks", v.NLayer, m.TowerBase, m.Blocks(), m.Cfg.NLayer)
 	}
 	fr := testFrames(t, m, jlm.Budget(page))

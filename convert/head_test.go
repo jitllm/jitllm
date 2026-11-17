@@ -56,7 +56,7 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := f.Config()
-	nmtp, nlayer := c.NMTP, c.NLayer
+	nmtp, nlayer := c.PredictionBlocks(), c.NLayer
 	_, own := f.Find(jlm.RoleHCHeadNorm, int32(nlayer), -1)
 	f.Close()
 	if nmtp != 1 || !own {

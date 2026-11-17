@@ -34,7 +34,7 @@ func (c *Config) olderStatements() error {
 		return &UpgradeError{What: "the n-gram block", Reconvert: true}
 	case c.RopeLinear != 0 || c.YarnBetaFast != 0 || c.YarnBetaSlow != 0:
 		return &UpgradeError{What: "its rotary's scaling method", Reconvert: true}
-	case c.AttnResBlock != 0 && (c.HCMult != 0 || c.Flags.Has(FlagParallel) || c.NMTP != 0):
+	case c.AttnResBlock != 0 && (c.HCMult != 0 || c.Flags.Has(FlagParallel) || c.PredictionBlocks() != 0):
 		return fmt.Errorf("jlm: a checkpoint bank every %d blocks beside another residual structure", c.AttnResBlock)
 	}
 	return nil

@@ -45,6 +45,8 @@ func migrationFor(v uint32, st Stating) func(path string) error {
 		return func(path string) error { return migrate30(path, st) }
 	case 31:
 		return migrate31
+	case 32:
+		return migrate32
 	}
 	return nil
 }
@@ -183,6 +185,30 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// migrate32 is version 32 to 33. v33's config record keeps no count of
+// prediction blocks: they are the blocks the graph statement states past the
+// trunk (PredictionBlocks). A v32 record's count is held to that statement,
+// which every v32 writer wrote beside it, and the record is rewritten four
+// bytes shorter, every tensor's planes carried as they are. A count the
+// statement does not cover has no graph for its blocks, which is refused for
+// a conversion from the source.
+func migrate32(path string) error {
+	f, err := openAt(path, 32)
+	if err != nil {
+		return err
+	}
+	if n := f.cfg.legacyPredict; n != f.cfg.PredictionBlocks() {
+		f.Close()
+		return &UpgradeError{What: fmt.Sprintf("%d prediction blocks", n), Reconvert: true}
+	}
+	f.cfg.legacyPredict = 0
+	src := &Source{Config: f.cfg, Vision: f.vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return f.publish(path, src, 33)
 }
 
 // migrate31 is version 31 to 32. v32 added PrePattern, a pre-tokenizer stage
@@ -353,7 +379,7 @@ func migrate28(path string) error {
 }
 
 // migrate27 is version 27 to 28. v28 put the count of multi-token-prediction
-// blocks (Config.NMTP) into the config record after NExpertGroupUsed; a v27
+// blocks into the config record after NExpertGroupUsed (v33 took it out); a v27
 // container has none, so it is zero. The record grows by four bytes, which
 // moves every offset after it, so the container is rewritten with every
 // tensor's planes carried as they are.

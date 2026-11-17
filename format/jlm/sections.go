@@ -158,9 +158,14 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	w.f32(c.ExpertScale)
 	w.u32(c.NExpertGroup)
 	w.u32(c.NExpertGroupUsed)
-	// v28: the prediction blocks after the trunk.
-	if v >= 28 {
-		w.u32(c.NMTP)
+	// v28 to v32: the count of prediction blocks after the trunk, which v33
+	// reads from the graph statement instead.
+	if v >= 28 && v < 33 {
+		n := c.legacyPredict
+		if n == 0 {
+			n = c.PredictionBlocks()
+		}
+		w.u32(n)
 	}
 	// (ERNIE 4.5's mixtures write the interleave too, under ArchErnie45MoE,
 	// another code an older reader refuses.)
@@ -487,9 +492,10 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	c.ExpertScale = r.f32()
 	c.NExpertGroup = r.u32()
 	c.NExpertGroupUsed = r.u32()
-	// v28 added the prediction blocks' count; an older record has none.
-	if v >= 28 {
-		c.NMTP = r.u32()
+	// v28 to v32 carried the prediction blocks' count, which v33 reads from
+	// the graph statement.
+	if v >= 28 && v < 33 {
+		c.legacyPredict = r.u32()
 	}
 	// The optional tail; see encodeConfig. Absent means all zero, which is what
 	// every architecture but Llama 4 is.
@@ -693,10 +699,10 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if err := exprsValid(c); err != nil {
 		return nil, err
 	}
-	if err := c.Streams.valid(int(c.NLayer + c.NMTP)); err != nil {
+	if err := c.Streams.valid(int(c.TextBlocks())); err != nil {
 		return nil, err
 	}
-	if err := c.Selection.valid(int(c.NLayer+c.NMTP), func(li int) bool { return li < len(c.CompKinds) && c.CompKinds[li] != CompNone }); err != nil {
+	if err := c.Selection.valid(int(c.TextBlocks()), func(li int) bool { return li < len(c.CompKinds) && c.CompKinds[li] != CompNone }); err != nil {
 		return nil, err
 	}
 	if c.ActQuant > ActQuantRowInt8 {

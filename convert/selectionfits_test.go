@@ -41,7 +41,7 @@ func TestASelectionOffTheHeadIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := base()
 			tc.change(c)
-			err := StateSelection(c, stores)
+			err := StateSelection(c, 0, stores)
 			if !tc.refuse {
 				if err != nil {
 					t.Fatal(err)

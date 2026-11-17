@@ -39,13 +39,28 @@ func decodeBlockGraphs(r *rbuf) BlockGraphs {
 	return g
 }
 
+// PredictionBlocks is how many prediction blocks follow the trunk: the
+// blocks the graph statement states past the trunk's NLayer in a model with
+// no head blocks, which follow the trunk instead. A prediction block is a
+// block like any other; what it reads and produces is its graph's and its
+// tensors', and the record keeps no count of them.
+func (c *Config) PredictionBlocks() uint32 {
+	if c.HeadBlocks() != 0 || len(c.Blocks.Of) <= int(c.NLayer) {
+		return 0
+	}
+	return uint32(len(c.Blocks.Of)) - c.NLayer
+}
+
+// TextBlocks is the trunk's blocks and the prediction blocks after it.
+func (c *Config) TextBlocks() uint32 { return c.NLayer + c.PredictionBlocks() }
+
 // statedBlocks is how many blocks' graphs c states, and the count a
 // container written before HeadGraphsRevision may state instead, its head
 // blocks left to the config.
 func (c *Config) statedBlocks() (blocks, short int) {
-	blocks = int(c.NLayer + c.HeadBlocks() + c.NMTP)
+	blocks = int(c.NLayer + c.HeadBlocks() + c.PredictionBlocks())
 	if c.Revision < HeadGraphsRevision {
-		return blocks, int(c.NLayer + c.NMTP)
+		return blocks, int(c.TextBlocks())
 	}
 	return blocks, blocks
 }

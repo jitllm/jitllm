@@ -22,12 +22,12 @@ func TestKVSourceIsTheRuntimesRule(t *testing.T) {
 		{"a recurrent block keeps no history", Config{NLayer: 6, NKVShared: 3,
 			LayerKinds: []LayerKind{LayerFullAttn, LayerFullAttn, LayerSSD, LayerFullAttn, LayerSSD, LayerFullAttn}},
 			[]int{0, 1, 2, 1, 4, 1}},
-		{"a prediction block keeps its own", Config{NLayer: 4, NKVShared: 2, NMTP: 1},
+		{"a prediction block keeps its own", Config{NLayer: 4, NKVShared: 2},
 			[]int{0, 1, 1, 1, 4}},
 	}
 	for _, tc := range cases {
 		var got []int
-		for b := range int(tc.c.NLayer + tc.c.NMTP) {
+		for b := range len(tc.want) {
 			got = append(got, tc.c.KVSource(b))
 		}
 		if !slices.Equal(got, tc.want) {

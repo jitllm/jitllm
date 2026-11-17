@@ -1185,7 +1185,7 @@ shipped with Ling-mini-2.0); transformers has no class for it.
 | group-limited top-k | `n_group` 8, `topk_group` 4, group score = top-2 sum | `NExpertGroup`, `ExpertGroupScore` |
 | renormalised `+1e-20`, routed scale 2.5 | `BailingMoeV2Gate.forward` | `MoESumFloor`, `ExpertScale` |
 | shared expert, dense lead | `num_shared_experts`, `first_k_dense_replace` | `NFFNShExp`, `NDenseLead` |
-| MTP layers | `num_nextn_predict_layers` (0 on Ling-mini) | `nextnOf`, set aside |
+| MTP layers | `num_nextn_predict_layers` (0 on Ling-mini) | `predictOf`, set aside |
 
 **Cost: none of it is new.** The arch code, `fusesQKV`, the router gate held
 to sigmoid (the class hardcodes `torch.sigmoid`) and a fixture whose

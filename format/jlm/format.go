@@ -46,6 +46,9 @@ const Magic = "JITLLM\x00\x00"
 //
 // Revisions, newest first, each of which a previous reader would misread:
 //
+//	v33  the config record keeps no count of prediction blocks, which are
+//	     the blocks the graph statement states past the trunk
+//	     (PredictionBlocks)
 //	v32  a pre-tokenizer stage may be its Split's own pattern (PrePattern),
 //	     the regex and its invert flag in the vocab record's last tail
 //	v31  the config record names no architecture: its first two bytes are
@@ -53,8 +56,9 @@ const Magic = "JITLLM\x00\x00"
 //	v30  the audio tower's depthwise bias folded into RoleABNShift
 //	v29  a row table (RowTable) after the page arrays, read a row at a time,
 //	     and TypeIQ4NL
-//	v28  multi-token-prediction blocks kept after the trunk (Config.NMTP) and
-//	     the roles that make one (RoleNextnEHProj and its siblings)
+//	v28  multi-token-prediction blocks kept after the trunk, counted in the
+//	     config record until v33, and the roles that make one (role codes
+//	     124 to 129, RolePredictProj and its siblings)
 //	v27  Q4_K/Q5_K sub-block scales and minima packed as a 96-bit stream, the
 //	     GGUF's own 12 bytes (kernels.ScStream)
 //	v26  a mixture's experts split out of the block page into a third page
@@ -74,7 +78,7 @@ const Magic = "JITLLM\x00\x00"
 //	     block, index) identity, a typed config and pre-tokenizer stages
 //	v5   Q6_K's payload is a 4-bit plus a 2-bit plane
 //	v3   no tensor is in GGUF layout
-const Version = 32
+const Version = 33
 
 // HeaderBytes is the fixed header. Everything after it is located by offset.
 // It is 192 because every offset in this header is u64; squeezing offsets

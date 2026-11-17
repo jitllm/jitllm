@@ -603,8 +603,9 @@ func (v tensorNames) blockRole(name string) (jlm.Role, bool) {
 // prediction blocks'. Each feature a block takes is added to taken where it
 // is not nil (FeaturesOf).
 func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, taken map[string]bool) error {
-	if c.HeadBlocks() != 0 && c.NMTP != 0 {
-		return fmt.Errorf("convert: %d head blocks beside %d prediction blocks, which both follow the trunk", c.HeadBlocks(), c.NMTP)
+	np := predictionBlocks(c.Config, s.Tensors)
+	if c.HeadBlocks() != 0 && np != 0 {
+		return fmt.Errorf("convert: %d head blocks beside %d prediction blocks, which both follow the trunk", c.HeadBlocks(), np)
 	}
 	// The rotary ops turn by the factors stated per pair.
 	if err := StateRotary(c.Config, s); err != nil {
@@ -618,7 +619,7 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, tak
 	if err != nil {
 		return err
 	}
-	n := int(c.NLayer + c.HeadBlocks() + c.NMTP)
+	n := int(c.NLayer + c.HeadBlocks() + np)
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
 	for li := range n {
@@ -1677,7 +1678,7 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int, names tensorNames) *bloc
 			}
 			continue
 		}
-		if int(t.Block) != li || t.Role.Vision() || nextnRole(t.Role) || t.Index >= 0 {
+		if int(t.Block) != li || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
 			continue
 		}
 		sh := graph.Shape{K: int(t.Dims[0])}
@@ -1712,16 +1713,6 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int, names tensorNames) *bloc
 		}
 	}
 	return bf
-}
-
-// nextnRole is a prediction block's entry's tensor, which its entry's graph
-// binds, not its body's.
-func nextnRole(r jlm.Role) bool {
-	switch r {
-	case jlm.RoleNextnEHProj, jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm, jlm.RoleNextnHead, jlm.RoleNextnEmbd:
-		return true
-	}
-	return false
 }
 
 // vars are the facts as a graph's expressions read them: the block's index,

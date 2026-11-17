@@ -1875,7 +1875,7 @@ func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 	// The block is on the card, so the host gives up its page; pageIn
 	// re-reads it if the seam later moves the block back. Asked, not
 	// assumed: a unified device's buffers alias host memory.
-	// A prediction block keeps its page: its eh_proj runs on the host every
+	// A prediction block keeps its page: its projection runs on the host every
 	// draft step (Speculator.draftRows), and re-reading the page for it
 	// would cost a block of I/O a step.
 	if r, ok := ld.(nn.HostPageReleaser); ok && r.ReleasesHostPage(li) && l.Mtp == nil {

@@ -364,8 +364,8 @@ func Write(dst string, src *Source, fp Fingerprint) (*Header, error) {
 // other byte is the current layout, which each migration's step gate holds
 // to v's own writer (TestEachStepIsItsVersionsWriter).
 func writeAt(dst string, src *Source, fp Fingerprint, v uint32) (*Header, error) {
-	if v < 28 && src.Config != nil && src.Config.NMTP != 0 {
-		return nil, fmt.Errorf("jlm: a version %d container cannot state %d prediction blocks", v, src.Config.NMTP)
+	if v < 28 && src.Config != nil && src.Config.PredictionBlocks() != 0 {
+		return nil, fmt.Errorf("jlm: a version %d container cannot state %d prediction blocks", v, src.Config.PredictionBlocks())
 	}
 	l, err := layoutOf(src, fp, v)
 	if err != nil {

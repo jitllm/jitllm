@@ -174,10 +174,11 @@ type Config struct {
 	// none.
 	QKVAct *jlm.Expr
 
-	// NMTP is how many multi-token-prediction blocks follow the trunk (blocks
-	// NLayer..NLayer+NMTP-1); zero for a model that ships none. They run only
-	// for speculative drafting (spec.go), never in the trunk.
-	NMTP int
+	// NPredict is how many prediction blocks follow the trunk (blocks
+	// NLayer..NLayer+NPredict-1), the blocks the container states past it
+	// (jlm.Config.PredictionBlocks); zero for a model that ships none. They
+	// run only for speculative drafting (spec.go), never in the trunk.
+	NPredict int
 
 	// geoms is each block's own geometry where the blocks differ
 	// (jlm.Config.Geoms), nil when every block is the model's; mixed says
@@ -586,7 +587,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	}
 	out := &Config{
 		NLayer:       int(c.NLayer),
-		NMTP:         int(c.NMTP),
+		NPredict:     int(c.PredictionBlocks()),
 		NEmbd:        int(c.NEmbd),
 		NHead:        int(c.NHead),
 		NKVHead:      int(c.NKVHead),
@@ -810,19 +811,19 @@ type Layer struct {
 	NoFFN bool
 
 	// mtp is a multi-token-prediction block's own weights, nil on every trunk
-	// block. See jlm.Config.NMTP.
+	// block. See jlm.Config.PredictionBlocks.
 	Mtp *mtpWeights
 }
 
-// mtpWeights is what a prediction block has beyond an ordinary block: the two
-// eh_proj that makes its residual from the next token's embedding and the
+// mtpWeights is what a prediction block has beyond an ordinary block: the
+// projection that makes its residual from the next token's embedding and the
 // trunk's hidden state (its two input norms are the block's vectors), and its
 // head norm. head and embd are
 // the block's own copies where the container kept them (they differed from the
 // trunk's); otherwise they are the trunk's, as headNorm is the trunk's output
 // norm where the block has none.
 type mtpWeights struct {
-	EhProj     Tensor
+	Proj       Tensor
 	HeadNorm   []float32
 	Head, Embd Tensor
 	// ownEmbd says embd is the block's own table, not the trunk's.
@@ -2003,7 +2004,7 @@ func ReleaseLayer(c *jlm.Frames, li int, l *Layer, keepExperts bool) {
 		}
 	}
 	if w := l.Mtp; w != nil {
-		for _, t := range []*Tensor{&w.EhProj, &w.Head, &w.Embd} {
+		for _, t := range []*Tensor{&w.Proj, &w.Head, &w.Embd} {
 			if t.E == nil || t.E.Block == jlm.DenseBlock {
 				continue // the trunk's, in the dense region
 			}
@@ -2052,13 +2053,13 @@ func bindPacked(c *jlm.Frames, cfg *Config, l *Layer) error {
 	for _, m := range l.Mats {
 		bindOne(c, m.T)
 	}
-	// A prediction block's eh_proj, head and embedding. The head and the
+	// A prediction block's projection, head and embedding. The head and the
 	// embedding are copies of the trunk's tensors unless the block carries its
 	// own, and a copy taken at build() predates binding, so it is bound here
 	// too; a dense span never moves, so after the first time this writes
 	// nothing.
 	if w := l.Mtp; w != nil {
-		for _, t := range []*Tensor{&w.EhProj, &w.Head, &w.Embd} {
+		for _, t := range []*Tensor{&w.Proj, &w.Head, &w.Embd} {
 			bindOne(c, t)
 		}
 	}
@@ -2151,7 +2152,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	// container states the mixture model-wide, and a block with none runs
 	// its mixer alone (Nemotron 3) or a dense FFN (Jamba, DeepSeek's lead).
 	if cfg.MoE() {
-		cfg.routed = make([]bool, cfg.NLayer+cfg.NMTP)
+		cfg.routed = make([]bool, cfg.NLayer+cfg.NPredict)
 		for i := range cfg.routed {
 			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(i), -1)
 		}
@@ -2366,7 +2367,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if v := c.Vision(); v != nil && v.Tower != nil {
 		nvis = int(v.NLayer) + audioBlocks(v)
 	}
-	m.Layers = make([]Layer, cfg.NLayer+cfg.NMTP, max(cfg.NLayer+cfg.NMTP, int(c.H.NBlocks))+nvis)
+	m.Layers = make([]Layer, cfg.NLayer+cfg.NPredict, max(cfg.NLayer+cfg.NPredict, int(c.H.NBlocks))+nvis)
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
 		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block < 0 || int(e.Block) >= len(m.Layers) {
@@ -2500,31 +2501,31 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 }
 
 // buildMTP binds what each multi-token-prediction block has beyond the
-// ordinary block build() already bound (jlm.Config.NMTP).
+// ordinary block build() already bound (jlm.Config.PredictionBlocks).
 func buildMTP(c *jlm.File, m *Model,
 	get func(jlm.Role, int32, int32) (Tensor, error),
 	vec, optVec func(jlm.Role, int32) ([]float32, error)) error {
 	cfg := m.Cfg
-	for i := cfg.NLayer; i < cfg.NLayer+cfg.NMTP; i++ {
+	for i := cfg.NLayer; i < cfg.NLayer+cfg.NPredict; i++ {
 		bi := int32(i)
 		w := &mtpWeights{Head: m.Output, Embd: m.Embd, HeadNorm: m.OutNorm}
 		var err error
-		if w.EhProj, err = get(jlm.RoleNextnEHProj, bi, -1); err != nil {
+		if w.Proj, err = get(jlm.RolePredictProj, bi, -1); err != nil {
 			return err
 		}
-		if w.EhProj.K != 2*cfg.NEmbd || w.EhProj.Rows != cfg.NEmbd {
-			return fmt.Errorf("model: prediction block %d eh_proj is %dx%d, want %dx%d",
-				i, w.EhProj.K, w.EhProj.Rows, 2*cfg.NEmbd, cfg.NEmbd)
+		if w.Proj.K != 2*cfg.NEmbd || w.Proj.Rows != cfg.NEmbd {
+			return fmt.Errorf("model: prediction block %d's projection is %dx%d, want %dx%d",
+				i, w.Proj.K, w.Proj.Rows, 2*cfg.NEmbd, cfg.NEmbd)
 		}
-		enorm, err := vec(jlm.RoleNextnENorm, bi)
+		enorm, err := vec(jlm.RolePredictTokenNorm, bi)
 		if err != nil {
 			return err
 		}
-		hnorm, err := vec(jlm.RoleNextnHNorm, bi)
+		hnorm, err := vec(jlm.RolePredictHiddenNorm, bi)
 		if err != nil {
 			return err
 		}
-		if hn, err := optVec(jlm.RoleNextnHeadNorm, bi); err != nil {
+		if hn, err := optVec(jlm.RolePredictHeadNorm, bi); err != nil {
 			return err
 		} else if hn != nil {
 			w.HeadNorm = hn
@@ -2539,21 +2540,21 @@ func buildMTP(c *jlm.File, m *Model,
 		for _, v := range []struct {
 			name    string
 			n, want int
-		}{{"enorm", len(enorm), cfg.NEmbd}, {"hnorm", len(hnorm), hw},
+		}{{"token norm", len(enorm), cfg.NEmbd}, {"hidden norm", len(hnorm), hw},
 			{"shared_head_norm", len(w.HeadNorm), hn}} {
 			if v.n != v.want {
 				return fmt.Errorf("model: prediction block %d %s is %d wide, want %d", i, v.name, v.n, v.want)
 			}
 		}
 		// The block's own head and embedding exist only where they differed
-		// from the trunk's (convert.nextnTensors dropped the copies).
-		if c.Has(jlm.RoleNextnHead, bi, -1) {
-			if w.Head, err = get(jlm.RoleNextnHead, bi, -1); err != nil {
+		// from the trunk's (convert.predictTensors dropped the copies).
+		if c.Has(jlm.RolePredictHead, bi, -1) {
+			if w.Head, err = get(jlm.RolePredictHead, bi, -1); err != nil {
 				return err
 			}
 		}
-		if c.Has(jlm.RoleNextnEmbd, bi, -1) {
-			if w.Embd, err = get(jlm.RoleNextnEmbd, bi, -1); err != nil {
+		if c.Has(jlm.RolePredictEmbd, bi, -1) {
+			if w.Embd, err = get(jlm.RolePredictEmbd, bi, -1); err != nil {
 				return err
 			}
 			w.ownEmbd = true

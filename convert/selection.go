@@ -24,16 +24,17 @@ import (
 //     block's first position, IdxTopK/QSARatio read, on every attention
 //     block.
 //
+// The selection covers the trunk and the predict prediction blocks after it.
 // A block selects where it stores the indexer's key. Outside an MLA model
 // the key is cached as one more head of the block's history, so a key of
 // another width, groups that are neither one nor the kv heads, blocks of
 // several geometries or KV sharing are refused here, with the file in front
 // of a person.
-func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) error {
+func StateSelection(c *jlm.Config, predict uint32, stores func(r jlm.Role, li int32) bool) error {
 	if c.IdxHeads == 0 || c.NLayer == 0 {
 		return nil
 	}
-	n := c.NLayer + c.NMTP
+	n := c.NLayer + predict
 	id := int32(c.IdxHeadDim)
 	s := &jlm.Selection{Blocks: make([]bool, n), Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, KeyWidth: c.IdxHeadDim,
 		Groups: 1, Rank: jlm.RankBest, Block: 1, Keep: c.IdxTopK}

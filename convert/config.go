@@ -27,6 +27,10 @@ import (
 type Config struct {
 	*jlm.Config
 	Name string
+	// NPredict is how many prediction blocks the source counts after the
+	// trunk, the GGUF's nextn_predict_layers (predictOf): the converter's to
+	// check the blocks against, never the container's.
+	NPredict uint32
 	// SwiGLULimits is each block's SwiGLU clamp under Flag2SwiGLUClamp, the
 	// file's; nil for a container restated from its flag (Activation).
 	SwiGLULimits []float32
@@ -350,7 +354,7 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 	// block_count includes any multi-token-prediction blocks after the trunk;
 	// from here on NLayer is the trunk alone. Before the layer kinds below,
 	// which are the trunk's.
-	if err := nextnOf(f, c); err != nil {
+	if err := predictOf(f, c); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 

@@ -217,8 +217,14 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 			}
 		},
 
-		"NRot":             func(c *jlm.Config, mc *model.Config) { c.NRot = uint32(mc.NRot) },
-		"NMTP":             func(c *jlm.Config, mc *model.Config) { c.NMTP = uint32(mc.NMTP) },
+		"NRot": func(c *jlm.Config, mc *model.Config) { c.NRot = uint32(mc.NRot) },
+		// The prediction blocks are the blocks the statement states past the
+		// trunk.
+		"NPredict": func(c *jlm.Config, mc *model.Config) {
+			if n := mc.NLayer + mc.NPredict; n < len(c.Blocks.Of) {
+				c.Blocks.Of = c.Blocks.Of[:n]
+			}
+		},
 		"NFFNShExp":        func(c *jlm.Config, mc *model.Config) { c.NFFNShExp = uint32(mc.NFFNShExp) },
 		"NExpertUsed":      func(c *jlm.Config, mc *model.Config) { c.NExpertUsed = uint32(mc.NExpertUsed) },
 		"NExpertGroupUsed": func(c *jlm.Config, mc *model.Config) { c.NExpertGroupUsed = uint32(mc.NExpertGroupUsed) },

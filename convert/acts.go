@@ -179,7 +179,7 @@ func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
 			"and v31 records no architecture: convert the model again", jlm.SourceRevision)
 	}
 	if !sel {
-		if err := StateSelection(c.Config, func(r jlm.Role, li int32) bool {
+		if err := StateSelection(c.Config, c.PredictionBlocks(), func(r jlm.Role, li int32) bool {
 			_, ok := f.Find(r, li, -1)
 			return ok
 		}); err != nil {

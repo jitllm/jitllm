@@ -266,12 +266,12 @@ func (l *Layer) Held(r jlm.Role) *Tensor {
 		return t
 	}
 	switch r {
-	case jlm.RoleNextnEHProj:
+	case jlm.RolePredictProj:
 		if l.Mtp == nil {
 			return nil
 		}
-		return &l.Mtp.EhProj
-	case jlm.RoleNextnEmbd:
+		return &l.Mtp.Proj
+	case jlm.RolePredictEmbd:
 		if l.Mtp == nil {
 			return nil
 		}

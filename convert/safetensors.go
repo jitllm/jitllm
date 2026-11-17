@@ -568,7 +568,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		return nil, err
 	}
 	s.Tensors = append(s.Tensors, fs...)
-	if s.Tensors, err = nextnTensors(s.Tensors, cfg); err != nil {
+	if s.Tensors, err = predictTensors(s.Tensors, cfg); err != nil {
 		return nil, err
 	}
 	if len(s.Tensors) == 0 {
@@ -588,7 +588,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		return nil, err
 	}
 	storeRowTables(cfg.Config, s)
-	if err := StateSelection(cfg.Config, sourceStores(s)); err != nil {
+	if err := StateSelection(cfg.Config, predictionBlocks(cfg.Config, s.Tensors), sourceStores(s)); err != nil {
 		return nil, err
 	}
 	if err := expertsFit(cfg, s); err != nil {
@@ -1262,11 +1262,11 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 	case jlm.RoleFFNDown:
 		return want(ffn, embd)
 
-	case jlm.RoleNextnEHProj:
+	case jlm.RolePredictProj:
 		return want(2*embd, embd)
-	case jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm:
+	case jlm.RolePredictTokenNorm, jlm.RolePredictHiddenNorm, jlm.RolePredictHeadNorm:
 		return want(embd)
-	case jlm.RoleNextnHead, jlm.RoleNextnEmbd:
+	case jlm.RolePredictHead, jlm.RolePredictEmbd:
 		return want(embd, vocab)
 	}
 	return nil

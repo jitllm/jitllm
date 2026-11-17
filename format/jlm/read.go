@@ -421,6 +421,18 @@ func openAt(path string, want uint32) (*File, error) {
 			closeDirect(direct)
 			return nil, fmt.Errorf("%w (%s)", err, path)
 		}
+		// A prediction block is found by the statement; one it leaves out
+		// would be weights nothing runs.
+		if blocks, _ := f.cfg.statedBlocks(); len(f.cfg.Blocks.Of) != 0 {
+			for i := range f.tab {
+				if e := &f.tab[i]; e.Role == RolePredictProj && int(e.Block) >= blocks {
+					fh.Close()
+					closeDirect(direct)
+					return nil, fmt.Errorf("jlm: %s: block %d stores a prediction block's projection past the %d blocks its graphs state",
+						path, e.Block, blocks)
+				}
+			}
+		}
 	}
 	// Every span is bounds-checked once, here, so a page-in on the hot path
 	// is a read and a slice, not a validation.

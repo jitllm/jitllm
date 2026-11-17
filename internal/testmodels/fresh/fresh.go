@@ -73,7 +73,7 @@ func reconvert(path string) error {
 		video := v == nil || v.Tower == nil || v.Tower.Video != nil || !convert.StatesVideo(v.Projector)
 		bidir := v == nil || v.Tower == nil || len(c.Config().BidirLayers) == 0 || v.Tower.Span.Bidir
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0
-		heads := len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.NMTP)
+		heads := len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.PredictionBlocks())
 		rev := (cfg.Revision >= 1 || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&

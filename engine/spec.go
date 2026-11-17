@@ -10,9 +10,9 @@ import (
 )
 
 // Speculative decoding with the model's own multi-token-prediction block
-// (jlm.Config.NMTP). Draft row q carries the token x_q and the trunk's normed
+// (jlm.Config.PredictionBlocks). Draft row q carries the token x_q and the trunk's normed
 // hidden state h_{q-1} (zero at q = 0) and predicts the token at q+1 through
-// eh_proj, one ordinary block of the architecture and the head; a drafted
+// its projection, one ordinary block of the architecture and the head; a drafted
 // token's row carries the draft's own g as its hidden state.
 //
 // A round drafts d_1 .. d_k, verifies [y, d_1 .. d_k] in one trunk pass,
@@ -145,7 +145,7 @@ const (
 	// SpecDraftAuto drafts with the model's prediction block where it carries
 	// one and by prompt lookup where it does not.
 	SpecDraftAuto SpecDrafter = iota
-	// SpecDraftMTP drafts with the prediction block (jlm.Config.NMTP); a
+	// SpecDraftMTP drafts with the prediction block (jlm.Config.PredictionBlocks); a
 	// model without one is refused.
 	SpecDraftMTP
 	// SpecDraftLookup drafts by prompt lookup: the tokens that followed the
@@ -354,13 +354,13 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	}
 	if o.drafter == SpecDraftAuto {
 		o.drafter = SpecDraftMTP
-		if c.NMTP == 0 {
+		if c.NPredict == 0 {
 			o.drafter = SpecDraftLookup
 		}
 	}
 	mtp := o.drafter == SpecDraftMTP
 	switch {
-	case mtp && c.NMTP == 0:
+	case mtp && c.NPredict == 0:
 		return nil, fmt.Errorf("model: the container carries no multi-token-prediction block to draft with")
 	case s.pos != 0:
 		return nil, fmt.Errorf("model: speculation starts on an empty session")
@@ -579,14 +579,14 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error {
 	d, c := sp.d, sp.d.m.Cfg
 	n := len(toks)
-	// The block's page: its eh_proj is read on the host even where the block
+	// The block's page: its projection is read on the host even where the block
 	// itself runs on a device, and the page stays (offerRange keeps it).
 	if _, err := d.pageIn(sp.mli); err != nil {
 		return err
 	}
-	// [enorm(embed(x)) ; hnorm(h)] per row through eh_proj, the composed
+	// [tnorm(embed(x)) ; hnorm(h)] per row through the projection, the composed
 	// entry (mtpEntryGraph). Over a residual of every stream the block takes
-	// the trunk's, every stream: eh_proj runs once per (row, stream), and its
+	// the trunk's, every stream: the projection runs once per (row, stream), and its
 	// rows are the draft's residual streams.
 	st := c.Streams()
 	d0 := c.NEmbd

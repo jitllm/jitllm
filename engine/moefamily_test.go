@@ -43,7 +43,7 @@ func moeBaseFixtures() []struct {
 			return c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 &&
-				c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
+				c.NLayer == 3 && c.NPredict == 1 && !c.TiedEmbd &&
 				dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil && dense.Vector(jlm.RoleFFNNorm) != nil &&
 				moe.Matrix(jlm.RoleRouter) != nil && moe.Vector(jlm.RoleExpProbsB) != nil && moe.Matrix(jlm.RoleShExpGate) != nil && moe.Vector(jlm.RoleShRouter) == nil &&
 				moe.Vector(jlm.RoleFFNNorm) != nil && moe.Vector(jlm.RolePostAttnNorm) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil &&
@@ -54,7 +54,7 @@ func moeBaseFixtures() []struct {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-				c.NExpertUsed == 2 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) && c.NDenseLead == 0 && c.NMTP == 0 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) && c.NDenseLead == 0 && c.NPredict == 0 &&
 				c.NKVHead < c.NHead && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.Matrix(jlm.RoleShExpGate) != nil &&
 				len(l.Vector(jlm.RoleShRouter)) == c.NEmbd && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil &&
 				l.Vector(jlm.RoleFFNNorm) != nil && !c.TiedEmbd
@@ -64,7 +64,7 @@ func moeBaseFixtures() []struct {
 			return !c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 && c.MoEStep == 2 &&
-				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
+				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NPredict == 0 &&
 				m.Layers[0].Gate.E != nil && m.Layers[2].Gate.E != nil && m.Layers[2].Matrix(jlm.RoleRouter) == nil &&
 				l.Matrix(jlm.RoleRouter) != nil && len(l.Vector(jlm.RoleExpProbsB)) == c.NExpert && l.Matrix(jlm.RoleShExpGate) != nil && l.Vector(jlm.RoleShRouter) == nil &&
 				l.Vector(jlm.RoleAttnQBias) == nil && l.Vector(jlm.RoleAttnOutBias) == nil && c.TiedEmbd
@@ -91,7 +91,7 @@ func moeBaseFixtures() []struct {
 			c := m.Cfg
 			ok := c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm && c.QKNormWide &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-				c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 && c.NMTP == 0 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 && c.NPredict == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]
@@ -421,9 +421,9 @@ func routerViolations(m *model.Model) []c6Violation {
 // mtpInTrunk runs the prediction blocks as more trunk blocks: what a converter
 // that did not set them aside would hand the engine.
 func mtpInTrunk(m *model.Model) func() {
-	undoC := cfgMut(m, func(c *model.Config) { c.NLayer, c.NMTP = c.NLayer+c.NMTP, 0 })
-	undoR := dropStored(m, jlm.RoleNextnEHProj, jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm,
-		jlm.RoleNextnHead, jlm.RoleNextnEmbd)
+	undoC := cfgMut(m, func(c *model.Config) { c.NLayer, c.NPredict = c.NLayer+c.NPredict, 0 })
+	undoR := dropStored(m, jlm.RolePredictProj, jlm.RolePredictTokenNorm, jlm.RolePredictHiddenNorm, jlm.RolePredictHeadNorm,
+		jlm.RolePredictHead, jlm.RolePredictEmbd)
 	return func() { undoR(); undoC() }
 }
 

@@ -16,7 +16,7 @@ import (
 // cut out of the GGUF it was exported beside. The separate file is a
 // property of the input, as an mmproj is: it ends here, where withHead puts
 // the head's block back after the trunk's and the conversion proceeds as for
-// a GGUF that carried it (nextnOf, nextnTensors).
+// a GGUF that carried it (predictOf, predictTensors).
 
 // headAlone says f is a prediction head published alone: it states
 // prediction blocks and holds no tensor of a block before them.
@@ -99,7 +99,7 @@ func withHead(f, h *meta.File, src, head string) (*meta.File, error) {
 		if !ok {
 			// A self-contained head carries the token embedding and the
 			// output projection; they must be the trunk's, which the model
-			// reads (nextnTensors drops a block's copy the same way).
+			// reads (predictTensors drops a block's copy the same way).
 			tt, have := f.Get(t.Name)
 			if !have || tt.Type != t.Type || !slices.Equal(tt.Dims, t.Dims) || !bytes.Equal(f.Bytes(tt), h.Bytes(&t)) {
 				return nil, fmt.Errorf("convert: the head %s carries %s, which is not %s's", head, t.Name, src)

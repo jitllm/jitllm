@@ -289,7 +289,7 @@ func (m *Model) statedRotaries() error {
 	}
 	bg := &m.Container.Config().Blocks
 	seen := map[uint16]bool{}
-	for li := range min(len(bg.Of), m.Cfg.NLayer+m.Cfg.NMTP) {
+	for li := range min(len(bg.Of), m.Cfg.NLayer+m.Cfg.NPredict) {
 		if seen[bg.Of[li]] {
 			continue
 		}
@@ -359,7 +359,7 @@ func (m *Model) Unstated() error {
 		}
 		return fmt.Errorf("model: the front end states no graph for %s: %s", what, why)
 	}
-	for li := range m.Cfg.NLayer + m.Cfg.NMTP {
+	for li := range m.Cfg.NLayer + m.Cfg.NPredict {
 		if (Composing{m.Container, m}).BlockGraph(li) == nil {
 			why, err := m.UncoveredAt(li)
 			return refuse(fmt.Sprintf("block %d", li), why, err)
@@ -412,7 +412,7 @@ func (m *Model) FrontGraphs() *frontSet {
 			s.errs[li] = m.shortVector(li, s.Blocks[li])
 		}
 	}
-	if np := m.Cfg.NMTP; np > 0 {
+	if np := m.Cfg.NPredict; np > 0 {
 		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)
 		s.MtpEntry, s.mtpEntryWhy = make([]*graph.Graph, np), make([]Uncovered, np)
 		s.MtpHead, s.MtpHidden = make([]*graph.Graph, np), make([]*graph.Graph, np)
@@ -520,7 +520,7 @@ func (m *Model) Inventory(block int32) (graph.Facts, bool) {
 	perExpert := false
 	for i := range m.Container.Entries() {
 		e := &m.Container.Entries()[i]
-		if e.Block != block || e.Role.Vision() || nextnRole(e.Role) {
+		if e.Block != block || e.Role.Vision() || predictRole(e.Role) {
 			continue
 		}
 		if e.Index >= 0 {
