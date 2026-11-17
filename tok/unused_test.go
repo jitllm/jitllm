@@ -9,8 +9,7 @@ import (
 )
 
 // TestDecodeRendersUnusedAsNothing: a token of type UNUSED is a converter's
-// padding placeholder ("[PAD50954]" in phi-2) and decodes to nothing, as in
-// llama.cpp. Both tokenizer families, because Decode is two functions.
+// padding placeholder ("[PAD50954]" in phi-2) and decodes to nothing. Both tokenizer families, because Decode is two functions.
 func TestDecodeRendersUnusedAsNothing(t *testing.T) {
 	for _, c := range []struct{ stem, unused string }{
 		{testmodels.Path("synth-phi2"), "[PAD50954]"},    // BPE

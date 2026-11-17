@@ -26,8 +26,8 @@ func wpmVocab(lower, keepMarks bool) *jlm.Vocab {
 }
 
 // TestWordPieceNormalizesAndSplits is the unit half of the WordPiece gate (the
-// model half is model.TestEmbeddingsMatchReference, against llama.cpp and the
-// models' own tokenizers). Each case is one BertNormalizer / BertPreTokenizer
+// model half is engine.TestEmbeddingsMatchReference, against the models' own
+// tokenizers). Each case is one BertNormalizer / BertPreTokenizer
 // rule, and each rule's violation is the second vocabulary below.
 func TestWordPieceNormalizesAndSplits(t *testing.T) {
 	v, err := New(wpmVocab(true, false))
@@ -59,8 +59,7 @@ func TestWordPieceNormalizesAndSplits(t *testing.T) {
 			t.Errorf("%q: %v, want %v", c.text, got, c.want)
 		}
 	}
-	// With parse_special off a control token's text is characters, as
-	// llama.cpp's partition skips it.
+	// With specials not parsed a control token's text is characters.
 	if got, want := v.Encode("hello [SEP]", true), []int32{2, 4, 1, 1, 1, 3}; !slices.Equal(got, want) {
 		t.Errorf("parse_special off: %v, want %v", got, want)
 	}

@@ -64,16 +64,15 @@ func TestTheDigitTripleSplitIsReadOnlyIsolated(t *testing.T) {
 	}
 }
 
-// TestLlamaCppDefaultPipeline holds pretok.LlamaCppDefault() to llama.cpp's own
-// default regexes (llama-vocab.cpp, the `default:` arm), applied in order by
-// Python's `regex` module the way unicode_regex_split applies them: each
-// pattern over each piece, the gaps kept.
+// TestDefaultBPEPipeline holds pretok.DefaultBPE() to its regexes, applied in
+// order by Python's `regex` module: each pattern over each piece, the gaps
+// kept.
 //
 // "it's" is the sharpest row: the apostrophe is \p{P}, so the first stage
 // takes it before any contraction rule sees it. The backtick row is where this
 // class parts from HuggingFace's Punctuation.
-func TestLlamaCppDefaultPipeline(t *testing.T) {
-	p, err := buildPipeline(pretok.LlamaCppDefault())
+func TestDefaultBPEPipeline(t *testing.T) {
+	p, err := buildPipeline(pretok.DefaultBPE())
 	if err != nil {
 		t.Fatal(err)
 	}

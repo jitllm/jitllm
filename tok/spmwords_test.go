@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// spmOneHeap is llama.cpp's SentencePiece merge as it stands there: the text
+// spmOneHeap is the SentencePiece merge over a whole run: the text
 // cut at its special tokens, then one queue per run seeded with every adjacent
 // pair of it. Encode runs one heap per word; this is the oracle that says the
 // two produce the same ids.

@@ -157,7 +157,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	// can tell "no stages" from "stages nobody verified".
 	ops, ok := pretok.PreOps(v.PreName)
 	if !ok && v.PreName == "default" {
-		ops, ok = pretok.LlamaCppDefault(), true
+		ops, ok = pretok.DefaultBPE(), true
 	}
 	if ok {
 		pre, err := containerPreOps(ops)
@@ -237,7 +237,7 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 // prepends <|begin_of_text|>, where llama.cpp's gpt-4o branch sets
 // ignore_merges false (RULE 7m). "default" is not in it: llama.cpp gives an
 // absent or "default" name its own pipeline with neither boolean
-// (pretok.LlamaCppDefault()). It is resolved at conversion; nothing on the
+// (pretok.DefaultBPE()). It is resolved at conversion; nothing on the
 // load path consults it.
 //
 //go:embed pretokenizers.json

@@ -15,16 +15,15 @@ import (
 )
 
 // TestStopSetMatchesLlamaCpp holds the stop set built from a GGUF to the one
-// llama.cpp prints at load (llama-vocab.cpp, special_eog_ids): EOS, the
-// file's eot, eom and FIM ids, and the names it matches, with its harmony and
-// gemma4 exceptions. The models are picked for what each exercises: a stated
+// the oracle prints at load: EOS, the file's eot, eom and FIM ids, and the
+// names eogNames lists, with the harmony and gemma4 exceptions. The models are picked for what each exercises: a stated
 // eot no name covers (HunyuanOCR), a literal "</s>" and FIM tokens in a BPE
 // vocabulary (Qwen2.5, stories260K-infill), harmony (gpt-oss), <|end|>
 // (phi3), and the families' own turn ends.
 func TestStopSetMatchesLlamaCpp(t *testing.T) {
 	lcpp := os.Getenv("JITLLM_LCPP")
 	if lcpp == "" {
-		t.Skip("set JITLLM_LCPP to a llama.cpp build directory holding llama-tokenize -- this gate proved nothing")
+		t.Skip("set JITLLM_LCPP to the oracle's build directory holding llama-tokenize -- this gate proved nothing")
 	}
 	bin := filepath.Join(lcpp, "llama-tokenize")
 	eogLine := regexp.MustCompile(`EOG token\s+=\s+(\d+)`)
@@ -68,7 +67,7 @@ func TestStopSetMatchesLlamaCpp(t *testing.T) {
 			slices.Sort(got)
 			slices.Sort(want)
 			if !slices.Equal(got, want) {
-				t.Errorf("stop set %v, llama.cpp %v", got, want)
+				t.Errorf("stop set %v, oracle %v", got, want)
 			} else {
 				t.Logf("%d stop ids agree: %v", len(got), got)
 			}
@@ -77,7 +76,7 @@ func TestStopSetMatchesLlamaCpp(t *testing.T) {
 }
 
 // TestStatedStopsEndAGeneration: an id the container states ends a generation
-// though no name llama.cpp matches covers it. HunyuanOCR closes a turn with
+// though no name eogNames lists covers it. HunyuanOCR closes a turn with
 // <｜hy_Assistant｜>, which reaches the container only as the GGUF's
 // eot_token_id; with the stated set dropped -- the state before the
 // container carried it -- the reply runs on past its turn.

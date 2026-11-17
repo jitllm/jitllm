@@ -8,14 +8,14 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestSPMPartitionsItsSpecialTokens holds SentencePiece Encode to llama.cpp's
-// special-token partition:
+// TestSPMPartitionsItsSpecialTokens holds SentencePiece Encode's special-token
+// partition:
 //
 //   - user-defined tokens are matched in the raw text before the score merge,
 //     always: gemma's runs of spaces and tabs are such tokens, so "*   **" is
 //     "*" "   " "**".
 //   - control tokens are matched too when the caller parses specials
-//     (EncodeSpecial, llama.cpp's parse_special): "<start_of_turn>" is one id.
+//     (EncodeSpecial): "<start_of_turn>" is one id.
 //
 // The goldens are llama-tokenize on the GGUFs these containers came from, with
 // --no-parse-special for Encode and without it for EncodeSpecial.

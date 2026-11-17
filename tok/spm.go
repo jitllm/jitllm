@@ -7,8 +7,8 @@
 //   - tokenizer.ggml.scores are merge priorities, not log probabilities: the
 //     highest-scoring adjacent pair merges, repeatedly, until no adjacent pair
 //     is in the vocabulary.
-//   - tokenizer.ggml.merges is never read for this type (llama.cpp ignores it
-//     too); BPE from that array gives almost-right output.
+//   - tokenizer.ggml.merges is never read for this type (a sentencepiece model
+//     has no merge table); BPE from that array gives almost-right output.
 package tok
 
 import (
@@ -35,7 +35,7 @@ const (
 	typeUserDefined = 4
 	// typeUnused is a placeholder a converter invents to pad a vocabulary out
 	// to the embedding's rows ("[PAD50954]", "<unused_256000>"). It decodes to
-	// nothing, as in llama.cpp.
+	// nothing: no model's text contains it.
 	typeUnused = 5
 )
 
@@ -75,8 +75,9 @@ type Vocab struct {
 	// pipeline covers this name, and the legacy family splitters run instead.
 	pipe *pipeline
 
-	// AddBOS and AddSpacePrefix default to true for SPM, which is what
-	// llama.cpp does when the model does not say otherwise.
+	// AddBOS and AddSpacePrefix default to true for SPM where the file does not
+	// say: sentencepiece's add_dummy_prefix and a LlamaTokenizer's
+	// add_bos_token.
 	AddBOS         bool
 	AddSpacePrefix bool
 
@@ -214,8 +215,8 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 		v.indexSpecial()
 		return v, newSPMBPE(vc, v)
 	}
-	// SPM partitions on its special tokens too, as llama.cpp does, before the
-	// score merge: Gemma's turn markers are control tokens, and gemma3's
+	// SPM partitions on its special tokens too, as the model's tokenizer matches
+	// its added tokens, before the score merge: Gemma's turn markers are control tokens, and gemma3's
 	// whitespace runs are user-defined tokens matched before any merge.
 	v.indexSpecial()
 	v.spaceGlue = map[string]bool{}
@@ -239,8 +240,7 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 // Size is the vocabulary size.
 func (v *Vocab) Size() int { return len(v.text) }
 
-// ID is llama.cpp's lookup_token: the id whose token text is exactly this
-// string, or false. It is not Encode: BPE-merging a marker's text can land on a
+// ID is the id whose token text is exactly this string, or false. It is not Encode: BPE-merging a marker's text can land on a
 // different split than the vocabulary entry.
 //
 // Failing a raw lookup it compares against the decoded piece, which is what
@@ -265,9 +265,9 @@ func (v *Vocab) Text(id int32) string {
 	return v.text[id]
 }
 
-// utf8Len is llama.cpp's utf8_len, byte for byte. utf8.DecodeRune is not a
-// substitute: it resegments malformed input differently, and the tokenizer
-// must agree with llama.cpp on invalid UTF-8.
+// utf8Len is the length a UTF-8 lead byte announces (its high nibble), which
+// consumes a malformed sequence whole. utf8.DecodeRune is not a substitute: it
+// resegments malformed input differently, which changes its tokens.
 func utf8Len(c byte) int {
 	return [16]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4}[c>>4]
 }
@@ -284,7 +284,7 @@ type bigram struct {
 }
 
 // bigramHeap pops the highest score first, breaking ties toward the leftmost
-// pair. Both halves matter: llama.cpp's comparator is
+// pair. Both halves matter: sentencepiece's BPE agenda orders pairs
 // (l.score < r.score) || (l.score == r.score && l.left > r.left).
 type bigramHeap []bigram
 
@@ -335,11 +335,9 @@ func (h *bigramHeap) pop() bigram {
 	return top
 }
 
-// eogNames are the pieces llama.cpp ends a generation on besides EOS
-// (llama-vocab.cpp, special_eog_ids and the FIM pad, repo and file-separator
-// ids it adds to them), matched by name exactly as it does. Where llama.cpp
-// takes one FIM token of each kind, the first its hash map yields, every one
-// present is taken here.
+// eogNames are the end-of-turn pieces a vocabulary stops on by name, besides
+// EOS and the ids its container states, and the fill-in-the-middle pad, repo
+// and file-separator pieces; every one present is taken.
 func eogNames() []string {
 	return []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
 		"<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>", "<|eom_id|>",
@@ -352,14 +350,13 @@ func eogNames() []string {
 
 // eogOf is the stop set: EOS, the ids the container states (jlm.Vocab.Stop:
 // a GGUF's eot and eom, a safetensors model's generation_config list), and
-// the ids llama.cpp recognises by name.
+// the pieces eogNames names.
 //
 // EOS is not the end of a turn on every model (phi3 closes a turn with
 // <|end|>). But in gpt-oss's harmony format <|end|> closes a message, not the
-// reply, so like llama.cpp it is dropped when a vocabulary has both <|return|>
-// and <|call|> (solar-open's <|calls|> and <|flush|> likewise). And like
-// llama.cpp, </s> is not a stop on a vocabulary with gemma4's
-// <|tool_response>.
+// reply, so it is dropped when a vocabulary has both <|return|> and <|call|>
+// (solar-open's <|calls|> and <|flush|> likewise). And </s> is not a stop on a
+// vocabulary with gemma4's <|tool_response>.
 func eogOf(v *Vocab, stated []int32) []int32 {
 	has := func(n string) bool { _, ok := v.ids[n]; return ok }
 	harmony := (has("<|return|>") && has("<|call|>")) || (has("<|calls|>") && has("<|flush|>"))
@@ -394,24 +391,22 @@ func eogOf(v *Vocab, stated []int32) []int32 {
 }
 
 // IsEOG reports whether id ends a generation: EOS, a stop id the model's file
-// states, or an end-of-turn token llama.cpp recognises by name.
+// states, or an end-of-turn piece eogNames names.
 func (v *Vocab) IsEOG(id int32) bool { return slices.Contains(v.eog, id) }
 
-// Encode tokenizes text. addSpecial controls the leading BOS, matching
-// llama.cpp's add_special argument.
+// Encode tokenizes text. addSpecial controls the leading BOS (the tokenizers
+// library's add_special_tokens).
 //
-// It is llama.cpp's tokenize with parse_special OFF, which is what its
-// tokenizer goldens record: a control token's text, "<s>" or "<|im_start|>",
-// is characters, and a user-defined token is still matched
-// (tokenizer_st_partition). EncodeSpecial is the same with it on.
+// Specials are not parsed: a control token's text, "<s>" or "<|im_start|>",
+// is characters, and a user-defined token is still matched. EncodeSpecial
+// parses them.
 func (v *Vocab) Encode(text string, addSpecial bool) []int32 {
 	return v.encode(text, addSpecial, false)
 }
 
 // EncodeSpecial is Encode with the vocabulary's control tokens matched in the
-// text as themselves (llama.cpp's parse_special), which a rendered chat
-// template needs, and which llama.cpp's tools and llama-server read a prompt
-// with.
+// text as themselves, which a rendered chat template needs: the model's
+// tokenizer matches its special added tokens so by default.
 func (v *Vocab) EncodeSpecial(text string, addSpecial bool) []int32 {
 	return v.encode(text, addSpecial, true)
 }
@@ -430,8 +425,8 @@ func (v *Vocab) encode(text string, addSpecial, control bool) []int32 {
 	if addSpecial && v.AddBOS {
 		out = append(out, v.BOS)
 	}
-	// The space prefix is per text run after a special (llama.cpp's
-	// is_prev_special), exactly as at the start of the prompt.
+	// The space prefix is per text run after a special, exactly as at the
+	// start of the prompt.
 	prevSpecial := true
 	for _, run := range v.partitionSpecial(text, control) {
 		if run.id >= 0 {
@@ -459,8 +454,8 @@ func (v *Vocab) encodeSPMRun(text string, prefix bool, out []int32) []int32 {
 	}
 	work := strings.ReplaceAll(text, " ", spaceMark)
 
-	// One heap and one symbol buffer per word, not over the whole text (as
-	// llama.cpp does), with an identical result: no merge can cross a cut
+	// One heap and one symbol buffer per word, not over the whole text, with
+	// the same result as one over the whole text: no merge can cross a cut
 	// placed before a space mark whose preceding character no token glues to a
 	// space mark (spaceGlue), so each word's merge order is independent, and a
 	// word-sized heap stays in L1.
@@ -520,8 +515,7 @@ func (v *Vocab) encodeSPMRun(text string, prefix bool, out []int32) []int32 {
 
 // emitSymbol emits one final symbol: its token, or its raw bytes.
 //
-// A merged symbol is always a token, so llama.cpp's reverse-merge undo is
-// unreachable here; the byte fallback only sees a single character the
+// A merged symbol is always a token, so no merge has to be undone here; the byte fallback only sees a single character the
 // vocabulary lacks.
 func (v *Vocab) emitSymbol(s string, out []int32) []int32 {
 	if id, ok := v.ids[s]; ok {

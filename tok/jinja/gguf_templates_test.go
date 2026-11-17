@@ -121,7 +121,7 @@ func specialText(f *meta.File) (bos, eos string) {
 	return bos, eos
 }
 
-// splitPart is llama.cpp's gguf-split naming, NAME-00001-of-00003.gguf.
+// splitPart is a split GGUF's naming, NAME-00001-of-00003.gguf.
 func splitPart() *regexp.Regexp {
 	return regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
 }

@@ -83,7 +83,7 @@ const (
 	PreDigitTriples PreOpKind = 6
 	// PrePunctDefault isolates runs of llama.cpp's "[\p{P}\$\+<=>\^~\|]",
 	// the first stage of the pipeline a vocabulary with no pre name gets
-	// (pretok.LlamaCppDefault). No parameters; a new code, as above.
+	// (pretok.DefaultBPE). No parameters; a new code, as above.
 	PrePunctDefault PreOpKind = 7
 	// PreDigitGroups isolates \p{N} in groups of DigitGroup (HuggingFace's
 	// Split on "\p{N}{1,3}", Isolated); PreKanaHanRuns isolates runs of CJK

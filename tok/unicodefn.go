@@ -53,17 +53,16 @@ func ucFlags(r rune) uint16 {
 	return uint16(ucRanges[i*4+3])
 }
 
-// ucIsLetter is \p{L}. Note llama.cpp folds every letter subcategory (Lu, Ll,
-// Lt, Lm, Lo) into one bit, which is all the pre-tokenizer patterns ask for.
+// ucIsLetter is \p{L}: every letter subcategory (Lu, Ll, Lt, Lm, Lo) in one
+// bit, which is all the pre-tokenizer patterns ask for.
 func ucIsLetter(r rune) bool { return ucFlags(r)&ucFlagLetter != 0 }
 
 // ucIsNumber is \p{N} -- decimal, letter and other numbers, as the regex class
-// means and as llama.cpp encodes it.
+// means.
 func ucIsNumber(r rune) bool { return ucFlags(r)&ucFlagNumber != 0 }
 
-// ucIsSpace is \s. It is a set, not a category: llama.cpp keeps White_Space
-// separate from \p{Z}, and the two are not the same (U+0009 is whitespace and
-// not a separator).
+// ucIsSpace is \s. It is a set, not a category: Unicode's White_Space is not
+// \p{Z} (U+0009 is whitespace and not a separator).
 func ucIsSpace(r rune) bool {
 	if r < 0 {
 		return false
@@ -75,7 +74,7 @@ func ucIsSpace(r rune) bool {
 
 // ucToLower is the simple lowercase mapping: one codepoint to one codepoint,
 // no locale and no multi-character expansions. That is what the contraction
-// rules need and what llama.cpp implements.
+// rules need.
 func ucToLower(r rune) rune {
 	if c, ok := ucMap(ucLower, r); ok {
 		return c
@@ -85,9 +84,8 @@ func ucToLower(r rune) rune {
 
 // ucFold is simple case folding, which is what `(?i:...)` means and what
 // ucToLower is not: U+017F LATIN SMALL LETTER LONG S folds to s but is already
-// lowercase, so "'ſ" is a contraction under the model's own regex. llama.cpp
-// expands (?i:'s) to '[sS]' and misses it; matching the original regex is a
-// deliberate divergence (AGENTS.md RULE 7m).
+// lowercase, so "'ſ" is a contraction under the model's own regex, which an
+// expansion of (?i:'s) to '[sS]' would miss.
 //
 // Only one non-ASCII codepoint folds to any of the eight contraction letters
 // (s t r e v m l d), so this is a small table rather than CaseFolding.txt.
@@ -110,8 +108,8 @@ func ucFold(r rune) rune {
 //	ucUpperClass  [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]
 //	ucLowerClass  [\p{Ll}\p{Lm}\p{Lo}\p{M}]
 //
-// The general category is not in the flag table (llama.cpp folds Lu/Ll/Lt/Lm/Lo
-// into one bit, and the table is generated from that artefact). The two case
+// The general category is not in the flag table (it folds Lu/Ll/Lt/Lm/Lo into
+// one bit). The two case
 // mappings in the same artefact separate the classes exactly:
 //
 //	Lu, Lt   have a lowercase mapping        -> upper class only

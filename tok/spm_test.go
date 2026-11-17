@@ -28,7 +28,7 @@ func models() map[string]string {
 	}
 }
 
-// TestGoldens is the tokenizer gate: exact token ids, against llama.cpp's own
+// TestGoldens is the tokenizer gate: exact token ids, against the oracle
 // tokenizer, on every model. There is no "close enough" here — one wrong id
 // shifts every embedding lookup after it and the model still produces fluent
 // text, so a tolerance would defeat the entire test.

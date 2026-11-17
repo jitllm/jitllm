@@ -8,8 +8,8 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// WordPiece: the BERT family's tokenizer, which every Ollama embedding model
-// on the bert and nomic-bert architectures ships.
+// WordPiece: the BERT family's tokenizer, the one the bert and nomic-bert
+// embedding models ship.
 //
 // The vocabulary marks the word-initial piece rather than the continuation:
 // "ing" for BERT's "##ing" and "▁the" for "the", so a word is matched as
@@ -17,8 +17,7 @@ import (
 // since a piece at byte 0 can only be word-initial.
 //
 // It is the model's own WordPiece (its tokenizer.json): a word over
-// maxWordChars characters is one [UNK], where llama.cpp segments it
-// (docs/divergences.md).
+// maxWordChars characters is one [UNK].
 
 // maxWordChars is WordPiece's max_input_chars_per_word: 100 in every census
 // model's tokenizer.json (all-MiniLM-L6-v2, nomic-embed-text-v1.5,
@@ -31,7 +30,7 @@ type wpmState struct {
 	maxLen       int // the longest token, in BYTES: the match window
 	// special is every control token, longest first, so a literal "[SEP]" in
 	// the text is that token and not five characters where the caller parses
-	// specials -- llama.cpp's parse_special, which llama-embedding turns on.
+	// specials, as the tokenizers library matches an added token in the text.
 	special []int32
 }
 
@@ -55,8 +54,8 @@ func newWPM(vc *jlm.Vocab, v *Vocab) error {
 	return nil
 }
 
-// encodeWPM is [CLS] words [SEP], the BertProcessing template llama.cpp applies
-// to every WPM vocabulary (add_bos and add_sep).
+// encodeWPM is [CLS] words [SEP], the post-processor a WordPiece model's
+// tokenizer.json states (BertProcessing).
 func (v *Vocab) encodeWPM(text string, addSpecial, control bool) []int32 {
 	out := make([]int32, 0, len(text)/4+2)
 	special := v.wpm.special
@@ -177,9 +176,9 @@ func ucNFDBase(r rune) rune {
 	return r
 }
 
-// isCJK is BERT's _is_chinese_char, with llama.cpp's reading of the one range
-// the two write differently (0x2B920, which is what HuggingFace's Rust code
-// has, where the Python has 0x2B820).
+// isCJK is BERT's _is_chinese_char as the tokenizers library a tokenizer.json
+// runs under writes it: its one range that differs from the Python
+// BertTokenizer's starts at 0x2B920, where the Python's starts at 0x2B820.
 func isCJK(r rune) bool {
 	return (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3400 && r <= 0x4DBF) ||
 		(r >= 0x20000 && r <= 0x2A6DF) || (r >= 0x2A700 && r <= 0x2B73F) ||

@@ -14,12 +14,12 @@ import (
 	"github.com/jitllm/jitllm/tok"
 )
 
-// The oracle is llama.cpp's own tokenizer (llama-tokenize --ids), not a round
+// The oracle is the GGUF oracle's tokenizer (llama-tokenize --ids), not a round
 // trip: a tokenizer that emits one token per byte round-trips perfectly and
 // ruins the model.
 func llamaTokenize(t *testing.T, model, text string, parseSpecial bool) ([]int32, bool) {
 	t.Helper()
-	// Without JITLLM_LCPP (a llama.cpp build directory holding llama-tokenize)
+	// Without JITLLM_LCPP (the oracle's build directory, holding llama-tokenize)
 	// there is no oracle and the caller skips.
 	lcpp := os.Getenv("JITLLM_LCPP")
 	if lcpp == "" {
@@ -133,8 +133,7 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 		}
 		// Decode must invert Encode -- except that it deliberately does not
 		// render control tokens, which is what a caller printing model output
-		// wants and what llama.cpp's detokenizer does by default. So the round
-		// trip holds for every case that contains none.
+		// wants. So the round trip holds for every case that contains none.
 		for _, text := range bpeCases() {
 			if strings.Contains(text, "<|") {
 				continue
@@ -154,5 +153,5 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 	if checked == 0 {
 		t.Skip("no gpt2-tokenizer model, or llama-tokenize is not installed")
 	}
-	t.Logf("%d cases identical to llama.cpp", checked)
+	t.Logf("%d cases identical to the oracle", checked)
 }

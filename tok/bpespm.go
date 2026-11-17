@@ -22,13 +22,11 @@ import (
 // and it is neither: SPM merges any adjacent pair whose concatenation is a
 // token, by score, where this merges only the pairs the merge list names.
 //
-// llama.cpp splits the run on newlines first ("[^\n]+|[\n]+", llama-vocab.cpp,
-// LLAMA_VOCAB_PRE_TYPE_GEMMA4), because its BPE asserts no newline inside a
-// word. HF tokenizers does not split, and the model's own tokenizer is the
-// authority (RULE 7m): this runs the whole run. The two could differ only
-// where a merge joins a newline to another character, and Gemma 4's 262144
-// tokens carry none (every token with a newline in it is newlines alone), so
-// on this vocabulary they agree on every input.
+// The run is merged whole, newlines and all, as the model's own tokenizer (the
+// tokenizers library) merges it. Splitting it on newlines first would differ
+// only where a merge joins a newline to another character, and Gemma 4's
+// 262144 tokens carry none (every token with a newline in it is newlines
+// alone).
 
 // spmBPE is the merge table of a VocabBPESPM vocabulary.
 type spmBPE struct {

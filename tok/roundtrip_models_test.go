@@ -17,9 +17,8 @@ import (
 // model sees. WordPiece normalises by design and is left out.
 //
 // Two inputs are deliberately not here, because the reference does the same:
-//   - invalid UTF-8: byte-level BPE reads it as U+FFFD, as llama.cpp's
-//     unicode_cpts_from_utf8 does, and SentencePiece cuts symbols by
-//     llama.cpp's utf8_len, so a malformed lead byte takes the next bytes with
+//   - invalid UTF-8: byte-level BPE reads it as U+FFFD, and SentencePiece cuts
+//     symbols by utf8Len, so a malformed lead byte takes the next bytes with
 //     it (a following space comes back as its raw bytes). The models' own
 //     tokenizers take only valid text; HTTP requests arrive as valid JSON.
 //   - a carriage return: HunyuanOCR's tokenizer.json drops it, so a CR does

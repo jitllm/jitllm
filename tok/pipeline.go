@@ -168,8 +168,8 @@ func splitDigitTriplesEach(s string, emit func(string)) {
 	}
 }
 
-// isPunctDefault is llama.cpp's "[\p{P}\$\+<=>\^~\|]" -- \p{P} and the
-// eight named ASCII symbols, and not the backtick HuggingFace's is_punc includes.
+// isPunctDefault is "[\p{P}\$\+<=>\^~\|]" -- \p{P} and the eight named
+// ASCII symbols, and not the backtick HuggingFace's is_punc includes.
 func isPunctDefault(r rune) bool {
 	switch r {
 	case '$', '+', '<', '=', '>', '^', '~', '|':

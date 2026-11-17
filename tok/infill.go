@@ -2,8 +2,8 @@ package tok
 
 import "slices"
 
-// Infill is what llama.cpp's infill sampler reads of a vocabulary, as tables a
-// composed draw gathers from. Each token's piece is the bytes it adds to
+// Infill is what the infill draw reads of a vocabulary, as tables a composed
+// draw gathers from. Each token's piece is the bytes it adds to
 // decoded text (Piece: none for a control or unused token).
 //
 // Class[t] is the lowest id whose piece is t's, t itself for a token with no
@@ -15,7 +15,7 @@ import "slices"
 //
 // EOG is the end-of-generation ids (IsEOG), and EOT the token the sampler
 // ends on when nothing but end-of-generation tokens survives: the first of
-// llama.cpp's end-of-turn names the vocabulary holds, else EOS.
+// eogNames the vocabulary holds, else EOS.
 //
 // The tables are built from the pieces when a model opens. They could be
 // stated at conversion instead, with the next container version.

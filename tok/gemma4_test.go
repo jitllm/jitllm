@@ -19,7 +19,7 @@ import (
 // (jlm.VocabBPESPM) to HuggingFace tokenizers running Gemma 4's own
 // tokenizer.json (scripts/gemma4tokgold.py) on a corpus of escaped spaces,
 // byte fallback, newlines beside other characters and long prose and code. The
-// vocabulary is the one llama.cpp's converter wrote into the synth-gemma4
+// vocabulary is the one the GGUF converter wrote into the synth-gemma4
 // fixture, read through convert.VocabOf, so it is what a container carries.
 func TestGemma4EncodesAsItsTokenizerDoes(t *testing.T) {
 	path := testmodels.Path("synth-gemma4.gguf")

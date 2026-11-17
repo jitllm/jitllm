@@ -139,8 +139,8 @@ type specialRun struct {
 }
 
 // indexSpecial collects the tokens partitionSpecial matches literally: every
-// control and user-defined token, which is llama.cpp's tokenizer_st_partition
-// with parse_special on.
+// control and user-defined token, as the tokenizers library matches its added
+// tokens in the text before the model's split.
 func (v *Vocab) indexSpecial() {
 	v.special = v.special[:0]
 	for id, k := range v.kind {
@@ -162,8 +162,8 @@ func (v *Vocab) indexSpecial() {
 }
 
 // partitionSpecial cuts the text at every special token, longest match first.
-// control says whether control tokens count (llama.cpp's parse_special);
-// user-defined ones always do.
+// control says whether control tokens count (the tokenizers library's
+// split_special_tokens, inverted); user-defined ones always do.
 func (v *Vocab) partitionSpecial(text string, control bool) []specialRun {
 	if len(v.special) == 0 {
 		return []specialRun{{text: text, id: -1}}
@@ -334,8 +334,8 @@ type bpeBigram struct {
 // container/heap, whose interface calls and boxing are measurable cost.
 type bpeQ []bpeBigram
 
-// less is llama.cpp's comparator: lower rank wins, and on a tie the leftmost
-// pair does. Ties are common, and breaking them differently changes the
+// less is byte-level BPE's merge order, the tokenizers library's: lower rank
+// wins, and on a tie the leftmost pair does. Ties are common, and breaking them differently changes the
 // tokenization of ordinary text.
 func (a bpeBigram) less(b bpeBigram) bool {
 	return a.rank < b.rank || (a.rank == b.rank && a.left < b.left)
@@ -393,13 +393,13 @@ func (v *Vocab) decodeBPE(ids []int32) string {
 	return b.String()
 }
 
-// llama3Family is the pre-tokenizer group llama.cpp gives the llama3 regex, and
-// with it add_bos and ignore_merges. It is the legacy path, reached only by a
-// container that stored no stages.
+// llama3Family is the pre-tokenizer names an older container that stored no
+// stages ran the Llama 3 split for, with add_bos and ignore_merges. It is the
+// legacy path, reached only by such a container.
 //
 // "default" is here only to keep an older container's answer what it was; it
-// is wrong for it (llama.cpp gives "default" its own pipeline, which the
-// converter now stores as pretok.LlamaCppDefault). Reconvert to fix.
+// is wrong for it ("default" has a pipeline of its own, which the converter
+// now stores as pretok.DefaultBPE). Reconvert to fix.
 func llama3Family(pre string) bool {
 	switch pre {
 	case "default", "llama3", "llama-v3", "llama-bpe", "falcon3", "falcon-h1", "pixtral", "midm-2.0", "lfm2", "jina-v5-nano":
@@ -414,7 +414,7 @@ func llama3Family(pre string) bool {
 func digitGroupFor(pre string) int {
 	switch pre {
 	case "dbrx", "smaug-bpe":
-		return 3 // llama.cpp gives these the {1,3} pattern
+		return 3 // their tokenizer.json split digits in runs of one to three
 	}
 	return 1
 }
@@ -488,8 +488,9 @@ func (v *Vocab) preSplitEach(text string, sc *bpeScratch, emit func(string)) {
 //	| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
 //
 // Hand-rolled because `\s+(?!\S)` is a negative lookahead RE2 cannot run.
-// It follows llama.cpp's hand-written version step for step so the two agree
-// where the pattern alone does not settle a case.
+// It tries the pattern's alternatives in order at each position, as a
+// backtracking engine reads the pattern, where the pattern alone does not
+// settle a case.
 func splitLlama3(text string, digitGroup int) []string {
 	return splitLlama3Params(text, llama3Params(digitGroup))
 }
@@ -543,7 +544,7 @@ func splitLlama3Each(text string, sp pretok.SplitParams, sc *runes, emit func(st
 	// patched at each call site.
 	isLetterX := func(i int) bool { return isLetter(i) && !isHan(i) }
 	// plain is "in range and none of letter/number/whitespace", which is the
-	// [^\s\p{L}\p{N}] class plus the bounds check llama.cpp writes as as_uint().
+	// [^\s\p{L}\p{N}] class plus a bounds check.
 	// It uses the unsubtracted isLetter on purpose: those classes are plain
 	// \p{L} in the pattern, so a Han codepoint is never punctuation.
 	plain := func(i int) bool { return i >= 0 && i < n && !isLetter(i) && !isNumber(i) && !isSpace(i) }
@@ -717,8 +718,8 @@ func splitLlama3Each(text string, sp pretok.SplitParams, sc *runes, emit func(st
 	}
 }
 
-// splitGPT2Each implements the original GPT-2 pattern, which llama.cpp gives to
-// gpt-2, mpt, olmo and jais, handing each piece to emit as it is found:
+// splitGPT2Each implements the original GPT-2 pattern, the one the gpt-2, mpt,
+// olmo and jais tokenizers state, handing each piece to emit as it is found:
 //
 //	's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
 //
@@ -826,7 +827,8 @@ func splitDigitsEach(text string, sc *runes, emit func(string)) {
 // slice of the input. Each stage owns one and reuses it.
 //
 // Invalid UTF-8 is rebuilt from the runes instead, turning each bad byte into
-// U+FFFD as llama.cpp's splitters do; a slice would keep the raw byte.
+// U+FFFD (utf8.DecodeRune's one-byte RuneError); a slice would keep the raw
+// byte.
 type runes struct {
 	rs    []rune
 	off   []int32
