@@ -225,7 +225,7 @@ func TestDeviceBudgetAccounting(t *testing.T) {
 	// STORAGE: what else a session charges the same card.
 	one := uint64(0)
 	if nLin > 0 {
-		g := deltaOf(c)
+		g := deltaOf(m)
 		one = uint64(g.DeltaStateLen()+g.ConvStateLen()) * 4
 	}
 	rec := 2 * one * uint64(nLin)

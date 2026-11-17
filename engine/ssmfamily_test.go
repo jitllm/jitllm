@@ -36,7 +36,7 @@ func ssmBaseFixtures() []struct {
 	}{
 		{"synth-mamba2", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.SSD() && c.SSM.Groups == 1 && c.SSM.NHeadV == 8 &&
+			ok := hasKind(c, jlm.LayerSSD, jlm.LayerSSDAttn) && c.SSM.Groups == 1 && c.SSM.NHeadV == 8 &&
 				c.SSM.StateSize == 16 && c.SSM.Inner == 128 && !c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]
@@ -102,7 +102,7 @@ func ssdScaled(m *model.Model, r jlm.Role, f func(v []float32)) func() {
 // F32 weights, whose rows are byte ranges.
 func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 	return func(m *model.Model) func() {
-		g := deltaOf(m.Cfg)
+		g := deltaOf(m)
 		n := g.QkBytes
 		// A block a device took gave its host page up; the swap reads it.
 		fr := testFrames(t, m)
@@ -234,7 +234,7 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 					clear(st.kv.view.Conv(li))
 				}
 			}))
-			if m.Cfg.ShortConv() {
+			if hasKind(m.Cfg, jlm.LayerShortConv) {
 				return // the window is a short convolution's only state
 			}
 			check("the state not carried", worst(func(st *Instance) {

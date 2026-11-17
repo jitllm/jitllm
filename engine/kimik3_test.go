@@ -39,7 +39,7 @@ func k3Fixtures() []struct {
 			ok := m.Container.Config().AttnResBlock == 2 && c.Streams() == 4 &&
 				expertWidthOf(m) == 32 && m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecayBounded(-5)) &&
 				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
-				c.ChanDecay() && c.MLA() && c.NoPosEnc && m.Container.Config().QLoraRank == 32 && c.KVLoraRank == 32 &&
+				chanDecay(m) && c.MLA() && c.NoPosEnc && m.Container.Config().QLoraRank == 32 && c.KVLoraRank == 32 &&
 				c.NDenseLead == 1 && c.NFFNShExp == 32 && c.ExpertSigmoid && c.ExpertScale == 2 &&
 				len(nn.VectorOf(m.Vecs, jlm.RoleOutputResScore)) == 64 &&
 				slices.Equal(c.LayerKinds, []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerLinearAttn,
@@ -57,8 +57,7 @@ func k3Fixtures() []struct {
 		// quantizer's blocks, so every tier quantizes the latent and the low-rank
 		// gates' rank (the head width) with a ragged tail.
 		{"synth-kimik3-ragged", func(m *model.Model) bool {
-			c := m.Cfg
-			return expertWidthOf(m) == 40 && c.ChanDecay()
+			return expertWidthOf(m) == 40 && chanDecay(m)
 		}},
 	}
 }

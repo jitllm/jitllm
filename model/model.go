@@ -42,10 +42,6 @@ type Config struct {
 	// container's flags; see jlm.FlagPoolMean and jlm.FlagNonCausal.
 	Pooling   jlm.Pooling
 	NonCausal bool
-	// chanDecay is ChanDecay()'s backing field: a delta rule whose forget
-	// gate is its own low-rank pair (RoleSSMFA, RoleSSMFB) decays per channel
-	// rather than per head.
-	chanDecay bool
 	NLayer    int
 	NEmbd     int
 	NHead     int
@@ -107,25 +103,6 @@ type Config struct {
 	// SSM is the recurrent geometry the linear layers use.
 	LayerKinds []jlm.LayerKind
 	SSM        jlm.SSMConfig
-	// DeltaKeyTiled pairs value head vh with key head vh % key heads rather
-	// than vh / (value heads per key head); see jlm.FlagDeltaKeyTiled.
-	DeltaKeyTiled bool
-
-	// ssd is SSD()'s backing field: the recurrent layers are Mamba-2's
-	// (jlm.LayerSSD), derived from the container's LayerKinds.
-	ssd bool
-	// ssdAttn: see SSDAttn.
-	ssdAttn bool
-	// shortConv: see ShortConv.
-	shortConv bool
-	// scan: see Scan. dtRank is its dt bottleneck, read off the first
-	// scan block's x_proj at build(): the container states no rank.
-	scan   bool
-	DtRank int
-	// SSMNormGroups is how many groups a Mamba-2 block's gated RMSNorm runs
-	// over, each of SSM.Inner/SSMNormGroups channels with its own slice of the
-	// weight: the container's SSM.Groups, as mamba_ssm and llama.cpp group it.
-	SSMNormGroups int
 
 	// MarkPointer is a pointer readout (jlm.Flag2MarkerPointer).
 	MarkPointer bool
@@ -603,34 +580,6 @@ func (c *Config) Attends() bool {
 	return false
 }
 
-// ChanDecay reports that the linear blocks run Kimi Delta Attention rather
-// than qwen3next's gated delta rule: the state decays at a rate per channel
-// instead of one per head, and both gates come off a low-rank bottleneck. It is
-// a property of the architecture, not of LayerKinds, which only says a block
-// is recurrent.
-func (c *Config) ChanDecay() bool { return c.chanDecay }
-
-// SSD reports that the recurrent blocks are Mamba-2 mixers (jlm.LayerSSD):
-// the delta rule's state stepped by the selective update, with a skip, a
-// convolution bias and a grouped gated norm.
-func (c *Config) SSD() bool { return c.ssd }
-
-// SSDAttn reports whether some block runs attention and a Mamba-2 mixer side
-// by side (Falcon-H1, jlm.LayerSSDAttn): the mixer's output needs a buffer of
-// its own beside the attention's.
-func (c *Config) SSDAttn() bool { return c.ssdAttn }
-
-// ShortConv reports that the recurrent blocks are LFM2's gated short
-// convolutions (jlm.LayerShortConv): a convolution window and no state beside
-// it.
-func (c *Config) ShortConv() bool { return c.shortConv }
-
-// Scan reports that the recurrent blocks are the per-element selective scan
-// (jlm.LayerScan: Mamba, FalconMamba, Jamba): every channel a head of one
-// row, the decay a vector over the state, dt off a low-rank bottleneck of the
-// convolved x.
-func (c *Config) Scan() bool { return c.scan }
-
 // configFrom translates the container's typed description into the engine's.
 //
 // Parsing and architecture knowledge live in convert.configOf; this copies
@@ -656,7 +605,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		}
 	}
 	out := &Config{
-		chanDecay:    stores(jlm.RoleSSMFB),
 		NLayer:       int(c.NLayer),
 		NMTP:         int(c.NMTP),
 		NEmbd:        int(c.NEmbd),
@@ -695,8 +643,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		NFFNShExp:    int(c.NFFNShExp),
 		LayerKinds:   c.LayerKinds,
 		SSM:          c.SSM,
-
-		DeltaKeyTiled: c.Flags.Has(jlm.FlagDeltaKeyTiled),
 
 		RopeTail:         c.Flags2.Has(jlm.Flag2RopeTail),
 		KeyValue:         c.Flags2.Has(jlm.Flag2KeyValue),
@@ -737,19 +683,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.sel = c.Selection
 	out.compKinds, out.compRate = c.CompKinds, [3]int{0, int(c.CompRateCSA), int(c.CompRateHCA)}
 
-	for _, k := range c.LayerKinds {
-		switch k {
-		case jlm.LayerSSD:
-			out.ssd = true
-		case jlm.LayerSSDAttn:
-			out.ssd, out.ssdAttn = true, true
-		case jlm.LayerShortConv:
-			out.shortConv = true
-		case jlm.LayerScan:
-			out.scan = true
-		}
-	}
-	out.SSMNormGroups = max(int(c.SSM.Groups), 1)
 	if out.ResidualScale == 0 {
 		out.ResidualScale = 1
 	}
@@ -829,7 +762,7 @@ func headConfigOf(c *jlm.Config, trunk *Config) (*Config, error) {
 	}
 	return &Config{NLayer: trunk.NLayer + int(c.HeadBlocks()), NEmbd: int(c.NEmbd), NFFN: trunk.NFFN,
 		NVocab: trunk.NVocab, NCtx: trunk.NCtx, EmbdScale: 1, AttnFactor: 1, ResidualScale: 1, LogitScale: 1,
-		ExpertScale: 1, SSMNormGroups: 1, NonCausal: true, NoPosEnc: true, LayerNorm: true, Trunk: trunk.NLayer}, nil
+		ExpertScale: 1, NonCausal: true, NoPosEnc: true, LayerNorm: true, Trunk: trunk.NLayer}, nil
 }
 
 // tensor is one weight matrix, kept as the raw mapping plus its shape.
@@ -2257,13 +2190,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		cfg.routed = make([]bool, cfg.NLayer+cfg.NMTP)
 		for i := range cfg.routed {
 			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(i), -1)
-		}
-	}
-	// The dt rank is the dt rows of the x projection a block stores.
-	for i := range c.Config().LayerKinds {
-		if e, ok := c.Find(jlm.RoleSSMXDt, int32(i), -1); ok {
-			cfg.DtRank = int(e.Dims[1])
-			break
 		}
 	}
 	m := &Model{Cfg: cfg}

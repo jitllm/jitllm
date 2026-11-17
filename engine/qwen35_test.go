@@ -56,11 +56,11 @@ func TestHybridDecodeIsCaptured(t *testing.T) {
 func TestDeltaKeyTiledIsTheDeltaRulesPairing(t *testing.T) {
 	grouped, openOpts := hybridModelOpt(t, hyOpt{})
 	tiled, openOpts2 := hybridModelOpt(t, hyOpt{tiled: true})
-	if grouped.Cfg.DeltaKeyTiled || !tiled.Cfg.DeltaKeyTiled {
+	if keyTiled(grouped) || !keyTiled(tiled) {
 		t.Fatalf("the flag did not survive the container: grouped=%v tiled=%v",
-			grouped.Cfg.DeltaKeyTiled, tiled.Cfg.DeltaKeyTiled)
+			keyTiled(grouped), keyTiled(tiled))
 	}
-	g := deltaOf(tiled.Cfg)
+	g := deltaOf(tiled)
 	if g.Rep < 2 {
 		t.Fatalf("the fixture has %d value head(s) per key head; the pairings coincide and this proves nothing", g.Rep)
 	}

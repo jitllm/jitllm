@@ -14,9 +14,9 @@ import (
 // them past 100 times the clean worst and past 1e-4.
 func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 	m := frontModel(t, "synth-kimilinear")
-	if coveredBlocks(m) != m.Cfg.NLayer || !m.Cfg.ChanDecay() {
+	if coveredBlocks(m) != m.Cfg.NLayer || !chanDecay(m) {
 		t.Fatalf("the front end states %d of %d blocks, channel decay %v: the gate selects nothing",
-			coveredBlocks(m), m.Cfg.NLayer, m.Cfg.ChanDecay())
+			coveredBlocks(m), m.Cfg.NLayer, chanDecay(m))
 	}
 	ids := []int32{5, 11, 23, 41}
 	toks := make([]int32, 24)

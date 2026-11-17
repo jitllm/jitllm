@@ -2,7 +2,9 @@ package engine
 
 import (
 	"math"
+	"slices"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -18,12 +20,6 @@ type deltaGeom struct {
 	VDim    int // value head width, which is also the state's value extent
 	Rep     int // value heads per key head
 	QkBytes int // q and k each occupy kHeads*kDim of the convolved channels
-	// chanDecay is Kimi Delta Attention rather than qwen3next's gated delta
-	// rule: the decay is a vector per value head instead of one rate, and both
-	// gates come off a rank-kDim bottleneck (f_a_proj and g_a_proj project to
-	// linear_head_dim, which is kDim).
-	chanDecay bool
-	Rank      int
 	// tiled pairs value head vh with key head vh % kHeads instead of vh / rep:
 	// the order llama.cpp's qwen35 converter writes the value heads in. See
 	// keyHead.
@@ -44,7 +40,8 @@ type deltaGeom struct {
 	tail int
 }
 
-func deltaOf(c *model.Config) deltaGeom {
+func deltaOf(m *model.Model) deltaGeom {
+	c := m.Cfg
 	g := deltaGeom{
 		Conv:   int(c.SSM.ConvKernel),
 		KHeads: int(c.SSM.Groups),
@@ -62,12 +59,11 @@ func deltaOf(c *model.Config) deltaGeom {
 	if g.KDim > 0 {
 		g.scale = 1 / float32(math.Sqrt(float64(g.KDim)))
 	}
-	g.chanDecay, g.Rank = c.ChanDecay(), g.KDim
-	g.Tiled = c.DeltaKeyTiled
-	g.Ssd = c.SSD()
+	g.Tiled = keyTiled(m)
+	g.Ssd = hasKind(c, jlm.LayerSSD, jlm.LayerSSDAttn)
 	g.tail = c.RecTailLen()
-	if c.Scan() {
-		g.Scan, g.Chans, g.QkBytes, g.Rank = true, int(c.SSM.Inner), 0, c.DtRank
+	if hasKind(c, jlm.LayerScan) {
+		g.Scan, g.Chans, g.QkBytes = true, int(c.SSM.Inner), 0
 	}
 	return g
 }
@@ -80,3 +76,38 @@ func (g deltaGeom) DeltaStateLen() int { return g.VHeads * g.VDim * g.KDim }
 // stateStride is one sequence's whole recurrent state row: the delta rule's
 // and the tail after it (Config.recTailLen).
 func (g deltaGeom) StateStride() int { return g.DeltaStateLen() + g.tail }
+
+// hasKind reports whether some block of c is of one of kinds.
+func hasKind(c *model.Config, kinds ...jlm.LayerKind) bool {
+	for li := range c.NLayer {
+		if slices.Contains(kinds, c.LayerKind(li)) {
+			return true
+		}
+	}
+	return false
+}
+
+// chanDecay reports whether m's recurrent blocks decay per channel: they
+// store a forget gate's low-rank pair (RoleSSMFB).
+func chanDecay(m *model.Model) bool {
+	for i := range m.Layers {
+		if m.Layers[i].Matrix(jlm.RoleSSMFB) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// dtRank is the dt rows of the x projection m's blocks store, 0 for none.
+func dtRank(m *model.Model) int {
+	for i := range m.Layers {
+		if mt := m.Layers[i].Matrix(jlm.RoleSSMXDt); mt != nil {
+			return mt.Rows
+		}
+	}
+	return 0
+}
+
+// keyTiled reports whether m's container pairs value head vh with key head
+// vh % key heads (jlm.FlagDeltaKeyTiled).
+func keyTiled(m *model.Model) bool { return m.Container.Config().Flags.Has(jlm.FlagDeltaKeyTiled) }

@@ -165,7 +165,7 @@ func TestFrontStatesTheDeltaRules(t *testing.T) {
 			if len(stated) == 0 {
 				t.Fatal("the model states no delta rule: the gate selects nothing")
 			}
-			if m.Cfg.ChanDecay() {
+			if chanDecay(m) {
 				rule := opsOf(m.Composing().BlockGraph(stated[0]), graph.OpStateScan)[0]
 				if w := m.Composing().BlockGraph(stated[0]).Values[rule.In[3]].Width; w != rule.Attr.NHead*rule.Attr.HeadDim ||
 					graph.ScanAxis(rule.Attr.Words[3]) != graph.ScanHead|graph.ScanCol {
@@ -187,7 +187,7 @@ func checkDeltaMixer(t *testing.T, m *model.Model, li int) {
 		t.Fatalf("block %d, a delta rule, is refused by %q (%v)", li, why, m.UncoveredErr(li))
 	}
 	g := m.Composing().BlockGraph(li)
-	dg := deltaOf(m.Cfg)
+	dg := deltaOf(m)
 	convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpStateScan)
 	if len(convs) != 1 || len(rules) != 1 {
 		t.Fatalf("block %d states %d state convolutions and %d delta rules, want one each", li, len(convs), len(rules))
@@ -203,7 +203,7 @@ func checkDeltaMixer(t *testing.T, m *model.Model, li int) {
 	if dg.Tiled {
 		keys = graph.ScanCycle | graph.ScanCol
 	}
-	if m.Cfg.ChanDecay() {
+	if chanDecay(m) {
 		decay |= graph.ScanCol
 	}
 	if a.NHead != dg.VHeads || a.NKVHead != dg.KHeads || a.HeadDim != dg.KDim ||

@@ -13,7 +13,7 @@ import (
 // Mamba-2 mixer both, the mixer's projection beside the attention's four.
 func falconh1Block(m *model.Model, norm bool) bool {
 	c := m.Cfg
-	ok := c.SSD() && c.SSDAttn() && c.RopeNeox && !c.NoPosEnc &&
+	ok := hasKind(c, jlm.LayerSSD, jlm.LayerSSDAttn) && hasKind(c, jlm.LayerSSDAttn) && c.RopeNeox && !c.NoPosEnc &&
 		c.NHead == 4 && c.NKVHead == 2 && !c.TiedEmbd
 	for i := range m.Layers {
 		l := &m.Layers[i]
@@ -32,7 +32,7 @@ func falconh1Fixtures() []struct {
 		sel  func(m *model.Model) bool
 	}{
 		{"synth-falconh1", func(m *model.Model) bool {
-			return falconh1Block(m, true) && m.Cfg.SSM.Groups == 2 && m.Cfg.SSMNormGroups == 2
+			return falconh1Block(m, true) && m.Cfg.SSM.Groups == 2
 		}},
 		{"synth-falconh1-nonorm", func(m *model.Model) bool { return falconh1Block(m, false) && m.Cfg.SSM.Groups == 1 }},
 	}

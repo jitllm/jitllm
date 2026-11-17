@@ -20,8 +20,8 @@ func mamba1Fixtures() []struct {
 	}{
 		{"synth-mamba1", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Scan() && c.SSM.Inner == 128 && c.SSM.StateSize == 16 &&
-				c.DtRank == 32 && c.NLayer == 3 && !c.TiedEmbd
+			ok := hasKind(c, jlm.LayerScan) && c.SSM.Inner == 128 && c.SSM.StateSize == 16 &&
+				dtRank(m) == 32 && c.NLayer == 3 && !c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && l.NoFFN && c.LayerKind(i).Recurrent() && len(l.Vector(jlm.RoleSSMA)) == 128*16 &&
@@ -34,11 +34,11 @@ func mamba1Fixtures() []struct {
 		// a ragged tail.
 		{"synth-mamba1-ragged", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Scan() && c.DtRank == 40 && c.NLayer == 3
+			return hasKind(c, jlm.LayerScan) && dtRank(m) == 40 && c.NLayer == 3
 		}},
 		{"synth-falconmamba", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Scan() && c.NLayer == 3
+			ok := hasKind(c, jlm.LayerScan) && c.NLayer == 3
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && l.NoFFN && len(l.Vector(jlm.RoleSSMDtNorm)) == 32 && len(l.Vector(jlm.RoleSSMBNorm)) == 16 && len(l.Vector(jlm.RoleSSMCNorm)) == 16
@@ -49,7 +49,7 @@ func mamba1Fixtures() []struct {
 			// Four blocks: Mamba-1 with a dense MLP, Mamba-1 with a mixture,
 			// attention with a dense MLP, Mamba-1 with a mixture.
 			c := m.Cfg
-			ok := c.Scan() && c.NLayer == 4 && c.NExpert == 4 && c.NExpertUsed == 2 &&
+			ok := hasKind(c, jlm.LayerScan) && c.NLayer == 4 && c.NExpert == 4 && c.NExpertUsed == 2 &&
 				c.NoExpertNorm && !c.ExpertSigmoid && c.NoPosEnc && c.NKVHead == 2 && int(m.Container.Config().NFFNExp) == 96
 			for i, want := range []struct{ rec, moe bool }{{true, false}, {true, true}, {false, false}, {true, true}} {
 				l := &m.Layers[i]
@@ -87,7 +87,7 @@ func mamba1Violations() []c6Violation {
 			return eachSwap(m, jlm.RoleSSMXB, jlm.RoleSSMXC)
 		}},
 		{"one decay rate a channel (Mamba-2's form)", func(m *model.Model) func() {
-			n := deltaOf(m.Cfg).KDim
+			n := deltaOf(m).KDim
 			return ssdScaled(m, jlm.RoleSSMA, func(v []float32) {
 				for j := 0; j < len(v); j += n {
 					for i := 1; i < n; i++ {

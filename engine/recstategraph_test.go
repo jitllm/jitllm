@@ -20,7 +20,7 @@ func TestRecurrentStateIsTheGraphs(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			c, dg := m.Cfg, deltaOf(m.Cfg)
+			c, dg := m.Cfg, deltaOf(m)
 			for li := range c.NLayer {
 				conv, state := m.Composing().BlockGraph(li).RecurrentState()
 				wantConv, wantState := 0, 0

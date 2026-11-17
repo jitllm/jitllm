@@ -299,7 +299,7 @@ func k3RealSelected(t *testing.T, m *model.Model) {
 	c := m.Cfg
 	lin, full := jlm.LayerLinearAttn, jlm.LayerFullAttn
 	ok := m.Container.Config().AttnResBlock == 4 && expertWidthOf(m) == 512 &&
-		m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecaySoftplus()) && c.ChanDecay() && c.MLA() && c.NoPosEnc &&
+		m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecaySoftplus()) && chanDecay(m) && c.MLA() && c.NoPosEnc &&
 		m.Container.Config().QLoraRank == 256 && c.KVLoraRank == 128 && c.NDenseLead == 1 && c.NExpert == 8 &&
 		c.NExpertUsed == 2 && c.ExpertSigmoid && c.NEmbd == 1024 &&
 		slices.Equal(c.LayerKinds, []jlm.LayerKind{lin, lin, lin, full, lin, lin, lin, full})
