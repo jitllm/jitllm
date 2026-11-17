@@ -155,7 +155,7 @@ func TestWarmReportsAFailingSide(t *testing.T) {
 }
 
 func TestSummaryNamesBothAndTheRatios(t *testing.T) {
-	ss := [2]Side{{Name: "jitllm"}, {Name: "llama.cpp"}}
+	ss := [2]Side{{Name: "jitllm"}, {Name: "other"}}
 	mk := func(ttft time.Duration, toks int, gap time.Duration) hb.Sample {
 		s := hb.Sample{TTFT: ttft, CompletionTokens: toks}
 		for range toks - 1 {
@@ -164,7 +164,7 @@ func TestSummaryNamesBothAndTheRatios(t *testing.T) {
 		return s
 	}
 	got := Summary(ss, [2]hb.Sample{mk(50*time.Millisecond, 101, 10*time.Millisecond), mk(100*time.Millisecond, 101, 20*time.Millisecond)})
-	want := "jitllm: TTFT 50 ms, 100.0 tok/s · llama.cpp: TTFT 100 ms, 50.0 tok/s · jitllm/llama.cpp: decode 2.00x, TTFT 0.50x"
+	want := "jitllm: TTFT 50 ms, 100.0 tok/s · other: TTFT 100 ms, 50.0 tok/s · jitllm/other: decode 2.00x, TTFT 0.50x"
 	if got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}

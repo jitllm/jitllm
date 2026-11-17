@@ -56,7 +56,7 @@
     "model-correctness": {
       "module": ".", "packages": ["./engine"], "run": "TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestSafetensorsMatchTransformers|TestStatedTowerEncodesAPicture", "cap": "16G",
       "needs": {"models": true},
-      "note": "the engine against llama.cpp, transformers and its own batched path (RULE 7, RULE 11d); run the same on the arm64 host"
+      "note": "the engine against its reference oracles, transformers and its own batched path (RULE 7, RULE 11d); run the same on the arm64 host"
     },
     "five-principles": {
       "module": ".", "packages": ["./engine"], "run": "TestEveryModelRunsGenerated|TestDecodeDoesNotAllocate|TestPagingDoesNotChangeTheAnswer|TestOpenHonoursAPageBudget|TestForwardBatchFaultsItsBlocksIn|TestTwoPagedModels|TestWindowedLayersHoldTheirWindow|TestPrefixCacheRestoresAWindowedLayer", "cap": "16G",

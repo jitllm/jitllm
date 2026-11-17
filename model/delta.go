@@ -2,9 +2,10 @@ package model
 
 // The gated delta net: the other half of a hybrid's block loop.
 //
-// The graph is llama.cpp's running graph (layer 0 of Qwen3-Next-80B-A3B under
-// `llama-eval-callback`), and six of its steps are ones a from-paper reading
-// gets wrong:
+// The graph is transcribed tensor by tensor from the GGUF oracle's running
+// graph (JITLLM_LCPP; layer 0 of Qwen3-Next-80B-A3B), not re-derived from
+// transformers' Qwen3NextGatedDeltaNet, and six of its steps are ones a
+// from-paper reading gets wrong:
 //
 //	(1) SiLU on the convolution's output, before it is split
 //	(2) q and k L2-normalised: no weight, divided by the vector's own length

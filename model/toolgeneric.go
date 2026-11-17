@@ -16,12 +16,11 @@ import (
 // The generic tool form is what a model whose chat template reads no tools is
 // served: it was not trained to call a tool, so the request tells it, in the
 // system message, what tools it may call and how to answer, and its reply is
-// held to the answer's shape. It is llama.cpp's (common_chat_params_init_generic
-// and minja's tool polyfills, which the request's prompt is built through):
+// held to the answer's shape. The request's prompt is built through it:
 //
 //   - the system message gets the sentence genericSystem, then the tools as
-//     the request wrote them and an example call, which minja reads off the
-//     template itself (genericExample);
+//     the request wrote them and an example call, read off the template
+//     itself (genericExample);
 //   - a call an assistant turn made is written into its content as
 //     {"tool_calls": [...]}, and a tool's result is a user turn holding
 //     {"tool_response": {...}}, since the template renders neither;
@@ -32,7 +31,8 @@ import (
 //
 // Nothing in it is the model's own syntax, so the reply is read from its text
 // by one scanner (readGeneric) and forced by one schema (genericGrammar).
-// docs/divergences.md says where this part from llama.cpp.
+// docs/divergences.md records where the form departs from the convention it
+// follows.
 
 const genericSystem = "Respond in JSON format, either with `tool_call` (a request to call tools) or with `response` reply to the user's request"
 
@@ -148,8 +148,8 @@ func genericMessages(msgs []ChatMessage, tools []byte, example string, role bool
 // genericExample is the call the template shows the model: what it writes for
 // a turn that made one, after the text it writes for a plain user turn. render
 // is the template over a conversation (add_generation_prompt as its second
-// argument) and eos its end-of-sequence token. llama.cpp's own derivation
-// (minja's chat_template), the markup of the template's turn included.
+// argument) and eos its end-of-sequence token. The markup of the template's
+// turn is included.
 func genericExample(render func([]ChatMessage, bool) (string, error), eos string) string {
 	user := ChatMessage{Role: "user", Content: "Hey"}
 	call := polyCalls{Calls: []polyCall{{Name: "tool_name", ID: "call_1___", Arguments: json.RawMessage(`{"arg1":"some_value"}`)}}}
@@ -180,8 +180,8 @@ func genericExample(render func([]ChatMessage, bool) (string, error), eos string
 	return ex
 }
 
-// genericGrammar is the grammar a generic reply is held to: llama.cpp's
-// schema for it, through the same schema converter as response_format. A tool
+// genericGrammar is the grammar a generic reply is held to: the form's
+// schema, through the same schema converter as response_format. A tool
 // whose parameter schema the converter does not build takes any JSON object
 // for its arguments, as a forced call in any other form does.
 func genericGrammar(tools ToolSet, choice ToolChoice, names []string) (string, error) {

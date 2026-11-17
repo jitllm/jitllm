@@ -37,7 +37,7 @@ func sampling(sh *app.Shell) widget.Widget {
 		rows = append(rows, knob(sh, k.Name, k.Min, k.Max, k.Step, k.Get, k.Set, k.Caption))
 	}
 	rows = append(rows, seedField(sh),
-		note(sh, "Applied in llama.cpp's order, so a prompt samples the same in both."))
+		note(sh, "Applied in the sampler chain's fixed order."))
 
 	return primitives.VBox(rows...).Gap(2)
 }

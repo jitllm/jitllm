@@ -167,7 +167,7 @@ func TestGenericGrammarHoldsTheReply(t *testing.T) {
 }
 
 // genericCallText is the example call a template that writes its turns as
-// <|role|>text<|end|> shows the model, as llama.cpp reads it off the template.
+// <|role|>text<|end|> shows the model, as genericExample reads it off the template.
 const genericCallText = "{\n  \"tool_calls\": [\n    {\n      \"name\": \"tool_name\",\n      \"arguments\": {\n" +
 	"        \"arg1\": \"some_value\"\n      },\n      \"id\": \"call_1___\"\n    }\n  ]\n}"
 

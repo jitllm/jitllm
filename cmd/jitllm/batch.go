@@ -18,8 +18,8 @@ import (
 // rate: the concurrent-serving number, where run reports one conversation's.
 //
 // Every session gets the same prompt, admitted in chunks beside the decoding
-// rows. The rate is generated tokens over the whole wall, prompt included --
-// vLLM's end-to-end accounting, so the two print comparable numbers.
+// rows. The rate is generated tokens over the whole wall, prompt included:
+// end-to-end accounting.
 func batchCmd(args []string) error {
 	fs := flag.NewFlagSet("batch", flag.ExitOnError)
 	dev := fs.String("devices", "gpu:0", "the one device every block and the head go on")
@@ -97,8 +97,8 @@ func batchCmd(args []string) error {
 		}
 		return time.Since(t0), steps, nil
 	}
-	// A warm-up first, as vLLM's and llama.cpp's benchmarks do: the first step
-	// compiles every ragged matvec and captures the graph.
+	// A warm-up first: the first step compiles every ragged matvec and
+	// captures the graph.
 	if _, _, err := decode(4); err != nil {
 		return err
 	}

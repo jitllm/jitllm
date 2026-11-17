@@ -128,7 +128,7 @@ type frontSet struct {
 	// with typical-p (graph.SampleCut's Typical), apart so a draw without it
 	// pays for none of it.
 	CpuSample, CpuWalk, CpuRow, CpuCut *graph.Graph
-	// CpuWalkInfill is a top-k draw's walk through llama.cpp's infill
+	// CpuWalkInfill is a top-k draw's walk through the fill-in-the-middle
 	// sampler (graph.SampleWalk's Infill) at nn.InfillMaxK candidates, and
 	// Infill the vocabulary's tables it reads.
 	CpuWalkInfill              *graph.Graph
@@ -1151,11 +1151,10 @@ func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 			graph.Attrs{Eps: 1e-24 / float64(w), HeadDim: w}, nil, nil)[0]
 		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w))}, nil, w, n)
 	}
-	// norm is v normalised as llama.cpp's embd_normalize k asks
-	// (common_embd_normalize): unit at 2, v as it is below 0, scaled into
-	// int16's range by its largest magnitude at 0, else divided by its k-norm,
-	// |v|^k as exp(k log|v|) and the sum's k-th root as exp(log(sum)/k). A
-	// divisor of 0 leaves zeros.
+	// norm is v normalised as a request's embd_normalize k asks: unit at 2, v
+	// as it is below 0, scaled into int16's range by its largest magnitude at
+	// 0, else divided by its k-norm, |v|^k as exp(k log|v|) and the sum's k-th
+	// root as exp(log(sum)/k). A divisor of 0 leaves zeros.
 	k := b.In("embed.norm", 1)
 	norm := func(v graph.ValueID, w int, name string) graph.ValueID {
 		m := func(n string, fn graph.MapFn, c float64, width int, in ...graph.ValueID) graph.ValueID {

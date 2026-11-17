@@ -10,12 +10,12 @@ import (
 //
 //	KVF32   4 bytes an element
 //	KVF16   binary16, 2 bytes an element
-//	KVBF16  bfloat16, 2 bytes an element, rounded as ggml rounds it
-//	KVQ8_0  q8_0 per head row (32-element blocks, llama.cpp's rounding):
+//	KVBF16  bfloat16, 2 bytes an element, rounded to nearest even
+//	KVQ8_0  q8_0 per head row (32-element blocks, Q8_0's reference rounding):
 //	        1.25 bytes an element as the cache lays it out
-//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1, KVIQ4_NL  llama.cpp's blocks of those
-//	        formats per head row, quantized as ggml's reference quantizer
-//	        does: 0.5625, 0.625, 0.6875, 0.75 and 0.5625 bytes an element
+//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1, KVIQ4_NL  GGUF blocks of those
+//	        formats per head row, quantized as each type's reference
+//	        quantizer does: 0.5625, 0.625, 0.6875, 0.75 and 0.5625 bytes an element
 //
 // A q8 history's row is its heads' q8 rows (composer.Pool.Q8): the append
 // quantizes each head's row whole, and every read widens its element. MLA's

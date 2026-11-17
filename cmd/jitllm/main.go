@@ -97,8 +97,7 @@ func buildVersion() string {
 }
 
 func main() {
-	// speed -ttft's load row counts from here, as llama.cpp's log timestamps
-	// count from its logger's start.
+	// speed -ttft's load row counts from here, the process's start.
 	procStart := time.Now()
 	// A Vulkan driver held for the process's life keeps the ICDs loaded while
 	// devices open and close (vulkan.Driver); nil where there is no loader.
@@ -171,7 +170,7 @@ func usage() {
   jitllm embed [-ids] [-lines] <model.jlm> <text...>   an embedding model's normalised vector
   jitllm decide [-lines] <model.jlm> <request.json|->       a decision model's answers to a /v1/systemone body
   jitllm bench [-tokenizer FILE] <model.jlm>
-  jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] <model.jlm>   llama-bench's pp/tg, warmed
+  jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] <model.jlm>   prompt and decode rates (pp/tg), warmed
   jitllm batch [-devices SPEC] [-batch N] [-n N] <model.jlm> <prompt...>
   jitllm verify [flags] <model.jlm>
   jitllm upgrade <model.jlm>...   bring containers from an older jitllm to this build's version, in place
@@ -260,9 +259,9 @@ template does). -chat-template stores another in its place:
   jitllm convert -chat-template Mistral-7B-Instruct-v0.3/tokenizer_config.json \
       Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
 
-A GGUF can drop what its model's config.json states: llama.cpp's converter writes
-no LongRoPE factors for MiniCPM-V's text model, and LFM2-VL's mmproj names no
-resampling filter. -config reads them from the publisher's files (config.json and
+A GGUF can drop what its model's config.json states: MiniCPM-V's text GGUF
+carries no LongRoPE factors, and LFM2-VL's mmproj names no resampling filter.
+-config reads them from the publisher's files (config.json and
 the preprocessor_config.json beside it); a GGUF that names LongRoPE and carries no
 factors is refused without it:
   -config FILE           a config.json or the model directory holding one
@@ -278,7 +277,7 @@ is already here and complete. It lands beside the models you already have -- see
   HF_TOKEN               a token for a private or gated repo; HUGGING_FACE_HUB_TOKEN
                          and ~/.cache/huggingface/token are read too
 
-sampling (names match llama.cpp, so a prompt moves between engines):
+sampling:
   -temp F                sampling temperature; 0 = greedy (default)
   -top-k N               keep only the k most likely tokens; 0 = off
   -top-p F               nucleus sampling; 0 or 1 = off
@@ -465,7 +464,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 
 	// -chat is opt-in. The default stays raw completion because every board
-	// row and the llama.cpp comparisons are completions of a bare prompt.
+	// row and the baseline comparisons are completions of a bare prompt.
 	ids := m.Vocab.EncodeSpecial(prompt, true)
 	replying := chat != nil && chat.repl
 	if replying {
@@ -492,7 +491,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	// -depth measures decode at a context length, where attention grows with
 	// position and weight traffic does not. The padding repeats the prompt's
-	// own tokens; only the length matters, as with llama-bench's -d.
+	// own tokens; only the length matters.
 	if depth > len(ids) {
 		if len(ids) == 0 {
 			return fmt.Errorf("cannot pad an empty prompt to depth %d", depth)
@@ -895,7 +894,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		sm.Observe(next)
 		if top > 0 {
 			// The margin at each step is the thing to look at when jitllm and
-			// llama.cpp disagree: a near-tie is float reassociation, a wide gap
+			// a reference disagree: a near-tie is float reassociation, a wide gap
 			// is a bug.
 			fmt.Fprintf(os.Stderr, "step %2d:", i)
 			for _, c := range engine.TopK(logits, top) {
@@ -1389,8 +1388,7 @@ func runCmd(args []string) error {
 	chat := fs.Bool("chat", false, "wrap the prompt in the model's own chat template (instruct models)")
 	system := fs.String("system", "", "a system message, with -chat")
 	depth := fs.Int("depth", 0, "pad the prompt to this many tokens before generating, so decode is measured at that context length")
-	// Sampling, named to match llama.cpp so a prompt moves between engines.
-	// temp 0 is greedy and is the default: every correctness test in the tree
+	// Sampling. temp 0 is greedy and is the default: every correctness test in the tree
 	// compares argmax, and a sampler on by default would make them fail
 	// randomly rather than loudly.
 	temp := fs.Float64("temp", 0, "sampling temperature; 0 = greedy (default)")

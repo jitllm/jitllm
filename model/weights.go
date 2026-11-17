@@ -249,7 +249,7 @@ func (m *Model) CpuTablePlanes(i, ctx int) []float32 {
 
 // RopeFor is the rotary an instance of context ctx turns: the long factors'
 // (RopeLong) where ctx passes the context the short factors were trained to,
-// llama.cpp's rule on its context, and the model's rotary otherwise. An
+// chosen once for the instance's context, and the model's rotary otherwise. An
 // instance turns one rotary for its whole history.
 func (m *Model) RopeFor(ctx int) *nn.Rope {
 	if m.RopeLong != nil && ctx > m.LongCtx {

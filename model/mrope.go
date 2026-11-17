@@ -14,7 +14,7 @@ import (
 // of a still image turns at (s, s+y, s+x), where s is the rotary position the
 // span starts at, and the text after it resumes at s + max(H, W) rather than at
 // s + H*W -- so from the first image on, a row's rotary position and its cache
-// position part (transformers' get_rope_index, llama.cpp's mtmd n_pos).
+// position part (transformers' get_rope_index).
 //
 // Nothing about that is an image pipeline's: a sequence carries its rotary
 // marks (graph.OpRopePos), written where a prompt's spans enter and dropped

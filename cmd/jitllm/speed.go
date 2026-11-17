@@ -20,13 +20,13 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a
+// speedCmd is the pp/tg measurement: a prompt of -p tokens and a
 // greedy decode of -n, each timed on its own, -r times on fresh instances after
 // one untimed warm-up of both.
 //
 // run's "prompt" figure is not a prefill rate: the first prompt of a process
-// compiles and loads the batched kernels, which llama-bench excludes as
-// warm-up.
+// compiles and loads the batched kernels, which speed's untimed warm-up
+// excludes.
 func speedCmd(procStart time.Time, args []string) error {
 	fs := flag.NewFlagSet("speed", flag.ExitOnError)
 	dev := fs.String("devices", "auto", "where to run the blocks, as run's -devices")
@@ -135,7 +135,7 @@ func speedCmd(procStart time.Time, args []string) error {
 	one := func(timed bool) (pp, tg time.Duration, err error) {
 		// The prompt's instance is closed before the decode's is opened: two
 		// live sessions each hold a KV cache on every card, and the tier does
-		// not budget a second one. llama-bench's pp and tg are separate runs.
+		// not budget a second one. pp and tg are separate runs.
 		st, err := attach(*p + 1)
 		if err != nil {
 			return 0, 0, err
@@ -164,7 +164,7 @@ func speedCmd(procStart time.Time, args []string) error {
 		t0 := time.Now()
 		// The timer stops when Prefill returns: it hands back the last row's
 		// logits read from the device, so the device has finished; that is
-		// llama-bench's pp boundary (decode of the batch with the last row's
+		// the pp boundary (decode of the batch with the last row's
 		// logits, then a synchronize), with no sampling and no tokenizing.
 		lg, err := st.Prefill(prompt)
 		pp = time.Since(t0)
@@ -191,11 +191,11 @@ func speedCmd(procStart time.Time, args []string) error {
 		if err != nil {
 			return 0, 0, err
 		}
-		// The decode starts on a fresh instance at position 1, as llama-bench's
-		// tg does, so it is not a decode at the prompt's depth. Speculation
-		// starts from the seed sentence instead: a prediction block's
-		// acceptance is a property of the text, and a one-token prompt has
-		// none to speak of.
+		// The decode starts on a fresh instance at position 1, so its boundary
+		// is the baseline row's (RULE 1) and it is not a decode at the
+		// prompt's depth. Speculation starts from the seed
+		// sentence instead: a prediction block's acceptance is a property of
+		// the text, and a one-token prompt has none to speak of.
 		st2, err := attach(*n + len(seed) + 2)
 		if err != nil {
 			return 0, 0, err
@@ -445,7 +445,7 @@ func tierCounters(d nn.LayerDevice) *backend.Counters {
 // when nothing was recorded. A decode token's are event nodes inside its
 // captured graph; a prompt's are an event pair around each launch, since a
 // prompt chunk is not captured (scripts/kshim.c with KSHIM_DIRECT=1 takes the
-// same of llama.cpp's prompt).
+// same of the baseline's prompt).
 func printKernelTimes(ctr *backend.Counters, unit string, steps int) {
 	us, cnt := ctr.CUDAKernelTimes()
 	if len(us) == 0 {
@@ -557,8 +557,8 @@ func ttftRun(m *model.Model, attach func(int) (*engine.Instance, error), p, reps
 	// The two rows vs-llamacpp.sh reads: load is open to ready (the container
 	// opened, the devices up, the kernels compiled, the tuners run, the blocks
 	// placed and uploaded); ttft (model loaded) is ready to the first token of
-	// the process's first prompt, tokenizing excluded as llama.cpp's prompt
-	// eval excludes it.
+	// the process's first prompt, tokenizing excluded as the baseline's
+	// prompt row excludes it.
 	if err := readyHonest(compiled); err != nil {
 		return err
 	}

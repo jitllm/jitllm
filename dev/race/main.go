@@ -5,7 +5,7 @@
 // measurement: one request per side is one sample, and a board row comes from
 // dev/httpbench or scripts/vs-llamacpp.sh (AGENTS.md RULE 2).
 //
-//	go run . -left jitllm=http://127.0.0.1:4242 -right llama.cpp=http://127.0.0.1:8080 \
+//	go run . -left jitllm=http://127.0.0.1:4242 -right other=http://127.0.0.1:8080 \
 //	  -model model -prompt "Explain how a CPU cache works." -max-tokens 256 -warm 2
 //
 // Each side is NAME=URL, the URL the endpoint's base without /v1. The header
@@ -52,7 +52,7 @@ func main() {
 	out := flag.String("o", "", "write both samples and the summary as JSON here")
 	timeout := flag.Duration("timeout", 10*time.Minute, "the whole race's timeout")
 	leftExtra := flag.String("left-extra", "", "a JSON object merged into the left side's request body")
-	rightExtra := flag.String("right-extra", "", "a JSON object merged into the right side's request body, e.g. {\"cache_prompt\":false} for llama-server")
+	rightExtra := flag.String("right-extra", "", "a JSON object merged into the right side's request body, e.g. {\"cache_prompt\":false}")
 	noTUI := flag.Bool("no-tui", false, "race without the screen and print the summary only")
 	flag.Parse()
 
