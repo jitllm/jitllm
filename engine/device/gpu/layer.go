@@ -4191,8 +4191,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.TCapture += time.Since(tc)
 			if errors.Is(err, errServedCold) {
 				// A served slice not formed yet: its compile and its
-				// constants' upload have no place in a capture, so this step
-				// is issued unrecorded, forming it, and the next is captured.
+				// constants' upload have no place in a capture, so the call
+				// is issued unrecorded. At placement's warm-up (prewarming)
+				// that forms it and the next call is captured; at a step
+				// servedFor refuses it (UnformedAtStep).
 				if r != nil {
 					g.stale = append(g.stale, r)
 				}
