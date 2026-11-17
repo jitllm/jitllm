@@ -1079,7 +1079,9 @@ func oaTools(raw, choice json.RawMessage) ([]byte, error) {
 	var ts []struct {
 		Type     string `json:"type"`
 		Function struct {
-			Name string `json:"name"`
+			Name       string          `json:"name"`
+			Parameters json.RawMessage `json:"parameters"`
+			Strict     *bool           `json:"strict"`
 		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &ts); err != nil {
@@ -1088,6 +1090,14 @@ func oaTools(raw, choice json.RawMessage) ([]byte, error) {
 	for i, t := range ts {
 		if t.Type != "function" || t.Function.Name == "" {
 			return nil, fmt.Errorf("tools[%d]: only {\"type\": \"function\"} with a name is supported", i)
+		}
+		if s := t.Function.Strict; s != nil && *s {
+			if len(t.Function.Parameters) == 0 {
+				return nil, fmt.Errorf("tools[%d] %q is strict and states no parameters", i, t.Function.Name)
+			}
+			if err := strictSchema(t.Function.Parameters); err != nil {
+				return nil, fmt.Errorf("tools[%d] %q is strict: %v", i, t.Function.Name, err)
+			}
 		}
 	}
 	if len(ts) == 0 {

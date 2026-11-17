@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -200,6 +202,11 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 		if rf.JSONSchema == nil || len(rf.JSONSchema.Schema) == 0 {
 			return "", fmt.Errorf("%w: response_format json_schema needs json_schema.schema", ErrInvalid)
 		}
+		if s := rf.JSONSchema.Strict; s != nil && *s {
+			if err := strictSchema(rf.JSONSchema.Schema); err != nil {
+				return "", fmt.Errorf("%w: response_format json_schema %q is strict: %v", ErrInvalid, rf.JSONSchema.Name, err)
+			}
+		}
 		src, err := grammar.FromJSONSchema(rf.JSONSchema.Schema)
 		if err != nil {
 			return "", fmt.Errorf("%w: response_format: %v", ErrInvalid, err)
@@ -207,6 +214,72 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 		return src, nil
 	}
 	return "", fmt.Errorf("%w: response_format type %q: text, json_object or json_schema", ErrInvalid, rf.Type)
+}
+
+// strictSchema refuses what OpenAI's strict mode refuses of a schema, so the
+// compatible routes answer a strict request as the API they serve does: an
+// object that does not close itself (additionalProperties false) or does not
+// require every property it lists, at any depth -- a property, an item, a
+// branch of anyOf, allOf or oneOf, a definition.
+func strictSchema(raw json.RawMessage) error {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	return strictAt(v, "the schema")
+}
+
+// strictAt is strictSchema at v, which at names as a path of keys.
+func strictAt(v any, at string) error {
+	switch x := v.(type) {
+	case []any:
+		for i, e := range x {
+			if err := strictAt(e, fmt.Sprintf("%s[%d]", at, i)); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		props, _ := x["properties"].(map[string]any)
+		object := props != nil || x["type"] == "object"
+		if ts, ok := x["type"].([]any); ok {
+			object = object || slices.Contains(ts, any("object"))
+		}
+		if object {
+			if ap, ok := x["additionalProperties"].(bool); !ok || ap {
+				return fmt.Errorf("%s states no additionalProperties false, which a strict schema states on every object", at)
+			}
+			req := map[string]bool{}
+			if rs, ok := x["required"].([]any); ok {
+				for _, r := range rs {
+					if s, ok := r.(string); ok {
+						req[s] = true
+					}
+				}
+			}
+			for _, k := range slices.Sorted(maps.Keys(props)) {
+				if !req[k] {
+					return fmt.Errorf("%s does not require %q, and a strict schema requires every property it lists", at, k)
+				}
+			}
+		}
+		for _, k := range []string{"properties", "$defs", "definitions"} {
+			if m, ok := x[k].(map[string]any); ok {
+				for _, n := range slices.Sorted(maps.Keys(m)) {
+					if err := strictAt(m[n], at+"."+k+"."+n); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		for _, k := range []string{"items", "prefixItems", "anyOf", "allOf", "oneOf"} {
+			if e, ok := x[k]; ok {
+				if err := strictAt(e, at+"."+k); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // toolStream reads a generate's tool calls, when its chat declares tools: in

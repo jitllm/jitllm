@@ -197,11 +197,12 @@ func TestNativeRequestsBuildTheOptionsTheOpenAIRoutesDo(t *testing.T) {
 			})},
 		{"response_format json_schema", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"response_format":{"type":"json_schema",` +
-				`"json_schema":{"name":"x","strict":true,"schema":{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}}}}`,
+				`"json_schema":{"name":"x","strict":true,"schema":{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"],` +
+				`"additionalProperties":false}}}}`,
 			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.ResponseFormat = &v1.ResponseFormat{Type: v1.ResponseFormat_TYPE_JSON_SCHEMA, Name: "x",
 					Strict:     ptr(true),
-					JsonSchema: `{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}`}
+					JsonSchema: `{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"],"additionalProperties":false}`}
 			})},
 		{"response_format text", "/v1/chat/completions",
 			`{"model":"m-1","messages":` + parityMsgs + `,` + paritySampling + `,"response_format":{"type":"text"}}`,

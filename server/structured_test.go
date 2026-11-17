@@ -232,7 +232,7 @@ func TestResponseFormatOverHTTP(t *testing.T) {
 	}
 	out := postOAText(t, c.url, fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"Describe a person."}],`+
 		`"max_tokens":400,"temperature":1,"seed":7,"response_format":{"type":"json_schema","json_schema":`+
-		`{"name":"p","strict":true,"schema":%s}}}`, sm.id, sm.schemas[0]))
+		`{"name":"p","schema":%s}}}`, sm.id, sm.schemas[0]))
 	var doc, schema any
 	if err := schemacheck.Parse(out, &doc); err != nil {
 		t.Fatalf("json_schema: %q: %v", out, err)
