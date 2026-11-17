@@ -1386,6 +1386,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	defer func() {
 		if placed {
 			g.mu.Lock()
+			promptW, stepW := g.promptW, g.stepW
 			g.prewarmComposedTables()
 			// A block whose composed part, or prompt part at the narrowest
 			// width fitReserved reached, does not fit beside the blocks placed
@@ -1406,10 +1407,14 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				g.LastErr = why
 				placed = false
 			}
-			// The reserved width the forms above narrowed (narrowReserved)
-			// has its per-row head formed here, as a first placement's
-			// (prewarmComposed): a step at that width forms nothing.
-			g.prepRowsReserved()
+			// The reserved width the forms above narrowed (narrowReserved),
+			// or a decline's dropped forms, have the per-row head formed
+			// here, as a first placement's (prewarmComposed): a step at that
+			// width forms nothing. A placement that kept the width keeps the
+			// head it had.
+			if !placed || g.promptW != promptW || g.stepW != stepW {
+				g.prepRowsReserved()
+			}
 			g.mu.Unlock()
 		}
 	}()
