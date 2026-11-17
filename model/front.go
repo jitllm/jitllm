@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"sync"
 
 	"github.com/jitllm/jitllm/composer"
@@ -274,6 +275,54 @@ func (c Composing) Rotaries() []graph.Rotary {
 		out = append(out, c.m.rotaryOf(r))
 	}
 	return out
+}
+
+// statedRotaries states the model's further rotaries (Model.Ropes): each a
+// width, base and magnitude a block's stated rotary op turns by that the
+// model's rotary does not -- the sliding layers' own -- its pairs divided by
+// the model's factors only where the op reads them. A block whose graph does
+// not decode adds none; its error is FrontGraphs'.
+func (m *Model) statedRotaries() error {
+	m.Ropes = nil
+	same := func(r *nn.Rope, a graph.Attrs) bool {
+		return r.NRot == a.NRot && r.Base == a.Base && scaleOne(r.Scale) == scaleOne(a.Mscale) && (len(r.Freqs) > 0) == a.Freqs
+	}
+	bg := &m.Container.Config().Blocks
+	seen := map[uint16]bool{}
+	for li := range min(len(bg.Of), m.Cfg.NLayer+m.Cfg.NMTP) {
+		if seen[bg.Of[li]] {
+			continue
+		}
+		seen[bg.Of[li]] = true
+		g, _, err := m.blockGraph(li)
+		if err != nil || g == nil {
+			continue
+		}
+		for _, o := range g.Ops {
+			if o.Kind != graph.OpRope || same(&m.Rope, o.Attr) ||
+				slices.ContainsFunc(m.Ropes, func(r nn.Rope) bool { return same(&r, o.Attr) }) {
+				continue
+			}
+			if len(m.Rope.Runs) > 0 {
+				return fmt.Errorf("model: block %d turns a rotary of its own beside the model's rotary sections", li)
+			}
+			r := m.Rope
+			r.NRot, r.Base, r.Scale = o.Attr.NRot, o.Attr.Base, o.Attr.Mscale
+			if !o.Attr.Freqs {
+				r.Freqs = nil
+			}
+			m.Ropes = append(m.Ropes, r)
+		}
+	}
+	return nil
+}
+
+// scaleOne is a rotary magnitude, 0 read as one.
+func scaleOne(s float64) float64 {
+	if s == 0 {
+		return 1
+	}
+	return s
 }
 
 func (m *Model) rotaryOf(r nn.Rope) graph.Rotary {

@@ -1981,6 +1981,7 @@ input	model/front.go	"model: a pointer readout that stores no %v"
 input	model/front.go	"model: a pointer readout whose %v is %d wide"
 input	model/front.go	"model: block %d reads %d floats of its %v, which holds %d"
 input	model/front.go	"model: block %d reads its %v, which the file does not store"
+input	model/front.go	"model: block %d turns a rotary of its own beside the model's rotary sections"	a container the converter does not write
 input	model/front.go	"model: the front end states no graph for %s: %s"	a block of a container the converter did not write: the census runs every one it writes
 context	model/front.go	"model: the front end states no graph for %s: %s: %w"	a block of a container the converter did not write: the census runs every one it writes
 context	model/front.go	"model: the marker head's block %d: %w"
@@ -2034,7 +2035,6 @@ input	model/model.go	"model: per-layer embeddings: a table %dx%d, a projection %
 input	model/model.go	"model: prediction block %d %s is %d wide, want %d"
 input	model/model.go	"model: prediction block %d eh_proj is %dx%d, want %dx%d"
 input	model/model.go	"model: prediction block %d's head or embedding is %dx%d, want %dx%d"
-input	model/model.go	"model: rotary sections on the sliding layers' own rotary, which the converter refuses"	a container the converter does not write
 input	model/model.go	"model: the container carries %d hyper-connected streams it does not state: convert the model again"
 input	model/model.go	"model: the container has no config section"
 input	model/model.go	"model: the container states a marker head of no blocks"

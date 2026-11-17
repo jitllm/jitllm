@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -43,7 +44,7 @@ func hfDenseSelected() map[string]func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.QKNormWide && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostFFNNorm) != nil &&
 				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && slides(m, 2) && !slides(m, 3) &&
-				!c.NoPEGlobal && ropesAt(m, 3) && c.RopeScaleSWA == 1 && len(m.Ropes) == 1
+				!c.NoPEGlobal && ropesAt(m, 3) && slidingRotaryPlain(m)
 		},
 		"synth-hf-exaone4": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -76,4 +77,30 @@ func TestSafetensorsDenseFamilySelected(t *testing.T) {
 			}
 		})
 	}
+}
+
+// slidingRotaryPlain reports that every sliding block's stated rotary turns
+// at a magnitude of one and divides by no stored factors, and some block is
+// sliding.
+func slidingRotaryPlain(m *model.Model) bool {
+	n := 0
+	for li := range m.Cfg.NLayer {
+		g := m.Composing().BlockGraph(li)
+		if g == nil {
+			return false
+		}
+		if w, _ := g.AttendWindow(); w == 0 {
+			continue
+		}
+		for _, o := range g.Ops {
+			if o.Kind != graph.OpRope {
+				continue
+			}
+			if o.Attr.Freqs || o.Attr.Mscale != 0 && o.Attr.Mscale != 1 {
+				return false
+			}
+			n++
+		}
+	}
+	return n > 0
 }

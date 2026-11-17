@@ -113,11 +113,6 @@ type Config struct {
 	// 50 and the output logits at 30. Zero means none. Omitting it gives fluent
 	// wrong output that only an external oracle catches.
 	AttnSoftcap, FinalSoftcap float32
-	RopeBaseSWA               float64
-	// RopeScaleSWA is the sliding layers' rotary magnitude where the
-	// container states one of their own (jlm.Config.RopeScaleSWA); 0 is the
-	// full layers'.
-	RopeScaleSWA float64
 
 	// YarnFactor is a YaRN's factor, which the score's magnitude reads (0 is
 	// no YaRN); the rotary's angles turn by the factors the container states
@@ -186,12 +181,10 @@ type Config struct {
 
 	// geoms is each block's own geometry where the blocks differ
 	// (jlm.Config.Geoms), nil when every block is the model's; mixed says
-	// their attention geometries differ and localNRot is the rotary width the
-	// blocks reading the second table turn. Set by setGeoms, read through
+	// their attention geometries differ. Set by setGeoms, read through
 	// HeadDimAt and friends.
-	geoms     []jlm.Geom
-	mixed     bool
-	localNRot int
+	geoms []jlm.Geom
+	mixed bool
 	// ownGeoms says the blocks state geometries of their own (setGeoms),
 	// where mixed counts a marker head's too.
 	ownGeoms bool
@@ -351,26 +344,13 @@ func (c *Config) MixedGeom() bool { return c.mixed }
 // own; a marker head's geometry, its blocks' set's, is not one.
 func (c *Config) OwnGeoms() bool { return c.ownGeoms }
 
-// setGeoms takes the blocks' own geometries, gs one per block or none;
-// sliding says which blocks turn by the sliding layers' rotary.
-func (c *Config) setGeoms(gs []jlm.Geom, sliding func(int) bool) {
-	c.geoms, c.mixed, c.localNRot = gs, false, 0
+// setGeoms takes the blocks' own geometries, gs one per block or none.
+func (c *Config) setGeoms(gs []jlm.Geom) {
+	c.geoms, c.mixed = gs, false
 	for li := range gs {
 		c.mixed = c.mixed || c.HeadDimAt(li) != c.HeadDim || c.NKVHeadAt(li) != c.NKVHead || c.NRotAt(li) != c.NRot
-		if sliding(li) {
-			c.localNRot = max(c.localNRot, c.NRotAt(li))
-		}
 	}
 	c.ownGeoms = c.mixed
-}
-
-// LocalNRot is the rotary width the blocks reading the second table
-// (Model.Ropes) turn: theirs where they state one, NRot otherwise.
-func (c *Config) LocalNRot() int {
-	if c.localNRot != 0 {
-		return c.localNRot
-	}
-	return c.NRot
 }
 
 // HeadDimAt, NKVHeadAt and NRotAt are layer li's attention geometry: the
@@ -621,8 +601,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		AttnFactor:   float64(c.AttnFactor),
 		NExpert:      int(c.NExpert),
 		NExpertUsed:  int(c.NExpertUsed),
-		RopeBaseSWA:  float64(c.RopeBaseSWA),
-		RopeScaleSWA: float64(c.RopeScaleSWA),
 		AttnSoftcap:  c.AttnSoftcap,
 		FinalSoftcap: c.FinalSoftcap,
 		YarnFactor:   float64(c.YarnFactor),
@@ -672,7 +650,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 
 		HCMult: int(c.HCMult),
 	}
-	out.setGeoms(c.Geoms, c.Sliding)
+	out.setGeoms(c.Geoms)
 	out.VNorm = c.Flags2.Has(jlm.Flag2VNorm)
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
 	out.bidir = c.BidirLayers
@@ -1164,6 +1142,10 @@ func openContainer(path string, options ...Option) (*Model, error) {
 		return nil, err
 	}
 	m.Container, m.load = c, lo
+	if err := m.statedRotaries(); err != nil {
+		c.Close()
+		return nil, err
+	}
 	m.Gc, m.chatClock = lo.gc, lo.ChatClock
 	m.ActWindow = m.ActWindowOf()
 	m.Id = newModelID()
@@ -2318,29 +2300,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if len(m.Rope.Runs) > 0 {
 		cfg.RopePairs = m.Rope.TablePairs()
 	}
-	// The sliding layers' rotary, where the container states them a base,
-	// width or magnitude of their own.
-	if cfg.RopeBaseSWA != 0 || cfg.LocalNRot() != cfg.NRot {
-		r := m.Rope
-		if cfg.RopeBaseSWA != 0 {
-			r.Base = cfg.RopeBaseSWA
-		}
-		// The sliding layers turn their own width where their blocks state one.
-		r.NRot = cfg.LocalNRot()
-		if cfg.RopeScaleSWA != 0 {
-			r.Scale = cfg.RopeScaleSWA
-		}
-		if len(r.Runs) > 0 {
-			return nil, fmt.Errorf("model: rotary sections on the sliding layers' own rotary, which the converter refuses")
-		}
-		m.Ropes = append(m.Ropes, r)
-	}
-	// The full layers' rotary divides each pair's angle by the factor the
+	// The model's rotary divides each pair's angle by the factor the
 	// container states for it (rope_freqs, or LongRoPE's short factors), the
 	// long factors an instance past the original context turns (RopeLong):
 	// the converter states a scaling method's divisors in them
-	// (convert.StateRotary). The sliding layers' rotary, copied above, keeps
-	// none.
+	// (convert.StateRotary). A rotary of the blocks' own is the one their
+	// stated rotary ops turn by (statedRotaries).
 	for _, role := range []jlm.Role{jlm.RoleRopeFreqs, jlm.RoleRopeFactorsShort} {
 		if c.Has(role, jlm.DenseBlock, -1) {
 			if m.Rope.Freqs, err = vec(role, jlm.DenseBlock); err != nil {

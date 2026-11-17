@@ -343,8 +343,8 @@ func (h *Head) Vector(r jlm.Role) []float32 { return VectorOf(h.Vectors, r) }
 
 // MaxRopeTables is the most rotary tables a call carries, a bound this code
 // chose: an array keeps a call's tables in its frame rather than on the heap
-// (RULE 2f), and the container states two rotaries at most (RopeBase,
-// RopeBaseSWA), so four leave room. A front end stating more is refused when
+// (RULE 2f), and the blocks' stated rotary ops turn two rotaries at most
+// (the model's and the sliding layers'), so four leave room. A front end stating more is refused when
 // an instance is made (Instance.initTables), naming the count; the bound
 // grows with the array.
 const MaxRopeTables = 4
