@@ -38,9 +38,16 @@ import (
 // class, so a measurement of one thread runs at the clock a loaded device
 // runs at. A launch is the composer's smallest form and a read of the
 // whole memory its column reduction, each formed for the device in front
-// of it as a model's part is; the reads a cache serves, the chase and the
-// instruction classes are still kernels built from IR. Each is timed on
-// the device's clock where the backend has one.
+// of it as a model's part is. The device's rate of a class an expression
+// issues (gpuStep) is the composer's form of rows through chains of the
+// class's terms, the instructions of the class the estimator counts in it
+// over the seconds, taken between two depths so a launch's own cost
+// cancels. A thread's rate and a chain's delay, the reads a cache serves,
+// the chase and the lanes' and the workgroup's exchanges are still kernels
+// built from IR: a composed form is straight code without a loop, and a
+// thread alone running enough of it to time stalls on fetching its
+// instructions. Each is timed on the device's clock where the backend has
+// one.
 func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
 	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API())}}
@@ -205,7 +212,12 @@ func GPU(d backend.Device) (cost.Device, error) {
 		if cl == cost.ClassGroup {
 			chains = 1
 		}
-		total, err := rate(chains, 1, threads)
+		var total float64
+		if _, _, ok := gpuStep(cl); ok {
+			total, err = p.slope(cl, 16*threads, chains, 16, 64)
+		} else {
+			total, err = rate(chains, 1, threads)
+		}
 		if err != nil {
 			return out, err
 		}
@@ -252,6 +264,7 @@ type gpuProbe struct {
 // gpuForm is kernels launched in order, each with its workgroups, width and
 // buffers: a graph the composer formed, compiled.
 type gpuForm struct {
+	issued [cost.NumClasses]int64
 	ks     []backend.Kernel
 	names  []string
 	groups []int
@@ -315,7 +328,8 @@ func (p *gpuProbe) kernel(k *ir.Kernel, groups, width int, bufs ...backend.Buf) 
 // compiled, each value bound to its buffer in vals or one of its own, and
 // each constant block, scratch and the step's row count to one of its own.
 func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gpuForm, error) {
-	_, codes, err := p.reg.Form(p.request(g))
+	req := p.request(g)
+	ks, codes, err := p.reg.FormKernels(req)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +342,11 @@ func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gp
 		return b, b.Write(unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(ws))), 4*len(ws)))
 	}
 	f := &gpuForm{}
-	for _, c := range codes {
+	for i, c := range codes {
+		n := cost.Issued(ks[i], req.Step, cost.Device{Device: p.dev})
+		for cl := range n {
+			f.issued[cl] += n[cl]
+		}
 		if c.GPU == nil {
 			return nil, fmt.Errorf("probe: %s has no GPU code", c.Name)
 		}
@@ -364,6 +382,44 @@ func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gp
 		f.groups, f.widths, f.args = append(f.groups, c.Groups), append(f.widths, c.GPU.Group[0]), append(f.args, args)
 	}
 	return f, nil
+}
+
+// slope is the instructions of class cl a second a row of n issues through
+// chains chains, from the chains at two depths, short and long: what a
+// launch costs beside its chains cancels in the difference. A chain is
+// straight code, its launches back to back with no read of the memory
+// between them: a read would take the code out of the last cache, and a
+// thread alone stalls on fetching it. The device's clock times them where
+// its backend has one, else the wall of a session's launches.
+func (p *gpuProbe) slope(cl cost.Class, n, chains, short, long int) (float64, error) {
+	warm := p.warm
+	p.warm = nil
+	defer func() { p.warm = warm }()
+	_, clocked := Timer(p.d)
+	var count, secs [2]float64
+	for i, deep := range [2]int{short, long} {
+		g, ok := rateGraph(cl, n, chains, deep)
+		if !ok {
+			return 0, fmt.Errorf("probe: no chain of the %v class", cl)
+		}
+		f, err := p.form(g, nil)
+		if err != nil {
+			return 0, err
+		}
+		count[i] = f.count(countedAs(cl))
+		if clocked {
+			secs[i], err = p.time(f, 16)
+		} else {
+			secs[i], err = p.wall(f, 64)
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	if !(count[1] > count[0]) || !(secs[1] > secs[0]) {
+		return 0, fmt.Errorf("probe: %v chains of %d and %d count %v and took %v seconds", cl, short, long, count, secs)
+	}
+	return (count[1] - count[0]) / (secs[1] - secs[0]), nil
 }
 
 // request asks for g at one row on the device the probe measures, its
@@ -435,6 +491,9 @@ func gpuReadKernel(name string, threads, per, mask, width int, whole bool) (*ir.
 	b.Store(out, t, acc, 0)
 	return b.Done()
 }
+
+// count is the instructions of class cl one launch of f issues.
+func (f *gpuForm) count(cl cost.Class) float64 { return float64(f.issued[cl]) }
 
 func (f *gpuForm) run(s backend.Session) error {
 	for i, k := range f.ks {
@@ -632,9 +691,12 @@ func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 // itself, a shift and an exclusive or, not an add of a constant): its
 // value's type, the instructions applied to a value, given the workgroup
 // memory the kernel declares where shared is set and the thread's index,
-// and how many instructions that is where more than one. The integer class
-// is a shift and an exclusive or, the index class a multiply-add: an
-// integer multiply is slower than the rest on some devices.
+// and how many instructions the estimator counts in it where more than
+// one. The integer class is a shift and an exclusive or, the index class a
+// multiply-add: an integer multiply is slower than the rest on some
+// devices. The estimator counts a multiply-add of integers as a multiply
+// and an add, as it counts the composed index chain whose total rate it
+// takes, though a device issues it as one instruction.
 type gpuOp struct {
 	t      ir.Type
 	op     func(b *ir.Builder, sh, tid, x ir.Value) ir.Value
@@ -652,7 +714,7 @@ func gpuOps() map[cost.Class]gpuOp {
 		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
 		}},
-		cost.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+		cost.ClassIndex: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
 		}},
 		cost.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},

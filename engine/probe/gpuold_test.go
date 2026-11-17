@@ -30,9 +30,19 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 	p := &oldProbe{d: d}
 	defer p.close()
 
+	// The launch is a kernel copying one word, the work of the composed
+	// probe's smallest form: on Vulkan, which orders every dispatch after the
+	// one before, a launch's wall holds its load and store, a microsecond
+	// on a V100 that a kernel doing nothing does not pay.
 	empty := ir.New("probe_empty", [3]int{width, 1, 1})
-	empty.Param("p", ir.F32)
+	ep, eq := empty.Param("p", ir.F32), empty.Param("q", ir.F32)
+	at := empty.Const(ir.U32, 0)
+	empty.Store(eq, at, empty.Load(ir.F32, ep, at, 0), 0)
 	scratch, err := p.alloc(4 * width)
+	if err != nil {
+		return out, err
+	}
+	sink, err := p.alloc(4)
 	if err != nil {
 		return out, err
 	}
@@ -88,10 +98,10 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 	if err != nil {
 		return out, err
 	}
-	if out.Floor, err = p.time(ek, 1, width, 64, scratch); err != nil {
+	if out.Floor, err = p.time(ek, 1, width, 64, scratch, sink); err != nil {
 		return out, err
 	}
-	if out.Launch, err = p.wall(ek, 1, width, 256, scratch); err != nil {
+	if out.Launch, err = p.wall(ek, 1, width, 256, scratch, sink); err != nil {
 		return out, err
 	}
 
@@ -176,7 +186,9 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
 		}},
-		cost.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+		// Two: the estimator counts a multiply and an add, as the composed
+		// arm's count does, though the device issues one instruction.
+		cost.ClassIndex: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
 		}},
 		cost.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
