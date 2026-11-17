@@ -1640,7 +1640,8 @@ func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 			continue
 		}
 		m, err := model.Open(p)
-		if err != nil && strings.Contains(err.Error(), "this build reads") {
+		var older *model.UpgradeRequiredError
+		if err != nil && (strings.Contains(err.Error(), "this build reads") || errors.As(err, &older)) {
 			// A stale container whose GGUF remains is converted again, as
 			// every other gate's jlmOf does: excluding it ran the sweep on
 			// none of the models after a format bump.
@@ -1656,7 +1657,7 @@ func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 			}
 		}
 		if err != nil {
-			if strings.Contains(err.Error(), "this build reads") {
+			if strings.Contains(err.Error(), "this build reads") || errors.As(err, &older) {
 				stale = append(stale, name)
 				continue
 			}
