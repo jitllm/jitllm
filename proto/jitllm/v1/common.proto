@@ -106,6 +106,9 @@ message SamplingParams {
   // exist so a request that carries them is answered, not silently run.
   optional float presence_penalty = 8;
   optional float frequency_penalty = 9;
+  // 0 or 1 (or unset) is off: the candidates whose surprise is nearest the
+  // distribution's entropy, kept up to this much of the probability.
+  optional float typical_p = 10;
 }
 
 // SpeculationParams turns on speculative decoding for a generate: a round

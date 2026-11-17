@@ -230,6 +230,7 @@ func newState(fr *front, deviceSpec, placement string, maxSeq int, chat, kvCache
 		Vision:       newValue(fr, fOther, false),
 		Chat:         newValue(fr, fOther, chat),
 		ChatCapable:  newValue(fr, fOther, false),
+		Own:          newValue(fr, fOther, session.Sampling{}),
 		PromptTokS:   newValue(fr, fRates, 0.0),
 		DecodeTokS:   newValue(fr, fRates, 0.0),
 		BytesPerTok:  newValue(fr, fRates, 0.0),

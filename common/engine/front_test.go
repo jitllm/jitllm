@@ -81,6 +81,7 @@ type testStore struct {
 	Vision       *val[bool]
 	Chat         *val[bool]
 	ChatCapable  *val[bool]
+	Own          *val[session.Sampling]
 
 	PromptTokS  *val[float64]
 	DecodeTokS  *val[float64]
@@ -120,6 +121,7 @@ func newTestStore() *testStore {
 		Vision:       newVal(false),
 		Chat:         newVal(false),
 		ChatCapable:  newVal(true),
+		Own:          newVal(session.Sampling{}),
 		PromptTokS:   newVal(0.0),
 		DecodeTokS:   newVal(0.0),
 		BytesPerTok:  newVal(0.0),
@@ -211,8 +213,8 @@ func (sh *testShell) state() State {
 		Streaming: st.Streaming, Loads: st.Loads,
 		Revision: st.Revision, ShowThinking: st.ShowThinking, Stream: st.Stream,
 		StreamThink: st.StreamThink, Vision: st.Vision, Chat: st.Chat,
-		ChatCapable: st.ChatCapable,
-		PromptTokS:  st.PromptTokS, DecodeTokS: st.DecodeTokS,
+		ChatCapable: st.ChatCapable, Own: st.Own,
+		PromptTokS: st.PromptTokS, DecodeTokS: st.DecodeTokS,
 		BytesPerTok: st.BytesPerTok, GBs: st.GBs,
 		DeviceSpec: st.DeviceSpec, Placement: st.Placement, MaxSeq: st.MaxSeq, DeviceReport: st.DeviceReport,
 		BlockMap: st.BlockMap, Pager: st.Pager, Alloc: st.Alloc,

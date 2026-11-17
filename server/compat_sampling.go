@@ -78,11 +78,13 @@ func (q *oaSampling) logitBias() ([]TokenBias, error) {
 type samplingFields struct {
 	Temperature, TopP, MinP, RepetitionPenalty, PresencePenalty, FrequencyPenalty *float64
 	TopK                                                                          *int
+	// TypicalP is the Connect surface's alone: the OpenAI API has none.
+	TypicalP *float64
 }
 
 func (q *oaSampling) fields() samplingFields {
 	return samplingFields{q.Temperature, q.TopP, q.MinP, q.RepetitionPenalty, q.PresencePenalty,
-		q.FrequencyPenalty, q.TopK}
+		q.FrequencyPenalty, q.TopK, nil}
 }
 
 // validate refuses a value outside its range.
@@ -104,6 +106,9 @@ func (q samplingFields) validate() error {
 	}
 	if q.MinP != nil && (*q.MinP < 0 || *q.MinP > 1) {
 		return fmt.Errorf("min_p %v is outside [0, 1]", *q.MinP)
+	}
+	if q.TypicalP != nil && (*q.TypicalP < 0 || *q.TypicalP > 1) {
+		return fmt.Errorf("typical_p %v is outside [0, 1]", *q.TypicalP)
 	}
 	if q.RepetitionPenalty != nil && *q.RepetitionPenalty <= 0 {
 		return fmt.Errorf("repetition_penalty %v is not positive", *q.RepetitionPenalty)

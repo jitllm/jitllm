@@ -56,6 +56,7 @@ func StateOf(st *app.Store) core.State {
 		Vision:       st.Vision,
 		Chat:         st.Chat,
 		ChatCapable:  st.ChatCapable,
+		Own:          st.OwnSampling,
 
 		PromptTokS:  st.PromptTokS,
 		DecodeTokS:  st.DecodeTokS,

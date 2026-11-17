@@ -402,6 +402,7 @@ func (e *Engine) activate(en *entry) error {
 	summary := e.headerNow().String()
 	chatOK := m.ChatCapable()
 	vision := m.SeesPictures()
+	own := ownSampling(m.Cfg.Generation, e.sessMax)
 	var blocks []byte
 	var alloc session.Allocation
 	var fr *jlm.Frames
@@ -418,6 +419,7 @@ func (e *Engine) activate(en *entry) error {
 		}
 		e.st.ChatCapable.Set(chatOK)
 		e.st.Vision.Set(vision)
+		e.st.Own.Set(own)
 		e.st.ModelPath.Set(path)
 		e.st.ModelSummary.Set(summary)
 		e.st.Loaded.Set(true)
@@ -445,6 +447,7 @@ func (e *Engine) unpublish() {
 		e.st.ModelPath.Set("")
 		e.st.ModelSummary.Set("")
 		e.st.Vision.Set(false)
+		e.st.Own.Set(session.Sampling{})
 		e.st.BlockMap.Set(nil)
 		e.st.Alloc.Set(session.Allocation{})
 	})
@@ -498,10 +501,23 @@ func samplerFor(s session.Sampling, g *jlm.Generation, nctx int, name string) (*
 		TopK:        s.TopK,
 		TopP:        float64(s.TopP),
 		MinP:        float64(s.MinP),
+		TypicalP:    float64(s.TypicalP),
 		RepeatPen:   float64(s.RepeatPen),
 		RepeatLastN: s.RepeatLastN,
 		Seed:        s.Seed,
 	}, nil
+}
+
+// ownSampling is the draw the model's container states (g, over nctx
+// tokens) as the app's settings, Own set; none (Own false) where it states
+// no draw.
+func ownSampling(g *jlm.Generation, nctx int) session.Sampling {
+	if g == nil {
+		return session.Sampling{}
+	}
+	sm := engine.StatedSampler(*g, nctx)
+	return session.Sampling{Temp: float32(sm.Temp), TopK: sm.TopK, TopP: float32(sm.TopP), MinP: float32(sm.MinP),
+		TypicalP: float32(sm.TypicalP), RepeatPen: float32(sm.RepeatPen), RepeatLastN: sm.RepeatLastN, Own: true}
 }
 
 func short(p string) string {

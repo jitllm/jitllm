@@ -37,8 +37,10 @@ type draft struct {
 	showKeys           bool
 	system, spec, ctx  string
 	placement          string
-	knobs              []string
-	seed, folders      string
+	// knobs are the sampling knobs' fields, shown is what they were filled
+	// from: a knob whose text is left as it was is not set.
+	knobs, shown  []string
+	seed, folders string
 }
 
 func newSettingsPage(env *env) *settingsPage {
@@ -79,12 +81,18 @@ func (p *settingsPage) rebuild() {
 	}
 	knobs := make([]huh.Field, len(session.SamplingKnobs()))
 	d.knobs = make([]string, len(session.SamplingKnobs()))
+	d.shown = make([]string, len(session.SamplingKnobs()))
+	shown := cfg.Sampling.Shown(p.env.f.st.Own.Get())
 	for i, k := range session.SamplingKnobs() {
-		k := k
-		d.knobs[i] = strconv.FormatFloat(float64(k.Get(cfg.Sampling)), 'f', -1, 32)
+		i, k := i, k
+		d.knobs[i] = strconv.FormatFloat(float64(k.Get(shown)), 'f', -1, 32)
+		d.shown[i] = d.knobs[i]
 		knobs[i] = huh.NewInput().Title(k.Name).Value(&d.knobs[i]).
 			Description(fmt.Sprintf("%g to %g", k.Min, k.Max)).
 			Validate(func(s string) error {
+				if strings.TrimSpace(s) == d.shown[i] {
+					return nil
+				}
 				v, err := strconv.ParseFloat(strings.TrimSpace(s), 32)
 				if err != nil || float32(v) < k.Min || float32(v) > k.Max {
 					return fmt.Errorf("a number from %g to %g", k.Min, k.Max)
@@ -190,9 +198,14 @@ func (p *settingsPage) apply() tea.Cmd {
 		cfg.MaxSeq = n
 		st.MaxSeq.Set(n)
 	}
+	s := cfg.Sampling.Shown(st.Own.Get())
 	for i, k := range session.SamplingKnobs() {
+		if strings.TrimSpace(d.knobs[i]) == d.shown[i] {
+			continue
+		}
 		if v, err := strconv.ParseFloat(strings.TrimSpace(d.knobs[i]), 32); err == nil {
-			k.Set(&cfg.Sampling, float32(v))
+			k.Set(&s, float32(v))
+			cfg.Sampling = s
 		}
 	}
 	if v, err := strconv.ParseInt(strings.TrimSpace(d.seed), 10, 64); err == nil {

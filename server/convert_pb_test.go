@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -110,16 +111,21 @@ func TestEverySamplingFieldReachesTheSampler(t *testing.T) {
 	i32 := func(v int32) *int32 { return &v }
 	seed := uint64(7)
 	got := pbSampling(&v1.SamplingParams{
-		Temperature: f32(0.5), TopP: f32(0.25), TopK: i32(40), MinP: f32(0.125),
+		Temperature: f32(0.5), TopP: f32(0.25), TopK: i32(40), MinP: f32(0.125), TypicalP: f32(0.75),
 		Seed: &seed, RepeatPenalty: f32(1.5), RepeatLastN: i32(32),
 	})
-	if got.Temp != 0.5 || got.TopP != 0.25 || got.TopK != 40 || got.MinP != 0.125 || got.Seed != 7 ||
+	if got.Temp != 0.5 || got.TopP != 0.25 || got.TopK != 40 || got.MinP != 0.125 || got.TypicalP != 0.75 || got.Seed != 7 ||
 		got.RepeatPen != 1.5 || got.RepeatLastN != 32 {
 		t.Fatalf("sampling reached the engine as %+v", *got)
 	}
 	if got := pbSampling(&v1.SamplingParams{}); got.Temp != 0 || got.TopP != 0 || got.TopK != 0 || got.MinP != 0 ||
-		got.Seed != 0 || got.RepeatPen != 0 || got.RepeatLastN != 0 {
+		got.TypicalP != 0 || got.Seed != 0 || got.RepeatPen != 0 || got.RepeatLastN != 0 {
 		t.Fatalf("an empty params message set fields: %+v", *got)
+	}
+	for _, v := range []float32{-0.1, 1.5} {
+		if err := samplingOf(&v1.SamplingParams{TypicalP: f32(v)}).validate(); err == nil || !strings.Contains(err.Error(), "typical_p") {
+			t.Errorf("typical_p %v was not refused by name: %v", v, err)
+		}
 	}
 }
 

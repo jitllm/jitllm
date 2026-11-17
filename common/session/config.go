@@ -18,21 +18,37 @@ func KVCacheDir() string {
 
 // Sampling is the decode sampler's settings, persisted between runs. Stated
 // is the open model's own draw, the one its container states, in place of
-// the fields; a front end setting a field clears it.
+// the fields; a front end setting a field clears it. Own marks the fields
+// as that draw itself (the engine's State.Own), what a front end shows
+// while Stated holds; it is never saved.
 type Sampling struct {
 	Stated      bool    `json:"stated"`
 	Temp        float32 `json:"temp"`
 	TopK        int     `json:"top_k"`
 	TopP        float32 `json:"top_p"`
 	MinP        float32 `json:"min_p"`
+	TypicalP    float32 `json:"typical_p"`
 	RepeatPen   float32 `json:"repeat_pen"`
 	RepeatLastN int     `json:"repeat_last_n"`
 	Seed        int64   `json:"seed"`
+	Own         bool    `json:"-"`
 }
 
 // DefaultSampling is the sampler a fresh install starts with: each model's
 // own.
 func DefaultSampling() Sampling { return Sampling{Stated: true} }
+
+// Shown is the settings as the knobs show and edit them: while they are the
+// model's own, own's fields (the open model's draw, where own.Own says it
+// is known) with the settings' seed. A knob set on what Shown returns keeps
+// every field it did not set at the model's value.
+func (s Sampling) Shown(own Sampling) Sampling {
+	if !s.Stated || !own.Own {
+		return s
+	}
+	own.Stated, own.Seed = true, s.Seed
+	return own
+}
 
 // Knob is one sampling setting as a front end offers it: its name, its range
 // and step, how to read and write it, and the words for its value.
@@ -45,9 +61,11 @@ type Knob struct {
 	Caption func(Sampling) string
 }
 
-// SamplingKnobs() are the sampler's settings. Setting one makes the settings
-// the caller's own (Stated false), and while the model's own draw holds, each
-// says so. The seed is not a knob: it is a value, not a range.
+// SamplingKnobs() are the sampler's settings, read and set on what
+// Sampling.Shown returns. Setting one makes the settings the caller's own
+// (Stated false), and while the model's own draw holds, each says so beside
+// its value where that is known. The seed is not a knob: it is a value, not
+// a range.
 func SamplingKnobs() []Knob {
 	ks := []Knob{
 		// The temperature caption names greedy: at zero engine.Sampler returns the
@@ -65,6 +83,15 @@ func SamplingKnobs() []Knob {
 			Get:     func(s Sampling) float32 { return float32(s.TopK) },
 			Set:     func(s *Sampling, v float32) { s.TopK = int(v) },
 			Caption: func(s Sampling) string { return OffInt(s.TopK, 0, "most likely tokens") }},
+		{Name: "Typical-p", Min: 0, Max: 1, Step: 0.01,
+			Get: func(s Sampling) float32 { return s.TypicalP },
+			Set: func(s *Sampling, v float32) { s.TypicalP = v },
+			Caption: func(s Sampling) string {
+				if s.TypicalP <= 0 || s.TypicalP >= 1 {
+					return "off"
+				}
+				return fmt.Sprintf("%.2f", s.TypicalP)
+			}},
 		{Name: "Top-p", Min: 0, Max: 1, Step: 0.01,
 			Get: func(s Sampling) float32 { return s.TopP },
 			Set: func(s *Sampling, v float32) { s.TopP = v },
@@ -99,9 +126,12 @@ func SamplingKnobs() []Knob {
 	}
 	for i := range ks {
 		set, caption := ks[i].Set, ks[i].Caption
-		ks[i].Set = func(s *Sampling, v float32) { s.Stated = false; set(s, v) }
+		ks[i].Set = func(s *Sampling, v float32) { s.Stated, s.Own = false, false; set(s, v) }
 		ks[i].Caption = func(s Sampling) string {
-			if s.Stated {
+			switch {
+			case s.Stated && s.Own:
+				return caption(s) + ", the model's own"
+			case s.Stated:
 				return "the model's own"
 			}
 			return caption(s)

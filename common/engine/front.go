@@ -59,6 +59,10 @@ type State struct {
 	Vision       session.Value[bool]
 	Chat         session.Value[bool]
 	ChatCapable  session.Value[bool]
+	// Own is the open model's stated draw as settings (Own set), what the
+	// knobs show while the settings are the model's own; none (Own false)
+	// where the model states none or the service does not say.
+	Own session.Value[session.Sampling]
 
 	PromptTokS  session.Value[float64]
 	DecodeTokS  session.Value[float64]

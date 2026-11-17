@@ -50,6 +50,7 @@ func samplingOf(p *v1.SamplingParams) samplingFields {
 		Temperature:      f64(p.Temperature),
 		TopP:             f64(p.TopP),
 		MinP:             f64(p.MinP),
+		TypicalP:         f64(p.TypicalP),
 		PresencePenalty:  f64(p.PresencePenalty),
 		FrequencyPenalty: f64(p.FrequencyPenalty),
 	}

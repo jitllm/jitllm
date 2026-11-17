@@ -95,7 +95,7 @@ func (e *Engine) Unload(path string) {
 		e.unload(en)
 		e.publishModels()
 		if e.active == nil {
-			e.sh.Post(func() { e.st.Loaded.Set(false); e.st.Vision.Set(false) })
+			e.sh.Post(func() { e.st.Loaded.Set(false); e.st.Vision.Set(false); e.st.Own.Set(session.Sampling{}) })
 		}
 		e.status("closed %s", short(path))
 	})

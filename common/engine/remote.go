@@ -374,6 +374,7 @@ func (r *Remote) activate(path string) {
 		}
 		r.st.ChatCapable.Set(chatOK)
 		r.st.Vision.Set(vision)
+		r.st.Own.Set(session.Sampling{})
 		r.st.ModelPath.Set(path)
 		r.st.Loaded.Set(true)
 		r.st.Problem.Set(session.Problem{})
@@ -506,6 +507,7 @@ func (r *Remote) Unload(path string) {
 				r.st.ModelPath.Set("")
 				r.st.ModelSummary.Set("")
 				r.st.Vision.Set(false)
+				r.st.Own.Set(session.Sampling{})
 				r.st.BlockMap.Set(nil)
 				r.st.Alloc.Set(session.Allocation{})
 			})
@@ -661,9 +663,9 @@ func samplingOf(s session.Sampling) *v1.SamplingParams {
 	if s.Stated {
 		return nil
 	}
-	temp, topP, minP, pen := s.Temp, s.TopP, s.MinP, s.RepeatPen
+	temp, topP, minP, typP, pen := s.Temp, s.TopP, s.MinP, s.TypicalP, s.RepeatPen
 	topK, lastN := int32(s.TopK), int32(s.RepeatLastN)
-	p := &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK, MinP: &minP,
+	p := &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK, MinP: &minP, TypicalP: &typP,
 		RepeatPenalty: &pen, RepeatLastN: &lastN}
 	if s.Seed != 0 {
 		seed := uint64(s.Seed)

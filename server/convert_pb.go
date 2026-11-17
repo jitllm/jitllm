@@ -377,6 +377,9 @@ func pbSampling(p *v1.SamplingParams) *engine.Sampler {
 	if p.MinP != nil {
 		s.MinP = float64(*p.MinP)
 	}
+	if p.TypicalP != nil {
+		s.TypicalP = float64(*p.TypicalP)
+	}
 	if p.Seed != nil {
 		s.Seed = int64(*p.Seed)
 	}

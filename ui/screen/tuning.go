@@ -106,11 +106,13 @@ func knob(
 ) widget.Widget {
 	// The slider owns its signal and writes through on change: a
 	// Signal[Sampling] is replaced wholesale on every Set, so sliders bound to
-	// its fields would clobber each other.
-	val := state.NewSignal(get(sh.Store.Sampling.Get()))
-	cap := reactive(sh, sh.Store.Sampling.AsReadonly(), func() string {
-		return caption(sh.Store.Sampling.Get())
-	})
+	// its fields would clobber each other. It reads and edits the settings as
+	// shown, so a knob moved off the model's own keeps the model's other
+	// values.
+	shown := func() app.Sampling { return sh.Store.Sampling.Get().Shown(sh.Store.OwnSampling.Get()) }
+	val := state.NewSignal(get(shown()))
+	cap := state.NewComputed(func() string { return caption(shown()) },
+		sh.Store.Sampling.AsReadonly(), sh.Store.OwnSampling.AsReadonly())
 	return primitives.VBox(
 		primitives.HBox(
 			// The caption shrinks, not the label; see above.
@@ -120,7 +122,9 @@ func knob(
 		slider.New(
 			slider.ValueSignal(val),
 			slider.Min(min), slider.Max(max), slider.Step(step),
-			slider.OnChange(func(v float32) { set(sh, func(s *app.Sampling) { put(s, v) }) }),
+			slider.OnChange(func(v float32) {
+				set(sh, func(s *app.Sampling) { *s = s.Shown(sh.Store.OwnSampling.Get()); put(s, v) })
+			}),
 			slider.PainterOpt(sh.P.Slider),
 		),
 	).Gap(sh.P.Space.XS).PaddingXY(0, sh.P.Space.XS)

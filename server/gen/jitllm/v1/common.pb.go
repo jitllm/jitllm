@@ -453,8 +453,11 @@ type SamplingParams struct {
 	// exist so a request that carries them is answered, not silently run.
 	PresencePenalty  *float32 `protobuf:"fixed32,8,opt,name=presence_penalty,json=presencePenalty,proto3,oneof" json:"presence_penalty,omitempty"`
 	FrequencyPenalty *float32 `protobuf:"fixed32,9,opt,name=frequency_penalty,json=frequencyPenalty,proto3,oneof" json:"frequency_penalty,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// 0 or 1 (or unset) is off: the candidates whose surprise is nearest the
+	// distribution's entropy, kept up to this much of the probability.
+	TypicalP      *float32 `protobuf:"fixed32,10,opt,name=typical_p,json=typicalP,proto3,oneof" json:"typical_p,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SamplingParams) Reset() {
@@ -546,6 +549,13 @@ func (x *SamplingParams) GetPresencePenalty() float32 {
 func (x *SamplingParams) GetFrequencyPenalty() float32 {
 	if x != nil && x.FrequencyPenalty != nil {
 		return *x.FrequencyPenalty
+	}
+	return 0
+}
+
+func (x *SamplingParams) GetTypicalP() float32 {
+	if x != nil && x.TypicalP != nil {
+		return *x.TypicalP
 	}
 	return 0
 }
@@ -673,7 +683,7 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\tDeviceRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
 	"\abackend\x18\x02 \x01(\x0e2\x12.jitllm.v1.BackendR\abackend\x12\x14\n" +
-	"\x05index\x18\x03 \x01(\x05R\x05index\"\xdc\x03\n" +
+	"\x05index\x18\x03 \x01(\x05R\x05index\"\x8c\x04\n" +
 	"\x0eSamplingParams\x12%\n" +
 	"\vtemperature\x18\x01 \x01(\x02H\x00R\vtemperature\x88\x01\x01\x12\x18\n" +
 	"\x05top_p\x18\x02 \x01(\x02H\x01R\x04topP\x88\x01\x01\x12\x18\n" +
@@ -683,7 +693,9 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\rrepeat_last_n\x18\x06 \x01(\x05H\x05R\vrepeatLastN\x88\x01\x01\x12\x18\n" +
 	"\x05min_p\x18\a \x01(\x02H\x06R\x04minP\x88\x01\x01\x12.\n" +
 	"\x10presence_penalty\x18\b \x01(\x02H\aR\x0fpresencePenalty\x88\x01\x01\x120\n" +
-	"\x11frequency_penalty\x18\t \x01(\x02H\bR\x10frequencyPenalty\x88\x01\x01B\x0e\n" +
+	"\x11frequency_penalty\x18\t \x01(\x02H\bR\x10frequencyPenalty\x88\x01\x01\x12 \n" +
+	"\ttypical_p\x18\n" +
+	" \x01(\x02H\tR\btypicalP\x88\x01\x01B\x0e\n" +
 	"\f_temperatureB\b\n" +
 	"\x06_top_pB\b\n" +
 	"\x06_top_kB\a\n" +
@@ -692,7 +704,9 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\x0e_repeat_last_nB\b\n" +
 	"\x06_min_pB\x13\n" +
 	"\x11_presence_penaltyB\x14\n" +
-	"\x12_frequency_penalty\"P\n" +
+	"\x12_frequency_penaltyB\f\n" +
+	"\n" +
+	"_typical_p\"P\n" +
 	"\x11SpeculationParams\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12!\n" +
 	"\fdraft_tokens\x18\x02 \x01(\x05R\vdraftTokens\"6\n" +
