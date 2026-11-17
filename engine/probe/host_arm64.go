@@ -86,15 +86,14 @@ func (e emitter) rateKernel(cl cost.Class) ([]byte, error) {
 }
 
 // chainKernel runs [0] trips of eight instructions of class cl, each using
-// the one before's result, nil for a class rateKernel has none of.
+// the one before's result, nil for a class rateKernel has none of; the
+// special class's chain is composed (chainDelay).
 func (e emitter) chainKernel(cl cost.Class) ([]byte, error) {
 	var a a64.A64
 	var op func()
 	switch cl {
 	case cost.ClassFloat:
 		op = func() { a.FMLA4s(a64.V0, a64.V14, a64.V15) }
-	case cost.ClassSpecial:
-		op = func() { a.FDIV4s(a64.V0, a64.V0, a64.V15) }
 	case cost.ClassInt:
 		op = func() { a.ADD4s(a64.V0, a64.V0, a64.V15) }
 	case cost.ClassLanes:

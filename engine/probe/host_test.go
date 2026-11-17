@@ -19,9 +19,12 @@ func TestHostMeasures(t *testing.T) { hostMeasures(t, cpu.New()) }
 
 // hostMeasures holds the probe of h to what TestHostMeasures states.
 func hostMeasures(t *testing.T, h *cpu.Target) {
+	if err := hostCheck(h); err != nil {
+		t.Skip(err)
+	}
 	d, err := HostOn(h)
 	if err != nil {
-		t.Skip(err)
+		t.Fatal(err)
 	}
 	t.Logf("workers %d, call %.1f ns", d.Slots, d.Launch*1e9)
 	for l, c := range d.Caches {

@@ -149,9 +149,10 @@ func (e emitter) rateKernel(cl cost.Class) ([]byte, error) {
 }
 
 // chainKernel runs [0] trips of eight instructions of class cl, each using
-// the one before's result, nil for a class rateKernel has none of. The index
-// chain subtracts a register: a core may fold a chain of immediate adds in
-// its renamer, which an index computed from registers does not get.
+// the one before's result, nil for a class rateKernel has none of; the
+// special class's chain is composed (chainDelay). The index chain subtracts
+// a register: a core may fold a chain of immediate adds in its renamer,
+// which an index computed from registers does not get.
 func (e emitter) chainKernel(cl cost.Class) ([]byte, error) {
 	return e.trips(cl, func(a *x86.Buf, j int) bool {
 		if cl == cost.ClassIndex {

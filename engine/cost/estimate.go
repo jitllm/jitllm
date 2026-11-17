@@ -49,6 +49,14 @@ func Estimate(r Former, f composer.Model, s composer.Step, p Placement) (Cost, e
 	return total, errors.Join(errs...)
 }
 
+// Issued is the instructions of each class kernel k issues at step s on
+// device d, as the estimator counts them: the units the estimate weighs a
+// class's rate in.
+func Issued(k *composer.Kernel, s composer.Step, d Device) [NumClasses]int64 {
+	m := costModel{d: d, s: s}
+	return m.cost(k).Issued
+}
+
 // placed is model f's parts on placement p: each part's plan for the
 // composer, and the device it is priced on.
 func placed(f composer.Model, p Placement) ([]composer.Part, []composer.PartPlan, []Device, error) {

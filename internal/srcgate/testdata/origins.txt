@@ -487,6 +487,7 @@ bug	composer/decompose_sound.go	"a sound of %d rows of %d, %d taps, sample forma
 bug	composer/decompose_topk.go	"a top %d of spans of %d"
 bug	composer/decompose_uniform.go	"a uniform of %d inputs into %d outputs"
 bug	composer/decompose_uniform.go	"a uniform of %d keys under a counter of %d"
+bug	composer/form.go	"jit: %d kernels lowered to %d codes"
 bug	composer/form.go	"jit: a request with no graph"
 context	composer/form.go	"jit: cannot form %s at %d rows on %s: %w"	names the part whose composition failed; the failure is the wrapped error's, under its own phrase
 context	composer/form.go	"jit: cannot form %s: %w"	names the part whose composition failed; the failure is the wrapped error's, under its own phrase
@@ -1396,12 +1397,17 @@ fault	engine/probe/cache_darwin.go	"probe: hw.perflevel0.l1dcachesize: %w"	the h
 fault	engine/probe/cache_darwin.go	"probe: hw.perflevel0.l2cachesize: %w"	the host states no figure; the probe measures without it
 fault	engine/probe/cache_linux.go	"probe: no cache sizes under /sys/devices/system/cpu/cpu0/cache"	the host states no figure; the probe measures without it
 fault	engine/probe/cache_other.go	"probe: no cache sizes on %s"	the host states no figure; the probe measures without it
+bug	engine/probe/formed.go	"probe: %s binds %+v, which no probe provides"
+bug	engine/probe/formed.go	"probe: %s has a call word at %d past the argument block"
+bug	engine/probe/formed.go	"probe: %s has no host code"
 bug	engine/probe/gpu.go	"probe: %s binds %v, which a probe does not hold"
 bug	engine/probe/gpu.go	"probe: %s has no GPU code"
 bug	engine/probe/gpu.go	"probe: %s is a kernel of the warm launch too"
 fault	engine/probe/gpu.go	"probe: %s was not timed"	the host states no figure; the probe measures without it
 limit	engine/probe/host_amd64.go	"probe: the host's measuring kernels need SSE4.1 and SSSE3 at least; this host is %v"
 fault	engine/probe/host_other.go	"probe: no host probe for %s"	the host states no figure; the probe measures without it
+fault	engine/probe/hostforms.go	"probe: %d chains took %v seconds"	the host states no figure; the probe measures without it
+bug	engine/probe/hostforms.go	"probe: the %v chain counts none of the class"
 fault	engine/probe/name_linux.go	"probe: /proc/cpuinfo names no model"	the host states no figure; the probe measures without it
 fault	engine/probe/name_other.go	"probe: no host name on %s"	the host states no figure; the probe measures without it
 context	engine/route.go	" across sessions"

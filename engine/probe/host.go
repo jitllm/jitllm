@@ -16,10 +16,14 @@ import (
 	"github.com/jitllm/jitllm/sched"
 )
 
-// The host probe's measuring kernels are generated per architecture: each
-// provides hostCheck (whether this host runs them), hostLanes (a vector's
-// floats), and readKernel, chaseKernel, rateKernel, chainKernel, mixKernel
-// and emptyKernel, with one contract for the argument block they read.
+// The host probe's measuring kernels are the composer's forms of graphs of
+// ops where one is gated against the hand-built kernel it replaces
+// (hostforms.go): the special class's delay is a composed chain's seconds
+// over the estimator's count of the class in it. The rest are generated per
+// architecture: each provides hostCheck (whether this host runs them),
+// hostLanes (a vector's floats), and readKernel, chaseKernel, rateKernel,
+// chainKernel, mixKernel and emptyKernel, with one contract for the
+// argument block they read.
 
 // cache is a data cache level: its size and whether CPUs share it.
 type cache struct {
@@ -63,6 +67,7 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		return d, err
 	}
 	defer walk.Close()
+	fm := newFormer(h)
 	largest := sizes[len(sizes)-1].bytes
 	evict := make([]byte, 2*largest)
 	nearer := int64(0)
@@ -119,6 +124,14 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		}
 		d.Rates[cl] = cost.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
 		k.Close()
+		delay, ok, err := chainDelay(fm, cl)
+		if err != nil {
+			return d, err
+		}
+		if ok {
+			d.Delay[cl] = delay
+			continue
+		}
 		code, err = e.chainKernel(cl)
 		if err != nil {
 			return d, err

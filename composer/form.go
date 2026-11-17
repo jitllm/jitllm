@@ -124,6 +124,31 @@ func (r *Registry) form(req Request) ([]Code, error) {
 	return out, nil
 }
 
+// FormKernels is req's final IR beside its codes, code i kernel i's
+// lowering, formed afresh: what a measurement of the codes divides by what
+// the kernels count.
+func (r *Registry) FormKernels(req Request) ([]*Kernel, []Code, error) {
+	if req.Graph == nil {
+		return nil, nil, fmt.Errorf("jit: a request with no graph")
+	}
+	ks, err := r.formKernels(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	codes, err := r.Lower(ks, req.Device)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(codes) != len(ks) {
+		return nil, nil, fmt.Errorf("jit: %d kernels lowered to %d codes", len(ks), len(codes))
+	}
+	out := make([]Code, len(codes))
+	for i, c := range codes {
+		out[i] = c.Code
+	}
+	return ks, out, nil
+}
+
 // formKernels is a request's final IR: its ops decomposed and generated, the
 // device's passes run.
 func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
