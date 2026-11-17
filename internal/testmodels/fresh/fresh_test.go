@@ -171,3 +171,50 @@ func TestUnstatedHeadBlocksAreReconverted(t *testing.T) {
 		t.Fatalf("a container leaving its head blocks out was left as it is: %d graphs, want %d", n, whole)
 	}
 }
+
+// TestUnstatedBlocksAreReconverted: a container that states no graph for its
+// blocks, as the converter wrote one before it stated them and as the front
+// end now refuses, is reconverted from its source rather than left for the
+// load to refuse.
+func TestUnstatedBlocksAreReconverted(t *testing.T) {
+	dir := t.TempDir()
+	src := testmodels.Path("stories260K.gguf")
+	if _, err := os.Stat(src); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
+	}
+	if err := os.Symlink(src, filepath.Join(dir, filepath.Base(src))); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "stories260K"+jlm.Ext)
+	if _, err := convert.FromGGUFs(src, "", dst, jlm.Fingerprint{Host: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	stated := func() int {
+		t.Helper()
+		c, err := jlm.Open(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		return len(c.Config().Blocks.Of)
+	}
+	whole := stated()
+	if whole == 0 {
+		t.Fatal("the fixture states no block graphs as converted: it tests nothing")
+	}
+	if changed, err := jlm.Restate(dst, func(_ *jlm.File, c *jlm.Config) (bool, error) {
+		c.Blocks = jlm.BlockGraphs{}
+		return true, nil
+	}); err != nil || !changed {
+		t.Fatalf("leaving the blocks unstated: changed %v, %v", changed, err)
+	}
+	if stated() != 0 {
+		t.Fatal("the restated container states its blocks: the gate cannot see a reconversion")
+	}
+	if err := Container(dst); err != nil {
+		t.Fatal(err)
+	}
+	if n := stated(); n != whole {
+		t.Fatalf("a container stating no block graphs was left as it is: %d graphs, want %d", n, whole)
+	}
+}

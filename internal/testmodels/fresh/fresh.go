@@ -29,7 +29,9 @@ import (
 // projector's tower is reconverted from X.gguf and mmproj-X.gguf, and one
 // whose chat template states no tool form is reconverted too, as is one whose
 // tower states its pictures causal beside the layers its text model states
-// they see each other on (Gemma 4's, before the converter stated it). An absent
+// they see each other on (Gemma 4's, before the converter stated it), as is one
+// that states no graph for some of its blocks (written before the converter
+// stated them, which the front end refuses). An absent
 // container with its source beside it is converted from it: a missing
 // artefact is a task. A container that opens and states all of that, a path
 // that is not a container and one with no source are left alone, and the
@@ -71,7 +73,7 @@ func reconvert(path string) error {
 		video := v == nil || v.Tower == nil || v.Tower.Video != nil || !convert.StatesVideo(v.Projector)
 		bidir := v == nil || v.Tower == nil || len(c.Config().BidirLayers) == 0 || v.Tower.Span.Bidir
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0
-		heads := len(cfg.Blocks.Of) == 0 || len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.NMTP)
+		heads := len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.NMTP)
 		rev := (cfg.Revision >= 1 || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&
@@ -81,7 +83,7 @@ func reconvert(path string) error {
 		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video && bidir && heads:
 			return nil
 		case !heads:
-			openErr = fmt.Errorf("it states no graphs for its head blocks")
+			openErr = fmt.Errorf("it states no graph for some of its blocks")
 		case !bidir:
 			openErr = fmt.Errorf("it states the layers a picture's rows see each other on, and its pictures causal")
 		case !video:
