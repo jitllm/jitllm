@@ -11,15 +11,20 @@ import (
 // WordPiece: the BERT family's tokenizer, which every Ollama embedding model
 // on the bert and nomic-bert architectures ships.
 //
-// The vocabulary is in llama.cpp's spelling, not BERT's: the GGUF converter
-// turned "##ing" into "ing" and "the" into "▁the", so a word is matched as
+// The vocabulary marks the word-initial piece rather than the continuation:
+// "ing" for BERT's "##ing" and "▁the" for "the", so a word is matched as
 // "▁" + word, greedily, longest piece first. The segmentation is the same,
 // since a piece at byte 0 can only be word-initial.
 //
-// It follows llama.cpp's llm_tokenizer_wpm_session line for line, the oracle
-// this path is gated against. Where it differs from HuggingFace's
-// BertTokenizer (a word over 100 characters is one [UNK] there and is
-// segmented here), the divergence is llama.cpp's.
+// It is the model's own WordPiece (its tokenizer.json): a word over
+// maxWordChars characters is one [UNK], where llama.cpp segments it
+// (docs/divergences.md).
+
+// maxWordChars is WordPiece's max_input_chars_per_word: 100 in every census
+// model's tokenizer.json (all-MiniLM-L6-v2, nomic-embed-text-v1.5,
+// mxbai-embed-large-v1, snowflake-arctic-embed-xs) and the tokenizers
+// default; a GGUF does not carry it.
+const maxWordChars = 100
 
 type wpmState struct {
 	lower, strip bool
@@ -89,6 +94,10 @@ func (v *Vocab) encodeWPM(text string, addSpecial, control bool) []int32 {
 // wordPieces segments one run of ordinary text.
 func (v *Vocab) wordPieces(text string, out []int32) []int32 {
 	for _, word := range v.wpm.words(text) {
+		if utf8.RuneCountInString(word) > maxWordChars {
+			out = append(out, v.Unk)
+			continue
+		}
 		w := spaceMark + word
 		start := len(out)
 		for i := 0; i < len(w); {

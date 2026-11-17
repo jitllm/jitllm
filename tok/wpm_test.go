@@ -2,12 +2,13 @@ package tok
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// wpmVocab is a hand-built WordPiece vocabulary in llama.cpp's spelling: a
+// wpmVocab is a hand-built WordPiece vocabulary as a container stores one: a
 // word-initial piece carries "▁", a continuation carries nothing.
 func wpmVocab(lower, keepMarks bool) *jlm.Vocab {
 	toks := []string{"[PAD]", "[UNK]", "[CLS]", "[SEP]",
@@ -49,6 +50,10 @@ func TestWordPieceNormalizesAndSplits(t *testing.T) {
 		{"zzz x", []int32{2, 1, 14, 3}},
 		// control characters vanish; a literal special is that token
 		{"hello\x07 [SEP]", []int32{2, 4, 3, 3}},
+		// a word of maxWordChars characters is segmented; one past it is one
+		// [UNK], as the model's WordPiece reads it
+		{"play" + strings.Repeat("ing", 32), append(append([]int32{2, 10}, slices.Repeat([]int32{11}, 32)...), 3)},
+		{"play" + strings.Repeat("ing", 32) + "x", []int32{2, 1, 3}},
 	} {
 		if got := v.EncodeSpecial(c.text, true); !slices.Equal(got, c.want) {
 			t.Errorf("%q: %v, want %v", c.text, got, c.want)
