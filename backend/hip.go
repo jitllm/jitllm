@@ -231,6 +231,9 @@ func (h *hipDev) Alloc(n int) (Buf, error) {
 // a wave size the device does not run or spills to scratch -- a fault the
 // offline gate (engine.TestComposedFormsLowerForAMDGPU) holds every composed
 // form to, checked here too because a shape no gate registered reaches it.
+// lowersTile is amdgpu's answer: it lowers no tile op.
+func (h *hipDev) lowersTile(TileShape) error { return amdgpu.LowersTile() }
+
 func (h *hipDev) Compile(k *ir.Kernel) (Kernel, error) {
 	h.ctr.compiles.Add(1)
 	src, err := amdgpu.Lower(k, h.tg)

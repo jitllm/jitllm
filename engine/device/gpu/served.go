@@ -296,9 +296,9 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 }
 
 // composedMatrix is the binary16 tile the composer forms a step of rows on
-// (composer.Device.Matrix), asked of the device once by compiling a probe
-// (backend.LowersTile): none where it does not lower one staged in
-// workgroup memory and carried across a loop. The float reference
+// (composer.Device.Matrix), asked of the device once (backend.LowersTile,
+// what its API states against what its lowering emits): none where it does
+// not lower one staged in workgroup memory and carried across a loop. The float reference
 // (Config.ComposedFloat) states none: the tile multiplies binary16
 // operands, and the reference is float arithmetic, not the forms it holds
 // to it -- a matrix-unit attention the reference shared would move both

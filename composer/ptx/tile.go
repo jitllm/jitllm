@@ -120,6 +120,19 @@ func voltaSM(sm int) bool { return sm >= 70 && sm < 75 }
 // quad-pair layout.
 func QuadPairTiles(target string) bool { return voltaSM(smOf(target)) }
 
+// LowersTile is Lower's answer for a product of tiles of types ts on target,
+// staged in workgroup memory, carried across a loop and its rows scaled:
+// nil where it lowers one, the refusal Lower makes where not.
+func LowersTile(target string, ts ...ir.TileType) error {
+	sm := smOf(target)
+	for _, t := range ts {
+		if err := tileSupported(t, sm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // smOf parses "sm_86" as 86, or 0.
 func smOf(target string) int {
 	n, _ := strconv.Atoi(strings.TrimPrefix(target, "sm_"))

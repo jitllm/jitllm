@@ -29,6 +29,7 @@ func OpenWith(Opts) (*Ctx, error)                   { return nil, errNoMetal }
 func (c *Ctx) Name() string                         { return "" }
 func (c *Ctx) Mem() (free, total uint64, err error) { return 0, 0, errNoMetal }
 func (c *Ctx) UnifiedMemory() bool                  { return false }
+func (c *Ctx) SimdgroupMatrix() bool                { return false }
 func (c *Ctx) MaxBuffer() uint64                    { return 0 }
 func (c *Ctx) MaxThreadgroupMemory() int            { return 0 }
 func (c *Ctx) Close()                               {}

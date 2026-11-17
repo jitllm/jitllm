@@ -177,6 +177,7 @@ limit	backend/metal.go	"metal: %s is written for %d-lane simdgroups and %s runs 
 limit	backend/metal.go	"metal: %s wants a %d-thread threadgroup and its pipeline allows %d on %s"
 bug	backend/metal.go	"metal: writing %d bytes at offset %d of a %d-byte buffer"
 context	backend/metal.go	"msl"
+limit	backend/metal.go	"msl: %s is in no GPU family with simdgroup_matrix (MTLGPUFamilyApple7, MTLGPUFamilyMac2)"	the device's GPU family (-supportsFamily:): simdgroup_matrix is Apple7 and Mac2
 limit	backend/metal/groups.go	"metal: dispatch of %d threadgroups; the kernel's threadgroup index is 32-bit, so a dispatch holds at most %d"	a dispatch past the 32-bit threadgroup count: the API's limit
 context	backend/metal/metal_darwin.go	"blit command buffer"
 context	backend/metal/metal_darwin.go	"command buffer"
@@ -209,13 +210,17 @@ context	backend/metal/metal_darwin.go	"newResidencySetWithDescriptor"
 limit	backend/metal/metal_other.go	"metal: not available on this platform"	Metal outside Apple's platforms
 limit	backend/resources.go	"backend: the workgroup is wider than the kernel's registers allow"
 context	backend/restrict.go	"backend: %w"
+skip	backend/tiles.go	"backend: %s states no collective tile"
+bug	backend/tiles.go	"backend: %v is not a well-formed tile type"
+bug	backend/tiles.go	"backend: a row scale of a %s accumulator: tile.scale scales a float32 one"
 bug	backend/view.go	"backend: a %T bound at an offset: views are not implemented on its backend"	a buffer type no backend makes: CUDA, Vulkan and Metal bind views
+context	backend/vulkan.go	"a tiled GEMM"
 limit	backend/vulkan.go	"backend: spirv: %s has no grid barrier"
 limit	backend/vulkan.go	"backend: spirv: %s states no compute-unit count (VK_NV_shader_sm_builtins, VK_AMD_shader_core_properties), and core Vulkan no co-residency"	a device's limit: no compute-unit count, no co-residency (RULE 13)
 bug	backend/vulkan.go	"backend: spirv: a copy between buffers this backend did not allocate"
 bug	backend/vulkan.go	"backend: the only Vulkan device is %s; declining it so the seam tuner cannot place blocks on the host's own cores (a Vulkan device pin of \"0\", or JITLLM_VK_DEVICE=0, takes it anyway)"	a default, not a refusal: a software Vulkan device runs on the host's own cores, and naming it takes it
 context	backend/vulkan.go	"spirv"
-bug	backend/vulkan.go	"spirv: %s uses cooperative-matrix tiles and %s did not enable them (VK_KHR_cooperative_matrix, storageBuffer16BitAccess, storageBuffer8BitAccess, shaderFloat16, shaderInt8)"
+limit	backend/vulkan.go	"spirv: %s uses cooperative-matrix tiles and %s did not enable them (VK_KHR_cooperative_matrix, storageBuffer16BitAccess, storageBuffer8BitAccess, shaderFloat16, shaderInt8)"	the device's own statement: it did not enable the features cooperative-matrix SPIR-V declares
 limit	backend/vulkan.go	"spirv: %s wants %dx%dx%d %s*%s+%s->%s at subgroup scope and %s enumerates %d combination(s), none of them that one"
 bug	backend/vulkan.go	"spirv: %s: tile.mma operands are not tiles"
 bug	backend/vulkan.go	"vulkan: the device is closed"
@@ -308,6 +313,7 @@ bug	composer/a64/a64img.go	"a64: byte lane %d, want 0..15"
 bug	composer/a64/a64ops.go	"a64: A64Access %d is not an access"
 limit	composer/amdgpu/lower.go	"amdgpu: a wave of %d lanes"
 bug	composer/amdgpu/lower.go	"amdgpu: no lowering for %s"	an op past the lowering's switch: the AMD profile forms only what it lowers
+refusal	composer/amdgpu/lower.go	"amdgpu: no lowering for the tile ops yet: the matrix units (WMMA, MFMA) are reached through them and are not built"	WMMA and MFMA are not built: an AMD device forms the scalar twins of the tiled forms
 bug	composer/amdgpu/lower.go	"amdgpu: op %d: %s: dependency counters are not lowered for AMDGPU yet"
 bug	composer/amdgpu/lower.go	"amdgpu: op %d: EndLoop outside a loop"
 bug	composer/amdgpu/lower.go	"amdgpu: op %d: no lowering for %s yet: the matrix units (WMMA, MFMA) are reached through the tile ops and are not built"	the AMD lowering states what its instructions express; the composer forms no tile op it refuses
@@ -689,6 +695,7 @@ bug	composer/msl/tile.go	"msl: %s wants %s and %q holds %s"
 bug	composer/msl/tile.go	"msl: %s: operand 0 is not a parameter"
 limit	composer/msl/tile.go	"msl: a half accumulator is refused, not substituted"	Metal's lowering states its limit; the composer forms no half accumulator there
 limit	composer/msl/tile.go	"msl: no %s matrix: simdgroup_matrix has no integer form on this target (char and int both fail to compile -- metal.TestSimdgroupMatrixForms)"
+refusal	composer/msl/tile.go	"msl: no lowering for %s"	a row scale of a simdgroup accumulator is not built: the flash pass keeps its running sums out of the accumulator on Metal
 bug	composer/msl/tile.go	"msl: op %d: a tile product whose A is not a tile of whole 8x8 blocks"
 context	composer/pass.go	"jit: pass %s: %w"
 bug	composer/pass_args.go	"jit: %s: argument field %d holds both %s and %s"
@@ -746,6 +753,7 @@ bug	composer/spirv/lower.go	"spirv: unmatched loop at op %d"
 bug	composer/spirv/tile.go	"spirv: %s is not a tile op"
 bug	composer/spirv/tile.go	"spirv: %s through %q, which is not a tile buffer (declare it with ir.ParamTile)"
 bug	composer/spirv/tile.go	"spirv: %s: buffer %q holds %s and the tile is %s; a cooperative access does not convert"
+refusal	composer/spirv/tile.go	"spirv: a cooperative matrix carried across a loop or staged in workgroup memory is not lowered"	SPV_KHR_cooperative_matrix expresses both, and neither lowering is built or gated: a Vulkan device forms the scalar twins of the tiled GEMM
 bug	composer/storage.go	"jit: %v storage %q is read and nothing writes it"
 bug	composer/storage.go	"jit: table %s has no source"
 bug	composer/storage.go	"jit: value %d of part %d is read and nothing writes it"

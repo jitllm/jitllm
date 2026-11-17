@@ -208,10 +208,8 @@ func (v *vkDev) Compile(k *ir.Kernel) (Kernel, error) {
 	// features: a driver may run the module anyway and silently compute a
 	// wrong answer, so the refusal is the whole safety property.
 	if ir.UsesTiles(k) {
-		if !v.c.Tiles() {
-			return nil, fmt.Errorf("spirv: %s uses cooperative-matrix tiles and %s did not enable them "+
-				"(VK_KHR_cooperative_matrix, storageBuffer16BitAccess, storageBuffer8BitAccess, "+
-				"shaderFloat16, shaderInt8)", k.Name, v.c.Name())
+		if err := v.tilesEnabled(k.Name); err != nil {
+			return nil, err
 		}
 		if err := v.tileShapes(k); err != nil {
 			return nil, err
@@ -469,6 +467,31 @@ func (s *vkSession) Sync() error {
 	return err
 }
 
+// tilesEnabled refuses a tile kernel, named name, on a device that did not
+// enable the features its SPIR-V declares.
+func (v *vkDev) tilesEnabled(name string) error {
+	if v.c.Tiles() {
+		return nil
+	}
+	return fmt.Errorf("spirv: %s uses cooperative-matrix tiles and %s did not enable them "+
+		"(VK_KHR_cooperative_matrix, storageBuffer16BitAccess, storageBuffer8BitAccess, "+
+		"shaderFloat16, shaderInt8)", name, v.c.Name())
+}
+
+// lowersTile is what the device enabled and enumerated
+// (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR) for s, then spirv's
+// answer for its staged form.
+func (v *vkDev) lowersTile(s TileShape) error {
+	if err := v.tilesEnabled("a tiled GEMM"); err != nil {
+		return err
+	}
+	a, b, acc := s.types()
+	if err := v.tileShape("a tiled GEMM", a, b, acc.Elem); err != nil {
+		return err
+	}
+	return spirv.LowersStagedTile()
+}
+
 // tileShapes refuses a kernel whose matrix shape this device did not enumerate.
 //
 // The driver is not a reliable check: asked for a shape it does not offer, it
@@ -483,15 +506,23 @@ func (v *vkDev) tileShapes(k *ir.Kernel) error {
 		if a == nil || b == nil || o.Tile == nil {
 			return fmt.Errorf("spirv: %s: tile.mma operands are not tiles", k.Name)
 		}
-		ca, cb := coopComp(a.Elem), coopComp(b.Elem)
-		cc := coopComp(o.Tile.Elem)
-		if !v.c.SupportsTile(a.Rows, b.Cols, a.Cols, ca, cb, cc, cc) {
-			return fmt.Errorf("spirv: %s wants %dx%dx%d %s*%s+%s->%s at subgroup scope and %s "+
-				"enumerates %d combination(s), none of them that one",
-				k.Name, a.Rows, b.Cols, a.Cols, ca, cb, cc, cc, v.c.Name(), len(v.c.TileShapes()))
+		if err := v.tileShape(k.Name, *a, *b, o.Tile.Elem); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// tileShape refuses a product of a and b into acc, in the kernel named name,
+// that this device did not enumerate.
+func (v *vkDev) tileShape(name string, a, b ir.TileType, acc ir.TileElem) error {
+	ca, cb, cc := coopComp(a.Elem), coopComp(b.Elem), coopComp(acc)
+	if v.c.SupportsTile(a.Rows, b.Cols, a.Cols, ca, cb, cc, cc) {
+		return nil
+	}
+	return fmt.Errorf("spirv: %s wants %dx%dx%d %s*%s+%s->%s at subgroup scope and %s "+
+		"enumerates %d combination(s), none of them that one",
+		name, a.Rows, b.Cols, a.Cols, ca, cb, cc, cc, v.c.Name(), len(v.c.TileShapes()))
 }
 
 // coopComp maps an IR tile element onto VkComponentTypeKHR. The integer cases

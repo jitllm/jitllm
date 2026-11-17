@@ -242,8 +242,10 @@ type Ctx struct {
 	qs  map[*Queue]bool
 
 	// unified is -hasUnifiedMemory, read once: it is a property of the
-	// hardware and cannot change under an open device.
-	unified bool
+	// hardware and cannot change under an open device. simdMatrix is
+	// SimdgroupMatrix's answer, read once the same way.
+	unified    bool
+	simdMatrix bool
 	// opts is the MTLCompileOptions every library compiles under; see
 	// strictMath.
 	opts ID
@@ -269,6 +271,7 @@ func OpenWith(o Opts) (*Ctx, error) {
 	if q == 0 {
 		return nil, fmt.Errorf("metal: newCommandQueue returned nil")
 	}
+	fam := rt.sel("supportsFamily:")
 	c := &Ctx{
 		rt:         rt,
 		stats:      o.stats(),
@@ -276,6 +279,7 @@ func OpenWith(o Opts) (*Ctx, error) {
 		dev:        d,
 		name:       rt.gostr(rt.send0(d, rt.sel("name"))),
 		unified:    rt.sendBool(d, rt.sel("hasUnifiedMemory")).ok(),
+		simdMatrix: rt.sendBoolU64(d, fam, mtlGPUFamilyApple7).ok() || rt.sendBoolU64(d, fam, mtlGPUFamilyMac2).ok(),
 		opts:       rt.strictMath(o.FastMath),
 		spin:       o.spin(),
 		concurrent: o.Concurrent,
@@ -337,6 +341,19 @@ func (c *Ctx) Mem() (free, total uint64, err error) {
 // A caller must treat the device budget as a slice of the host budget, not add
 // the two.
 func (c *Ctx) UnifiedMemory() bool { return c.unified }
+
+// The MTLGPUFamily values whose devices run simdgroup_matrix, as Apple's
+// Metal feature set tables list them ("SIMD-scoped matrix multiply"): Apple7
+// and later answer to Apple7, Mac2 is every Mac GPU family that has it.
+const (
+	mtlGPUFamilyApple7 = 1007
+	mtlGPUFamilyMac2   = 2002
+)
+
+// SimdgroupMatrix reports whether the device's GPU family runs
+// simdgroup_matrix (-supportsFamily:), the 8x8 matrix msl lowers a
+// collective tile to.
+func (c *Ctx) SimdgroupMatrix() bool { return c.simdMatrix }
 
 // MaxThreadgroupMemory is -maxThreadgroupMemoryLength: the bytes of
 // threadgroup memory one threadgroup may declare.

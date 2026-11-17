@@ -46,6 +46,12 @@ func Lower(k *ir.Kernel, t Target) (string, error) {
 	return l.lower()
 }
 
+// LowersTile is Lower's answer for a tile product: the matrix units (WMMA,
+// MFMA) are reached through the tile ops and are not built, so it refuses.
+func LowersTile() error {
+	return fmt.Errorf("amdgpu: no lowering for the tile ops yet: the matrix units (WMMA, MFMA) are reached through them and are not built")
+}
+
 type lowerer struct {
 	k *ir.Kernel
 	t Target

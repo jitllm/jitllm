@@ -1506,8 +1506,8 @@ type devShared struct {
 	// because no kernel bakes a capacity.
 	paged bool
 	kvp   *kvPool
-	// matrixCap is composedMatrix's probe, in tileCap's terms, scaleCap
-	// composedScale's.
+	// matrixCap is composedMatrix's answer (1 yes, -1 no, 0 not asked),
+	// scaleCap composedScale's.
 	matrixCap, scaleCap int8
 	// launch is launchWords' answer, asked once where launchSet.
 	launch    int

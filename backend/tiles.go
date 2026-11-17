@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"fmt"
+
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/ptx"
 )
@@ -14,26 +16,44 @@ type TileShape struct {
 	Scale     bool
 }
 
-// LowersTile reports whether d compiles a kernel that multiplies collective
-// tiles of shape s, staged from workgroup memory and carried across a loop --
-// the form a tiled GEMM uses -- and the device's own words when it does not.
+// types is the shape's A, B and accumulator tile types.
+func (s TileShape) types() (a, b, acc ir.TileType) {
+	return ir.TileType{Rows: s.M, Cols: s.K, Elem: s.Elem, Use: ir.TileA},
+		ir.TileType{Rows: s.K, Cols: s.N, Elem: s.Elem, Use: ir.TileB},
+		ir.TileType{Rows: s.M, Cols: s.N, Elem: s.Acc, Use: ir.TileAcc}
+}
+
+// tileStater is a device that states which collective tiles it multiplies.
+type tileStater interface {
+	lowersTile(s TileShape) error
+}
+
+// LowersTile reports whether d multiplies collective tiles of shape s,
+// staged from workgroup memory and carried across a loop -- the form a
+// tiled GEMM uses -- and the reason when it does not.
 //
-// It is the capability question the tier asks before it builds a tile kernel,
-// in place of asking for a backend by name: Metal lowers 8x8 tiles to
-// simdgroup_matrix, PTX lowers any f16 tile whose sides are multiples of 8 to
-// mma.sync (sm_70 and later; see TileQuadPairs), and Vulkan lowers the shapes
-// the device enumerated. The probe is compiled, never launched; asking costs a compile,
-// so a caller keeps the answer for the device it holds.
+// The answer is what the device's API states (CUDA's compute capability,
+// the cooperative-matrix combinations a Vulkan device enumerated and the
+// features it enabled, a Metal device's GPU family) read against what its
+// lowering emits for that statement (ptx.LowersTile, spirv.LowersStagedTile,
+// msl.LowersTile, amdgpu.LowersTile). Nothing is compiled.
 func LowersTile(d Device, s TileShape) (bool, string) {
-	k, err := tileProbe(s)
-	if err != nil {
+	a, b, acc := s.types()
+	for _, t := range [3]ir.TileType{a, b, acc} {
+		if !t.Valid() {
+			return false, fmt.Sprintf("backend: %v is not a well-formed tile type", t)
+		}
+	}
+	if s.Scale && s.Acc != ir.TileF32 {
+		return false, fmt.Sprintf("backend: a row scale of a %s accumulator: tile.scale scales a float32 one", s.Acc)
+	}
+	ts, ok := d.(tileStater)
+	if !ok {
+		return false, fmt.Sprintf("backend: %s states no collective tile", d.API())
+	}
+	if err := ts.lowersTile(s); err != nil {
 		return false, err.Error()
 	}
-	kern, err := d.Compile(k)
-	if err != nil {
-		return false, err.Error()
-	}
-	kern.Close()
 	return true, ""
 }
 
@@ -53,43 +73,4 @@ func Fragment(d Device) ir.MMAShape {
 		return ir.MMAVolta()
 	}
 	return ir.MMAShape{}
-}
-
-// tileProbe is the smallest kernel with every part of a staged tile GEMM: A
-// and B staged through workgroup memory behind a barrier, the accumulator a
-// loop-carried tile, the result stored column-major to a buffer.
-func tileProbe(s TileShape) (*ir.Kernel, error) {
-	aT := ir.TileType{Rows: s.M, Cols: s.K, Elem: s.Elem, Use: ir.TileA}
-	bT := ir.TileType{Rows: s.K, Cols: s.N, Elem: s.Elem, Use: ir.TileB}
-	cT := ir.TileType{Rows: s.M, Cols: s.N, Elem: s.Acc, Use: ir.TileAcc}
-	b := ir.New("tilecap", [3]int{ir.SubgroupLanes, 1, 1})
-	pIn := b.Param("pIn", ir.U32)
-	pOut := b.ParamTile("pOut", s.Acc)
-	words := (s.M*s.K + s.K*s.N) * s.Elem.Bytes() / 4
-	sh := b.Shared("tilecap", ir.U32, max(words, 1))
-	tid := b.TID()
-	b.Store(sh, tid, b.Load(ir.U32, pIn, tid, 0), 0)
-	b.Barrier()
-	zero := b.Const(ir.U32, 0)
-	seed := b.ConstF32(0)
-	if s.Acc == ir.TileI32 {
-		seed = b.Const(ir.I32, 0)
-	}
-	init := b.TileSplat(cT, seed)
-	b.Loop(2)
-	acc := b.TilePhi(init)
-	a := b.TileLoad(aT, sh, zero, b.Const(ir.U32, int64(s.K)), false)
-	bb := b.TileLoad(bT, sh, b.Const(ir.U32, int64(s.M*s.K)), b.Const(ir.U32, int64(s.K)), true)
-	c := acc
-	if s.Scale {
-		c = b.TileScaleRows(acc, sh, zero)
-	}
-	b.SetPhi(acc, b.TileMMA(a, bb, c))
-	b.EndLoop()
-	b.TileStore(pOut, zero, b.Const(ir.U32, int64(s.M)), acc, true)
-	k, err := b.Done()
-	if err != nil {
-		return nil, err
-	}
-	return k, k.Validate()
 }

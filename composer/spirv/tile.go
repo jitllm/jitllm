@@ -151,6 +151,13 @@ func (l *lowerer) tileType(t ir.TileType) uint32 {
 	return id
 }
 
+// LowersStagedTile is Emit's answer for a tile product staged in workgroup
+// memory and carried across a loop, the form a tiled GEMM takes: neither is
+// lowered yet (lower.go), so it refuses.
+func LowersStagedTile() error {
+	return fmt.Errorf("spirv: a cooperative matrix carried across a loop or staged in workgroup memory is not lowered")
+}
+
 // tileOp lowers one collective op.
 func (l *lowerer) tileOp(o ir.Op, v ir.Value) error {
 	m := &l.m

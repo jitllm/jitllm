@@ -1020,6 +1020,13 @@ func ptxOptions(o Opts) []ptx.Option {
 	return out
 }
 
+// lowersTile is ptx's answer for s at the target the device's compute
+// capability names (cuDeviceGetAttribute), or the one Opts.CUDATarget set.
+func (c *cudaDev) lowersTile(s TileShape) error {
+	a, b, acc := s.types()
+	return ptx.LowersTile(c.d.Target, a, b, acc)
+}
+
 func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 	c.ctr.compiled(k.Name)
 	src, err := ptx.Lower(k, c.d.Target, c.lower...)

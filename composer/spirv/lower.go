@@ -147,8 +147,8 @@ func Emit(k *ir.Kernel, opts ...Option) ([]byte, error) {
 	for i, o := range k.Ops {
 		// Two tile forms not lowered here yet, refused by name: a loop-carried
 		// cooperative matrix and a cooperative access to workgroup memory.
-		// SPV_KHR_cooperative_matrix can express both, but neither is gated.
-		// They exist for Metal's staged GEMM (kernels.GemmTile).
+		// SPV_KHR_cooperative_matrix can express both, but neither is gated
+		// (LowersStagedTile states it).
 		if o.Kind == ir.OpPhi && o.Tile != nil {
 			return nil, fmt.Errorf("spirv: op %d: a loop-carried cooperative matrix is not lowered", i)
 		}

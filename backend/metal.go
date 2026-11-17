@@ -150,6 +150,16 @@ func mslOptions(o Opts) []msl.Option {
 	return out
 }
 
+// lowersTile is whether the device's GPU family has simdgroup_matrix
+// (metal.Ctx.SimdgroupMatrix), then msl's answer for s.
+func (m *mtlDev) lowersTile(s TileShape) error {
+	if !m.c.SimdgroupMatrix() {
+		return fmt.Errorf("msl: %s is in no GPU family with simdgroup_matrix (MTLGPUFamilyApple7, MTLGPUFamilyMac2)", m.c.Name())
+	}
+	a, b, acc := s.types()
+	return msl.LowersTile(s.Scale, a, b, acc)
+}
+
 func (m *mtlDev) Compile(k *ir.Kernel) (Kernel, error) {
 	m.ctr.compiled(k.Name)
 	src, err := msl.Emit(k, m.lower...)

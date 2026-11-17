@@ -62,6 +62,21 @@ func tileT(t ir.TileType) (string, error) {
 	return fmt.Sprintf("jitllm_tile_%s_%dx%d", tileElemName(t.Elem), t.Rows, t.Cols), nil
 }
 
+// LowersTile is Emit's answer for a product of tiles of types ts, staged in
+// workgroup memory and carried across a loop, its rows scaled where scale:
+// nil where it lowers one, the refusal Emit makes where not.
+func LowersTile(scale bool, ts ...ir.TileType) error {
+	for _, t := range ts {
+		if _, err := tileT(t); err != nil {
+			return err
+		}
+	}
+	if scale {
+		return fmt.Errorf("msl: no lowering for %s", ir.OpTileScale)
+	}
+	return nil
+}
+
 // tileStructs declares the struct of every tile type of k past 8x8, each
 // once: its 8x8 blocks, row-major by block. A struct and not an array, so a
 // loop-carried tile is reassigned whole as a scalar is.
