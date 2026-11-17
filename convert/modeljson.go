@@ -1857,16 +1857,10 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 }
 
 // mjRopeScaling states a rope scaling object, transformers' rope_parameters
-// or rope_scaling, by its published method: none and default state nothing;
-// llama3 states its per-pair factors over the rotated width as
-// rope_freqs.weight, rotary.json's llama3 method over what transformers reads
-// from env (llama3RopeOf);
-// yarn states its factor, original context, correction range and magnitude
-// as transformers computes them (hfYarnApply); longrope states its two factor
-// vectors and original context as rope_factors_short and rope_factors_long,
-// with the magnitude transformers computes (hfLongRope); a method not
-// implemented, or one the file's rope_methods does not list, is refused by
-// name.
+// or rope_scaling, by its method's statement in rotary.json (rotaryScaling,
+// rotaryMethod.state): none and default state nothing; a method the file's
+// rope_methods does not list, or one rotary.json states no reading of, is
+// refused by name.
 func mjRopeScaling(cfg *Config, c *hfConfig, v any, methods []string, env exprEnv) error {
 	if v == nil {
 		return nil
@@ -1875,75 +1869,29 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, methods []string, env exprEn
 	if !ok {
 		return fmt.Errorf("the rope scaling is %s, not an object", exprKind(v))
 	}
-	t := obj["rope_type"]
-	if t == nil {
-		t = obj["type"]
+	r, err := rotaryScaling(cfg, obj, env, methods)
+	if err != nil || r == nil {
+		return err
 	}
-	if s, ok := t.(string); ok && s != "default" && len(methods) > 0 && !slices.Contains(methods, s) {
-		return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)
+	if ok, err := r.holds(cfg); err != nil || !ok {
+		return err
 	}
-	switch t {
-	case nil, "default":
-		return nil
-	case "llama3":
-		raw, err := json.Marshal(obj)
-		if err != nil {
+	ts, err := r.settle(cfg)
+	if err != nil {
+		return err
+	}
+	div, err := r.divisors(cfg)
+	if err != nil {
+		return err
+	}
+	if div != nil {
+		ts = append(ts, ropeFreqsTensor(div))
+		if err := r.clear(cfg); err != nil {
 			return err
 		}
-		num := func(k string) *float64 {
-			if f, ok := env(k).(float64); ok {
-				return &f
-			}
-			return nil
-		}
-		params, err := llama3RopeOf(raw, num("original_max_position_embeddings"), num("max_position_embeddings"))
-		if err != nil {
-			return fmt.Errorf("rope scaling llama3: %w", err)
-		}
-		rot := cfg.NRot
-		if rot == 0 {
-			rot = cfg.HeadDim
-		}
-		freqs, err := rotaryDivisors("llama3", int(rot)/2, float64(rot), float64(cfg.RopeBase), params)
-		if err != nil {
-			return fmt.Errorf("rope scaling llama3: %w", err)
-		}
-		c.extra = append(c.extra, ropeFreqsTensor(freqs))
-		return nil
-	case "longrope", "su":
-		raw, err := json.Marshal(obj)
-		if err != nil {
-			return err
-		}
-		var lr hfLongRope
-		if err := json.Unmarshal(raw, &lr); err != nil {
-			return fmt.Errorf("rope scaling longrope: %w", err)
-		}
-		if f, ok := env("original_max_position_embeddings").(float64); ok && f > 0 && lr.OrigCtx == 0 {
-			lr.OrigCtx = uint32(f)
-		}
-		return lr.apply(c, cfg)
-	case "yarn":
-		raw, err := json.Marshal(obj)
-		if err != nil {
-			return err
-		}
-		var y hfYarn
-		if err := json.Unmarshal(raw, &y); err != nil {
-			return fmt.Errorf("rope scaling yarn: %w", err)
-		}
-		if !(y.Factor >= 1) {
-			return fmt.Errorf("rope scaling yarn: a factor of %g", y.Factor)
-		}
-		// standardize_rope_params: a top-level original context first, then the
-		// object's, then max_position_embeddings (hfYarnApply's NCtx).
-		if f, ok := env("original_max_position_embeddings").(float64); ok && f > 0 {
-			y.OrigCtx = uint32(f)
-		}
-		hfYarnApply(&y, cfg)
-		return nil
 	}
-	return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)
+	c.extra = append(c.extra, ts...)
+	return nil
 }
 
 func exprUint(what string, v any) (uint64, error) {

@@ -114,11 +114,10 @@ type Config struct {
 	// wrong output that only an external oracle catches.
 	AttnSoftcap, FinalSoftcap float32
 
-	// YarnFactor is a YaRN's factor, which the score's magnitude reads (0 is
-	// no YaRN); the rotary's angles turn by the factors the container states
-	// per pair (convert.StateRotary). YarnOrigCtx is the context past which a
-	// LongRoPE turns its long factors.
-	YarnFactor  float64
+	// YarnOrigCtx is the context past which a LongRoPE turns its long
+	// factors. A scaled rotary's angles turn by the factors the container
+	// states per pair, and YaRN's score magnitude is in AttnScale
+	// (convert.StateRotary).
 	YarnOrigCtx int
 	// NoPosEnc: the attention blocks apply no positional encoding at all.
 	// Position still orders the causal mask and never reaches q or k.
@@ -143,9 +142,8 @@ type Config struct {
 	NExpertGroup, NExpertGroupUsed int
 
 	// AttnScale is the softmax's multiplier, already including YaRN's squared
-	// magnitude correction. The converter folds one copy of the correction into
-	// AttnFactor (which scales cos and sin); the score is scaled by its square
-	// (DeepSeek's softmax_scale, llama.cpp's kq_scale), so it is its own field.
+	// magnitude correction where a class's attention scales by it (DeepSeek's
+	// softmax_scale), which the converter states in the container's.
 	AttnScale float64
 
 	// NDenseLead is how many leading blocks have a dense feed-forward. The
@@ -603,7 +601,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		NExpertUsed:  int(c.NExpertUsed),
 		AttnSoftcap:  c.AttnSoftcap,
 		FinalSoftcap: c.FinalSoftcap,
-		YarnFactor:   float64(c.YarnFactor),
 		YarnOrigCtx:  int(c.YarnOrigCtx),
 		NoPosEnc:     c.Flags.Has(jlm.FlagNoPosEnc),
 		TiedEmbd:     c.Flags.Has(jlm.FlagTiedEmbd),
@@ -671,16 +668,12 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	if out.ExpertScale == 0 {
 		out.ExpertScale = 1
 	}
-	// The score's scale, with YaRN's correction squared; without YaRN it is
-	// 1/sqrt(HeadDim). A model that states its own scale (Granite's
-	// attention.scale, gemma 27B's) is taken at its word; see jlm.Config.
+	// The score's scale: 1/sqrt(HeadDim) where the container states none. A
+	// stated one (Granite's attention.scale, gemma 27B's, YaRN's score
+	// magnitude folded in by the converter) is taken at its word.
 	out.AttnScale = 1 / math.Sqrt(float64(out.HeadDim))
 	if c.AttnScale != 0 {
 		out.AttnScale = float64(c.AttnScale)
-	}
-	if c.YarnLogMul != 0 && c.YarnFactor > 1 {
-		mscale := float64(c.YarnLogMul)*math.Log(float64(c.YarnFactor)) + 1
-		out.AttnScale *= mscale * mscale
 	}
 
 	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
@@ -987,7 +980,7 @@ func Open(path string, options ...Option) (*Model, error) {
 	m, err := openContainer(path, options...)
 	if err != nil {
 		if ue := (*jlm.UpgradeError)(nil); errors.As(err, &ue) {
-			return nil, &UpgradeRequiredError{Path: path, What: ue.What}
+			return nil, &UpgradeRequiredError{Path: path, What: ue.What, Reconvert: ue.Reconvert}
 		}
 		return nil, err
 	}
@@ -1004,12 +997,22 @@ func Open(path string, options ...Option) (*Model, error) {
 
 // UpgradeRequiredError is a container written before this build states what
 // the composer reads of it. It carries the upgrade command.
-type UpgradeRequiredError struct{ Path, What string }
+type UpgradeRequiredError struct {
+	Path, What string
+	// Reconvert says an upgrade cannot state it: the model is converted
+	// again from its source.
+	Reconvert bool
+}
 
 // Error names the file, what it does not state and the command that states
-// it, in place.
+// it: an upgrade in place, or a conversion from the source where an upgrade
+// cannot.
 func (e *UpgradeRequiredError) Error() string {
-	return fmt.Sprintf("jitllm: %s was written before this build states its %s, which the composer reads.\n"+
+	if e.Reconvert {
+		return fmt.Sprintf("jitllm: %s was written before this build states %s, which the composer reads, "+
+			"and an upgrade cannot state it from the container.\n  Convert it again from its source:  jitllm convert", e.Path, e.What)
+	}
+	return fmt.Sprintf("jitllm: %s was written before this build states %s, which the composer reads.\n"+
 		"  Upgrade it once:  jitllm upgrade %s", e.Path, e.What, e.Path)
 }
 

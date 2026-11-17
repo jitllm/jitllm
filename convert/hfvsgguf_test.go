@@ -73,6 +73,17 @@ func hfSource(t testing.TB, dir string) *jlm.Source {
 func ggufSource(t testing.TB, path string) *jlm.Source {
 	t.Helper()
 	s := ggufConverted(t, path, false)
+	f, err := gguf.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	// The converter states a GGUF's rotary before its block graphs
+	// (buildGGUF): the method's divisors over the file's factors, then
+	// StateRotary's fold of YaRN's score.
+	if err := stateGGUFRotary(f, s); err != nil {
+		t.Fatal(err)
+	}
 	if err := StateRotary(s.Config, s); err != nil {
 		t.Fatal(err)
 	}

@@ -658,15 +658,24 @@ func TestDeepseekYarnIsRead(t *testing.T) {
 				t.Fatalf("a yarn deepseek was refused: %v", err)
 			}
 			cf := s.Config
-			if cf.YarnFactor != 40 || cf.YarnOrigCtx != 32 || cf.YarnBetaFast != 0 || cf.YarnBetaSlow != 0 {
-				t.Errorf("yarn %v/%v/%v/%v", cf.YarnFactor, cf.YarnOrigCtx, cf.YarnBetaFast, cf.YarnBetaSlow)
+			if cf.YarnFactor != 0 || cf.YarnOrigCtx != 32 || cf.YarnBetaFast != 0 || cf.YarnBetaSlow != 0 {
+				t.Errorf("yarn %v/%v/%v/%v, want a container stating no method", cf.YarnFactor, cf.YarnOrigCtx,
+					cf.YarnBetaFast, cf.YarnBetaSlow)
+			}
+			score := float32(0)
+			if c.logMul != 0 {
+				k := float64(c.logMul)*math.Log(40) + 1
+				score = float32(1 / math.Sqrt(float64(cf.HeadDim)) * (k * k))
+			}
+			if cf.AttnScale != score {
+				t.Errorf("AttnScale = %v, want the score magnitude folded in, %v", cf.AttnScale, score)
 			}
 			want := yarnFreqs(int(cf.NRot), float64(cf.RopeBase), 40, 32, 32, 1, false)
 			if got := statedRopeFreqs(t, s); !slices.Equal(f32Bits(got), f32Bits(want)) {
 				t.Errorf("the stated rotary factors %v, want YaRN's %v", got, want)
 			}
-			if cf.YarnLogMul != c.logMul {
-				t.Errorf("YarnLogMul = %v, want %v", cf.YarnLogMul, c.logMul)
+			if cf.YarnLogMul != 0 {
+				t.Errorf("YarnLogMul = %v, want it folded into AttnScale", cf.YarnLogMul)
 			}
 			if math.Abs(float64(cf.AttnFactor-c.attn)) > 1e-6 {
 				t.Errorf("AttnFactor = %v, want %v", cf.AttnFactor, c.attn)

@@ -55,7 +55,7 @@ func hfDenseSelected() map[string]func(m *model.Model) bool {
 		"synth-hf-ministral3": func(m *model.Model) bool {
 			c := m.Cfg
 			return !c.RopeNeox && c.AttnTempScale == 0.5 && c.AttnTempFloor == 4 &&
-				c.AttnTempOffs == 0 && c.YarnFactor == 16 &&
+				c.AttnTempOffs == 0 && ropeFactor(m) == 16 &&
 				m.Rope.Scale > 1.1 && m.Rope.Scale < 1.13
 		},
 	}

@@ -1075,7 +1075,7 @@ func (c *Config) RopePairs() ([]RopePair, error) {
 	if c.RopeSections == [4]uint32{} || len(c.RopeTable) != 0 {
 		return c.RopeTable, nil
 	}
-	return nil, &UpgradeError{What: "rotary table"}
+	return nil, &UpgradeError{What: "its rotary table"}
 }
 
 // PictureRope is how a picture's grid rows place themselves on the text

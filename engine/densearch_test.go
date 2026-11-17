@@ -67,7 +67,7 @@ func denseFixtures() []struct {
 		{"synth-mistral3", func(m *model.Model) bool {
 			c := m.Cfg
 			return !c.RopeNeox && !c.NoPEGlobal && c.AttnTempScale == 0.5 &&
-				c.AttnTempFloor == 4 && c.AttnTempOffs == 0 && c.YarnFactor == 16 &&
+				c.AttnTempFloor == 4 && c.AttnTempOffs == 0 && ropeFactor(m) == 16 &&
 				m.Rope.Scale > 1.1 && m.Rope.Scale < 1.13
 		}},
 		{"synth-olmo2-gqa", func(m *model.Model) bool {
@@ -78,7 +78,7 @@ func denseFixtures() []struct {
 		{"synth-olmo3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.QKNormWide && c.NKVHead < c.NHead && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim &&
-				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && !slides(m, 3) && c.YarnFactor == 8 &&
+				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && !slides(m, 3) && ropeFactor(m) == 8 &&
 				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
 				len(m.Ropes) == 1 && m.Ropes[0].Scale == 1 && m.Ropes[0].Freqs == nil && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},

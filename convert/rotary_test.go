@@ -225,7 +225,7 @@ func TestStateRotaryStatesThePairs(t *testing.T) {
 			if err := StateRotary(&cfg, s); err != nil {
 				t.Fatal(err)
 			}
-			if cfg.RopeLinear != 0 || cfg.YarnBetaFast != 0 || cfg.YarnBetaSlow != 0 || cfg.YarnFactor != r.cfg.YarnFactor {
+			if cfg.RopeLinear != 0 || cfg.YarnBetaFast != 0 || cfg.YarnBetaSlow != 0 || cfg.YarnFactor != 0 {
 				t.Fatalf("the config still states a method: %+v", cfg)
 			}
 			if len(r.have) == 0 && (len(s.Tensors) != 1 || s.Tensors[0].Role != jlm.RoleRopeFreqs) {

@@ -177,6 +177,9 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		o.statedSource(s)
 	}
 	if g != nil {
+		if err := stateGGUFRotary(f, s); err != nil {
+			return nil, err
+		}
 		if err := StateBlockGraphs(&Config{Config: s.Config}, s, g, ggufKeys(f), o.taken); err != nil {
 			return nil, err
 		}

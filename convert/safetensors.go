@@ -1272,64 +1272,6 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 // ---------------------------------------------------------------------------
 // llama
 
-// hfYarn is a YaRN rope_scaling as config.json spells it.
-type hfYarn struct {
-	Factor       float64  `json:"factor"`
-	OrigCtx      uint32   `json:"original_max_position_embeddings"`
-	BetaFast     *float64 `json:"beta_fast"`
-	BetaSlow     *float64 `json:"beta_slow"`
-	MScale       *float64 `json:"mscale"`
-	MScaleAllDim *float64 `json:"mscale_all_dim"`
-	AttnFactor   *float64 `json:"attention_factor"`
-	Truncate     *bool    `json:"truncate"`
-}
-
-// hfYarnApply writes a consumed YaRN into the container's fields, as
-// transformers computes it.
-//
-// The magnitude on cos and sin is _compute_yarn_parameters' attention_factor:
-// the config's own where it states one, else mscale(f, mscale) /
-// mscale(f, mscale_all_dim) when both are set and non-zero, else mscale(f, 1),
-// with mscale(f, k) = 0.1*k*ln(f) + 1. So a DeepSeek carrying mscale ==
-// mscale_all_dim (every shipped one) leaves cos and sin at exactly one.
-//
-// A class whose attention multiplies the softmax scale by a YaRN magnitude
-// squared (DeepSeek's yarn_apply_mscale) states it as YarnLogMul: a model.json
-// by its yarn_log_multiplier, hfYarnScoreScale for the Go reader that remains.
-func hfYarnApply(y *hfYarn, cfg *Config) {
-	if y == nil || y.Factor <= 1 {
-		return
-	}
-	cfg.YarnFactor = float32(y.Factor)
-	cfg.YarnOrigCtx = y.OrigCtx
-	if cfg.YarnOrigCtx == 0 {
-		cfg.YarnOrigCtx = cfg.NCtx
-	}
-	// Python's truthiness: an absent key and a zero are both false, so
-	// `get("beta_fast") or 32` reads a zero as the default too.
-	set := func(p *float64) bool { return p != nil && *p != 0 }
-	cfg.YarnBetaFast, cfg.YarnBetaSlow = 32, 1
-	if set(y.BetaFast) {
-		cfg.YarnBetaFast = float32(*y.BetaFast)
-	}
-	if set(y.BetaSlow) {
-		cfg.YarnBetaSlow = float32(*y.BetaSlow)
-	}
-	// truncate false takes the correction range as computed, unrounded.
-	if y.Truncate != nil && !*y.Truncate {
-		cfg.Flags |= jlm.FlagYarnExact
-	}
-	ms := func(k float64) float64 { return 0.1*k*math.Log(y.Factor) + 1 }
-	switch {
-	case y.AttnFactor != nil:
-		cfg.AttnFactor *= float32(*y.AttnFactor)
-	case set(y.MScale) && set(y.MScaleAllDim):
-		cfg.AttnFactor *= float32(ms(*y.MScale) / ms(*y.MScaleAllDim))
-	default:
-		cfg.AttnFactor *= float32(ms(1))
-	}
-}
-
 // permuteHeadPairs moves row (h, j*hd/2 + i) to row (h, 2i + j), per head.
 //
 // It is a permutation of whole rows only, independent of the element type,

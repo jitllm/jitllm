@@ -3,6 +3,7 @@ package convert
 import (
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/safetensors"
@@ -10,9 +11,10 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestYarnAgreesAcrossInputs holds YaRN's container fields -- the ramp, the
-// magnitude on cos and sin (AttnFactor) and the score's correction
-// (YarnLogMul) -- equal between a safetensors directory and the GGUF
+// TestYarnAgreesAcrossInputs holds YaRN's container fields -- the stated
+// rotary factors, the magnitude on cos and sin (AttnFactor) and the score's
+// scale with its correction folded in (AttnScale) -- equal between a
+// safetensors directory and the GGUF
 // llama.cpp's converter wrote from the same config.json. The fixtures are
 // scripts/c6gold.py's, one per family and per way of stating the magnitude;
 // DeepSeek-V2-Lite (mscale == mscale_all_dim == 0.707, factor 40) is the real
@@ -42,24 +44,23 @@ func TestYarnAgreesAcrossInputs(t *testing.T) {
 			}
 			sa, sb := hfSourceLazy(t, dir), ggufSource(t, gp)
 			a, b := sa.Config, sb.Config
-			if a.YarnFactor <= 1 {
-				t.Fatalf("the safetensors config carries no YaRN (factor %v)", a.YarnFactor)
+			if !slices.ContainsFunc(statedRopeFreqs(t, sa), func(f float32) bool { return f != 1 }) {
+				t.Fatal("the safetensors config states no YaRN: every rotary factor is one")
 			}
 			for _, f := range []struct {
 				name string
 				x, y any
 			}{
-				{"YarnFactor", a.YarnFactor, b.YarnFactor},
 				{"YarnOrigCtx", a.YarnOrigCtx, b.YarnOrigCtx},
 				{"the stated rotary factors", statedRopeFreqs(t, sa), statedRopeFreqs(t, sb)},
 				{"AttnFactor", a.AttnFactor, b.AttnFactor},
-				{"YarnLogMul", a.YarnLogMul, b.YarnLogMul},
+				{"AttnScale", a.AttnScale, b.AttnScale},
 			} {
 				if fmt.Sprint(f.x) != fmt.Sprint(f.y) {
 					t.Errorf("%s: safetensors %v, gguf %v", f.name, f.x, f.y)
 				}
 			}
-			t.Logf("factor %v, AttnFactor %v, YarnLogMul %v on both", a.YarnFactor, a.AttnFactor, a.YarnLogMul)
+			t.Logf("AttnFactor %v, AttnScale %v on both", a.AttnFactor, a.AttnScale)
 			ran++
 		})
 	}

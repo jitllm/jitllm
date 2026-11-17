@@ -36,7 +36,7 @@ func ds32Fixtures() []struct {
 			ok := c.MLA() && s != nil && s.Rank == jlm.RankBest && s.Block == 1 && s.Relu &&
 				s.Weight != nil && m.Container.Config().QLoraRank == 32 && c.KVLoraRank == 16 && c.NRot == 8 && s.Heads == 8 && s.HeadDim == 16 &&
 				s.Keep == 4 && c.KVDim() == 16+8+16 && c.ExpertSigmoid && c.NExpertGroup == 2 &&
-				c.NDenseLead == 1 && c.YarnFactor == 8
+				c.NDenseLead == 1 && ropeFactor(m) == 8
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && matRows(l, jlm.RoleIdxQB) == 8*16 && matRows(l, jlm.RoleIdxK) == 16 && matRows(l, jlm.RoleIdxProj) == 8 &&

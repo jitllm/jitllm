@@ -1011,19 +1011,28 @@ func TestYarnThroughTheLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	mj := lib["Qwen3ForCausalLM"]
+	var hc *hfConfig
 	qwen := func(extra string) (*Config, error) {
-		return mj.config(hfConfigOf(t, `{"architectures": ["Qwen3ForCausalLM"], "vocab_size": 100,
+		hc = hfConfigOf(t, `{"architectures": ["Qwen3ForCausalLM"], "vocab_size": 100,
 		  "hidden_size": 64, "intermediate_size": 96, "num_hidden_layers": 2, "num_attention_heads": 4,
-		  "num_key_value_heads": 2, "head_dim": 16, "max_position_embeddings": 512`+extra+`}`), []string{"lm_head.weight"})
+		  "num_key_value_heads": 2, "head_dim": 16, "max_position_embeddings": 512`+extra+`}`)
+		return mj.config(hc, []string{"lm_head.weight"})
 	}
 	c, err := qwen(`, "rope_scaling": {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 64}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := float32(0.1*math.Log(4) + 1)
-	if c.YarnFactor != 4 || c.YarnOrigCtx != 64 || c.YarnBetaFast != 32 || c.YarnBetaSlow != 1 || c.AttnFactor != want {
-		t.Errorf("factor %v over %d, betas %v/%v, magnitude %v; want 4 over 64, 32/1, %v",
-			c.YarnFactor, c.YarnOrigCtx, c.YarnBetaFast, c.YarnBetaSlow, c.AttnFactor, want)
+	if c.YarnFactor != 4 || c.YarnOrigCtx != 64 || c.AttnFactor != want {
+		t.Errorf("factor %v over %d, magnitude %v; want 4 over 64, %v", c.YarnFactor, c.YarnOrigCtx, c.AttnFactor, want)
+	}
+	div, err := rotaryDivisors("yarn", 8, 16, float64(c.RopeBase), map[string]any{"factor": 4.0, "original_context": 64.0,
+		"beta_fast": 32.0, "beta_slow": 1.0, "truncate": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hc.extra) != 1 || hc.extra[0].Role != jlm.RoleRopeFreqs || !slices.Equal(hc.extra[0].Data, ropeFreqsTensor(div).Data) {
+		t.Errorf("%d extra tensors, want rope_freqs of the divisors at betas 32/1 over 64 positions", len(hc.extra))
 	}
 	c, err = qwen(`, "original_max_position_embeddings": 128, "rope_scaling": {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 64}`)
 	if err != nil || c.YarnOrigCtx != 128 {

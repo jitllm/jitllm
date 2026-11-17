@@ -11079,8 +11079,30 @@ compared byte for byte. Floor for ceil in the yarn statement fails both
 statement gates; dropping one f32() from llama3's wavelength moves one
 divisor by an ulp, which the transcription gate names.
 
-What stays a field: YarnFactor, for the score's magnitude with YarnLogMul
-(not a frequency); YarnOrigCtx, past which LongRoPE turns its long factors;
-the sliding layers' own base, width and magnitude, which the stated rotary
-ops carry and model/ still reads from the config to build its second
-rotary.
+What stays a field: YarnOrigCtx, past which LongRoPE turns its long
+factors. The sliding layers' rotary is built from their stated rope ops
+(model.statedRotaries), and RopeBaseSWA, RopeScaleSWA and LocalNRot have
+left model.Config; synth-hf-olmo3's second rotary, identical to its first,
+is no longer built. YaRN's score magnitude, (YarnLogMul ln YarnFactor + 1)
+squared on DeepSeek's softmax scale, is folded into the container's
+AttnScale at conversion and YarnFactor and YarnLogMul are cleared, so a
+container states no method a reader could apply a second time: a build
+from before the statement, opening one, finds no YaRN and turns by the
+stated factors, where it had computed NaN angles from a YaRN factor with
+no correction range. The scale is stored in float32, the width the kernels
+take it at. A model with blocks of several head widths and no stated scale
+has no one scale to fold it into and is refused.
+
+How a method is read is rotary.json's too: each method states, per
+source, its parameters as expressions (a config.json's scaling object and
+paths, a GGUF's keys), the conditions that refuse a reading, where it
+states nothing, its cos and sin magnitude, the container fields it keeps
+and the flags its divisors consume; a GGUF writer's magnitude convention a
+class names (yarn_magnitude) is a set of reads in rotary.json. The Go
+readers (llama3RopeOf, hfYarnApply, hfLongRope, ropeScalingOf's switch,
+yarnMscaleRatio) are gone; StateRotary reads method fields only in a
+container written before the statement. Every scaled model's rotary, the
+safetensors goldens' among them, dumps identically through the statements
+and through the readers. A container still carrying method fields is told
+to convert again from its source: an upgrade restates the config, not the
+factor tensors the method would scale.

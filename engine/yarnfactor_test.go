@@ -2,12 +2,13 @@ package engine
 
 import (
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/model"
 )
 
 // YaRN's magnitude, read from what each family's reference reads
-// (convert.ropeScalingOf, convert.hfYarnApply): a config's stated
+// (convert.ropeScalingOf, rotary.json's yarn statement): a config's stated
 // attention_factor on cos and sin, else the derived one, and for the DeepSeek
 // family the score's own mscale(f, mscale_all_dim)^2. Each fixture is
 // transformers' class written to GGUF by llama.cpp's converter
@@ -29,26 +30,36 @@ func yarnFixtures() []struct {
 		// only.
 		{"synth-olmo3-af", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.YarnFactor == 8 && m.Rope.Scale == 1.5 &&
+			return ropeFactor(m) == 8 && m.Rope.Scale == 1.5 &&
 				len(m.Ropes) == 1 && m.Ropes[0].Scale == 1 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
 		}},
 		// attention_factor 0.75, outranking the mscale/mscale_all_dim ratio.
 		{"synth-mistral3-af", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.YarnFactor == 16 && m.Rope.Scale == 0.75 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
+			return ropeFactor(m) == 16 && m.Rope.Scale == 0.75 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
 		}},
 		// mscale == mscale_all_dim: cos and sin at exactly one, the score at
 		// mscale(8, 0.707)^2.
 		{"synth-deepseek-yarn", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.MLA() && c.YarnFactor == 8 && m.Rope.Scale == 1 && yarnScoreScaled(c)
+			return c.MLA() && ropeFactor(m) == 8 && m.Rope.Scale == 1 && yarnScoreScaled(c)
 		}},
 		// And a stated 0.8 on cos and sin beside the same score correction.
 		{"synth-deepseek-yarn-af", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.MLA() && c.YarnFactor == 8 && float32(m.Rope.Scale) == 0.8 && yarnScoreScaled(c)
+			return c.MLA() && ropeFactor(m) == 8 && float32(m.Rope.Scale) == 0.8 && yarnScoreScaled(c)
 		}},
 	}
+}
+
+// ropeFactor is the largest of m's per-pair rotary divisors: a YaRN's
+// factor, which turns every pair past its correction range; 0 for a rotary
+// the container scales by none.
+func ropeFactor(m *model.Model) float32 {
+	if len(m.Rope.Freqs) == 0 {
+		return 0
+	}
+	return slices.Max(m.Rope.Freqs)
 }
 
 // yarnScoreScaled reports whether the score carries mscale(8, 0.707)^2 over

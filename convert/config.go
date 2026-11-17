@@ -515,110 +515,31 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 	return c, nil
 }
 
-// ropeScalingOf reads the rotary scaling keys into c.
-//
-// YaRN's magnitude correction is folded into AttnFactor, which already scales
-// cos and sin: 0.1*ln(factor)+1, times the file's own attn_factor -- what both
-// llama.cpp (whose context setup cancels and re-applies it) and transformers
-// (attention_factor, when the config gives none) arrive at.
-//
-// A config that states attention_factor reaches the file as
-// rope.scaling.yarn_attn_factor (llama.cpp's converter writes it), and
-// transformers' _compute_yarn_parameters puts exactly that on cos and sin in
-// place of the derived magnitude, for every family here (DeepSeek's score
-// correction is separate and stays). llama.cpp's runtime reads the key for
-// grok alone and derives the magnitude for every other architecture: RULE 7m,
-// chosen -- the model's reference, which parts from llama.cpp only on a file
-// that states a factor the formula would not give.
+// ropeScalingOf reads the rotary scaling keys into c: the context the
+// rotary was trained to, and the method rope.scaling.type names by its GGUF
+// statement in rotary.json (ggufRotary), the reads of the convention its
+// class states (its yarn_magnitude) in place of the method's where it states
+// one -- the magnitude and the fields the method keeps. Its divisors are
+// stated with the file's own factors (stateGGUFRotary).
 func ropeScalingOf(f *meta.File, c *Config) error {
 	// The context the rotary was trained to: YaRN scales from it, and
 	// LongRoPE turns its long factors past it (model.RopeFor).
 	if v := f.UintKey("rope.scaling.original_context_length", 0); v > 0 {
 		c.YarnOrigCtx = uint32(v)
 	}
-	kind := ""
-	if kv, ok := f.Key("rope.scaling.type"); ok {
-		s, ok := kv.String()
-		if !ok {
-			return fmt.Errorf("rope.scaling.type is not a string")
-		}
-		kind = s
+	convention := ""
+	if c.Stated != nil {
+		convention = c.Stated.yarnMagnitude
 	}
-	factor := float32(f.FloatKey("rope.scaling.factor", 0))
-	switch kind {
-	case "", "none":
-		return nil
-	case "longrope", "su":
-		// The factors are tensors: the file's own, or the publisher's
-		// config.json's where the file dropped them (applyModelConfig).
-		return nil
-	case "linear":
-		if factor > 0 && factor != 1 {
-			c.RopeLinear = factor
-		}
-		return nil
-	case "yarn":
-		if factor <= 1 {
-			return nil
-		}
-		c.YarnFactor = factor
-		c.YarnOrigCtx = uint32(f.UintKey("rope.scaling.original_context_length", uint64(c.NCtx)))
-		c.YarnBetaFast = float32(f.FloatKey("rope.scaling.yarn_beta_fast", 32))
-		c.YarnBetaSlow = float32(f.FloatKey("rope.scaling.yarn_beta_slow", 1))
-		if !(c.YarnBetaFast > 0) || !(c.YarnBetaSlow > 0) {
-			return fmt.Errorf("rope.scaling.yarn_beta_fast %g and yarn_beta_slow %g are not a correction range",
-				c.YarnBetaFast, c.YarnBetaSlow)
-		}
-		explicit, haveExplicit := 0.0, false
-		if kv, ok := f.Key("rope.scaling.yarn_attn_factor"); ok {
-			v, ok := kv.Float()
-			if !ok || !(v > 0) || math.IsInf(v, 0) {
-				return fmt.Errorf("rope.scaling.yarn_attn_factor is not a positive number")
-			}
-			explicit, haveExplicit = v, true
-		}
-		// The stored value is the coefficient of ln(factor) itself: llama.cpp
-		// writes 0.1*mscale_all_dim here and divides by 0.1 at load, so it
-		// replaces the 0.1 rather than scaling it.
-		logMul := 0.1
-		if c.Stated.yarnMagnitude == "mscale_ratio" {
-			if haveExplicit {
-				c.AttnFactor *= float32(explicit)
-				return nil
-			}
-			yarnMscaleRatio(f, c, float64(factor))
-			return nil
-		}
-		if kv, ok := f.Key("rope.scaling.yarn_log_multiplier"); ok {
-			if v, ok := kv.Float(); ok {
-				logMul = v
-				c.YarnLogMul = float32(v)
-			}
-		}
-		// The correction reaches the softmax as well as the rotary: the score is
-		// scaled by its square (DeepSeek's softmax_scale, llama.cpp's kq_scale),
-		// which the graph applies from c.YarnLogMul.
-		//
-		// DeepSeek does not scale cos and sin at all: its reference divides
-		// yarn_get_mscale(factor, mscale) by yarn_get_mscale(factor,
-		// mscale_all_dim), and every released DeepSeek has the two equal, so the
-		// rotary is untouched and only the score takes the square. Folding it
-		// here made DeepSeek-V2-Lite generate fluent nonsense.
-		//
-		// DeepSeek V4 scales neither: transformers forces the compressed
-		// rotary's attention_factor to 1 and scores at head_dim^-1/2, and
-		// llama.cpp's builder passes an attn_factor that cancels ggml's own
-		// magnitude and a kq_scale of 1/sqrt(head_dim). Each states
-		// yarn_magnitude softmax.
-		switch {
-		case haveExplicit:
-			c.AttnFactor *= float32(explicit)
-		case c.Stated.yarnMagnitude != "softmax":
-			c.AttnFactor *= float32(logMul*math.Log(float64(factor)) + 1)
-		}
-		return nil
+	r, err := ggufRotary(f, c, convention)
+	if err != nil || r == nil {
+		return err
 	}
-	return fmt.Errorf("rope.scaling.type %q is not implemented: %w", kind, ErrNotImplemented)
+	if ok, err := r.holds(c); err != nil || !ok {
+		return err
+	}
+	_, err = r.settle(c)
+	return err
 }
 
 // allLocal is the SWAPeriod that makes every layer a sliding-window one.

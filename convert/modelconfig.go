@@ -21,10 +21,16 @@ import (
 // that names LongRoPE and carries none is refused without the option: what
 // it would run is not the model's rotary.
 func (o *options) applyModelConfig(f *meta.File, s *jlm.Source, src string) error {
-	named := false
+	lib, err := readRotary()
+	if err != nil {
+		return err
+	}
+	var named *rotaryMethod
 	if kv, ok := f.Key("rope.scaling.type"); ok {
 		v, _ := kv.String()
-		named = v == "longrope" || v == "su"
+		if m, _ := lib.method(v); m != nil && m.HF != nil && len(m.HF.Factors) > 0 {
+			named = m
+		}
 	}
 	for i := range s.Tensors {
 		if s.Tensors[i].Role == jlm.RoleRopeFactorsShort {
@@ -32,10 +38,10 @@ func (o *options) applyModelConfig(f *meta.File, s *jlm.Source, src string) erro
 		}
 	}
 	if o.modelConfig == "" {
-		if named {
-			return fmt.Errorf("convert: %s names LongRoPE and carries none of its factors (llama.cpp's converter "+
-				"writes none for this architecture): give the publisher's config.json (WithModelConfig, "+
-				"jitllm convert -config)", src)
+		if named != nil {
+			return fmt.Errorf("convert: %s names %s and carries none of its factors (a GGUF "+
+				"of this architecture holds none): give the publisher's config.json (WithModelConfig, "+
+				"jitllm convert -config)", src, named.Describe)
 		}
 		return nil
 	}
@@ -43,22 +49,59 @@ func (o *options) applyModelConfig(f *meta.File, s *jlm.Source, src string) erro
 	if err != nil {
 		return err
 	}
-	lr, err := hfLongRopeConsume(c)
+	ts, err := modelConfigFactors(c, &Config{Config: s.Config})
 	if err != nil {
 		return err
 	}
-	if lr == nil {
-		if named {
-			return fmt.Errorf("convert: %s names LongRoPE and %s states none", src, c.path)
+	if len(ts) == 0 {
+		if named != nil {
+			return fmt.Errorf("convert: %s names %s and %s states none", src, named.Describe, c.path)
 		}
 		return nil
 	}
-	ts, err := lr.state(c.path, &Config{Config: s.Config})
-	if err != nil {
-		return err
-	}
 	s.Tensors = append(s.Tensors, ts...)
 	return nil
+}
+
+// modelConfigFactors states on cfg what c's rope_scaling states by a method
+// with per-pair factor lists (rotaryMethod.Factors): the lists as
+// rope_factors_short and rope_factors_long, the magnitude and the fields the
+// method keeps. A scaling of any other method states nothing here.
+func modelConfigFactors(c *hfConfig, cfg *Config) ([]jlm.Tensor, error) {
+	if len(c.RopeScaling) == 0 || string(c.RopeScaling) == "null" {
+		return nil, nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(c.RopeScaling, &obj); err != nil {
+		return nil, fmt.Errorf("convert: %s: rope_scaling: %w", c.path, err)
+	}
+	top := map[string]any{}
+	for k, raw := range c.keys {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("convert: %s: %s: %w", c.path, k, err)
+		}
+		top[k] = v
+	}
+	r, err := rotaryScaling(cfg, obj, func(p string) any { return top[p] }, nil)
+	if errors.Is(err, ErrNotImplemented) || err == nil && (r == nil || len(r.src.Factors) == 0) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
+	ok, err := r.holds(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	ts, err := r.settle(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
+	return ts, nil
 }
 
 // modelConfigOf reads path, a config.json or the directory holding one; a

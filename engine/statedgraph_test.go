@@ -241,15 +241,7 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 		"AttnTempOffs":  func(c *jlm.Config, mc *model.Config) { c.AttnTempOffset = float32(mc.AttnTempOffs) },
 		"DeltaDecay":    func(c *jlm.Config, mc *model.Config) { c.DeltaDecay = mc.DeltaDecay },
 		"DeltaGate":     func(c *jlm.Config, mc *model.Config) { c.DeltaGate = mc.DeltaGate },
-		// Open scales a stated score scale by YaRN's correction squared.
-		"AttnScale": func(c *jlm.Config, mc *model.Config) {
-			s := mc.AttnScale
-			if c.YarnLogMul != 0 && c.YarnFactor > 1 {
-				k := float64(c.YarnLogMul)*math.Log(float64(c.YarnFactor)) + 1
-				s /= k * k
-			}
-			c.AttnScale = float32(s)
-		},
+		"AttnScale":     func(c *jlm.Config, mc *model.Config) { c.AttnScale = float32(mc.AttnScale) },
 		// A clamp's bound is the min's constant (jlm.Config.QKVAct).
 		"QKVAct": func(c *jlm.Config, mc *model.Config) {
 			c.ClampKQV = 0
