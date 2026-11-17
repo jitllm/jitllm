@@ -14,14 +14,16 @@ import (
 // mlaValueHead is the latent block's value head width (mlaPlan).
 const mlaValueHead = 128
 
+// mlaQLatent is the query's latent width, the two-step query's middle.
+const mlaQLatent = 192
+
 // mlaPlan is a latent-attention block's geometry. The widths are all different
 // and none a multiple of another (key head 96 = 64 nope + 32 rotary, value head
 // 128, latent 160), so confusing one for another cannot go unnoticed.
 func mlaPlan() *nn.LayerPlan {
 	p := &nn.LayerPlan{
 		NEmbd: 256, NHead: 4, NKVHead: 4, HeadDim: 96, NRot: 32, NFFN: 512,
-		KVLoraRank: 160, QLoraRank: 192,
-		MaxSeq: 64, RMSEps: 1e-5, AttnScale: 0.1, RopeBase: 10000,
+		KVLoraRank: 160, MaxSeq: 64, RMSEps: 1e-5, AttnScale: 0.1, RopeBase: 10000,
 	}
 	p.Graph = latentBlockGraph(p)
 	withRotary(p)
@@ -47,7 +49,7 @@ func latentBlockGraph(p *nn.LayerPlan) *graph.Graph {
 	}
 	x := b.In("x", p.NEmbd)
 	n := b.Norm(x, jlm.RoleAttnNorm, p.RMSEps)
-	q := b.MatVec(b.Norm(b.MatVec(n, jlm.RoleAttnQA, p.QLoraRank), jlm.RoleAttnQANorm, p.RMSEps), jlm.RoleAttnQB, nh*hd)
+	q := b.MatVec(b.Norm(b.MatVec(n, jlm.RoleAttnQA, mlaQLatent), jlm.RoleAttnQANorm, p.RMSEps), jlm.RoleAttnQB, nh*hd)
 	kv := b.MatVec(n, jlm.RoleAttnKVA, row)
 	latent := b.Norm(slice(kv, "latent", 0, 0, lat, lat), jlm.RoleAttnKVANorm, p.RMSEps)
 	ra := graph.Attrs{HeadDim: rot, NRot: rot, Base: p.RopeBase, Layout: graph.RopeNorm}
@@ -86,12 +88,12 @@ func mlaBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 			// The norms, the two latent ones among them, which each free walk
 			// must reach.
 			Vectors: []nn.RoleVector{{Role: jlm.RoleAttnNorm, V: f(p.NEmbd)}, {Role: jlm.RoleFFNNorm, V: f(p.NEmbd)},
-				{Role: jlm.RoleAttnQANorm, V: f(p.QLoraRank)}, {Role: jlm.RoleAttnKVANorm, V: f(p.KVLoraRank)}},
+				{Role: jlm.RoleAttnQANorm, V: f(mlaQLatent)}, {Role: jlm.RoleAttnKVANorm, V: f(p.KVLoraRank)}},
 			// No q, k or v projection: the query is two-step and kv_a serves
 			// both key and value; the two absorb banks are one sheet per HEAD.
 			Mats: []nn.RoleWeight{
 				{Role: jlm.RoleAttnOut, W: q4(p.NEmbd, p.NHead*mlaValueHead)},
-				{Role: jlm.RoleAttnQA, W: q4(p.QLoraRank, p.NEmbd)}, {Role: jlm.RoleAttnQB, W: q4(p.NHead*p.HeadDim, p.QLoraRank)},
+				{Role: jlm.RoleAttnQA, W: q4(mlaQLatent, p.NEmbd)}, {Role: jlm.RoleAttnQB, W: q4(p.NHead*p.HeadDim, mlaQLatent)},
 				{Role: jlm.RoleAttnKVA, W: q4(p.KVRow(), p.NEmbd)},
 				{Role: jlm.RoleAttnKB, W: q4(p.NHead*p.KVLoraRank, nope)},
 				{Role: jlm.RoleAttnVB, W: q4(p.NHead*mlaValueHead, p.KVLoraRank)},

@@ -1204,6 +1204,20 @@ func (g *Graph) AttendWindow() (int, bool) {
 	return 0, false
 }
 
+// ReadsRowCodes reports that a matvec of g projects a row's int8 codes
+// (ElemI8, Builder.Int8Codes): g quantizes its projections' inputs per row
+// by their absolute maximum. False for a nil graph.
+func (g *Graph) ReadsRowCodes() bool {
+	if g != nil {
+		for _, o := range g.Ops {
+			if o.Kind == OpMatVec && len(o.In) > 0 && g.Values[o.In[0]].Elem == ElemI8 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // op appends o, an output stating no rows over its first input's grid.
 func (g *Graph) op(o Op) {
 	if len(o.In) > 0 {

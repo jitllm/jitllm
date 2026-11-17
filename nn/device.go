@@ -672,8 +672,7 @@ type LayerPlan struct {
 	// that width. The value is the row's leading KVLoraRank floats, so a tier
 	// must not store K and V apart.
 	//
-	// QLoraRank is the query latent, 0 where the query is one step.
-	KVLoraRank, QLoraRank int
+	KVLoraRank int
 	// AttnScale is the score multiplier, and 0 means the ordinary
 	// 1/sqrt(HeadDim). It is carried because YaRN's magnitude correction reaches
 	// the score (DeepSeek), and because MLA takes its scores over the

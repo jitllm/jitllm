@@ -36,12 +36,6 @@ import (
 // attention.head_count_kv, and every one of those defaulted wrong yields a model
 // that loads, runs, and produces confident nonsense.
 type Config struct {
-	// TokenAct says every projection input is quantized to int8 per token
-	// by its absolute maximum, as BitNet's BitLinear does: the session's
-	// activation window is the widest row (nn.WithActWindow), so each 32-wide
-	// block of a row carries the row's one scale. A property of the graph,
-	// read from the arch.
-	TokenAct bool
 	// Pooling is how an EMBEDDING model reads its vector out of the last
 	// residual, and PoolNone for every generator. NonCausal is an encoder's
 	// attention: every position sees every other. Both come off the
@@ -167,7 +161,7 @@ type Config struct {
 	//
 	// HeadDimV is the value head's width, filled in even where the container
 	// stores zero for "same as HeadDim".
-	QLoraRank, KVLoraRank int
+	KVLoraRank int
 	// RopeTail, KeyValue, QUnitNorm and OutUnrotated are the container's
 	// attention statements (jlm.Flag2RopeTail, ...).
 	RopeTail, KeyValue, QUnitNorm, OutUnrotated bool
@@ -717,7 +711,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 
 		DeltaKeyTiled: c.Flags.Has(jlm.FlagDeltaKeyTiled),
 
-		QLoraRank:        int(c.QLoraRank),
 		RopeTail:         c.Flags2.Has(jlm.Flag2RopeTail),
 		KeyValue:         c.Flags2.Has(jlm.Flag2KeyValue),
 		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
@@ -819,7 +812,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		mscale := float64(c.YarnLogMul)*math.Log(float64(c.YarnFactor)) + 1
 		out.AttnScale *= mscale * mscale
 	}
-	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
+
 	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
 	if out.DeltaDecay == nil {
 		var err error
@@ -2630,9 +2623,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// leading four, so applying both to one block would compose wrongly.
 		linear := cfg.LayerKind(i).Recurrent()
 		mla := cfg.KVLoraRank != 0 && !linear
+		// The query projects through a latent of its own where the block
+		// stores one.
+		qLatent := c.Has(jlm.RoleAttnQA, bi, -1)
 		if mla {
 			q := bind{jlm.RoleAttnQ, &l.Wq}
-			if cfg.QLoraRank != 0 {
+			if qLatent {
 				q = bind{jlm.RoleAttnQB, &l.Wqb}
 			}
 			// The FFN triple must stay last: the mixture branch below trims it
@@ -2644,14 +2640,14 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				{jlm.RoleAttnVB, &l.Wvb},
 				{jlm.RoleAttnOut, &l.Wo},
 			}
-			if cfg.QLoraRank != 0 {
+			if qLatent {
 				head = append(head, bind{jlm.RoleAttnQA, &l.Wqa})
 			}
 			want = append(head, want[4:]...)
 		}
 		// A block storing a latent query reads q through it whatever its
 		// attention.
-		if !mla && !linear && c.Has(jlm.RoleAttnQA, bi, -1) {
+		if !mla && !linear && qLatent {
 			want[0] = bind{jlm.RoleAttnQB, &l.Wqb}
 			want = append([]bind{{jlm.RoleAttnQA, &l.Wqa}}, want...)
 		}
@@ -2830,12 +2826,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if _, err = optVec(jlm.RoleFFNSubNorm, bi); err != nil {
 			return nil, err
 		}
-		if (l.Vector(jlm.RoleAttnSubNorm) != nil || l.Vector(jlm.RoleFFNSubNorm) != nil) != cfg.TokenAct ||
-			cfg.TokenAct && (len(l.Vector(jlm.RoleAttnSubNorm)) != cfg.QDimAt(i) || len(l.Vector(jlm.RoleFFNSubNorm)) != cfg.NFFNAt(i) ||
+		if (l.Vector(jlm.RoleAttnSubNorm) != nil || l.Vector(jlm.RoleFFNSubNorm) != nil) &&
+			(len(l.Vector(jlm.RoleAttnSubNorm)) != cfg.QDimAt(i) || len(l.Vector(jlm.RoleFFNSubNorm)) != cfg.NFFNAt(i) ||
 				l.Gate.E == nil || cfg.MoEAt(i) || cfg.Parallel) {
 			return nil, fmt.Errorf("model: block %d: inner norms %d and %d wide (a gated dense FFN of %d, "+
-				"attention %d wide, per-token activations %v)", bi, len(l.Vector(jlm.RoleAttnSubNorm)), len(l.Vector(jlm.RoleFFNSubNorm)),
-				cfg.NFFNAt(i), cfg.QDimAt(i), cfg.TokenAct)
+				"attention %d wide)", bi, len(l.Vector(jlm.RoleAttnSubNorm)), len(l.Vector(jlm.RoleFFNSubNorm)),
+				cfg.NFFNAt(i), cfg.QDimAt(i))
 		}
 		if sc := l.Vector(jlm.RoleLayerOutScale); sc != nil && len(sc) != 1 {
 			return nil, fmt.Errorf("model: block %d's output scale has %d values, want 1", bi, len(sc))
@@ -3001,11 +2997,11 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		if mla {
 			// The kv latent's norm is always there; the q latent's exists only
-			// in the two-step form, which is what QLoraRank says.
+			// in the two-step form, where the block stores the latent.
 			if _, err = vec(jlm.RoleAttnKVANorm, bi); err != nil {
 				return nil, err
 			}
-			if cfg.QLoraRank != 0 {
+			if qLatent {
 				if _, err = vec(jlm.RoleAttnQANorm, bi); err != nil {
 					return nil, err
 				}
@@ -3018,7 +3014,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				want int
 			}{
 				{"attn_kv_a_norm", len(l.Vector(jlm.RoleAttnKVANorm)), cfg.KVLoraRank},
-				{"attn_q_a_norm", len(l.Vector(jlm.RoleAttnQANorm)), cfg.QLoraRank},
+				{"attn_q_a_norm", len(l.Vector(jlm.RoleAttnQANorm)), l.Wqa.Rows},
 			} {
 				if v.want != 0 && v.have != v.want {
 					return nil, fmt.Errorf("model: block %d %s is %d wide, want %d",
@@ -3440,8 +3436,9 @@ func containerShape(e *jlm.Entry) (Tensor, bool) {
 }
 
 // actWindowOf is the model's activation window (composer.ActWindow) over the
-// types of its matrices: for a model quantizing each row per token
-// (Config.TokenAct), one window over its widest row.
+// types of its matrices: for a model whose blocks quantize each row per
+// token (quantizesRows), one window over its widest row, so each 32-wide
+// block of a row carries the row's one scale.
 func (m *Model) ActWindowOf() int {
 	maxK := 0
 	var types []quant.Type
@@ -3451,10 +3448,27 @@ func (m *Model) ActWindowOf() int {
 			types = append(types, t.Typ)
 		}
 	}
-	if m.Cfg.TokenAct {
+	if m.quantizesRows() {
 		return (maxK + 31) / 32 * 32
 	}
 	return composer.ActWindow(types)
+}
+
+// quantizesRows reports that a block's stated graph projects its rows' int8
+// codes (graph.Graph.ReadsRowCodes), each graph the blocks share read once.
+func (m *Model) quantizesRows() bool {
+	of := m.Container.Config().Blocks.Of
+	read := make([]bool, len(m.Container.Config().Blocks.Graphs))
+	for li := range min(m.Cfg.NLayer, len(of)) {
+		if read[of[li]] {
+			continue
+		}
+		read[of[li]] = true
+		if g, _, _ := m.blockGraph(li); g.ReadsRowCodes() {
+			return true
+		}
+	}
+	return false
 }
 
 // specHidW is a speculation step's hidden state per row: what a prediction

@@ -375,18 +375,15 @@ func TestFrontStatesTheActivationFromTheBlocksNumbers(t *testing.T) {
 // the product of the gate and up projections before down -- to their place in
 // the graph, and forms them; a norm of the wrong width is refused.
 //
-// No container reaches this statement yet. A model stores these norms only
-// where it quantizes its projection inputs per token (model.go refuses one
-// without the other), and the front end refuses that first, by name
-// (UncoveredTokenAct), so the graph is read here with the flag taken from the
-// config. Until a later change states the quantization, no block of any model
-// is served through these norms, and no device gate runs them.
+// A model stores these norms where its graphs quantize the projections'
+// inputs per token; the graphs are stated here with the quantization taken
+// out of the container, so the norms' places are read on their own.
 func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 	m := frontModel(t, "synth-bitnet-f16.gguf")
-	if !m.Cfg.TokenAct {
+	if !quantizesRows(m) {
 		t.Fatal("the fixture does not quantize per token: this gate is about a model that does")
 	}
-	defer cfgMut(m, func(c *model.Config) { c.TokenAct = false })()
+	defer jlmMut(m, func(c *jlm.Config) { c.ActQuant = jlm.ActQuantNone })()
 	var stated []int
 	for li := range m.Cfg.NLayer {
 		if why := m.Uncovered(li); why != model.Covered {

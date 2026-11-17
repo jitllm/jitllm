@@ -259,12 +259,6 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 				c.ClampKQV = mc.QKVAct.Terms[1].Args[1].Value
 			}
 		},
-		"TokenAct": func(c *jlm.Config, mc *model.Config) {
-			c.ActQuant = jlm.ActQuantNone
-			if mc.TokenAct {
-				c.ActQuant = jlm.ActQuantRowInt8
-			}
-		},
 	}
 }
 
@@ -293,6 +287,17 @@ func windowOf(m *model.Model) int {
 		w = max(w, v)
 	}
 	return w
+}
+
+// quantizesRows reports that a block of m's graphs projects its rows' int8
+// codes: its activations are quantized per token.
+func quantizesRows(m *model.Model) bool {
+	for li := range m.Cfg.NLayer {
+		if m.Composing().BlockGraph(li).ReadsRowCodes() {
+			return true
+		}
+	}
+	return false
 }
 
 // ropesAt reports that block li's graph turns its queries and keys by a

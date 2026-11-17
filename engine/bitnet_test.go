@@ -108,7 +108,7 @@ func openBitNet(t *testing.T, name, golden string, typ quant.Type) (*model.Model
 // as the widest row.
 func bitnetSelected(m *model.Model, typ quant.Type) bool {
 	c := m.Cfg
-	if !c.TokenAct || !m.Container.Config().Flags.Has(jlm.FlagReLU2) || !c.RopeNeox || !c.TiedEmbd {
+	if !quantizesRows(m) || !m.Container.Config().Flags.Has(jlm.FlagReLU2) || !c.RopeNeox || !c.TiedEmbd {
 		return false
 	}
 	for i := range m.Layers {
@@ -190,8 +190,8 @@ func bitnetViolations() []c6Violation {
 		{"NORM rotary", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
 		{"activations per 32, not per token", func(m *model.Model) func() {
 			// The window a projection's activations are quantized over is
-			// the model's, fixed at Open from the flag: it moves with it.
-			undo := cfgMut(m, func(c *model.Config) { c.TokenAct = false })
+			// the model's, fixed at Open from its graphs: it moves with them.
+			undo := jlmMut(m, func(c *jlm.Config) { c.ActQuant = jlm.ActQuantNone })
 			was := m.ActWindow
 			m.ActWindow = m.ActWindowOf()
 			return func() { m.ActWindow = was; undo() }

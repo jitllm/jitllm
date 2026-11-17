@@ -1977,7 +1977,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.HistRow = historyRow(s.m.Composing(), plan.Graph)
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
 	if c.MLA() {
-		plan.KVLoraRank, plan.QLoraRank = c.KVLoraRank, c.QLoraRank
+		plan.KVLoraRank = c.KVLoraRank
 	}
 	// The mixture is a property of the block: DeepSeek's dense lead blocks
 	// (Config.MoEAt) must not carry the model-wide expert counts.
