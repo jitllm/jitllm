@@ -50,7 +50,7 @@ func nemotronhFixtures() []struct {
 				ok = ok && c.LayerKind(i).Recurrent() == want.rec && c.MoEAt(i) == want.moe && l.NoFFN == !want.moe
 				if want.moe {
 					ok = ok && l.UngatedExp && l.Gate.E == nil && l.Up.E != nil && l.Vector(jlm.RoleExpProbsB) != nil &&
-						l.ShGate.E == nil && l.ShUp.E != nil && l.Vector(jlm.RoleShRouter) == nil
+						l.Matrix(jlm.RoleShExpGate) == nil && l.Matrix(jlm.RoleShExpUp) != nil && l.Vector(jlm.RoleShRouter) == nil
 				}
 			}
 			return ok

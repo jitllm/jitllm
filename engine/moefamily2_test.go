@@ -35,7 +35,7 @@ func moe2Fixtures() []struct {
 				c.NFFNShExp == int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd &&
 				dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
-				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
+				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.Matrix(jlm.RoleShExpGate) != nil &&
 				moe.Vector(jlm.RoleShRouter) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil && moe.Vector(jlm.RoleAttnKNorm) != nil &&
 				moe.Vector(jlm.RoleAttnQBias) == nil && moe.Vector(jlm.RoleAttnKBias) == nil && moe.Vector(jlm.RoleAttnVBias) == nil && moe.Vector(jlm.RoleAttnOutBias) == nil &&
 				moe.Wq.E != nil && moe.Wk.E != nil && moe.Wv.E != nil
@@ -48,7 +48,7 @@ func moe2Fixtures() []struct {
 				c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) &&
 				c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
 				windowOf(m) == 0 && dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil &&
-				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.ShGate.E != nil &&
+				moe.Matrix(jlm.RoleRouter) != nil && len(moe.Vector(jlm.RoleExpProbsB)) == c.NExpert && moe.Matrix(jlm.RoleShExpGate) != nil &&
 				moe.Vector(jlm.RoleShRouter) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil && moe.Vector(jlm.RoleAttnKNorm) != nil &&
 				moe.Vector(jlm.RoleAttnQBias) == nil && moe.Vector(jlm.RoleAttnKBias) == nil && moe.Vector(jlm.RoleAttnVBias) == nil && moe.Vector(jlm.RoleAttnOutBias) == nil
 		}},
@@ -62,7 +62,7 @@ func moe2Fixtures() []struct {
 				len(m.Rope.Freqs) == c.NRot/2 && m.Vector(jlm.RoleOutputBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 			for i := range m.Layers {
 				l = &m.Layers[i]
-				ok = ok && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E == nil &&
+				ok = ok && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.Matrix(jlm.RoleShExpGate) == nil &&
 					l.Vector(jlm.RoleAttnNormBias) != nil && l.Vector(jlm.RoleFFNNormBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil
 			}
 			return ok

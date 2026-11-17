@@ -165,8 +165,9 @@ func frontModel(t *testing.T, file string) *model.Model {
 // TestFrontRefusesWhatItDropsFromABlock is the gate against a stated graph
 // that does not describe its block: a tensor the block stores and the graph
 // does not bind is refused by name, and so is one the graph binds and the
-// block does not store, rather than either given a graph that computes
-// something else.
+// block does not store, and one stored at another shape than the graph binds
+// (a norm or a bias of the wrong length would run, onto a neighbour's rows),
+// rather than any given a graph that computes something else.
 func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 	m := frontModel(t, "Qwen3-0.6B-Q8_0.gguf")
 	if len(m.Container.Config().Blocks.Of) == 0 {
@@ -182,6 +183,8 @@ func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 			model.UncoveredUnbound, jlm.RolePostAttnNorm},
 		{"a tensor it binds and the block does not store", func(inv map[jlm.Role]graph.Shape) { delete(inv, jlm.RoleAttnK) },
 			model.UncoveredUnverified, jlm.RoleAttnK},
+		{"a tensor stored at a shape it does not bind", func(inv map[jlm.Role]graph.Shape) { inv[jlm.RoleAttnNorm] = graph.Shape{K: m.Cfg.NEmbd + 1} },
+			model.UncoveredUnverified, jlm.RoleAttnNorm},
 	} {
 		undo := restateInventory(m, c.inv)
 		why, err := m.Uncovered(0), m.UncoveredErr(0)

@@ -94,7 +94,7 @@ func gemma4Fixtures() []struct {
 				c.NExpertUsed == 2 && int(m.Container.Config().NFFNExp) == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && c.MoEAt(i) && matRows(l, jlm.RoleRouter) == c.NExpert && l.ShGate.Rows == c.NFFN &&
+				ok = ok && c.MoEAt(i) && matRows(l, jlm.RoleRouter) == c.NExpert && matrixRows(l, jlm.RoleShExpGate) == c.NFFN &&
 					l.Vector(jlm.RoleShRouter) == nil && len(l.Vector(jlm.RoleExpScale)) == c.NExpert && len(l.Vector(jlm.RoleRouterNorm)) == c.NEmbd &&
 					l.Vector(jlm.RoleFFNNorm2) != nil && l.Vector(jlm.RolePostFFNNorm1) != nil && l.Vector(jlm.RolePostFFNNorm2) != nil
 			}

@@ -893,13 +893,6 @@ type Layer struct {
 	// global layers): wv is unbound and every path copies k's projection
 	// before k's norm and rotary run.
 	VFromK bool
-	// Multi-head Latent Attention, all nil unless Config.KVLoraRank is set.
-	// wq is then the one-step query (DeepSeek-V2-Lite, q_lora_rank null) and
-	// wqa/wqb the two-step one; exactly one of those is populated.
-	//
-	// wkb and wvb are banks, one sheet per head, read through bankExpert as an
-	// expert bank is, so the absorb runs as a single gather.
-	Wqa, Wqb, Wkva, Wkb, Wvb Tensor
 	// banksFrom is what the expert banks spanned when their views were last
 	// cut: bindPacked re-cuts only when a bank moved, since a cut is a fresh
 	// nn.Packed per view and a resident block is rebound every token.
@@ -911,10 +904,6 @@ type Layer struct {
 	// ungatedExp is a mixture whose experts have no gate bank (Nemotron 3):
 	// each is down(act(up(h))), the activation alone, as an ungated FFN is.
 	UngatedExp bool
-
-	// The shared expert runs for every token beside the routed ones; its
-	// gate, where it has one, is a vector in vecs.
-	ShGate, ShUp, ShDown Tensor
 
 	// noFFN is a block that is its mixer alone: plain Mamba-2's, and a
 	// Nemotron-H mixer layer not followed by an MLP. It ends at the first
@@ -2524,9 +2513,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		l := &m.Layers[e.Block]
 		l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: v})
 	}
-	// bind names one tensor a layer must have. It is a named type rather than
-	// an anonymous struct so a hybrid can substitute the attention four for the
-	// recurrent four without restating the literal.
+	// bind names one tensor a layer reads by name.
 	type bind = struct {
 		role jlm.Role
 		dst  *Tensor
@@ -2538,68 +2525,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		l := &m.Layers[i]
 		cur = l
 		bi := int32(i)
-		want := []bind{
-			{jlm.RoleAttnQ, &l.Wq}, {jlm.RoleAttnK, &l.Wk},
-			{jlm.RoleAttnV, &l.Wv}, {jlm.RoleAttnOut, &l.Wo},
-			{jlm.RoleFFNGate, &l.Gate}, {jlm.RoleFFNUp, &l.Up},
-			{jlm.RoleFFNDown, &l.Down},
-		}
-		// A linear layer (per the layer map) replaces the four attention
-		// bindings with its own; MLA (a whole-model property, from KVLoraRank)
-		// replaces them with five. The two are mutually exclusive per block:
-		// Kimi-Linear has both kinds, and each branch trims the original
-		// leading four, so applying both to one block would compose wrongly.
-		linear := cfg.LayerKind(i).Recurrent()
-		mla := cfg.KVLoraRank != 0 && !linear
-		// The query projects through a latent of its own where the block
-		// stores one.
-		qLatent := c.Has(jlm.RoleAttnQA, bi, -1)
-		if mla {
-			q := bind{jlm.RoleAttnQ, &l.Wq}
-			if qLatent {
-				q = bind{jlm.RoleAttnQB, &l.Wqb}
-			}
-			// The FFN triple must stay last: the mixture branch below trims it
-			// with want[:len(want)-3].
-			head := []bind{
-				q,
-				{jlm.RoleAttnKVA, &l.Wkva},
-				{jlm.RoleAttnKB, &l.Wkb},
-				{jlm.RoleAttnVB, &l.Wvb},
-				{jlm.RoleAttnOut, &l.Wo},
-			}
-			if qLatent {
-				head = append(head, bind{jlm.RoleAttnQA, &l.Wqa})
-			}
-			want = append(head, want[4:]...)
-		}
-		// A block storing a latent query reads q through it whatever its
-		// attention.
-		if !mla && !linear && qLatent {
-			want[0] = bind{jlm.RoleAttnQB, &l.Wqb}
-			want = append([]bind{{jlm.RoleAttnQA, &l.Wqa}}, want...)
-		}
-		// A recurrent block's mixer is whatever else it stores, bound with
-		// the block's other matrices below; one that attends as well keeps
-		// the attention four.
-		if linear && !cfg.LayerKind(i).Attends() {
-			want = want[4:]
-		}
-		// A block with no FFN at all (no up projection and no mixture) is its
-		// mixer alone; the FFN triple and its norm are not bound.
-		if !cfg.MoEAt(i) && !c.Has(jlm.RoleFFNUp, bi, -1) && !c.Has(jlm.RoleFFNDown, bi, -1) {
-			l.NoFFN = true
-			want = want[:len(want)-3]
-		}
-		// There is no fused qkv or gate/up in a container: convert.unfuse
-		// splits phi3's while the bytes are still row-major. A packed tensor
-		// has no byte range per row.
+		// A block binds what it stores, each matrix under its role: its
+		// stated graph names what it reads, and Open holds the graph to the
+		// store (graph.Verify, graph.Unbound). Named here is what code reads
+		// by name: the attention four and the FFN triple, a mixture's three
+		// banks in the triple's place.
+		ffn := []bind{{jlm.RoleFFNGate, &l.Gate}, {jlm.RoleFFNUp, &l.Up}, {jlm.RoleFFNDown, &l.Down}}
 		if cfg.MoEAt(i) {
-			// The dense FFN triple becomes a router plus three expert banks,
-			// each one 3-D and holding every expert. Loaded in their own loop
-			// rather than appended to want, so nothing about the attention
-			// tensors above can be skipped by getting this branch wrong.
-			want = want[:len(want)-3]
 			// Every bank is stacked at conversion (convert.stackGGUFExperts, a
 			// bank of mixed types as F32): experts one tensor each are a
 			// container written before that.
@@ -2607,205 +2539,23 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				return nil, fmt.Errorf("model: block %d stores its experts one tensor each, as converters "+
 					"before banks of mixed types did: re-convert the model (jitllm convert)", bi)
 			}
-			specs := []struct {
-				role jlm.Role
-				dst  *Tensor
-			}{
-				{jlm.RoleRouter, new(Tensor)},
-				{jlm.RoleExpGateBank, &l.Gate},
-				{jlm.RoleExpUpBank, &l.Up},
-				{jlm.RoleExpDownBank, &l.Down},
-			}
-			// Experts with no gate bank are ungated: down(act(up(h))), the
-			// activation an ungated kind (Nemotron 3's squared ReLU).
-			if !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1) {
-				l.UngatedExp = true
-				specs = slices.Delete(specs, 1, 2)
-			}
-			for _, spec := range specs {
-				if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
-					return nil, err
-				}
-			}
-			// A model has a shared expert if the container carries its
-			// tensors.
-			// An ungated one (Nemotron 3) has up and down and no gate.
-			if c.Has(jlm.RoleShExpGate, bi, -1) || c.Has(jlm.RoleShExpUp, bi, -1) {
-				for _, spec := range []struct {
-					role jlm.Role
-					dst  *Tensor
-				}{
-					{jlm.RoleShExpGate, &l.ShGate},
-					{jlm.RoleShExpUp, &l.ShUp},
-					{jlm.RoleShExpDown, &l.ShDown},
-				} {
-					if spec.role == jlm.RoleShExpGate && !c.Has(jlm.RoleShExpGate, bi, -1) {
-						continue
-					}
-					if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
-						return nil, err
-					}
-				}
-				// Optional: DeepSeek's shared expert has no gate. See
-				// sharedExpert for why an absent one is weight 1 and not
-				// sigma(0).
-				if _, err = optVec(jlm.RoleShRouter, bi); err != nil {
-					return nil, err
-				}
-				if l.Vector(jlm.RoleShRouter) != nil && len(l.Vector(jlm.RoleShRouter)) != cfg.NEmbd {
-					return nil, fmt.Errorf("model: block %d shared-expert gate is %d wide, want %d",
-						bi, len(l.Vector(jlm.RoleShRouter)), cfg.NEmbd)
-				}
-			}
+			ffn = []bind{{jlm.RoleExpGateBank, &l.Gate}, {jlm.RoleExpUpBank, &l.Up}, {jlm.RoleExpDownBank, &l.Down}}
 		}
-		for _, spec := range want {
-			// A KV-sharing block has no k or v projection: it attends to an
-			// earlier block's history (Config.KVShared).
-			if cfg.KVShared(i) && (spec.role == jlm.RoleAttnK || spec.role == jlm.RoleAttnV) {
+		named := append([]bind{{jlm.RoleAttnQ, &l.Wq}, {jlm.RoleAttnK, &l.Wk}, {jlm.RoleAttnV, &l.Wv},
+			{jlm.RoleAttnOut, &l.Wo}}, ffn...)
+		for _, b := range named {
+			if !c.Has(b.role, bi, -1) {
 				continue
 			}
-			// An ungated FFN is one without a gate tensor (starcoder, phi-2,
-			// falcon, nemotron): up, the activation, down.
-			if spec.role == jlm.RoleFFNGate && !c.Has(jlm.RoleFFNGate, bi, -1) &&
-				c.Has(jlm.RoleFFNUp, bi, -1) {
-				continue
-			}
-			// Gemma 4's global layers have no v projection
-			// (attention_k_eq_v): v is k's projection, before k's norm and
-			// rotary, under v's own weightless norm. Only a model that norms v
-			// may omit it; anywhere else an absent v is a broken file.
-			if spec.role == jlm.RoleAttnV && cfg.VNorm && !c.Has(jlm.RoleAttnV, bi, -1) &&
-				c.Has(jlm.RoleAttnK, bi, -1) {
-				l.VFromK = true
-				continue
-			}
-			// A container stating its key as its value stores no v.
-			if spec.role == jlm.RoleAttnV && cfg.KeyValue && !c.Has(jlm.RoleAttnV, bi, -1) {
-				continue
-			}
-			if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
+			if err = getTo(b.dst, b.role, bi, -1); err != nil {
 				return nil, err
 			}
 		}
-		// A post-norm block (OLMo 2, EXAONE 4) has no pre-norms at all: each
-		// branch reads the residual as it is and normalises its output instead.
-		// A block stores the pre-norms it has: none on a post-norm block (OLMo
-		// 2's, an encoder's norms after each residual add), no FFN norm on a
-		// parallel block sharing one; the front end states the norms stored.
-		attnNormB, ffnNormB := l.Vector(jlm.RoleAttnNormBias), l.Vector(jlm.RoleFFNNormBias)
-		if (attnNormB != nil || ffnNormB != nil) && !cfg.at(i).LayerNorm {
-			return nil, fmt.Errorf("model: block %d has a norm bias on an RMSNorm model", bi)
-		}
-		if ffnNormB != nil && l.Vector(jlm.RoleFFNNorm) == nil {
-			return nil, fmt.Errorf("model: block %d has an FFN norm bias and no FFN norm", bi)
-		}
-		// FFN biases belong only to a dense ungated FFN; a mixture's are the
-		// experts' own (RoleExpUpBias). Refused rather than guessed.
-		if (l.Vector(jlm.RoleFFNUpBias) != nil || l.Vector(jlm.RoleFFNDownBias) != nil) && (l.Gate.E != nil || cfg.MoEAt(i)) {
-			return nil, fmt.Errorf("model: block %d carries FFN biases on a gated or mixture FFN", bi)
-		}
-		// gemma2/gemma3's post-norms, when the file carries them.
-		if _, err = optVec(jlm.RolePostAttnNorm, bi); err != nil {
-			return nil, err
-		}
-		// BitNet's two inner norms: both on every block of a BitNet, and on
-		// no other model, each as wide as what it normalises.
-		if _, err = optVec(jlm.RoleAttnSubNorm, bi); err != nil {
-			return nil, err
-		}
-		if _, err = optVec(jlm.RoleFFNSubNorm, bi); err != nil {
-			return nil, err
-		}
-		if (l.Vector(jlm.RoleAttnSubNorm) != nil || l.Vector(jlm.RoleFFNSubNorm) != nil) &&
-			(len(l.Vector(jlm.RoleAttnSubNorm)) != cfg.QDimAt(i) || len(l.Vector(jlm.RoleFFNSubNorm)) != cfg.NFFNAt(i) ||
-				l.Gate.E == nil || cfg.MoEAt(i) || cfg.Parallel) {
-			return nil, fmt.Errorf("model: block %d: inner norms %d and %d wide (a gated dense FFN of %d, "+
-				"attention %d wide)", bi, len(l.Vector(jlm.RoleAttnSubNorm)), len(l.Vector(jlm.RoleFFNSubNorm)),
-				cfg.NFFNAt(i), cfg.QDimAt(i))
-		}
-		if sc := l.Vector(jlm.RoleLayerOutScale); sc != nil && len(sc) != 1 {
-			return nil, fmt.Errorf("model: block %d's output scale has %d values, want 1", bi, len(sc))
-		}
-		if _, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
-			return nil, err
-		}
-		if f := cfg.NFFNAt(i); !cfg.MoEAt(i) && l.Down.K != 0 && (l.Down.K != f || l.Up.Rows != f) {
-			return nil, fmt.Errorf("model: block %d's FFN is %d wide (up %d), want %d", bi, l.Down.K,
-				l.Up.Rows, f)
-		}
-		// A mixture block whose experts read a pre-norm of their own runs a
-		// dense MLP beside them, each branch with its norms.
-		if cfg.MoEAt(i) && l.Vector(jlm.RoleFFNNorm2) != nil {
-			for _, v := range []struct {
-				role jlm.Role
-				want int
-			}{
-				{jlm.RoleFFNNorm2, cfg.NEmbd},
-				{jlm.RolePostFFNNorm1, cfg.NEmbd},
-				{jlm.RolePostFFNNorm2, cfg.NEmbd},
-				{jlm.RoleRouterNorm, cfg.NEmbd},
-				{jlm.RoleExpScale, cfg.NExpert},
-			} {
-				if got := l.Vector(v.role); len(got) != v.want {
-					return nil, fmt.Errorf("model: block %d %s has %d values, want %d",
-						bi, v.role, len(got), v.want)
-				}
-			}
-			if l.Vector(jlm.RolePostFFNNorm) == nil || l.Vector(jlm.RoleFFNNorm) == nil {
-				return nil, fmt.Errorf("model: block %d is a dense-and-mixture block with no "+
-					"ffn_norm or post_ffw_norm", bi)
-			}
-		}
-		// A bias of the wrong length would still run, landing on a neighbour's
-		// rows, so the lengths are checked here.
-		for _, b := range []struct {
-			name string
-			v    []float32
-			want int
-		}{
-			{"attn_sinks", l.Vector(jlm.RoleAttnSinks), cfg.NHeadAt(i)},
-			{"router bias", l.Vector(jlm.RoleRouterBias), cfg.NExpert},
-			{"expert selection bias", l.Vector(jlm.RoleExpProbsB), cfg.NExpert},
-			{"expert gate bias", l.Vector(jlm.RoleExpGateBias), l.Up.Rows},
-			{"expert up bias", l.Vector(jlm.RoleExpUpBias), l.Up.Rows},
-			{"expert down bias", l.Vector(jlm.RoleExpDownBias), cfg.NExpert * cfg.NEmbd},
-			{"attn_norm bias", attnNormB, cfg.NEmbd},
-			{"ffn_norm bias", ffnNormB, cfg.NEmbd},
-			{"ffn_up bias", l.Vector(jlm.RoleFFNUpBias), cfg.NFFNAt(i)},
-			{"ffn_down bias", l.Vector(jlm.RoleFFNDownBias), cfg.NEmbd},
-		} {
-			if b.v != nil && len(b.v) != b.want {
-				return nil, fmt.Errorf("model: block %d %s has %d values, want %d",
-					bi, b.name, len(b.v), b.want)
-			}
-		}
-		if mla {
-			// The kv latent's norm is always there; the q latent's exists only
-			// in the two-step form, where the block stores the latent.
-			if _, err = vec(jlm.RoleAttnKVANorm, bi); err != nil {
-				return nil, err
-			}
-			if qLatent {
-				if _, err = vec(jlm.RoleAttnQANorm, bi); err != nil {
-					return nil, err
-				}
-			}
-			// A norm of the wrong length would still run, so both latent
-			// norms are checked.
-			for _, v := range []struct {
-				name string
-				have int
-				want int
-			}{
-				{"attn_kv_a_norm", len(l.Vector(jlm.RoleAttnKVANorm)), cfg.KVLoraRank},
-				{"attn_q_a_norm", len(l.Vector(jlm.RoleAttnQANorm)), l.Wqa.Rows},
-			} {
-				if v.want != 0 && v.have != v.want {
-					return nil, fmt.Errorf("model: block %d %s is %d wide, want %d",
-						bi, v.name, v.have, v.want)
-				}
-			}
-		}
+		// What the block stores says how it runs: no FFN at all, experts
+		// with no gate bank, v as k's projection under v's own norm.
+		l.NoFFN = !cfg.MoEAt(i) && !c.Has(jlm.RoleFFNUp, bi, -1) && !c.Has(jlm.RoleFFNDown, bi, -1)
+		l.UngatedExp = cfg.MoEAt(i) && !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1)
+		l.VFromK = cfg.VNorm && !c.Has(jlm.RoleAttnV, bi, -1) && c.Has(jlm.RoleAttnK, bi, -1)
 		// Every other matrix the block stores is loaded under its role, a
 		// tensor of the block's own: what a stated graph binds that no field
 		// above names.
