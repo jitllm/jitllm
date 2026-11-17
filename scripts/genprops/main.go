@@ -1,4 +1,4 @@
-// Command genprops generates grammar/unicodeprops.go, the code points every
+// Command genprops generates internal/uniprop/tables.go, the code points every
 // Unicode property escape of an ECMA-262 pattern names (\p{...}), from the
 // Unicode Character Database of the version it is given.
 //
@@ -247,15 +247,15 @@ func main() {
 //
 // Source: the Unicode Character Database, %s (unicode.org/Public/%s/ucd).
 
-package grammar
+package uniprop
 
-// propsVersion is the Unicode version a property escape reads.
-const propsVersion = %q
+// Version is the Unicode version a property escape reads.
+const Version = %q
 
-// propRanges is the code points key holds (propKey's), as unsigned varint
+// Ranges is the code points key holds (Key's), as unsigned varint
 // pairs in base64: each span's distance past the last one's end and its
 // length less one; "" for a key that names nothing.
-func propRanges(key string) string {
+func Ranges(key string) string {
 	switch key {
 `, version, version, version)
 	for _, k := range slices.Sorted(maps.Keys(sets)) {
@@ -265,11 +265,11 @@ func propRanges(key string) string {
 	return ""
 }
 
-// propKey is the key the property of an escape names: kind is gc, sc or scx
+// Key is the key the property of an escape names: kind is gc, sc or scx
 // for a name=value escape, or "" for a lone name -- a general category or a
 // binary property -- and name the value or the lone name as spelled, any of
 // its aliases. "" where it names none.
-func propKey(kind, name string) string {
+func Key(kind, name string) string {
 	switch kind + "|" + name {
 `)
 	for _, k := range slices.Sorted(maps.Keys(keys)) {
@@ -279,8 +279,8 @@ func propKey(kind, name string) string {
 	return ""
 }
 
-// propKind is the kind a name=value escape's name spells, "" for none.
-func propKind(name string) string {
+// KindOf is the kind a name=value escape's name spells, "" for none.
+func KindOf(name string) string {
 	switch name {
 `)
 	for _, k := range []string{"gc", "sc", "scx"} {
@@ -338,7 +338,7 @@ func totals(path string, key func(string) string, into map[string]int) {
 	})
 }
 
-// encode is set's spans as propRanges states them.
+// encode is set's spans as Ranges states them.
 func encode(set bits) string {
 	var out []byte
 	next := 0

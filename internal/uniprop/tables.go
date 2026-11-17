@@ -2,15 +2,15 @@
 //
 // Source: the Unicode Character Database, 15.1.0 (unicode.org/Public/15.1.0/ucd).
 
-package grammar
+package uniprop
 
-// propsVersion is the Unicode version a property escape reads.
-const propsVersion = "15.1.0"
+// Version is the Unicode version a property escape reads.
+const Version = "15.1.0"
 
-// propRanges is the code points key holds (propKey's), as unsigned varint
+// Ranges is the code points key holds (Key's), as unsigned varint
 // pairs in base64: each span's distance past the last one's end and its
 // length less one; "" for a key that names nothing.
-func propRanges(key string) string {
+func Ranges(key string) string {
 	switch key {
 	case "ASCII":
 		return "AH8="
@@ -858,11 +858,11 @@ func propRanges(key string) string {
 	return ""
 }
 
-// propKey is the key the property of an escape names: kind is gc, sc or scx
+// Key is the key the property of an escape names: kind is gc, sc or scx
 // for a name=value escape, or "" for a lone name -- a general category or a
 // binary property -- and name the value or the lone name as spelled, any of
 // its aliases. "" where it names none.
-func propKey(kind, name string) string {
+func Key(kind, name string) string {
 	switch kind + "|" + name {
 	case "gc|C":
 		return "gc=C"
@@ -2682,8 +2682,8 @@ func propKey(kind, name string) string {
 	return ""
 }
 
-// propKind is the kind a name=value escape's name spells, "" for none.
-func propKind(name string) string {
+// KindOf is the kind a name=value escape's name spells, "" for none.
+func KindOf(name string) string {
 	switch name {
 	case "General_Category", "gc":
 		return "gc"

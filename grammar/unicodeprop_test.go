@@ -3,6 +3,7 @@ package grammar
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/uniprop"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -23,8 +24,8 @@ func setSize(s runeSet) int {
 // names it does not: a script as a lone name, a property it does not list, a
 // name in the wrong case.
 func TestPropertyEscapesReadTheTokenizersUnicode(t *testing.T) {
-	if propsVersion != tok.UnicodeVersion {
-		t.Fatalf("the property tables are Unicode %s, the tokenizer's %s", propsVersion, tok.UnicodeVersion)
+	if uniprop.Version != tok.UnicodeVersion {
+		t.Fatalf("the property tables are Unicode %s, the tokenizer's %s", uniprop.Version, tok.UnicodeVersion)
 	}
 	for body, want := range map[string]int{
 		"Lu": 1831, "Ll": 2233, "Lo": 132234, "Nd": 680, "Cn": 824718, "Zs": 17, "Sm": 948,
