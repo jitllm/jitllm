@@ -104,7 +104,7 @@ func checkPack(t *testing.T, q layout.Quant, g quant.Type, name string, w []byte
 				// is a quarter the length, so a narrow index would read past it.
 				dword = dw[sup*((nrows+3)/4)+r/4]
 				d = float64(math.Float32frombits(uint32(uint8(dword>>(8*uint(r%4)))) << 23))
-			case perSuper == 1:
+			case perSuper == 1 && !biasArr:
 				// Two rows to a word on the narrow formats, low half first; the
 				// plane is half the length, so the wide index would go out of range.
 				dword = dw[sup*((nrows+1)/2)+r/2]
@@ -113,6 +113,8 @@ func checkPack(t *testing.T, q layout.Quant, g quant.Type, name string, w []byte
 				}
 				d = float64(layout.F16(uint16(dword)))
 			default:
+				// A minimum beside the scale (Q5_1's, a k-quant's) takes the
+				// whole word: d low, dmin high.
 				dword = dw[sup*nrows+r]
 				d = float64(layout.F16(uint16(dword)))
 				dmin = float64(layout.F16(uint16(dword >> 16)))
@@ -146,6 +148,9 @@ func checkPack(t *testing.T, q layout.Quant, g quant.Type, name string, w []byte
 					mi := int((w >> (base + 8)) & 0xFF)
 					bias = dmin * float64(mi)
 				}
+			} else if biasArr {
+				// Q5_1: the block's minimum, stored negated as dmin, at m one.
+				bias = dmin
 			}
 			if !biasArr {
 				bias = float64(biasK) * sc
