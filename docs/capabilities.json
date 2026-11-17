@@ -754,12 +754,12 @@
           {
             "name": "presence_penalty",
             "type": "number",
-            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
+            "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
           },
           {
             "name": "frequency_penalty",
             "type": "number",
-            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
+            "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
           },
           {
             "name": "seed",
@@ -909,12 +909,12 @@
           {
             "name": "presence_penalty",
             "type": "number",
-            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
+            "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
           },
           {
             "name": "frequency_penalty",
             "type": "number",
-            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
+            "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
           },
           {
             "name": "seed",
@@ -1083,7 +1083,7 @@
           "POST"
         ],
         "surface": "llamacpp",
-        "note": "llama.cpp's /completion: prompt as a string, token ids or both mixed; streams with stream:true; fields the sampler lacks are refused by name"
+        "note": "prompt as a string, token ids or both mixed; streams with stream:true; fields the sampler lacks are refused by name"
       },
       {
         "path": "/infill",
@@ -1091,7 +1091,7 @@
           "POST"
         ],
         "surface": "llamacpp",
-        "note": "llama.cpp's /infill, for a model with fill-in-the-middle tokens"
+        "note": "for a model with fill-in-the-middle tokens"
       },
       {
         "path": "/tokenize",
@@ -1123,7 +1123,7 @@
           "POST"
         ],
         "surface": "llamacpp",
-        "note": "an embedding model only; llama.cpp's reply shape, normalised as embd_normalize asks (L2 by default)"
+        "note": "an embedding model only; the surface's reply shape, normalised as embd_normalize asks (L2 by default)"
       },
       {
         "path": "/embeddings",
@@ -1131,7 +1131,7 @@
           "POST"
         ],
         "surface": "llamacpp",
-        "note": "/embedding's handler, as llama-server serves both"
+        "note": "/embedding's handler under its second path"
       },
       {
         "path": "/models",
@@ -1139,7 +1139,7 @@
           "GET"
         ],
         "surface": "llamacpp",
-        "note": "/v1/models' list, as llama-server serves both"
+        "note": "/v1/models' list under the surface's path"
       },
       {
         "path": "/props",
@@ -1148,7 +1148,7 @@
           "POST"
         ],
         "surface": "llamacpp",
-        "note": "read only; POST answers 501 as llama-server does without --props"
+        "note": "read only; POST answers 501"
       },
       {
         "path": "/slots",
@@ -1255,7 +1255,7 @@
           "GET"
         ],
         "surface": "jitllm",
-        "note": "llama-server's shape: {\"status\": \"ok\"}"
+        "note": "{\"status\": \"ok\"}"
       },
       {
         "path": "/v1/health",

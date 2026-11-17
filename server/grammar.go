@@ -225,8 +225,8 @@ func (lm *LoadedModel) toolStream(o GenerateOptions) (*model.ToolStream, error) 
 
 // logitBias is a request's logit bias as a row over the model's logits:
 // each entry's bias at its token, or at every token its text encodes to
-// without specials, summed where entries meet, as llama.cpp's sampler adds
-// them one after another. A token outside the vocabulary is refused.
+// without specials, summed where entries meet, as entries added one after
+// another are. A token outside the vocabulary is refused.
 func (lm *LoadedModel) logitBias(bs []TokenBias) ([]float32, error) {
 	n := lm.m.Cfg.NVocab
 	row := make([]float32, n)

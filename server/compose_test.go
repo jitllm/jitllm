@@ -12,7 +12,7 @@ import (
 )
 
 // TestGrammarComposesWithLogprobsAndChoices: logprobs on a constrained reply
-// are the raw distribution's (vLLM's default), so a token the grammar forces
+// are the raw distribution's, so a token the grammar forces
 // keeps the log-probability the model gave it rather than 0; n choices are
 // each held to the grammar; and speculation with n gives every choice
 // refused by name.

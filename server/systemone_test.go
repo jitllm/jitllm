@@ -19,8 +19,8 @@ import (
 // TestSystemOneMatchesTheEngine posts a /v1/systemone request to a decision
 // model the server loaded and holds the body to what the engine's own
 // Decider writes for the same request, byte for byte; a text model is
-// refused by name. llama.cpp's goldens hold the Decider itself
-// (engine.TestDecisionMatchesLlamaCpp).
+// refused by name. engine.TestDecisionMatchesLlamaCpp's goldens hold the
+// Decider itself.
 func TestSystemOneMatchesTheEngine(t *testing.T) {
 	path := testmodels.Path(filepath.Join("openjev", "tinyopenjev-for-testing-Q8_0.jlm"))
 	fresh.Must(t, path)

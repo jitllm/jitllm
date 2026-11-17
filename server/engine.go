@@ -1683,7 +1683,7 @@ type Prompt struct {
 	Kind PromptKind
 	Text string
 	// Images is a PromptText's pictures, each standing where Text holds
-	// Marker, in order (llama-server's multimodal prompt): the model's
+	// Marker, in order (/completion's multimodal prompt): the model's
 	// leading specials come first, then the text with its special tokens
 	// parsed and the pictures wrapped in the markers the container states
 	// (textPictureSpans).
@@ -1708,14 +1708,14 @@ type GenerateOptions struct {
 	MaxTokens int
 	// PredictTime, when set, ends the reply at its first token whose text
 	// holds a newline once this long has passed since decoding began, as
-	// FinishMaxTokens: llama-server's t_max_predict_ms.
+	// FinishMaxTokens: /completion's t_max_predict_ms.
 	PredictTime time.Duration
 	// MinIndent, when set, ends the reply at a line past its first newline
 	// that starts with fewer than MinIndent spaces or tabs before its first
-	// other character, as FinishMaxTokens: llama-server's n_indent.
+	// other character, as FinishMaxTokens: /completion's n_indent.
 	MinIndent int
 	// Progress asks for an EventProgress when the prompt begins, at each
-	// chunk's start after it and when the prompt is in: llama-server's
+	// chunk's start after it and when the prompt is in: /completion's
 	// return_progress.
 	Progress     bool
 	Sampling     *engine.Sampler
@@ -1724,9 +1724,9 @@ type GenerateOptions struct {
 	Echo         bool
 	QueueTimeout time.Duration
 	// IgnoreEOS keeps generating past an end-of-generation token, up to
-	// MaxTokens: the token is emitted and fed like any other (vLLM's
-	// ignore_eos). Stop strings still end the generate. Under a grammar or a
-	// forced tool call the reply does not end while the grammar lets it go
+	// MaxTokens: the token is emitted and fed like any other (the
+	// ignore_eos field, beyond the OpenAI API). Stop strings still end the
+	// generate. Under a grammar or a forced tool call the reply does not end while the grammar lets it go
 	// on, and ends where the grammar can go no further.
 	IgnoreEOS bool
 	// CachePrompt is a request that marked a cache breakpoint (Anthropic's
@@ -1757,8 +1757,8 @@ type GenerateOptions struct {
 	// request spends rebuilding that session's history (generateN): its
 	// echo, prompt logprobs and prompt counts start after them.
 	from int
-	// LogitBias is added to the logits before every penalty and cut, as
-	// llama.cpp's logit_bias sampler adds it: each entry's bias at its
+	// LogitBias is added to the logits before every penalty and cut: each
+	// entry's bias at its
 	// token, or at every token of its text, the entries summed where they
 	// meet; -Inf bans a token. A biased generate decodes as a constrained
 	// one does.
@@ -1769,7 +1769,7 @@ type GenerateOptions struct {
 	// (engine.Logprobs).
 	Logprobs    bool
 	TopLogprobs int
-	// PostSampling reads them after every sampler instead (llama.cpp's
+	// PostSampling reads them after every sampler instead (/completion's
 	// post_sampling_probs): each a probability under the distribution the
 	// token's draw drew from, the alternatives its survivors alone
 	// (engine.Instance.SampledProbs). A speculative round draws a span before
@@ -1803,7 +1803,7 @@ const (
 	EventProgress
 )
 
-// Progress is how far a generate's prompt has run, llama-server's
+// Progress is how far a generate's prompt has run, /completion's
 // prompt_progress: of Total positions, Cached the memory cache restored and
 // Done restored or run so far, Elapsed since the prompt began.
 type Progress struct {
@@ -1987,7 +1987,7 @@ type Finished struct {
 	// Restored is how many of PromptTokens came from the memory cache or a prompt store.
 	Restored int
 	// Truncated says the reply stopped at the end of the session's context
-	// (llama-server's truncated).
+	// (/completion's truncated).
 	Truncated bool
 }
 
@@ -2514,8 +2514,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 				tlp, err = takeSampled(in, lpw, lm.m.Vocab, &sampler, lg, next)
 			case err == nil:
 				// The model's raw distribution, before the grammar's mask, as
-				// before temperature and penalties: vLLM's default
-				// (raw_logprobs).
+				// before temperature and penalties.
 				tlp, err = takeLogprob(in, lpw, lm.m.Vocab, logits, next)
 			}
 			s.ms.Unhold(in)

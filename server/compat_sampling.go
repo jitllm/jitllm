@@ -24,12 +24,12 @@ import (
 //
 //	temperature         0 = greedy; default 1
 //	top_p               nucleus; default 1 (disabled)
-//	top_k               0 or -1 = disabled (vLLM spells disabled -1)
+//	top_k               0 or -1 = disabled
 //	min_p               0 = disabled
-//	repetition_penalty  1 = disabled; llama.cpp's repeat_penalty over the last 64
+//	repetition_penalty  1 = disabled; the repeat penalty over the last 64
 //	seed                the draw's seed; without one each request draws its own
 //	presence_penalty,
-//	frequency_penalty   0 = disabled, in [-2, 2]; llama.cpp's over the same window
+//	frequency_penalty   0 = disabled, in [-2, 2]; over the same window
 //	n                   continuations of one prompt, prefilled once; read by
 //	                    the OpenAI routes (compat_choices.go)
 //	logprobs,

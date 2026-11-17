@@ -10,7 +10,7 @@ import (
 )
 
 // TestPredictTimeEndsAtTheNextNewline: a reply past its prediction time
-// (llama-server's t_max_predict_ms) ends at its first token whose text holds a
+// (/completion's t_max_predict_ms) ends at its first token whose text holds a
 // newline, as FinishMaxTokens, alone and as a row of the step loop; the
 // tokens up to it are the reply's without the limit, and a limit not reached
 // changes nothing.

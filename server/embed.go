@@ -29,7 +29,7 @@ type EmbedOptions struct {
 	Inputs []Prompt
 	// Dimensions is the vector width asked for. Zero means the model's own.
 	Dimensions int
-	// Normalize is llama.cpp's embd_normalize: nil is unit length (2), below
+	// Normalize is the request's embd_normalize: nil is unit length (2), below
 	// 0 the pooled row as it is, 0 scaled into int16's range by its largest
 	// magnitude, any other k its k-norm (engine.Embedder.EmbedNorm).
 	Normalize *int
@@ -161,7 +161,7 @@ type embedder struct {
 
 func (x *embedder) close() { x.ms.Close() }
 
-// embed is ids' vector, normalised as llama.cpp's embd_normalize norm asks,
+// embed is ids' vector, normalised as the embd_normalize norm asks,
 // embedded on a lease of x's session: x's own slice, which its next call
 // overwrites.
 func (x *embedder) embed(ctx context.Context, ids []int32, norm int) ([]float32, error) {

@@ -89,7 +89,7 @@ func (s *sseWriter) raw(b []byte) {
 }
 
 // pings writes an SSE comment (":") whenever the stream has been silent for
-// every, as llama-server does, so a client that times out on silence keeps
+// every, so a client that times out on silence keeps
 // the connection. stop ends them and returns once no ping can be written.
 func (s *sseWriter) pings(every time.Duration) (stop func()) {
 	quit, exited := make(chan struct{}), make(chan struct{})

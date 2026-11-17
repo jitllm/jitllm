@@ -11,7 +11,7 @@ import (
 // TestLogitBiasMovesTheDraw: on greedy decode, a ban of the first token
 // plain decode draws keeps it out of every step, +100 on one token draws it
 // at every step, and a bias of 0 leaves the decode as it was. Over HTTP the
-// OpenAI route's bias and llama-server's give the engine's own text, and a
+// OpenAI route's bias and /completion's give the engine's own text, and a
 // bias out of range or on no token is refused.
 func TestLogitBiasMovesTheDraw(t *testing.T) {
 	sm := structuredModels()[0]
@@ -52,7 +52,7 @@ func TestLogitBiasMovesTheDraw(t *testing.T) {
 	}
 	if code := postJSON(t, c.url, "/completion", fmt.Sprintf(`{"model":%q,"prompt":%q,"n_predict":16,"temperature":0,`+
 		`"logit_bias":[[%d,100]]}`, sm.id, sm.prompt, held), &ll); code != 200 || ll.Content != want {
-		t.Fatalf("llama-server's logit_bias: %d %q, the engine %q", code, ll.Content, want)
+		t.Fatalf("/completion's logit_bias: %d %q, the engine %q", code, ll.Content, want)
 	}
 	for _, bad := range []string{`{"x":1}`, `{"5":101}`, `{"99999999":1}`} {
 		code, body := postRaw(t, c.url+"/v1/completions", fmt.Sprintf(`{"model":%q,"prompt":"x","max_tokens":4,`+

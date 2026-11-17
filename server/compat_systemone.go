@@ -15,7 +15,7 @@ import (
 )
 
 // TypeSafe-compatible POST /v1/systemone: the System One request, as the
-// TypeSafe SDK sends it and as llama-server answers it. An adapter like the
+// TypeSafe SDK sends it. An adapter like the
 // rest of the shim: it builds DecideOptions and calls Backend.Decide.
 //
 // The request is read with every object's keys in the order the client wrote

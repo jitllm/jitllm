@@ -64,7 +64,7 @@ type oaChatRequest struct {
 	// reasoning models and clients in the wild send either.
 	MaxCompletionTokens *int `json:"max_completion_tokens"`
 
-	// IgnoreEOS is the vLLM and llama-server extension: generate past an
+	// IgnoreEOS is an extension field beyond the OpenAI API: generate past an
 	// end-of-generation token, up to max_tokens.
 	IgnoreEOS bool `json:"ignore_eos"`
 
@@ -363,8 +363,8 @@ func (e *compat) openAIModels(w http.ResponseWriter, r *http.Request) {
 		Object  string `json:"object"`
 		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
-		// MaxModelLen is the context a request on this model gets, vLLM's
-		// field; a benchmark harness reads it to size its prompts.
+		// MaxModelLen is the context a request on this model gets, an
+		// extension field; a benchmark harness reads it to size its prompts.
 		MaxModelLen int `json:"max_model_len,omitempty"`
 		// Loaded and Aliases are jitllm's: a model in the models folder is
 		// listed before it is loaded, since naming it loads it, and each of

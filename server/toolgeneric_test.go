@@ -14,13 +14,12 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// Models whose chat template reads no tools are served llama.cpp's generic
-// tool format: the system message names the tools and an example call, the
+// Models whose chat template reads no tools are served the generic tool
+// format: the system message names the tools and an example call, the
 // reply is held to {"tool_call": ...} or {"response": ...}, and the reply is
 // read back as OpenAI tool calls or content. testdata/golden/generic holds
-// each gated request and what llama.cpp (b4689, the last build with the
-// format; scripts/genericgold.py) rendered and answered with for it on each
-// model.
+// each gated request and what scripts/genericgold.py rendered and answered
+// with for it on each model.
 func genericModels() []string {
 	return []string{"gemma-2-2b-it-Q4_K_M", "Qwen2-1.5B-Instruct-Q4_K_M", "Mistral-7B-Instruct-v0.3-Q4_K_M"}
 }
@@ -52,8 +51,8 @@ func compact(t *testing.T, s string) string {
 }
 
 // TestGenericToolsMatchLlamaCpp: on a model whose template reads no tools,
-// each request renders the prompt llama.cpp renders for it and is answered as
-// llama.cpp answers -- the same tool call, arguments and all, or the same
+// each request renders the prompt the golden holds for it and is answered as
+// the golden answers -- the same tool call, arguments and all, or the same
 // content -- through the server's own chat completions, on the CPU and on a
 // card. A request with a system turn to a template with no system role is
 // refused instead, as a 400 naming the role. The violation is the system
@@ -119,7 +118,7 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 						if err != nil || json.Unmarshal(gb, &want) != nil {
 							t.Fatalf("%s: no golden answer (%v)", name, err)
 						}
-						// llama.cpp hands its template an empty bos_token (the tokenizer adds it)
+						// The golden's template had an empty bos_token (the tokenizer adds it)
 						// and an empty eos_token, where the chat path renders both as the template
 						// writes them: the prompts are equal past those two.
 						got := strings.TrimPrefix(prompt, bos)
@@ -128,13 +127,13 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 							for i < len(got) && i < len(wantPrompt) && got[i] == wantPrompt[i] {
 								i++
 							}
-							t.Fatalf("%s: prompt parts from llama.cpp's at byte %d:\n got  %q\n want %q", name, i,
+							t.Fatalf("%s: prompt parts from the golden's at byte %d:\n got  %q\n want %q", name, i,
 								got[i:min(len(got), i+80)], string(wantPrompt[i:min(len(wantPrompt), i+80)]))
 						}
 						// The answer, from the same tokens: a conversation that ends a turn with
-						// the eos token is not the one llama.cpp answered.
+						// the eos token is not the one the golden answered.
 						if got != string(wantPrompt) {
-							t.Logf("%s: the prompt writes %q where llama.cpp's does not: the answer is not compared", name, eos)
+							t.Logf("%s: the prompt writes %q where the golden's does not: the answer is not compared", name, eos)
 							skipped++
 							return
 						}
@@ -145,13 +144,13 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 						}
 						msg := out.Choices[0].Message
 						if len(msg.ToolCalls) != len(want.ToolCalls) {
-							t.Fatalf("%s: calls %+v content %q, llama.cpp answered %+v content %q", name, msg.ToolCalls,
+							t.Fatalf("%s: calls %+v content %q, the golden answered %+v content %q", name, msg.ToolCalls,
 								msg.Content, want.ToolCalls, want.Content)
 						}
 						for i, tc := range msg.ToolCalls {
 							w := want.ToolCalls[i]
 							if tc.Function.Name != w.Name || compact(t, tc.Function.Arguments) != compact(t, string(w.Arguments)) {
-								t.Fatalf("%s: call %s(%s), llama.cpp answered %s(%s)", name, tc.Function.Name,
+								t.Fatalf("%s: call %s(%s), the golden answered %s(%s)", name, tc.Function.Name,
 									tc.Function.Arguments, w.Name, w.Arguments)
 							}
 						}
@@ -162,7 +161,7 @@ func TestGenericToolsMatchLlamaCpp(t *testing.T) {
 						// a near tie (RULE 11c), so there the answer must be an answer.
 						if arm == "cpu" && strings.TrimSpace(msg.Content) != strings.TrimSpace(want.Content) ||
 							(strings.TrimSpace(msg.Content) == "") != (strings.TrimSpace(want.Content) == "") {
-							t.Fatalf("%s: content %q, llama.cpp answered %q", name, msg.Content, want.Content)
+							t.Fatalf("%s: content %q, the golden answered %q", name, msg.Content, want.Content)
 						}
 						t.Logf("%s: %d calls, content %q", name, len(msg.ToolCalls), msg.Content)
 						ran++

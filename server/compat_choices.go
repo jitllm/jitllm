@@ -13,9 +13,8 @@ import (
 // OpenAI's logprobs and n.
 //
 // The log-probabilities are the model's raw distribution -- before
-// temperature, the repeat penalty and top-k/top-p/min-p -- which is what vLLM
-// returns by default (logprobs_mode "raw_logprobs"); engine.Logprobs computes
-// them with generated kernels.
+// temperature, the repeat penalty and top-k/top-p/min-p, not the distribution
+// the samplers reshaped; engine.Logprobs computes them with generated kernels.
 
 // maxChoices bounds n: each choice is a session's KV history.
 const maxChoices = 128

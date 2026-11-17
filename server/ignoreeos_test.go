@@ -78,8 +78,8 @@ func wantEarlyThenFull(t *testing.T, what string, run func(ignore bool) (string,
 	t.Logf("%s: %d tokens without ignore_eos, %d with", what, n, n2)
 }
 
-// TestIgnoreEOSRunsToMaxTokens: `ignore_eos` (the vLLM and llama-server
-// extension) on /v1/chat/completions, /v1/completions and the Connect
+// TestIgnoreEOSRunsToMaxTokens: `ignore_eos` (an extension field beyond the
+// OpenAI API) on /v1/chat/completions, /v1/completions and the Connect
 // GenerateRequest keeps a greedy generate going past the end-of-turn token
 // it otherwise stops on, to exactly max_tokens.
 func TestIgnoreEOSRunsToMaxTokens(t *testing.T) {
@@ -201,7 +201,7 @@ func TestIgnoreEOSRunsToTheGrammarsEnd(t *testing.T) {
 		t.Fatalf("letters with ignore_eos: %q, finish %v after %d tokens, want max_tokens after %d", long,
 			f1.Reason, f1.CompletionTokens, ignoreEOSMax)
 	}
-	// llama-server's /completion takes the grammar and ignore_eos together.
+	// /completion takes the grammar and ignore_eos together.
 	prompt, err := json.Marshal(conv)
 	if err != nil {
 		t.Fatal(err)

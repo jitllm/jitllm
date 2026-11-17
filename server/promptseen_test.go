@@ -10,12 +10,12 @@ import (
 )
 
 // TestTheSamplerSeesThePrompt: a request's sampler sees its prompt's tokens
-// before its first draw, as llama-server's accepts them
-// (common_sampler_accept). With a top-k of one, a request's first token is
-// the most likely; with a presence penalty past any logit as well, it is the
-// most likely the prompt's tail does not hold -- of a prompt whose most
-// likely continuation the prompt holds, so the two differ. A session in a
-// batched row (the default) and one alone (MaxBatchRows 1).
+// before its first draw, the penalties' window holding them. With a top-k of
+// one, a request's first token is the most likely; with a presence penalty past
+// any logit as well, it is the most likely the prompt's tail does not hold --
+// of a prompt whose most likely continuation the prompt holds, so the two
+// differ. A session in a batched row (the default) and one alone (MaxBatchRows
+// 1).
 func TestTheSamplerSeesThePrompt(t *testing.T) {
 	prompts := []string{
 		"Once upon a time, there was a little girl. Once upon a time, there was a little",

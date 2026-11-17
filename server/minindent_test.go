@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestMinIndentEndsAtAShortLine: a reply with a MinIndent (llama-server's
+// TestMinIndentEndsAtAShortLine: a reply with a MinIndent (/completion's
 // n_indent) ends at the token where a line past its first newline starts with
 // fewer spaces or tabs than that before its first other character, as
 // FinishMaxTokens, alone and as a row of the step loop; the tokens up to it

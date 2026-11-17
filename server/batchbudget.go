@@ -3,8 +3,8 @@ package server
 import "time"
 
 // stepBudget is how many prompt tokens a step of the loop carries beside its
-// decoding rows: vLLM's max_num_batched_tokens under chunked prefill, measured
-// rather than set.
+// decoding rows: the chunked prefill's token budget, measured rather than
+// set.
 //
 // A prompt admitted beside decoding rows costs each of them its chunk's time
 // at their next token. Fed at the step's full width (a device or host chunk,
