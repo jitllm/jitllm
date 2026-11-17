@@ -106,8 +106,8 @@ func (b *Builder) Properties(schema []byte, name string) ([]Prop, error) {
 func (b *Builder) Value() string  { return b.c.prim("value") }
 func (b *Builder) Object() string { return b.c.prim("object") }
 
-// String is the rule for a JSON string literal; Space the bounded whitespace
-// the JSON rules end in.
+// String is the rule for a JSON string literal; Space RFC 8259's ws, which
+// the JSON rules hold between their tokens and never after their last.
 func (b *Builder) String() string { return b.c.prim("string") }
 func (b *Builder) Space() string  { return b.c.prim("space") }
 
@@ -159,7 +159,7 @@ func classRune(r rune) string {
 	return string(r)
 }
 
-// Literal is GBNF for the exact text s.
+// Literal is the rule text for the exact text s.
 func Literal(s string) string { return literal(s) }
 
 // Text is the grammar whose root is the expression root.

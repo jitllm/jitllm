@@ -193,16 +193,17 @@ func genericGrammar(tools ToolSet, choice ToolChoice, names []string) (string, e
 				params = `{"type":"object"}`
 			}
 			calls[i] = `{"type":"object","properties":{"name":{"type":"string","const":` + jsonName(n) +
-				`},"arguments":` + params + `},"required":["name","arguments"]}`
+				`},"arguments":` + params + `},"required":["name","arguments"],"additionalProperties":false}`
 		}
 		call := calls[0]
 		if len(calls) > 1 {
 			call = `{"anyOf":[` + strings.Join(calls, ",") + `]}`
 		}
-		schema := `{"type":"object","properties":{"tool_call":` + call + `},"required":["tool_call"]}`
+		schema := `{"type":"object","properties":{"tool_call":` + call + `},"required":["tool_call"],` +
+			`"additionalProperties":false}`
 		if !choice.Forces() {
 			schema = `{"anyOf":[` + schema + `,{"type":"object","properties":{"response":{"type":"string"}},` +
-				`"required":["response"]}]}`
+				`"required":["response"],"additionalProperties":false}]}`
 		}
 		return grammar.FromJSONSchema([]byte(schema))
 	}

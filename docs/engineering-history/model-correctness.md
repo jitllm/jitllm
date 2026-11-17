@@ -9826,24 +9826,106 @@ CUDA and Vulkan, judging a flip as `TestSpecGreedyOnDevice` does.
 
 ### grammar
 
-Structured output: a reply constrained to a context-free grammar, GBNF text
-(llama.cpp's format) or a JSON Schema compiled to it (`FromJSONSchema`, the
-keywords llama.cpp's json-schema-to-grammar writes, each as it writes them:
-type, properties, required, additionalProperties, items, prefixItems,
-min/maxItems, min/maxLength, enum, const, anyOf, oneOf, $ref into $defs or
-definitions). Every other validation keyword is refused by name
-(`ErrUnsupported`, a 400 at the server): pattern, format, minimum and the
-other numeric bounds, allOf, not, patternProperties and the rest. llama.cpp
-builds pattern, format, integer bounds and allOf; those are the gap, refused
-rather than ignored, since ignoring one lets through output the schema
-forbids. An object with properties takes no other keys (absent
-additionalProperties read as false, OpenAI's strict mode); every output stays
-valid under the schema either way.
+Structured output: a reply constrained to a context-free grammar. Natively
+that is a JSON Schema, compiled by `grammar.FromJSONSchema` to rules over RFC
+8259's JSON grammar and read as JSON Schema 2020-12 reads each keyword; the
+compatibility endpoints also take grammar text and run it through the same
+`grammar.Parse`. The keywords built, and every one refused by name
+(`ErrUnsupported`, a 400 at the server), are listed at the head of
+`grammar/schema.go`, with what the rules do not write and why.
 
-The automaton is llama.cpp's: a set of stacks of grammar positions, stepped
-one code point at a time, rules entered and finished rules popped, a
-right-recursive star run as a tail call so a long run does not deepen a
-stack. Left recursion is refused at compile time. Two departures:
+The first compiler carried limits no schema states: integers and fractions
+capped at sixteen digits, every whitespace run at a space or a newline and
+twenty spaces or tabs, an exponent's digits read as an integer part (no
+leading zero), DEL refused bare,
+absent additionalProperties read as false, prefixItems read as the array's
+whole length, a type-less schema's keywords read as naming its type, and a
+February with no 29th. None of those is stated by a schema, RFC 8259 or
+2020-12, and all went: numerals have no length the schema does not state, a
+surrogate pair's escape is one character and a lone surrogate's none, and RFC
+3339's lower-case t and z are written. What stays is named with its reason:
+an object's properties in one order (every order of n keys is 2^n rules), an
+integer in int form (which numerals with a fraction and an exponent are
+integral is not context-free), the reply ending where its value does (RFC
+8259's trailing ws adds nothing, and ending at the value lets a reply end
+without the model choosing to), no leap second (a table of announced
+instants, not a rule), and a number's minimum and maximum, not built yet
+(docs/open-questions.md).
+
+Every keyword of a schema holds at once, and the first compiler read some
+alone: an anyOf or oneOf dropped the keywords beside it,
+so `{"type":"object","properties":{"a":{"type":"integer"}},
+"additionalProperties":false,"anyOf":[{"required":["a"]}]}` compiled to
+`root ::= (value)`, any JSON value; an enum beside a type wrote values of
+another type (`{"type":"string","enum":["a",1]}` wrote `1`); and an allOf
+folding a $ref that folds itself back
+(`{"$defs":{"a":{"allOf":[{"$ref":"#/$defs/a"}]}},"$ref":"#/$defs/a"}`)
+recursed until the goroutine's stack overflowed, a fatal error no server
+recovers from. Now each branch is folded with the keywords beside it (an
+allOf of the two), a branch nothing then satisfies is left out, types fold
+to the ones every part names (an integer is a number), an enum or const
+writes the values its type and its other list admit and refuses any other
+keyword beside it by name, and a $ref folded into itself is refused by name.
+
+Folding the keywords beside an anyOf into each branch made compiling
+exponential: each branch built the properties beside it again, so every
+level of nested objects carrying an anyOf doubled the work (a 1.5 KB schema of
+18 such levels took 40.6 s and wrote a 767 MB grammar on box 49). A schema
+object is now built once, by identity, however many folds reach it, so the
+work grows with the depth rather than as 2 to its power. A fold that still
+multiplies -- branches that each close the object below with an
+additionalProperties of their own, a new schema at every level -- is held to
+a ceiling on the rule text (4 MiB, counting each schema visited), and a
+grammar to 2^21 positions once its counted repetitions are written out
+(`TestSchemaCompileIsBounded`, `TestParseHoldsItsSize`). The second replaced a
+cap of 4096 on each counted repetition, which refused a schema's maxLength
+5000 and would have let a 1 MB literal repeated 4096 times through.
+
+The fold also merged every part's properties under one additionalProperties,
+so a part that closed its object no longer covered the properties the other
+parts named: `{"allOf":[{"properties":{"a":{}},"additionalProperties":false},
+{"properties":{"b":{}}}]}` wrote `{"b":"x"}`, which the first part forbids.
+2020-12 holds each part's additionalProperties to the keys its own properties
+do not name, so now a part's false leaves the other parts' properties out (a
+required one leaving nothing) and its schema joins theirs; a property whose
+schema is false is left out where it is optional.
+
+A oneOf was written as the union of its branches, so `{"oneOf":[{"type":
+"integer"},{"type":"number"}]}` wrote `1`, which satisfies both and so neither
+under 2020-12. A grammar cannot exclude a value two branches both match, so a
+oneOf is now written only where no two branches, each folded with the
+keywords beside it, can hold one value: their types do not meet, the values
+they list share none (compared as 2020-12 does, 1 and 1.0 alike), or they meet
+only as objects each requiring a property whose listed values the other's do
+not share. Any other oneOf is refused by name.
+
+Whitespace is the one bound on a reply that the schema does not state, and it
+is measured, not taken: a gap between two tokens is nothing, one space, or
+one line break and at most 16 spaces and tabs of indentation. It bounds formatting, never a value. The measurement
+rewrote the compiled gap per variant and sampled the structured gate's models
+and schemas at temperature 1 (stories15M 24 replies of at most 96 tokens,
+Llama-3.2-1B-Instruct 8 of at most 400, a schema each). stories15M ended its
+object in 0 of 24 with RFC 8259's ws unbounded, 0 of 24 with one line break
+and its indentation unbounded, 2 of 24 with a space or a line break and its
+indentation unbounded, 3 of 24 with up to 16 spaces and tabs on each side of
+one line break (each space is a token to it, and it pads every gap it is
+given), and 24 of 24 in the shape kept (at 4, 8 and 16 alike; at most 76
+tokens at 16). The first three ran on the object schema with
+additionalProperties absent, their replies whitespace from the first gap on;
+the last two with it false, as the gate now states it. Llama-3.2-1B-Instruct wrote one 1289-character run with ws
+unbounded, none past 16 characters with only the indentation unbounded, and
+ended 16 of 16 in the shape kept, indenting two spaces a level.
+
+The same measurement found the two limits a schema has to state for itself
+now: with no maximum, stories15M ended 13 of 24 integer arrays, its greedy
+reply writing a 5 and zeros to its last token; with additionalProperties
+absent, which 2020-12 reads as any further key, Llama-3.2-1B-Instruct wrote
+keys to its 400th token. The gate's schemas state both.
+
+The automaton is a set of stacks of grammar positions, stepped one code point
+at a time, rules entered and finished rules popped, a right-recursive star run
+as a tail call so a long run does not deepen a stack. Left recursion is
+refused at compile time. Two choices beyond that:
 
 - Stacks are interned as a persistent list and a set of stacks is interned
   too, so a state is one integer and a step from a state by a code point is
@@ -9852,8 +9934,7 @@ stack. Left recursion is refused at compile time. Two departures:
 - UTF-8 is checked to the byte: a code point begun by one token and finished
   by the next is carried in the state, a lead byte is admitted only where some
   stack can take a code point it could finish as, and overlong encodings,
-  surrogates and bytes past U+10FFFF are refused (llama.cpp's
-  partial-UTF-8 check admits some of these).
+  surrogates and bytes past U+10FFFF are refused, as RFC 3629 refuses them.
 
 The allowed set of a state is computed once per (grammar, tokenizer, state)
 and kept: the tokenizer's pieces are sorted once per tokenizer
@@ -10918,8 +10999,8 @@ What b4689 does, and `model/toolgeneric.go` does after it:
   into the turn's content as `{"tool_calls": [{"name", "arguments", "id"}]}`
   and a tool's result becomes a user turn holding `{"tool_response": {...}}`,
   whether or not the request carries tools, since the template renders neither.
-- **The reply** is one JSON object, held to a grammar from llama.cpp's schema
-  for it through the converter `response_format` uses (`genericGrammar`): `{"tool_call":
+- **The reply** is one JSON object, held to a grammar from a schema for it
+  through the converter `response_format` uses (`genericGrammar`): `{"tool_call":
   {"name": <a declared tool>, "arguments": <its schema>}}` or `{"response":
   text}`, and only the first under `tool_choice` "required". Several calls are
   not allowed: llama.cpp turns `parallel_tool_calls` off where the template

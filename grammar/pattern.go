@@ -84,13 +84,15 @@ func spaces() runeSet {
 }
 func lineEnds() runeSet { return setOf(span{'\n', '\n'}, span{'\r', '\r'}, span{0x2028, 0x2029}) }
 
-// jsonChar is GBNF for one character of a JSON string whose decoded value is
-// in s: a literal where JSON writes it bare, its escape where JSON must
-// escape it -- a quote, a backslash, a control character -- as the string
-// primitive writes them.
+// jsonChar is the rule text for one character of a JSON string whose
+// decoded value is in s: bare where RFC 8259 lets it stand bare, its escape
+// where it must be escaped -- a quote, a backslash, a control character --
+// as the string primitive writes them, and DEL either way. The \u form of a
+// character that may stand bare is not written: the one escape a character
+// must take is enough to write every value a pattern matches.
 func (c *converter) jsonChar(s runeSet) (string, error) {
 	var alts []string
-	if lit := s.minus(setOf(span{0, 0x1F}, span{'"', '"'}, span{'\\', '\\'}, span{0x7F, 0x7F})); len(lit) > 0 {
+	if lit := s.minus(setOf(span{0, 0x1F}, span{'"', '"'}, span{'\\', '\\'})); len(lit) > 0 {
 		var b strings.Builder
 		b.WriteByte('[')
 		for _, x := range lit {
@@ -146,7 +148,7 @@ func jsonEscape(r rune) string {
 	return fmt.Sprintf(`\u%04x`, r)
 }
 
-// pattern is GBNF for the content of a JSON string that holds a match of
+// pattern is the rule text for the content of a JSON string that holds a match of
 // src, a JSON Schema pattern (an ECMA-262 regular expression, unanchored: a
 // branch with no ^ may start anywhere, one with no $ end anywhere).
 // A Unicode property escape reads the Unicode tok's tables carry (property);
@@ -239,7 +241,7 @@ func escaped(src []rune, i int) bool {
 	return n%2 == 1
 }
 
-// rxParser reads one branch of a pattern into GBNF.
+// rxParser reads one branch of a pattern into rule text.
 type rxParser struct {
 	c *converter
 	s []rune
@@ -316,8 +318,8 @@ func (p *rxParser) quantifier() (lo, hi int, ok bool, err error) {
 		if !valid {
 			return 0, 0, false, nil
 		}
-		if l > maxRepeat || h > maxRepeat {
-			return 0, 0, false, fmt.Errorf("grammar: a pattern repeats past %d", maxRepeat)
+		if l > maxPositions || h > maxPositions {
+			return 0, 0, false, fmt.Errorf("grammar: a pattern repeats past the %d positions a grammar may hold", maxPositions)
 		}
 		lo, hi, ok = l, h, true
 		p.i += n

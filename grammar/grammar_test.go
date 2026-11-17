@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,7 +55,7 @@ func accepts(m *Matcher, s string) bool {
 	return ok && m.Done(st)
 }
 
-func TestGBNFAcceptsItsLanguage(t *testing.T) {
+func TestParseAcceptsItsLanguage(t *testing.T) {
 	v := newToyVocab()
 	cases := []struct {
 		src     string
@@ -85,7 +86,7 @@ x ::= "ab"`, []string{"abab", "ababab"}, []string{"ab", "abababab"}},
 	}
 }
 
-func TestGBNFRefusesWhatItCannotRun(t *testing.T) {
+func TestParseRefusesWhatItCannotRun(t *testing.T) {
 	for _, src := range []string{
 		`root ::= root "a" | "b"`,
 		`root ::= x
@@ -207,16 +208,26 @@ func schemaCases() []schemaCase {
 	return []schemaCase{
 		{`{"type":"object","properties":{"name":{"type":"string","maxLength":12},"age":{"type":"integer"},` +
 			`"tags":{"type":"array","items":{"enum":["a","b",3,null]},"maxItems":3}},"required":["name","age"]}`,
-			`{"name": "bo", "age": -4, "tags": ["a", 3]}`, `{"age": 4, "name": "bo"}`},
+			`{"name": "bo", "age": -4, "tags": ["a", 3]}`, `{"name": "bo"}`},
 		{`{"type":"array","items":{"type":"boolean"},"minItems":1,"maxItems":4}`, `[true,false]`, `[]`},
 		{`{"anyOf":[{"type":"number"},{"type":"string","minLength":2,"maxLength":3}]}`, `1.5e3`, `"a"`},
 		{`{"$defs":{"pt":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},` +
 			`"required":["x"],"additionalProperties":false}},"type":"array","items":{"$ref":"#/$defs/pt"},"maxItems":2}`,
 			`[{"x":1,"y":2},{"x":3}]`, `[{"y":2}]`},
 		{`{"type":"object","properties":{"a":{"const":"k"},"b":{"type":"null"},"c":{"type":"boolean"}}}`,
-			`{"b":null}`, `{"c":true,"a":"k"}`},
+			`{"b":null}`, `{"a":"j"}`},
 		{`{"type":["string","null"],"maxLength":5}`, `null`, `"toolong"`},
-		{`{"prefixItems":[{"type":"integer"},{"type":"string","maxLength":2}],"items":false}`, `[1,"ab"]`, `[1]`},
+		// Each part's additionalProperties holds the keys the other parts
+		// name, and a false property forbids its key.
+		{`{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"additionalProperties":{"type":"integer"}}]}`, `{"b": 1}`, `{"a": "x"}`},
+		{`{"allOf":[{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":false},{"properties":{"b":{"type":"string"}}}]}`, `{"a": "x"}`, `{"b": "x"}`},
+		{`{"type":"object","properties":{"a":{"type":"integer"}},"additionalProperties":false,"anyOf":[{"required":["a"]},{"properties":{"c":{"type":"null"}}}]}`, `{"a": 1}`, `{"c": null}`},
+		{`{"type":"object","properties":{"a":{"type":"integer"}},"additionalProperties":false,"oneOf":[{"required":["a"],"type":"object"},{"properties":{"c":{"type":"null"}},"type":"string"}]}`, `{"a": 1}`, `{"c": null}`},
+		{`{"type":"object","properties":{"a":false,"b":{"type":"integer"}}}`, `{"b": 1}`, `{"a": 1}`},
+		{`{"type":"string","maxLength":5000}`, `"` + strings.Repeat("x", 5000) + `"`, `"` + strings.Repeat("x", 5001) + `"`},
+		{`{"prefixItems":[{"type":"integer"},{"type":"string","maxLength":2}],"items":false}`, `[1]`, `[1,"ab",2]`},
+		{`{"prefixItems":[{"type":"integer"},{"type":"boolean"}]}`, `[1,true,"x",{}]`, `[true]`},
+		{`{"prefixItems":[{"type":"integer"},{"type":"boolean"}],"minItems":2,"maxItems":3}`, `[1,true,null]`, `[1]`},
 		{`{"type":"integer","minimum":-12,"exclusiveMaximum":250}`, `-12`, `250`},
 		{`{"type":"array","items":{"type":"integer","exclusiveMinimum":0.5,"maximum":1e3}}`, `[1,1000]`, `[0]`},
 		{`{"type":"object","properties":{"d":{"type":"string","format":"date"},"t":{"type":"string","format":"date-time"},` +
@@ -237,6 +248,99 @@ func schemaCases() []schemaCase {
 			`{"a":1,"x":true}`, `{"a":1,"x":2}`},
 		{`{"type":"object","properties":{"k":{"type":"null"}},"additionalProperties":true,"required":["k"]}`,
 			`{"k":null,"z":[1]}`, `{"z":1}`},
+		// RFC 8259 and 2020-12 where a schema states no bound: absent
+		// additionalProperties takes other keys, numerals and whitespace
+		// runs of any length, a type-less schema's keywords hold only their
+		// own type.
+		{`{"type":"object","properties":{"a":{"type":"integer"}}}`, `{"a":1,"b":"x"}`, `{"a":"x"}`},
+		{`{"type":"integer","minimum":5}`, `123456789012345678901234567890`, `4`},
+		{`{"type":"integer","maximum":-3}`, `-123456789012345678901234567890`, `-2`},
+		{`{"type":"number"}`, `-0.123456789012345678901234567890e0010`, `01`},
+		{`{"type":"array","items":{"type":"integer"}}`, "\r\n\t[ 1 ,\n" + strings.Repeat("\t", 16) + "2\r\n]", `[1,]`},
+		{`{"properties":{"a":{"type":"integer"}},"minLength":2}`, `5`, `{"a":"x"}`},
+		{`{"const":{"a":[1,"<"]}}`, `{ "a" : [ 1 , "<" ] }`, `{"a":["<",1]}`},
+		{`{"type":"string","format":"date-time"}`, `"2024-02-29t23:59:59.123456789012z"`, `"2023-02-29T00:00:00Z"`},
+		{`{"type":"string","format":"date"}`, `"2000-02-29"`, `"1900-02-29"`},
+		{`{"type":"string","minLength":2}`, `"` + esc("d83d") + esc("de00") + esc("0041") + `"`, `"` + esc("d83d") + esc("de00") + `"`},
+		{`{"type":"string","maxLength":1}`, `"` + esc("D83D") + esc("DE00") + `"`, `"` + esc("de00") + `"`},
+		{`{"type":"string","maxLength":1}`, "\"\x7f\"", `"\ud800"`},
+		// Every keyword of a schema holds at once: the ones beside an enum,
+		// a const, an anyOf and a oneOf, and every part of an allOf.
+		{`{"type":"string","enum":["a",1,"b",null]}`, `"b"`, `1`},
+		{`{"type":"integer","enum":[1.0,1.5,"1"]}`, `1.0`, `1.5`},
+		{`{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"string"}},"additionalProperties":false,` +
+			`"anyOf":[{"required":["a"]},{"required":["b"]}]}`, `{"b": "x"}`, `{}`},
+		{`{"type":"string","anyOf":[{"type":"integer"},{"maxLength":2}]}`, `"ab"`, `1`},
+		{`{"type":["string","null"],"oneOf":[{"type":"string","maxLength":1},{"type":"integer"},{"type":"null"}]}`, `null`, `"ab"`},
+		{`{"allOf":[{"type":["integer","string"]},{"type":"number"}]}`, `-7`, `"a"`},
+		// A oneOf whose branches no value satisfies two of: by type, by
+		// value, and by a required property's value.
+		{`{"oneOf":[{"type":"integer"},{"type":"string","maxLength":2}]}`, `-3`, `"abc"`},
+		{`{"oneOf":[{"const":1},{"enum":[2,"1"]}]}`, `"1"`, `3`},
+		{`{"type":"object","required":["kind"],"oneOf":[` +
+			`{"properties":{"kind":{"const":"a"},"n":{"type":"integer"}},"additionalProperties":false},` +
+			`{"properties":{"kind":{"const":"b"},"s":{"type":"string"}},"additionalProperties":false}]}`,
+			`{"kind": "b", "s": "x"}`, `{"kind": "a", "s": "x"}`},
+	}
+}
+
+// esc is JSON's escape of the UTF-16 code unit of hex digits h.
+func esc(h string) string { return `\` + "u" + h }
+
+// TestWhitespaceIsHeldToALine: a gap between two tokens is nothing, a space,
+// or a line break and up to maxIndent spaces and tabs, and no more -- the
+// bound schema.go's head measures.
+func TestWhitespaceIsHeldToALine(t *testing.T) {
+	src, err := FromJSONSchema([]byte(`{"type":"array","items":{"type":"integer"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMatcher(mustParse(t, src), IndexTokens(newToyVocab()))
+	run := func(n int) string { return strings.Repeat(" \t", n)[:n] }
+	for s, want := range map[string]bool{
+		"[1, 2]":                            true,
+		"[1,2]":                             true,
+		"[1,\r\n" + run(maxIndent) + "2\n]": true,
+		"\n" + run(maxIndent) + "[1]":       true,
+		"[1,\n" + run(maxIndent+1) + "2]":   false,
+		"[1,  2]":                           false,
+		"[1, \n2]":                          false,
+		"[1,\t2]":                           false,
+		"[1,\n\n2]":                         false,
+		"[1,\r\r\n2]":                       false,
+		"  [1]":                             false,
+	} {
+		if accepts(m, s) != want {
+			t.Errorf("%q taken %v, want %v", s, !want, want)
+		}
+	}
+}
+
+// TestTheReplyEndsWithItsValue: whitespace before a value is taken, none
+// after it, so the grammar is done once the value closes.
+func TestTheReplyEndsWithItsValue(t *testing.T) {
+	v := newToyVocab()
+	for _, schema := range []string{`{"type":"object"}`, `{"type":"integer","minimum":3}`, `{"enum":["a",1]}`} {
+		src, err := FromJSONSchema([]byte(schema))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
+		doc := map[string]string{`{"type":"object"}`: `{"k": [1, 2]}`, `{"type":"integer","minimum":3}`: `40`, `{"enum":["a",1]}`: `"a"`}[schema]
+		st, ok := m.AcceptText(m.Start(), "\n \t"+doc)
+		if !ok || !m.Done(st) {
+			t.Fatalf("%s: %q after leading whitespace refused", schema, doc)
+		}
+		if toks, end := m.Allowed(st); end && len(toks) > 0 && schema != `{"type":"integer","minimum":3}` {
+			t.Errorf("%s: %d tokens allowed after the value closed", schema, len(toks))
+		}
+		if _, ok := m.AcceptText(st, " "); ok {
+			t.Errorf("%s: whitespace after the value was taken", schema)
+		}
+	}
+	m := NewMatcher(mustParse(t, JSONObject()), IndexTokens(v))
+	if !accepts(m, "\n{ }") || accepts(m, "{} ") {
+		t.Error("json_object: leading whitespace refused or trailing taken")
 	}
 }
 
@@ -317,9 +421,9 @@ func TestPatternsMatchTheirLanguage(t *testing.T) {
 }
 
 // TestIntegerRangesAreExact holds an integer's bounds to the integers they
-// admit, each one written as JSON writes it: every integer around each range
-// is taken exactly where it lies within, across lengths and signs; a range
-// unbounded above reaches the sixteen digits the integer primitive writes.
+// admit, each one written as RFC 8259's int writes it: every integer around
+// each range is taken exactly where it lies within, across lengths and
+// signs, 0 as -0 too; a side no keyword bounds has no end.
 func TestIntegerRangesAreExact(t *testing.T) {
 	v := newToyVocab()
 	for _, rg := range [][2]int{{0, 0}, {0, 9}, {7, 7}, {10, 19}, {5, 123}, {-17, 4}, {-250, -3}, {99, 1000},
@@ -334,18 +438,30 @@ func TestIntegerRangesAreExact(t *testing.T) {
 				t.Fatalf("[%d, %d]: %d accepted %v\n%s", rg[0], rg[1], x, got, src)
 			}
 		}
-		if accepts(m, "0"+strconv.Itoa(rg[1])) || accepts(m, "-0") {
-			t.Fatalf("[%d, %d]: a leading zero or -0 is taken", rg[0], rg[1])
+		if accepts(m, "0"+strconv.Itoa(rg[1])) || accepts(m, "-00") {
+			t.Fatalf("[%d, %d]: a leading zero is taken", rg[0], rg[1])
+		}
+		if got, want := accepts(m, "-0"), rg[0] <= 0 && 0 <= rg[1]; got != want {
+			t.Fatalf("[%d, %d]: -0 accepted %v", rg[0], rg[1], got)
 		}
 	}
-	src, err := FromJSONSchema([]byte(`{"type":"integer","exclusiveMinimum":4}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := NewMatcher(mustParse(t, src), IndexTokens(v))
-	for s, want := range map[string]bool{"4": false, "5": true, "9999999999999999": true, "10000000000000000": false, "-5": false} {
-		if accepts(m, s) != want {
-			t.Errorf("above 4: %s accepted %v", s, !want)
+	long := strings.Repeat("9", 40)
+	for schema, cases := range map[string]map[string]bool{
+		`{"type":"integer","exclusiveMinimum":4}`: {"4": false, "5": true, "9999999999999999": true, "10000000000000000": true,
+			long: true, "1" + long: true, "-5": false, "-0": false, "05": false},
+		`{"type":"integer","maximum":-12}`: {"-12": true, "-11": false, "-" + long: true, "-100": true, "0": false, "-0": false},
+		`{"type":"integer","minimum":-3}`:  {"-3": true, "-4": false, "-0": true, "0": true, long: true},
+		`{"type":"integer"}`:               {"-" + long: true, long: true, "-0": true, "1.0": false, "1e2": false},
+	} {
+		src, err := FromJSONSchema([]byte(schema))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
+		for s, want := range cases {
+			if accepts(m, s) != want {
+				t.Errorf("%s: %s accepted %v", schema, s, !want)
+			}
 		}
 	}
 	if _, err := FromJSONSchema([]byte(`{"type":"integer","minimum":3.5,"maximum":3.9}`)); err == nil {
@@ -387,7 +503,7 @@ func TestSchemaRandomWalksValidate(t *testing.T) {
 			t.Fatal(err)
 		}
 		for range 200 {
-			out := walk(t, m, v, rng, 4000)
+			out := walk(t, m, v, rng, 20000)
 			var doc any
 			if err := schemacheck.Parse(out, &doc); err != nil {
 				t.Fatalf("%s: a walk wrote %q, which does not parse: %v", c.schema, out, err)
@@ -427,18 +543,140 @@ func walk(t *testing.T, m *Matcher, v *toyVocab, rng *rand.Rand, limit int) stri
 
 func TestSchemaRefusesByName(t *testing.T) {
 	for kw, schema := range map[string]string{
-		"lookaround":    `{"type":"string","pattern":"^(?=a)a$"}`,
-		"backreference": `{"type":"string","pattern":"(a)\\1"}`,
-		"word boundary": `{"type":"string","pattern":"\\bx"}`,
-		"minimum":       `{"type":"number","minimum":3}`,
-		"allOf":         `{"allOf":[{"type":"string","maxLength":2},{"maxLength":3}]}`,
-		"uniqueItems":   `{"type":"array","uniqueItems":true}`,
-		"$ref":          `{"$ref":"https://example.com/s.json"}`,
+		"lookaround":                       `{"type":"string","pattern":"^(?=a)a$"}`,
+		"backreference":                    `{"type":"string","pattern":"(a)\\1"}`,
+		"word boundary":                    `{"type":"string","pattern":"\\bx"}`,
+		"minimum":                          `{"type":"number","minimum":3}`,
+		"allOf":                            `{"allOf":[{"type":"string","maxLength":2},{"maxLength":3}]}`,
+		"uniqueItems":                      `{"type":"array","uniqueItems":true}`,
+		"$ref":                             `{"$ref":"https://example.com/s.json"}`,
+		"maxLength":                        `{"type":"string","maxLength":2097153}`,
+		"minItems":                         `{"type":"array","minItems":1e9}`,
+		"enum beside maxLength":            `{"enum":["a"],"maxLength":3}`,
+		"const beside properties":          `{"const":{},"properties":{}}`,
+		"share no type":                    `{"allOf":[{"type":"string"},{"type":"integer"}]}`,
+		"anyOf whose every branch":         `{"type":"string","anyOf":[{"type":"integer"},false]}`,
+		"enum none of whose values":        `{"type":"boolean","enum":[0,"true"]}`,
+		"folded into itself":               `{"$defs":{"a":{"allOf":[{"$ref":"#/$defs/a"}]}},"$ref":"#/$defs/a"}`,
+		"into itself":                      `{"$defs":{"a":{"type":"object","anyOf":[{"$ref":"#/$defs/a"}]}},"$ref":"#/$defs/a"}`,
+		"oneOf whose branches may overlap": `{"oneOf":[{"type":"integer"},{"type":"number"}]}`,
+		"may overlap":                      `{"type":"object","oneOf":[{"properties":{"k":{"const":1.0}},"required":["k"]},{"properties":{"k":{"enum":[10e-1,2]}},"required":["k"]}]}`,
+		"overlap":                          `{"oneOf":[{"type":"object","properties":{"k":{"const":1}},"required":["k"]},{"type":"object","properties":{"k":{"const":2}}}]}`,
 	} {
 		_, err := FromJSONSchema([]byte(schema))
 		var u ErrUnsupported
 		if !errors.As(err, &u) || !strings.Contains(err.Error(), kw) {
 			t.Errorf("%s: %v, want an ErrUnsupported naming %s", schema, err, kw)
 		}
+	}
+}
+
+// nestedSchema is depth objects, each holding the next as property x beside
+// an anyOf of the branch maps fold: each branch folds the keywords beside it
+// in, the property among them.
+func nestedSchema(depth int, branches string) string {
+	s := `{"type":"integer"}`
+	for range depth {
+		s = `{"type":"object","properties":{"x":` + s + `},"anyOf":` + branches + `}`
+	}
+	return s
+}
+
+// schemaSpent is the work FromJSONSchema does on schema: the rule text it
+// writes and the visits it makes, as maxSchemaText counts them.
+func schemaSpent(t *testing.T, schema string) (int, error) {
+	t.Helper()
+	d := json.NewDecoder(strings.NewReader(schema))
+	d.UseNumber()
+	root, err := decodeOrdered(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newConverter(root)
+	_, err = c.visit(root, "schema")
+	return c.spent, err
+}
+
+// TestSchemaCompileIsBounded: folding the keywords beside an anyOf into each
+// branch builds what they hold once, not once per branch at every level, and
+// a fold that would still multiply the text level by level is refused by name
+// once it passes maxSchemaText, its work held there. The work is counted, not
+// timed: the text and visits are the time and the memory.
+func TestSchemaCompileIsBounded(t *testing.T) {
+	required := `[{"required":["x"]},{"required":["y"]}]`
+	at := map[int]int{}
+	for _, depth := range []int{10, 20, 60} {
+		spent, err := schemaSpent(t, nestedSchema(depth, required))
+		if err != nil {
+			t.Fatalf("depth %d: %v", depth, err)
+		}
+		at[depth] = spent
+	}
+	// A rule's name carries its path, so the text grows as the square of
+	// the depth: twice that is the bound, where a fold per level doubles it.
+	if at[20] > 2*4*at[10] || at[60] > 2*9*at[20] {
+		t.Errorf("the work grows faster than the square of the nesting: %v", at)
+	}
+	src, err := FromJSONSchema([]byte(nestedSchema(60, required)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(src) > 1<<20 {
+		t.Errorf("depth 60 compiles to %d bytes", len(src))
+	}
+	v := newToyVocab()
+	m := NewMatcher(mustParse(t, src), IndexTokens(v))
+	if !accepts(m, `{"x": {"x": {"y": 1}}}`) || accepts(m, `{"x": {"x": {"z": 1}}}`) {
+		t.Errorf("depth 60's grammar does not hold each level to its anyOf")
+	}
+
+	// Two branches each closing the object differently: each folds the
+	// property below with its own additionalProperties, a schema of its own
+	// at every level.
+	closing := `[{"additionalProperties":{"type":"object"}},{"additionalProperties":{"type":"object","required":["z"]}}]`
+	spent, err := schemaSpent(t, nestedSchema(40, closing))
+	var u ErrUnsupported
+	if !errors.As(err, &u) || !strings.Contains(err.Error(), "passes") {
+		t.Fatalf("depth 40, closing branches: %v, want an ErrUnsupported naming the bound", err)
+	}
+	if spent > maxSchemaText+1<<16 {
+		t.Errorf("refused after %d bytes of work, past the %d bound", spent, maxSchemaText)
+	}
+	if _, err := FromJSONSchema([]byte(nestedSchema(3, closing))); err != nil {
+		t.Errorf("depth 3, closing branches: %v", err)
+	}
+}
+
+// TestParseHoldsItsSize: a grammar's counted repetitions are written out, so
+// one past maxPositions is refused by name before it is (a repetition that
+// alone would pass it allocates nothing of itself), the repetitions of one
+// grammar counted together, and one within them parses.
+func TestParseHoldsItsSize(t *testing.T) {
+	lit := `"` + strings.Repeat("a", 600) + `"`
+	for _, c := range []struct {
+		src   string
+		alone bool
+	}{
+		{`root ::= ` + lit + `{4096}`, true},
+		{`root ::= "a"{0,2000000}`, true},
+		{`root ::= ` + lit + `{1800} ` + lit + `{1800}`, false},
+	} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := Parse(c.src)
+		runtime.ReadMemStats(&after)
+		if err == nil || !strings.Contains(err.Error(), "positions") {
+			t.Errorf("%.40q: %v, want a refusal naming the positions", c.src, err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; c.alone && n > 1<<20 {
+			t.Errorf("%.40q: refused after allocating %d bytes", c.src, n)
+		}
+	}
+	g, err := Parse(`root ::= "a"{5000} ` + lit + `{100}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !accepts(NewMatcher(g, IndexTokens(newToyVocab())), strings.Repeat("a", 5000+600*100)) {
+		t.Error("a grammar within its positions refuses its sentence")
 	}
 }

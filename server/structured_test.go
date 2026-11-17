@@ -22,7 +22,12 @@ import (
 // step is caught.
 
 // structuredModels() are a tiny base model with a 128-token context and a real
-// instruct model.
+// instruct model. Their objects state additionalProperties false and the
+// base model's integers state bounds: JSON Schema reads an absent bound as
+// none, and the grammar sets none. Without them the instruct model wrote
+// further keys to its 400th token, and the base model ended 13 of 24 arrays
+// within its 96 tokens, its greedy reply writing a 5 and then zeros to the
+// last.
 func structuredModels() []struct {
 	file, id string
 	schemas  []string
@@ -37,13 +42,14 @@ func structuredModels() []struct {
 	}{
 		{"stories15M-q8_0.jlm", "s15", []string{
 			`{"type":"object","properties":{"color":{"enum":["red","green","blue"]},"ok":{"type":"boolean"}},` +
-				`"required":["color","ok"]}`,
-			`{"type":"array","items":{"type":"integer"},"minItems":1,"maxItems":3}`,
+				`"required":["color","ok"],"additionalProperties":false}`,
+			`{"type":"array","items":{"type":"integer","minimum":-9999,"maximum":9999},"minItems":1,"maxItems":3}`,
 		}, 96, "Once upon a time"},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "llama1b", []string{
 			`{"type":"object","properties":{"name":{"type":"string","maxLength":16},"age":{"type":"integer"},` +
 				`"pets":{"type":"array","items":{"type":"object","properties":{"kind":{"enum":["cat","dog"]},` +
-				`"legs":{"type":"number"}},"required":["kind"]},"maxItems":2}},"required":["name","age"]}`,
+				`"legs":{"type":"number"}},"required":["kind"],"additionalProperties":false},"maxItems":2}},` +
+				`"required":["name","age"],"additionalProperties":false}`,
 			`{"anyOf":[{"type":"string","maxLength":10},{"type":"null"},{"type":"boolean"}]}`,
 		}, 400, "Describe a person as JSON."},
 	}

@@ -1,7 +1,9 @@
-// Package grammar constrains generation to a context-free grammar: GBNF text
-// (llama.cpp's grammar format) or a JSON Schema compiled to it, matched one
-// code point at a time by a pushdown automaton and turned, at each step, into
-// the set of vocabulary tokens that keep the output inside the grammar.
+// Package grammar constrains generation to a context-free grammar: a JSON
+// Schema compiled to rules (schema.go), or rules written as BNF text --
+// `name ::= alternatives` of quoted literals, character classes, rule names,
+// groups and the repetitions *, +, ? and {m,n} -- matched one code point at
+// a time by a pushdown automaton and turned, at each step, into the set of
+// vocabulary tokens that keep the output inside the grammar.
 //
 // What runs per step, and which side of RULE 8 it is on, is in
 // docs/engineering-history/model-correctness.md, "grammar".
@@ -82,7 +84,8 @@ func (c *class) meets(lo, hi rune) bool {
 }
 
 // Grammar is a compiled grammar: every rule's alternatives flattened into one
-// array of positions, as llama.cpp lays them out.
+// array of positions, each alternative closed by an eAlt or, the rule's last,
+// an eEnd.
 type Grammar struct {
 	el   []elem
 	cls  []class
@@ -93,7 +96,7 @@ type Grammar struct {
 	src   string
 }
 
-// Source is the GBNF text the grammar was compiled from.
+// Source is the text the grammar was compiled from.
 func (g *Grammar) Source() string { return g.src }
 
 // item is one element of a rule before flattening.
@@ -114,9 +117,12 @@ type parser struct {
 	// error at the end.
 	defined []bool
 	anon    int
+	// size is the positions the rules hold so far, a rule weighing
+	// ruleWeight of them (maxPositions).
+	size int
 }
 
-// Parse compiles GBNF text. The root rule is "root". Left recursion is
+// Parse compiles a grammar's BNF text. The root rule is "root". Left recursion is
 // refused: a pushdown automaton stepping by code point cannot run it.
 func Parse(src string) (*Grammar, error) {
 	p := &parser{s: src, ids: map[string]int32{}, clsID: map[string]int32{}}
@@ -167,6 +173,7 @@ func (p *parser) rule(name string) int32 {
 		return id
 	}
 	id := int32(len(p.rules))
+	p.size += ruleWeight
 	p.ids[name] = id
 	p.names = append(p.names, name)
 	p.rules = append(p.rules, nil)
@@ -270,6 +277,10 @@ func (p *parser) alternatives(nested bool) ([][]item, error) {
 			return nil, err
 		}
 		alts = append(alts, seq)
+		p.size++
+		if p.size > maxPositions {
+			return nil, p.errf("the grammar is past the %d positions one may hold", maxPositions)
+		}
 		p.space(nested)
 		if p.i < len(p.s) && p.s[p.i] == '|' {
 			p.i++
@@ -283,7 +294,10 @@ func (p *parser) alternatives(nested bool) ([][]item, error) {
 func (p *parser) sequence(nested bool) ([]item, error) {
 	var seq []item
 	last := -1 // where the last atom starts in seq, for a postfix operator
+	counted := 0
 	for {
+		p.size += len(seq) - counted
+		counted = len(seq)
 		p.space(nested)
 		if p.i >= len(p.s) {
 			return seq, nil
@@ -383,7 +397,11 @@ func (p *parser) sequence(nested bool) ([]item, error) {
 				return nil, err
 			}
 			atom := slices.Clone(seq[last:])
-			seq = append(seq[:last], p.repetition(atom, lo, hi)...)
+			expanded, err := p.repetition(atom, lo, hi)
+			if err != nil {
+				return nil, err
+			}
+			seq = append(seq[:last], expanded...)
 			last = -1
 		default:
 			if c == '\n' || c == ')' || c == '|' {
@@ -425,19 +443,39 @@ func (p *parser) repeat() (lo, hi int, err error) {
 			}
 		}
 	}
-	if lo > maxRepeat || hi > maxRepeat {
-		return 0, 0, p.errf("repetition {%s} is past %d", body, maxRepeat)
+	if lo > maxPositions || hi > maxPositions {
+		return 0, 0, p.errf("repetition {%s} is past the %d positions a grammar may hold", body, maxPositions)
 	}
 	return lo, hi, nil
 }
 
-// maxRepeat bounds a counted repetition, which is expanded.
-const maxRepeat = 4096
+// maxPositions bounds the positions a grammar holds once its counted
+// repetitions are written out, and ruleWeight is what one rule counts for
+// among them: its name, its index entry and its slice headers come to about
+// eight positions' bytes. A grammar is sized by its request, so past this it
+// is refused by name rather than built: 2^21 positions are 16 MiB of
+// flattened rules, and the parser's items as much again.
+const (
+	maxPositions = 1 << 21
+	ruleWeight   = 8
+)
 
 // repetition is atom{lo,hi} as plain items: lo copies, then the optional
-// ones nested -- (x (x (x)?)?)? -- or a right-recursive star.
-func (p *parser) repetition(atom []item, lo, hi int) []item {
-	var out []item
+// ones nested -- (x (x (x)?)?)? -- or a right-recursive star. Its size is
+// held to maxPositions before any of it is written.
+func (p *parser) repetition(atom []item, lo, hi int) ([]item, error) {
+	n := len(atom)
+	cost := lo * n
+	switch {
+	case hi < 0:
+		cost += n + 3 + ruleWeight
+	case hi > lo:
+		cost += (hi - lo) * (n + 3 + ruleWeight)
+	}
+	if p.size+cost > maxPositions {
+		return nil, p.errf("repetition {%d,%d} of %d positions is past the %d a grammar may hold", lo, hi, n, maxPositions)
+	}
+	out := make([]item, 0, lo*n+1)
 	for range lo {
 		out = append(out, atom...)
 	}
@@ -447,16 +485,18 @@ func (p *parser) repetition(atom []item, lo, hi int) []item {
 		// as a tail call, so a long run does not deepen the stack.
 		r := p.newRule(nil)
 		p.rules[r] = [][]item{append(slices.Clone(atom), item{ref: true, arg: r}), nil}
+		p.size += n + 3
 		out = append(out, item{ref: true, arg: r})
 	case hi > lo:
 		var tail []item
 		for range hi - lo {
 			seq := append(slices.Clone(atom), tail...)
 			tail = []item{{ref: true, arg: p.newRule([][]item{seq, nil})}}
+			p.size += n + 3
 		}
 		out = append(out, tail...)
 	}
-	return out
+	return out, nil
 }
 
 // char reads one code point of a literal or a class, escapes decoded.

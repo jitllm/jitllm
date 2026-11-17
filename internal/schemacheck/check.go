@@ -51,13 +51,21 @@ func Validate(root, s, doc any) error {
 			}
 		}
 	}
-	if a, ok := m["anyOf"].([]any); ok {
+	// Every keyword of a schema holds at once: a branch matched leaves the
+	// keywords beside it to hold too.
+	if a, ok := m["anyOf"].([]any); ok && !slices.ContainsFunc(a, func(x any) bool { return Validate(root, x, doc) == nil }) {
+		return fmt.Errorf("%v matches no branch of anyOf", doc)
+	}
+	if a, ok := m["oneOf"].([]any); ok {
+		n := 0
 		for _, x := range a {
 			if Validate(root, x, doc) == nil {
-				return nil
+				n++
 			}
 		}
-		return fmt.Errorf("%v matches no branch", doc)
+		if n != 1 {
+			return fmt.Errorf("%v matches %d branches of oneOf, not one", doc, n)
+		}
 	}
 	var types []string
 	switch t := m["type"].(type) {
@@ -105,23 +113,18 @@ func Validate(root, s, doc any) error {
 		if x, ok := m["minItems"].(float64); ok && float64(len(d)) < x {
 			return fmt.Errorf("%d items, under %v", len(d), x)
 		}
-		// items holds the items after the prefix; a prefix with no items
-		// after it is held to its own length.
+		// prefixItems holds the positions the array has, items those after
+		// them.
 		after := 0
-		it, more := m["items"]
-		more = more && it != false
 		if p, ok := m["prefixItems"].([]any); ok {
-			if len(d) < len(p) || !more && len(d) != len(p) {
-				return fmt.Errorf("%d items for %d prefix items", len(d), len(p))
-			}
-			for i := range p {
+			after = min(len(p), len(d))
+			for i := range after {
 				if err := Validate(root, p[i], d[i]); err != nil {
 					return err
 				}
 			}
-			after = len(p)
 		}
-		if more {
+		if it, ok := m["items"]; ok {
 			for _, x := range d[after:] {
 				if err := Validate(root, it, x); err != nil {
 					return err
@@ -147,8 +150,7 @@ func Validate(root, s, doc any) error {
 			if !ok {
 				// A key no property names: refused where the schema forbids
 				// others, held to additionalProperties' schema where it gives
-				// one, and refused where it lists properties and does not
-				// require this key (the converter's strict reading).
+				// one, and taken with any value where it is absent.
 				switch {
 				case hasAddl && addl == false:
 					return fmt.Errorf("%v has %q, which additionalProperties false forbids", d, k)
@@ -156,8 +158,6 @@ func Validate(root, s, doc any) error {
 					continue
 				case hasAddl:
 					ps = addl
-				case props != nil && !slices.Contains(req, any(k)):
-					return fmt.Errorf("%v has %q, not a property", d, k)
 				default:
 					continue
 				}
@@ -173,14 +173,16 @@ func Validate(root, s, doc any) error {
 // inBounds holds number n to schema m's minimum, maximum and their
 // exclusive forms, compared exactly.
 func inBounds(m map[string]any, n json.Number) error {
-	x, ok := new(big.Rat).SetString(string(n))
-	if !ok {
-		return fmt.Errorf("%s is not a number", n)
-	}
 	for _, k := range []string{"minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum"} {
 		v, ok := m[k]
 		if !ok {
 			continue
+		}
+		// Read only against a bound: an unbounded number may carry an
+		// exponent past what a big.Rat is let to expand.
+		x, ok := new(big.Rat).SetString(string(n))
+		if !ok {
+			return fmt.Errorf("%s is not a number", n)
 		}
 		b, ok := new(big.Rat).SetString(fmt.Sprint(v))
 		if !ok {
@@ -196,16 +198,17 @@ func inBounds(m map[string]any, n json.Number) error {
 
 // hasFormat holds s to format f, RFC 3339's date, time and date-time and
 // RFC 4122's uuid, read by the time package and a pattern; any other format
-// asserts nothing.
+// asserts nothing. RFC 3339's T and Z are case-insensitive (5.6), and the
+// time package reads them upper case.
 func hasFormat(f, s string) error {
 	var err error
 	switch f {
 	case "date":
 		_, err = time.Parse("2006-01-02", s)
 	case "time":
-		_, err = time.Parse("15:04:05Z07:00", s)
+		_, err = time.Parse("15:04:05Z07:00", strings.ToUpper(s))
 	case "date-time":
-		_, err = time.Parse(time.RFC3339, s)
+		_, err = time.Parse(time.RFC3339, strings.ToUpper(s))
 	case "uuid":
 		if !regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`).MatchString(s) {
 			err = fmt.Errorf("not five groups of hex digits")
@@ -223,8 +226,16 @@ func isType(doc any, t string) bool {
 		_, ok := doc.(json.Number)
 		return ok
 	case "integer":
+		// 2020-12 counts any number with a zero fraction as an integer.
 		n, ok := doc.(json.Number)
-		return ok && !strings.ContainsAny(string(n), ".eE")
+		if !ok {
+			return false
+		}
+		if !strings.ContainsAny(string(n), ".eE") {
+			return true
+		}
+		r, ok := new(big.Rat).SetString(string(n))
+		return ok && r.IsInt()
 	case "boolean":
 		_, ok := doc.(bool)
 		return ok
@@ -241,7 +252,7 @@ func isType(doc any, t string) bool {
 }
 
 // Parse parses one JSON document, numbers kept as written: a grammar
-// allows sixteen digits and an exponent, past what a float64 holds.
+// writes numerals of any length, past what a float64 holds.
 func Parse(s string, doc *any) error {
 	d := json.NewDecoder(strings.NewReader(s))
 	d.UseNumber()
@@ -254,8 +265,39 @@ func Parse(s string, doc *any) error {
 	return nil
 }
 
+// jsonEqual is JSON Schema's equality: numbers by their value, 1 and 1.0
+// alike, and objects whatever their keys' order.
 func jsonEqual(a, b any) bool {
-	x, err1 := json.Marshal(a)
-	y, err2 := json.Marshal(b)
-	return err1 == nil && err2 == nil && string(x) == string(y)
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, v := range x {
+			if w, ok := y[k]; !ok || !jsonEqual(v, w) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		return ok && slices.EqualFunc(x, y, jsonEqual)
+	}
+	if p, ok := ratOf(a); ok {
+		q, ok := ratOf(b)
+		return ok && p.Cmp(q) == 0
+	}
+	return a == b
+}
+
+func ratOf(v any) (*big.Rat, bool) {
+	switch x := v.(type) {
+	case json.Number:
+		return new(big.Rat).SetString(string(x))
+	case float64:
+		r := new(big.Rat).SetFloat64(x)
+		return r, r != nil
+	}
+	return nil, false
 }
