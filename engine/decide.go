@@ -128,7 +128,7 @@ func NewDecider(in *Instance) (*Decider, error) {
 	}
 	lab := cfg.DecisionLabels
 	if lab == nil {
-		return nil, fmt.Errorf("model: %v states no label readout", cfg.Decision)
+		return nil, fmt.Errorf("model: the container states no decision readout")
 	}
 	src, ok := m.ChatTemplate("systemone")
 	if !ok {

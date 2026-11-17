@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
@@ -15,7 +14,7 @@ import (
 // against each option's <|box_end|> row, on the CPU and with every block on
 // each card.
 func TestPointerDecisionMatchesLlamaCpp(t *testing.T) {
-	c := decisionCase{"kev", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", jlm.DecisionKev, 0.05}
+	c := decisionCase{"kev", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", 0.05}
 	src, ok := existingModel(testmodels.Path(c.gguf))
 	if !ok {
 		testmodels.Missing(t, "MODEL MISSING: %s (scripts/decisiongold.sh names its source)", testmodels.Path(c.gguf))
@@ -25,8 +24,8 @@ func TestPointerDecisionMatchesLlamaCpp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if cfg := m.Container.Config(); cfg.Decision != c.kind || cfg.MarkerPrompt == nil || !m.Cfg.MarkPointer {
-		t.Fatalf("the container says readout %v, prompt %v, pointer %v", cfg.Decision, cfg.MarkerPrompt != nil, m.Cfg.MarkPointer)
+	if cfg := m.Container.Config(); !cfg.Decides() || cfg.MarkerPrompt == nil || !m.Cfg.MarkPointer {
+		t.Fatalf("the container states prompt %v, pointer %v", cfg.MarkerPrompt != nil, m.Cfg.MarkPointer)
 	}
 	arm := func(t *testing.T, g *gpu.GPU) {
 		in, err := NewInstance(m, 4096, WithKVF16(false))

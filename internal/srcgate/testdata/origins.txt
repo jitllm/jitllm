@@ -799,7 +799,7 @@ context	engine/cut.go	"engine: block %d's routed experts: %w"
 bug	engine/cut.go	"engine: the CPU device does not compose block %d's routed experts: %v"
 input	engine/decide.go	"%d options and the prompt holds %d of their markers in %d tokens"
 input	engine/decide.go	"decision label %q is not a single token"
-input	engine/decide.go	"model: %v states no label readout"	a decision asked of a container with no label readout: the input's check
+input	engine/decide.go	"model: the container states no decision readout"	a decision asked of a container with no readout: the input's check
 input	engine/decide.go	"model: a marker head's prompt states pictures and voice clips, not videos"	a video given a marker head, whose references take none (Laya's build_sequence and Kev's template are text, d1-omni's prompt.encode pictures and audio): the input's check
 input	engine/decide.go	"model: its marker head states no prompt; convert the model again"	a container written before marker prompts were stated: convert it again
 input	engine/decide.go	"model: the container carries no systemone template, the joint head's prompt"
@@ -1608,7 +1608,6 @@ input	format/jlm/sections.go	"jlm: activation quantization %d is not one this fo
 input	format/jlm/sections.go	"jlm: an n-gram block with %d residual streams"
 input	format/jlm/sections.go	"jlm: attention temperature %g with no floor"
 input	format/jlm/sections.go	"jlm: chunked attention with no chunk size"
-input	format/jlm/sections.go	"jlm: decision kind %d is not one this format defines"
 input	format/jlm/sections.go	"jlm: decision temperature %v for %v is not a positive temperature of a question type"
 input	format/jlm/sections.go	"jlm: kv_lora_rank %d with no rotary head width"
 input	format/jlm/sections.go	"jlm: kv_lora_rank %d with no value head width"

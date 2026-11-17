@@ -28,11 +28,12 @@ func (b *promptBuilder) text(s string) uint32 {
 	return b.node(jlm.PromptNode{Op: jlm.PromptText, Text: s})
 }
 
-// StateMarkerPrompt states a marker head's prompt in s's config, as its
-// readout's statement writes it (readouts.json), its sequence cut to maxLen
-// tokens (decision.max_tokens; 0 where the file is silent, the statement's).
-// A model with no marker head states none.
-func StateMarkerPrompt(s *jlm.Source, maxLen int64) error {
+// StateMarkerPrompt states a marker head's prompt in s's config, as the
+// statement of the readout its file names (decision.type; readouts.json)
+// writes it, its sequence cut to maxLen tokens (decision.max_tokens; 0 where
+// the file is silent, the statement's). A model with no marker head states
+// none.
+func StateMarkerPrompt(s *jlm.Source, readout string, maxLen int64) error {
 	c, v := s.Config, s.Vocab
 	if c == nil || c.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 {
 		return nil
@@ -40,11 +41,11 @@ func StateMarkerPrompt(s *jlm.Source, maxLen int64) error {
 	if v == nil {
 		return fmt.Errorf("convert: a marker head's prompt needs its vocabulary")
 	}
-	r := libraryReadout(c.Decision)
+	r := libraryReadout(readout)
 	if r == nil || r.Prompt == nil {
-		return fmt.Errorf("convert: %v states head blocks and no prompt of its kind: %w", c.Decision, ErrNotImplemented)
+		return fmt.Errorf("convert: readout %q states head blocks and no prompt of its kind: %w", readout, ErrNotImplemented)
 	}
-	p, err := r.Prompt.program(c.Decision.String(), v, maxLen, int64(c.DecisionHeadTokens))
+	p, err := r.Prompt.program(readout, v, maxLen, int64(c.DecisionHeadTokens))
 	if err != nil {
 		return err
 	}

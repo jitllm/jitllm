@@ -137,13 +137,13 @@ func readoutLibrary() (*readoutFile, error) {
 	return &lib, nil
 }
 
-// libraryReadout is the readout of kind the library states, nil for none.
-func libraryReadout(kind jlm.DecisionKind) *readoutStates {
+// libraryReadout is the readout the library states by name, nil for none.
+func libraryReadout(name string) *readoutStates {
 	lib, err := readoutLibrary()
 	if err != nil {
 		return nil
 	}
-	return lib.Readouts[kind.String()]
+	return lib.Readouts[name]
 }
 
 // codes is the run's codes.
@@ -279,24 +279,4 @@ func (st *readoutStates) state(name string, f *meta.File, c *Config) error {
 		c.Flags2 |= readoutFlags()[fl]
 	}
 	return nil
-}
-
-// StatesDecisionLabels says the converter states a label readout for kind.
-func StatesDecisionLabels(kind jlm.DecisionKind) bool {
-	r := libraryReadout(kind)
-	return r != nil && r.Labels != nil
-}
-
-// StatesJointHead reports whether a decision kind's container states a joint
-// head (jlm.JointHead).
-func StatesJointHead(kind jlm.DecisionKind) bool {
-	r := libraryReadout(kind)
-	return r != nil && r.Joint != nil
-}
-
-// StatesMediaPrefix reports whether a decision kind's container states its
-// media prefix (jlm.Flag2MediaPrefix).
-func StatesMediaPrefix(kind jlm.DecisionKind) bool {
-	r := libraryReadout(kind)
-	return r != nil && slices.Contains(r.Flags, "media_prefix")
 }

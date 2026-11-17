@@ -28,6 +28,16 @@ func questionTypes(name string) (jlm.QuestionType, bool) {
 	return 0, false
 }
 
+// decisionType is the readout f's decision.type names, "" for none.
+func decisionType(f *meta.File) string {
+	v, ok := f.Key("decision.type")
+	if !ok {
+		return ""
+	}
+	name, _ := v.String()
+	return name
+}
+
 // decisionOf fills c's decision fields from f, as the library states its
 // readout. A file with no decision type is not a decision model and is left
 // alone; a type the library states no readout for is refused, since the
@@ -39,19 +49,17 @@ func decisionOf(f *meta.File, c *Config) error {
 		return nil
 	}
 	name, _ := v.String()
-	kind, ok := jlm.DecisionKindOf(name)
 	lib, err := readoutLibrary()
 	if err != nil {
 		return err
 	}
 	st := lib.Readouts[name]
-	if !ok || st == nil {
+	if st == nil {
 		return fmt.Errorf("decision type %q is not implemented: %w", name, ErrNotImplemented)
 	}
 	if _, ok := f.KV["tokenizer.chat_template.systemone"]; !ok {
 		return fmt.Errorf("decision model %q carries no systemone template, which is its prompt", name)
 	}
-	c.Decision = kind
 	c.DecisionBlocks = uint32(f.UintKey("decision.block_count", 0))
 	if err := st.state(name, f, c); err != nil {
 		return err

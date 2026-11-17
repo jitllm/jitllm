@@ -37,16 +37,15 @@ type decisionGold struct {
 // moves), vllm-d3 0.078 (its ambiguous issue question, a near-tie).
 type decisionCase struct {
 	name, gguf, gold string
-	kind             jlm.DecisionKind
 	tol              float64
 }
 
 func decisionCases() []decisionCase {
 	return []decisionCase{
-		{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, 0.03},
-		{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, 0.10},
-		{"openjev", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", jlm.DecisionOpenJev, 0.01},
-		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0", jlm.DecisionVllmD3, 0.08},
+		{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", 0.03},
+		{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", 0.10},
+		{"openjev", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", 0.01},
+		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0", 0.08},
 	}
 }
 
@@ -64,9 +63,9 @@ func openDecision(t *testing.T, c decisionCase) *model.Model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg := m.Container.Config(); cfg.Decision != c.kind || cfg.DecisionLabels == nil {
+	if cfg := m.Container.Config(); cfg.DecisionLabels == nil || !cfg.Decides() {
 		m.Close()
-		t.Fatalf("the container says readout %v (labels %v), want %v", cfg.Decision, cfg.DecisionLabels != nil, c.kind)
+		t.Fatalf("the container states no label readout")
 	}
 	return m
 }

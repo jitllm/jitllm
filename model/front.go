@@ -455,7 +455,7 @@ func (m *Model) FrontGraphs() *frontSet {
 		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}
 		s.CpuMask = mk.Build()
 	}
-	if cfg := m.Container.Config(); cfg.DecisionLabels != nil || cfg.MarkerPrompt != nil || cfg.JointHead != nil {
+	if m.Container.Config().Decides() {
 		ds := graph.DecisionScores{N: nn.DecisionOptions, G: nn.DecisionGroup}
 		s.CpuDecide = ds.Build()
 	}

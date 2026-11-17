@@ -399,10 +399,9 @@ type Config struct {
 	NGramEOS, NGramImage         uint32
 	NGramMul, NGramOff, NGramVoc []uint64
 
-	// A decision model (decision.go): its readout, the head blocks that end
-	// the stack and the token budget of the question and options, and its
-	// fitted temperatures. A tenth optional tail; see encodeConfig.
-	Decision           DecisionKind
+	// A decision model (decision.go): the head blocks that end the stack and
+	// the token budget of the question and options, and its fitted
+	// temperatures. A tenth optional tail; see encodeConfig.
 	DecisionBlocks     uint32
 	DecisionHeadTokens uint32
 	DecisionTemps      []DecisionTemp

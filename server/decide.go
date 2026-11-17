@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
@@ -64,7 +63,7 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 	if err != nil {
 		return nil, err
 	}
-	if lm.m.Container.Config().Decision == jlm.DecisionNone {
+	if !lm.m.Container.Config().Decides() {
 		return nil, fmt.Errorf("%w: model %q is not a decision model: its container states no "+
 			"readout, so no score of its forward pass is an answer the weights were trained for",
 			ErrInvalid, lm.id)

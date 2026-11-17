@@ -61,14 +61,16 @@ func reconvert(path string) error {
 		streams := (cfg.AttnResBlock == 0 && cfg.HCLowRank == 0 || cfg.Streams.N > 1) &&
 			(cfg.NGramBlock == 0 || convert.StatesPre(cfg)) &&
 			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
-		labels := cfg.DecisionLabels != nil || !convert.StatesDecisionLabels(cfg.Decision)
-		joint := cfg.JointHead != nil || !convert.StatesJointHead(cfg.Decision)
-		media := cfg.Flags2.Has(jlm.Flag2MediaPrefix) || !convert.StatesMediaPrefix(cfg.Decision)
+		// Fitted temperatures and head blocks are a decision model's, routing
+		// blocks a joint head's, and a head with a tower d1-omni's media
+		// prefix: each converted since its readout was stated states it.
+		labels := cfg.Decides() || len(cfg.DecisionTemps) == 0 && cfg.DecisionBlocks == 0
+		joint := cfg.JointHead != nil || cfg.DecisionRouting == 0
+		media := cfg.Flags2.Has(jlm.Flag2MediaPrefix) || !cfg.Flags2.Has(jlm.Flag2HeadBlocks) || v == nil
 		audio := v == nil || v.Audio == nil || v.Audio.Tower != nil
 		video := v == nil || v.Tower == nil || v.Tower.Video != nil || !convert.StatesVideo(v.Projector)
 		bidir := v == nil || v.Tower == nil || len(c.Config().BidirLayers) == 0 || v.Tower.Span.Bidir
-		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
-			cfg.Decision != jlm.DecisionKev
+		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0
 		heads := len(cfg.Blocks.Of) == 0 || len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.NMTP)
 		rev := (cfg.Revision >= 1 || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
@@ -93,7 +95,7 @@ func reconvert(path string) error {
 		case !marker:
 			openErr = fmt.Errorf("it states no marker prompt for its head")
 		case !labels:
-			openErr = fmt.Errorf("it states no label readout for its decision kind")
+			openErr = fmt.Errorf("it states no readout for its decision head")
 		case !rev:
 			openErr = fmt.Errorf("it states nothing of its sliding layers or its rotary layout")
 		case !streams:

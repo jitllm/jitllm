@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
@@ -60,8 +59,8 @@ func TestJointDecisionMatchesTheReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if cfg := m.Container.Config(); cfg.Decision != jlm.DecisionClef || cfg.JointHead == nil || !m.Cfg.Joint {
-				t.Fatalf("the container says readout %v, joint head %v", cfg.Decision, cfg.JointHead != nil)
+			if cfg := m.Container.Config(); !cfg.Decides() || cfg.JointHead == nil || !m.Cfg.Joint {
+				t.Fatalf("the container states joint head %v, the model %v", cfg.JointHead != nil, m.Cfg.Joint)
 			}
 			arm := func(t *testing.T, g *gpu.GPU) {
 				in, err := NewInstance(m, 4096, WithKVF16(false))

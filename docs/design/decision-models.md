@@ -129,7 +129,7 @@ it covers most of the family with no new architecture.
   options sorted by key, noul shown true first.
 - **llama.cpp**: arch `clef` (PR 29831), text only, one sequence per batch.
 - **jitllm**: the arch `clef` converts into qwen35's container
-  (`ArchQwen3Next`) with `jlm.DecisionClef`; `decision.*` and `dec.blk.N.*`
+  (`ArchQwen3Next`) with its joint head stated (`jlm.JointHead`); `decision.*` and `dec.blk.N.*`
   are a role group of their own (`format/jlm/decisionroles.go`) at
   `DenseBlock` with the head block in `Index`, and the container states the
   routing and joint block counts, the head count and the head's LayerNorm
@@ -301,7 +301,12 @@ container data and one composed part: the converter states each kind's
 rules in `jlm.DecisionLabels` (codes and fallbacks, the token groups that
 score an option, the order options are shown in, a reversed second asking,
 sorted keys, the id for absent instructions, the entropy confidence, the
-sorted legend), and `engine.Decider` reads that record alone. Everything
+sorted legend), and `engine.Decider` reads that record alone. No readout
+has a code: the converter names one by the file's `decision.type`
+(`convert/readouts.json`), a container states its readout and nothing names
+it (`jlm.Config.Decides`), and the byte that once held a kind's code is
+written zero and read as nothing, so a new readout is a library statement
+with no Go beside it. Everything
 after the label pick is `graph.DecisionScores`, formed with the head's parts
 when the instance is made: the group max, the temperature, the softmax over
 the question's options, the mean with a reversed variant, and the answers'

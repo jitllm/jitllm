@@ -15,7 +15,7 @@ import (
 func TestLayaReadoutNeedsAnEncoder(t *testing.T) {
 	file := func(blocks uint64) *meta.File {
 		k := baseKeys(4)
-		k["decision.type"] = meta.MakeString(jlm.DecisionLaya.String())
+		k["decision.type"] = meta.MakeString("laya")
 		k["decision.block_count"] = meta.MakeUint(blocks)
 		k["decision.max_head_tokens"] = meta.MakeUint(512)
 		f := headerOnly("bert", k)

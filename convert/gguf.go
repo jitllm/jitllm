@@ -439,7 +439,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := StateRevision(c); err != nil {
 		return nil, err
 	}
-	if err := StateMarkerPrompt(s, int64(f.UintKey("decision.max_tokens", 0))); err != nil {
+	if err := StateMarkerPrompt(s, decisionType(f), int64(f.UintKey("decision.max_tokens", 0))); err != nil {
 		return nil, err
 	}
 	return s, nil
