@@ -44,8 +44,10 @@ const floatFormsNMSE = 1e-5
 // the bound.
 //
 // A dense model, a hybrid (recurrent state per row), a mixture, a sliding
-// window model, a latent attention's (its cached rows per session) and a
-// selection's (its indexer's keys per session).
+// window model, a latent attention's (its cached rows per session), a
+// selection's (its indexer's keys per session) and a hybrid whose blocks keep
+// windows of two sizes (twoWindowSuffix: each run's window copied back at its
+// own block's size).
 func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) { stepRunsOnTheCPUSharesOnePass(t) }
 
 // stepRunsOnTheCPUSharesOnePass is TestStepRunsOnTheCPUSharesOnePass with opts on every model it opens.
@@ -57,10 +59,11 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 		{"swa", "gemma-3-1b-it-Q4_K_M.gguf"},
 		{"mla", "synth-deepseek-yarn.gguf"},
 		{"selection", "synth-deepseek32.gguf"},
+		{"windows", "synth-granitehybrid.gguf" + twoWindowSuffix},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := testmodels.Path(c.file)
-			if _, err := os.Stat(p); err != nil {
+			if _, err := os.Stat(fixtureSource(p)); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
 			instOpts := append([]Option{WithKVF16(false)}, opts...)
@@ -69,7 +72,7 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if c.name == "hybrid" && !m.Cfg.Hybrid() {
+			if (c.name == "hybrid" || c.name == "windows") && !m.Cfg.Hybrid() {
 				t.Fatalf("%s is not a hybrid", c.file)
 			}
 			if c.name == "moe" && !m.Cfg.MoE() {
