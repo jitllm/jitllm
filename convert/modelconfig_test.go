@@ -158,7 +158,7 @@ func TestProcessorConfigStatesTheResample(t *testing.T) {
 		if _, err := buildGGUF(f, vf, src, proj, o); err != nil {
 			t.Fatal(err)
 		}
-		if pre == nil || pre.Kind != PreTileSmart || len(pre.Ints) < 8 {
+		if pre == nil || pre.Kind != kindOf(t, "tile_smart") || len(pre.Ints) < 8 {
 			t.Fatalf("the tower's first step is %+v, not the tiled resize", pre)
 		}
 		return pre.Ints[7]

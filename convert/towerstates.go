@@ -260,15 +260,14 @@ func towerOps() map[string]jlm.OpCode {
 	}
 }
 
-func towerSteps() map[string]jlm.PreKind {
-	return map[string]jlm.PreKind{
-		"resize": jlm.PreResize, "normalize": jlm.PreNormalize, "normalize_bf16": jlm.PreNormalizeBF16,
-		"resize_live": jlm.PreResizeLive, "canvas": jlm.PreCanvas,
-		"resize_short": PreResizeShort, "center_crop": PreCenterCrop, "tile": PreTile, "smart_resize": PreSmartResize,
-		"limit_pad": PreLimitPad, "long_box": PreLongBox, "naflex": PreNaFlex, "cap_unit": PreCapUnit,
-		"aspect_budget": PreAspectBudget, "tile_smart": PreTileSmart, "best_fit": PreBestFit, "slice_uhd": PreSliceUHD,
-		"video_resize": PreVideoResize, "long_tiles": PreLongTiles,
+// towerSteps is every picture step a stater writes by name: the
+// container's own and the projector library's processors' (mjPictures).
+func towerSteps() (map[string]jlm.PreKind, error) {
+	l, err := pictureLibrary()
+	if err != nil {
+		return nil, err
 	}
+	return l.kinds(), nil
 }
 
 func towerChains() map[string]uint8 {
@@ -305,10 +304,10 @@ func towerNorms() map[string]jlm.NormKind {
 	return map[string]jlm.NormKind{"layer": jlm.NormLayer, "rms": jlm.NormRMS}
 }
 
-// check refuses a statement naming an op, a step, a function, a norm or a
-// role the container does not know, and compiles its expressions, each
-// reading only the tower's facts.
-func (t *mjTower) check() error {
+// check refuses a statement naming an op, a step (none of kinds), a
+// function, a norm or a role the container does not know, and compiles its
+// expressions, each reading only the tower's facts.
+func (t *mjTower) check(kinds map[string]jlm.PreKind) error {
 	roles := rolesByName()
 	role := func(n string) error {
 		if _, ok := roles[strings.TrimSuffix(n, "?")]; !ok {
@@ -405,7 +404,7 @@ func (t *mjTower) check() error {
 		}
 	}
 	for _, p := range pre {
-		if _, ok := towerSteps()[p.Kind]; !ok {
+		if _, ok := kinds[p.Kind]; !ok {
 			return fmt.Errorf("step %q is not one the converter states", p.Kind)
 		}
 		srcs = append(append(srcs, p.Ints...), p.Floats...)
@@ -687,10 +686,14 @@ func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jin
 			return r, ok
 		}}
 	prog := pb.prog
+	kinds, err := towerSteps()
+	if err != nil {
+		return nil, err
+	}
 	steps := func(sts []mjPreStep) ([]jlm.PreStep, error) {
 		var out []jlm.PreStep
 		for _, st := range sts {
-			step := jlm.PreStep{Kind: towerSteps()[st.Kind]}
+			step := jlm.PreStep{Kind: kinds[st.Kind]}
 			for _, src := range st.Ints {
 				x, err := num(src)
 				if err != nil {
@@ -710,7 +713,6 @@ func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jin
 		return out, nil
 	}
 	out := &jlm.Tower{Version: jlm.TowerVersion}
-	var err error
 	if out.Pre, err = steps(t.Pre); err != nil {
 		return nil, err
 	}

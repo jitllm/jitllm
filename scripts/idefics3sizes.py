@@ -4,7 +4,7 @@
 
   $JITLLM_HF_PY scripts/idefics3sizes.py
 
-THE ORACLE FOR PreLongTiles' GEOMETRY (convert.longTileGeometry). For each
+THE ORACLE FOR THE long_tiles RULE'S GEOMETRY (convert/projectors.json). For each
 picture size of a sweep -- square, wide, tall, a pixel a side, a side past
 the longest edge, an odd side the processor makes even -- and two of the
 published configs (SmolVLM-256M's longest edge 2048 over 512 tiles, the

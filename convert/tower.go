@@ -20,21 +20,18 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	if err != nil || lt == nil {
 		return nil, err
 	}
+	pics, err := pictureLibrary()
+	if err != nil {
+		return nil, err
+	}
 	t, err := lt.state(by, s)
 	if err != nil {
 		return nil, err
 	}
 	if o.longestEdge > 0 {
-		steps := [][]jlm.PreStep{t.Pre}
+		pics.restateLongestEdge(t.Pre, o.longestEdge)
 		if t.Video != nil {
-			steps = append(steps, t.Video.Pre)
-		}
-		for _, pre := range steps {
-			for i := range pre {
-				if pre[i].Kind == PreLongTiles {
-					pre[i].Ints[0] = o.longestEdge
-				}
-			}
+			pics.restateLongestEdge(t.Video.Pre, o.longestEdge)
 		}
 	}
 	if o.pictureStep != nil {
@@ -48,32 +45,26 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 			edit(t.Video.Pre)
 		}
 	}
-	// The picture's geometry is stated from the stater's steps, which are
-	// then lowered to the container's generic ones; a video's frames read
-	// as pictures under steps of their own take a geometry of their own and
-	// the picture's steps.
-	if t.Geometry, err = GeometryOf(t, s.Vision); err != nil {
+	// The picture's geometry is stated from the stater's steps by the
+	// library's rule, which lowers them to the container's generic ones; a
+	// video's frames read as pictures under steps of their own take a
+	// geometry of their own and the picture's steps.
+	var pre []jlm.PreStep
+	if t.Geometry, pre, err = towerPicture(pics, t, s.Vision, t.Pre); err != nil {
 		return nil, err
 	}
 	switch v := t.Video; {
 	case v != nil && v.AsPictures() && len(v.Pre) > 0:
-		frames := *t
-		frames.Pre = v.Pre
-		if v.Frames, err = GeometryOf(&frames, s.Vision); err != nil {
+		if v.Frames, _, err = towerPicture(pics, t, s.Vision, v.Pre); err != nil {
 			return nil, fmt.Errorf("convert: the video's frames: %w", err)
 		}
 		v.Pre = nil
 	case v != nil && !v.AsPictures():
-		if v.Frames, err = FramesOf(v); err != nil {
-			return nil, err
-		}
-		if v.Pre, err = lowerPicture(v.Pre); err != nil {
+		if v.Frames, v.Pre, err = videoFrames(pics, v); err != nil {
 			return nil, err
 		}
 	}
-	if t.Pre, err = lowerPicture(t.Pre); err != nil {
-		return nil, err
-	}
+	t.Pre = pre
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: the stated tower (%v): %w", s.Vision.Projector, err)
 	}

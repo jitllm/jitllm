@@ -101,7 +101,7 @@ picture's resize plan is.
 
 A processor's resize of the frames is the converter's, as the picture's
 are (docs/design/picture-statement.md): Qwen's video smart_resize is
-`convert.PreVideoResize`, stated as the frames' geometry -- the frames
+the projector library's `video_resize` rule, the frames' geometry -- the frames
 sized together share the area, so the count is an operand of it
 (`jlm.PicFrames`) -- and lowered to `jlm.PreResizeLive`. Frames past an
 aspect of 200, or fewer frames sized together than the processor's

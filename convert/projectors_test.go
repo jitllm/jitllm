@@ -55,12 +55,12 @@ func TestProjectorStatementsAreChecked(t *testing.T) {
 		{"an expression over a name", projStates{Code: 2, Output: out(1), Scale: "config['merge']"}},
 		{"an expression that does not parse", projStates{Code: 2, Output: out(1), Scale: "src[["}},
 	} {
-		if err := c.p.check(); err == nil {
+		if err := c.p.check(nil); err == nil {
 			t.Errorf("%s: accepted", c.what)
 		}
 	}
 	ok := projStates{Code: 2, Output: out(1), Scale: "src['vision.projector.scale_factor'] | default(1)"}
-	if err := ok.check(); err != nil {
+	if err := ok.check(nil); err != nil {
 		t.Errorf("a plain entry: %v", err)
 	}
 }

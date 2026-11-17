@@ -318,7 +318,7 @@ func TestGemma4StatesItsVideo(t *testing.T) {
 	// The stater writes the picture's steps, then the frames' own.
 	half := len(stated) / 2
 	if !vid.AsPictures() || len(vid.Pre) != 0 || vid.Frames == nil || len(stated) != 2*half ||
-		stated[half].Kind != PreAspectBudget || stated[half].Ints[0] != 630 {
+		stated[half].Kind != kindOf(t, "aspect_budget") || stated[half].Ints[0] != 630 {
 		t.Fatalf("the video reads %+v, its frames' processor steps %+v", vid, stated[half:])
 	}
 	if !v.Tower.Span.Bidir {
@@ -616,7 +616,7 @@ func videoResize(t *testing.T, stated []jlm.PreStep, vid *jlm.Video) []int32 {
 		t.Fatalf("the container's video steps are %+v, its frames' geometry stated %v", vid.Pre, vid.Frames != nil)
 	}
 	for _, s := range stated {
-		if s.Kind == PreVideoResize {
+		if s.Kind == kindOf(t, "video_resize") {
 			if s.Ints[3] != vid.Pre[0].Ints[0] || s.Ints[4] != vid.Pre[0].Ints[1] {
 				t.Fatalf("the processor resizes with %v, the container with %v", s.Ints, vid.Pre[0].Ints)
 			}

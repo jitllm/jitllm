@@ -1,836 +1,1076 @@
 package convert
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
+	"slices"
+	"strings"
+
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// GeometryOf is the geometry of tower t's picture, from the steps its
-// stater wrote: the resize each states, read in the entry's patches, a
-// fixed square's grid side x side, the markers where the head writes them.
-func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
+// A processor's picture steps and the rules that state a picture's geometry
+// from them are the projector library's (projectors.json's pictures). A
+// stater writes a processor's own steps by name; the container holds none
+// of them: the rule that reads exactly the steps a picture takes states its
+// geometry (jlm.PictureGeometry) and lowers them to the container's generic
+// steps -- a resize to a fixed window (jlm.PreResize) or to each square's
+// own size (jlm.PreResizeLive), a canvas (jlm.PreCanvas). Every other step
+// (the normalisation) is kept as it is.
+
+// mjPictures is projectors.json's pictures: the processors' own steps by
+// name, and the rules.
+type mjPictures struct {
+	Steps map[string]*mjPicStep `json:"steps"`
+	Rules map[string]*mjPicRule `json:"rules"`
+}
+
+// mjPicStep is a step a rule reads: Code its kind where it is a processor's
+// own (0 for the container's step of that name), and the names of its ints
+// and floats, one ending in ? read as 0 where the step omits it.
+// LongestEdge names the int a processor config's size.longest_edge
+// restates.
+type mjPicStep struct {
+	Code        int      `json:"code"`
+	Ints        []string `json:"ints"`
+	Floats      []string `json:"floats"`
+	LongestEdge string   `json:"longest_edge"`
+}
+
+// mjPicRule is one processor's rule: the steps it reads (a picture takes it
+// where these are exactly the steps of any rule it takes), what their
+// numbers must satisfy, constants, definitions (an expression written
+// wherever its name is read), the bindings in order, the squares' count and
+// fields, the whole-picture stages, the bounds and the container's steps
+// the read ones lower to, in the place of the first.
+//
+// Its expressions are model.json's language over the steps' numbers (kind.
+// name), the tower's facts (patch, side, marks, widest), the resize names
+// (filter.*, prec.*), and, where the picture is read, its operands (w, h,
+// i the square, squares their count, frames) and the bindings. A part of an
+// expression that reads no operand is evaluated at conversion; ?: and where
+// of a constant condition take their branch there.
+type mjPicRule struct {
+	Doc     string            `json:"doc"`
+	Reads   []string          `json:"reads"`
+	Require []mjRequire       `json:"require"`
+	Const   []mjPicConst      `json:"const"`
+	Def     [][2]string       `json:"def"`
+	Bind    []mjPicBind       `json:"bind"`
+	Count   string            `json:"count"`
+	Square  map[string]string `json:"square"`
+	Stages  []mjPicStage      `json:"stages"`
+	Bounds  mjPicBounds       `json:"bounds"`
+	Lower   []mjPreStep       `json:"lower"`
+}
+
+// mjPicConst is a constant: Value, or the largest Max over the loops Each.
+type mjPicConst struct {
+	Let   string      `json:"let"`
+	Value string      `json:"value"`
+	Max   string      `json:"max"`
+	Each  [][4]string `json:"each"`
+}
+
+// mjPicBind is a binding: Let named Value (a value that is an operand or a
+// constant names it, and binds nothing); a row of the table Rows chosen as
+// jlm.PictureChoice states, its columns named Choose and read by Eligible,
+// Cost and Tie as the candidate row's; or Bind once for each turn of the
+// loops Each.
+type mjPicBind struct {
+	Let      string      `json:"let"`
+	Value    string      `json:"value"`
+	Choose   []string    `json:"choose"`
+	Rows     *mjPicTable `json:"rows"`
+	Eligible string      `json:"eligible"`
+	Cost     []string    `json:"cost"`
+	Tie      string      `json:"tie"`
+	Each     [][4]string `json:"each"`
+	Bind     []mjPicBind `json:"bind"`
+}
+
+// mjPicTable is a table of constant rows: Row for each turn of the loops
+// Each where If holds, grouped by Group's value where stated, each group in
+// the order its first row came. A loop is its variable, its first value,
+// the condition it runs while and its next value.
+type mjPicTable struct {
+	Each  [][4]string `json:"each"`
+	If    string      `json:"if"`
+	Row   []string    `json:"row"`
+	Group string      `json:"group"`
+}
+
+// mjPicStage is a whole-picture resize (jlm.PictureStage), stated where If
+// holds.
+type mjPicStage struct {
+	W      string `json:"w"`
+	H      string `json:"h"`
+	MaxPix string `json:"max_pix"`
+	If     string `json:"if"`
+}
+
+type mjPicBounds struct {
+	Unit       string `json:"unit"`
+	MaxPix     string `json:"max_pix"`
+	MaxPatches string `json:"max_patches"`
+}
+
+// Bounds on what a rule's loops and tables run to, so a statement sizes
+// nothing unchecked (RULE 9).
+const (
+	maxPicTurns = 1 << 16
+	maxPicDepth = 256
+)
+
+// picContext is the tower's facts a rule reads: the entry's patch, a fixed
+// square's grid side and whether the head writes marker rows.
+type picContext struct {
+	patch, side int
+	marks       bool
+}
+
+// pictureLibrary is projectors.json's pictures, checked: every rule reads
+// declared steps, no two read the same ones, and every expression parses.
+func pictureLibrary() (*mjPictures, error) {
+	var lib struct {
+		Pictures mjPictures `json:"pictures"`
+	}
+	if err := json.Unmarshal(projectorsJSON, &lib); err != nil {
+		return nil, fmt.Errorf("convert: projectors.json: %w", err)
+	}
+	l := &lib.Pictures
+	if err := l.check(); err != nil {
+		return nil, fmt.Errorf("convert: projectors.json: pictures: %w", err)
+	}
+	return l, nil
+}
+
+// PictureStep is the picture step a stater writes under name: the
+// container's own or a processor's (projectors.json's pictures).
+func PictureStep(name string) (jlm.PreKind, error) {
+	kinds, err := towerSteps()
+	if err != nil {
+		return 0, err
+	}
+	k, ok := kinds[name]
+	if !ok {
+		return 0, fmt.Errorf("convert: no picture step is named %q", name)
+	}
+	return k, nil
+}
+
+// containerSteps is the container's own picture steps by name.
+func containerSteps() map[string]jlm.PreKind {
+	return map[string]jlm.PreKind{
+		"resize": jlm.PreResize, "normalize": jlm.PreNormalize, "normalize_bf16": jlm.PreNormalizeBF16,
+		"resize_live": jlm.PreResizeLive, "canvas": jlm.PreCanvas,
+	}
+}
+
+// kinds is every step a stater may write by name: the container's and the
+// processors'.
+func (l *mjPictures) kinds() map[string]jlm.PreKind {
+	out := containerSteps()
+	for n, s := range l.Steps {
+		if s.Code != 0 {
+			out[n] = jlm.PreKind(s.Code)
+		}
+	}
+	return out
+}
+
+func (l *mjPictures) check() error {
+	own := containerSteps()
+	codes := map[int]string{}
+	for _, n := range slices.Sorted(maps.Keys(l.Steps)) {
+		s := l.Steps[n]
+		_, generic := own[n]
+		switch {
+		case s.Code == 0 && !generic:
+			return fmt.Errorf("step %s is no container step and states no code", n)
+		case s.Code != 0 && (generic || s.Code < 100 || s.Code > math.MaxUint8):
+			return fmt.Errorf("step %s: a processor's step is a code of 100 to 255 under a name of its own", n)
+		case codes[s.Code] != "" && s.Code != 0:
+			return fmt.Errorf("steps %s and %s share code %d", codes[s.Code], n, s.Code)
+		}
+		codes[s.Code] = n
+		if s.LongestEdge != "" && !slices.Contains(s.Ints, s.LongestEdge) {
+			return fmt.Errorf("step %s: its longest edge %q is none of its ints", n, s.LongestEdge)
+		}
+	}
+	seen := map[string]string{}
+	for _, n := range slices.Sorted(maps.Keys(l.Rules)) {
+		r := l.Rules[n]
+		if r.Doc == "" || len(r.Reads) == 0 || r.Count == "" {
+			return fmt.Errorf("rule %s states what it is, the steps it reads and its count", n)
+		}
+		for _, k := range r.Reads {
+			if l.Steps[k] == nil {
+				return fmt.Errorf("rule %s reads step %s, which is not declared", n, k)
+			}
+		}
+		key := strings.Join(slices.Sorted(slices.Values(r.Reads)), " ")
+		if seen[key] != "" {
+			return fmt.Errorf("rules %s and %s read the same steps", seen[key], n)
+		}
+		seen[key] = n
+		for f := range r.Square {
+			if _, ok := squareFields()[f]; !ok {
+				return fmt.Errorf("rule %s: %q is no square field", n, f)
+			}
+		}
+		for _, s := range r.Lower {
+			if _, ok := own[s.Kind]; !ok {
+				return fmt.Errorf("rule %s lowers to %q, which is no container step", n, s.Kind)
+			}
+		}
+		for _, src := range r.exprs() {
+			if _, err := parseExpr(src); err != nil {
+				return fmt.Errorf("rule %s: %w", n, err)
+			}
+		}
+	}
+	return nil
+}
+
+// exprs is every expression r states.
+func (r *mjPicRule) exprs() []string {
+	out := []string{r.Count, r.Bounds.Unit, r.Bounds.MaxPix, r.Bounds.MaxPatches}
+	for _, q := range r.Require {
+		out = append(out, q.That)
+	}
+	for _, c := range r.Const {
+		out = append(append(out, c.Value, c.Max), loopExprs(c.Each)...)
+	}
+	for _, d := range r.Def {
+		out = append(out, d[1])
+	}
+	var binds func(bs []mjPicBind)
+	binds = func(bs []mjPicBind) {
+		for _, b := range bs {
+			out = append(append(append(out, b.Value, b.Eligible, b.Tie), b.Cost...), loopExprs(b.Each)...)
+			if t := b.Rows; t != nil {
+				out = append(append(append(out, t.If, t.Group), t.Row...), loopExprs(t.Each)...)
+			}
+			binds(b.Bind)
+		}
+	}
+	binds(r.Bind)
+	for _, f := range slices.Sorted(maps.Keys(r.Square)) {
+		out = append(out, r.Square[f])
+	}
+	for _, s := range r.Stages {
+		out = append(out, s.W, s.H, s.MaxPix, s.If)
+	}
+	for _, s := range r.Lower {
+		out = append(append(out, s.Ints...), s.Floats...)
+	}
+	return slices.DeleteFunc(out, func(s string) bool { return s == "" })
+}
+
+func loopExprs(each [][4]string) []string {
+	var out []string
+	for _, l := range each {
+		out = append(out, l[1], l[2], l[3])
+	}
+	return out
+}
+
+// squareFields is a square's fields (jlm.SqOw, ...) by name.
+func squareFields() map[string]int {
+	return map[string]int{"ow": jlm.SqOw, "oh": jlm.SqOh, "x0": jlm.SqX0, "y0": jlm.SqY0, "pw": jlm.SqPw, "ph": jlm.SqPh,
+		"gw": jlm.SqGw, "gh": jlm.SqGh, "cw": jlm.SqCw, "ch": jlm.SqCh, "cx": jlm.SqCx, "cy": jlm.SqCy,
+		"mark": jlm.SqMark, "mark_n": jlm.SqMarkN, "trail": jlm.SqTrail, "trail_n": jlm.SqTrailN}
+}
+
+// squareDefaults is what a field a rule does not state is: the window and
+// the canvas the whole resize, nothing else.
+func squareDefaults() map[string]string {
+	return map[string]string{"pw": "ow", "ph": "oh", "cw": "ow", "ch": "oh"}
+}
+
+// pictureOperands is the operands a picture's expressions read by name.
+func pictureOperands() map[string]jlm.Arg {
+	return map[string]jlm.Arg{"w": jlm.Operand(jlm.PicW), "h": jlm.Operand(jlm.PicH), "i": jlm.Operand(jlm.PicSquare),
+		"squares": jlm.Operand(jlm.PicCount), "frames": jlm.Operand(jlm.PicFrames)}
+}
+
+// towerPicture is the geometry of tower t's picture under steps (its own,
+// or a video's frames read as pictures), and steps lowered: read in the
+// entry's patches, a fixed square's grid side x side, with the markers
+// where the head writes them.
+func towerPicture(l *mjPictures, t *jlm.Tower, v *jlm.Vision, steps []jlm.PreStep) (*jlm.PictureGeometry, []jlm.PreStep, error) {
 	ops := t.Entry.Ops
 	if len(ops) == 0 || ops[0].Code != jlm.TOpPatchify || ops[0].Span < 1 || v.PatchSize == 0 {
-		return nil, fmt.Errorf("convert: a picture's geometry of an entry that does not begin with its patches")
+		return nil, nil, fmt.Errorf("convert: a picture's geometry of an entry that does not begin with its patches")
 	}
-	p := int(ops[0].Span)
-	side := int(v.ImageSize / v.PatchSize)
+	c := picContext{patch: int(ops[0].Span), side: int(v.ImageSize / v.PatchSize)}
 	if len(t.Chain) > 0 {
-		side = int(v.ImageSize) / p
+		c.side = int(v.ImageSize) / c.patch
 	}
-	marks := false
 	for _, op := range t.Head.Ops {
-		marks = marks || op.Code == jlm.TOpMarkRow
+		c.marks = c.marks || op.Code == jlm.TOpMarkRow
 	}
-	var fixedW, fixedH, short, minT, maxT, longest, doubled, grid int
-	thumb, canvas, frame := false, false, false
-	for _, s := range t.Pre {
-		in := func(i int) int { return int(s.Ints[i]) }
-		switch s.Kind {
-		case jlm.PreResize:
-			fixedW, fixedH = in(0), in(1)
-		case PreResizeShort:
-			short = in(0)
-		case PreCenterCrop:
-			fixedW, fixedH = in(0), in(1)
-		case PreTile:
-			minT, maxT, thumb = in(0), in(1), in(2) == 1
-		case PreBestFit:
-			minT, maxT, thumb, canvas = 1, in(0), true, true
-		case PreLongTiles:
-			longest, doubled, grid = in(0), in(1), in(2)
-			frame = len(s.Ints) > 3 && in(3) == 1
-		case PreSmartResize:
-			return smartGeometry(in(0), in(1), in(2), len(s.Ints) == 6 && in(5) == 1, p), nil
-		case PreNaFlex:
-			return naflexGeometry(in(0), in(1), in(2)), nil
-		case PreLimitPad:
-			return limitGeometry(in(0), in(1), in(2), p), nil
-		case PreLongBox:
-			return boxGeometry(in(0), in(1), side), nil
-		case PreCapUnit:
-			return capGeometry(in(0), in(1), p), nil
-		case PreAspectBudget:
-			return budgetGeometry(in(0), in(1), in(2), p), nil
-		case PreTileSmart:
-			return smartTileGeometry(in(0), in(1), in(2), in(3), in(4), in(5), in(6), s.Floats[0], p), nil
-		case PreSliceUHD:
-			return sliceGeometry(in(0), in(1), in(2), p, marks), nil
+	return l.picture(steps, c)
+}
+
+// videoFrames is the geometry of video v's frames where it reads them
+// through an entry of its own, read in its patches, and its steps lowered.
+func videoFrames(l *mjPictures, v *jlm.Video) (*jlm.PictureGeometry, []jlm.PreStep, error) {
+	if len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != jlm.TOpPatchify || v.Entry.Ops[0].Span < 1 {
+		return nil, nil, fmt.Errorf("convert: a video's frames' geometry of an entry that does not begin with their patches")
+	}
+	g, pre, err := l.picture(v.Pre, picContext{patch: int(v.Entry.Ops[0].Span)})
+	if err != nil {
+		return nil, nil, fmt.Errorf("convert: the video's frames: %w", err)
+	}
+	return g, pre, nil
+}
+
+// restateLongestEdge sets the int each step's kind names its longest edge
+// to edge, a processor config's size.longest_edge.
+func (l *mjPictures) restateLongestEdge(steps []jlm.PreStep, edge int32) {
+	byKind := map[jlm.PreKind]*mjPicStep{}
+	for _, s := range l.Steps {
+		if s.Code != 0 {
+			byKind[jlm.PreKind(s.Code)] = s
 		}
 	}
-	switch {
-	case longest > 0 && fixedW > 0:
-		if (longest+fixedW-1)/fixedW > grid {
-			return nil, fmt.Errorf("convert: a longer side of %d pixels is more tiles of %d than the %d a side the processor names",
-				longest, fixedW, grid)
+	for i := range steps {
+		if d := byKind[steps[i].Kind]; d != nil && d.LongestEdge != "" {
+			if k := slices.Index(d.Ints, d.LongestEdge); k < len(steps[i].Ints) {
+				steps[i].Ints[k] = edge
+			}
 		}
-		return longTileGeometry(longest, fixedW, side, doubled, grid, marks, frame), nil
-	case canvas:
-		return canvasGeometry(maxT, fixedW, side, marks), nil
-	case maxT > 0:
-		return tileGeometry(minT, maxT, thumb, fixedW, side), nil
-	case short > 0:
-		return shortCropGeometry(short, fixedW, fixedH, side), nil
-	case fixedW > 0:
-		return fixedGeometry(fixedW, fixedH, side), nil
 	}
-	return nil, fmt.Errorf("convert: a picture never resized to the tower's size")
 }
 
-// geom builds a picture's geometry (jlm.PictureGeometry): bindings in
-// order, each an expression of the picture's sides and the bindings before
-// it, or a choice from a table; then the squares' count and fields. Every
-// constant is exact: the host evaluates them in float64, as the processors'
-// Python does.
-type geom struct {
-	g jlm.PictureGeometry
-	n uint32
-}
-
-func newGeom() *geom { return &geom{n: jlm.PicBound} }
-
-// The picture's operands.
-func pw() jlm.Arg { return jlm.Operand(jlm.PicW) }
-func ph() jlm.Arg { return jlm.Operand(jlm.PicH) }
-func pi() jlm.Arg { return jlm.Operand(jlm.PicSquare) }
-func pn() jlm.Arg { return jlm.Operand(jlm.PicCount) }
-func pf() jlm.Arg { return jlm.Operand(jlm.PicFrames) }
-
-// k is the exact constant v.
-func k(v float64) jlm.Arg { return jlm.ExactNum(v) }
-
-// built is the expression f states, its value its last term.
-func built(f func(e *sizes) jlm.Arg) jlm.Expr {
-	var e sizes
-	a := f(&e)
-	if a.Kind != jlm.ArgTerm || int(a.Index) != len(e.T)-1 {
-		e.add(a, k(0))
+// picture is the geometry the rule reading exactly steps' processor steps
+// states, and steps lowered.
+func (l *mjPictures) picture(steps []jlm.PreStep, c picContext) (*jlm.PictureGeometry, []jlm.PreStep, error) {
+	read := map[string]bool{}
+	for _, r := range l.Rules {
+		for _, k := range r.Reads {
+			read[k] = true
+		}
 	}
-	return e.expr()
+	names := map[jlm.PreKind]string{}
+	for n, k := range l.kinds() {
+		names[k] = n
+	}
+	at := map[string]int{}
+	for i, s := range steps {
+		n := names[s.Kind]
+		if !read[n] {
+			continue
+		}
+		if _, twice := at[n]; twice {
+			return nil, nil, fmt.Errorf("convert: a picture takes two %s steps", n)
+		}
+		at[n] = i
+	}
+	taken := strings.Join(slices.Sorted(maps.Keys(at)), " ")
+	for _, rn := range slices.Sorted(maps.Keys(l.Rules)) {
+		r := l.Rules[rn]
+		if strings.Join(slices.Sorted(slices.Values(r.Reads)), " ") != taken {
+			continue
+		}
+		env := newPicEnv(c)
+		first := len(steps)
+		for _, k := range r.Reads {
+			first = min(first, at[k])
+			if err := env.params(k, l.Steps[k], &steps[at[k]]); err != nil {
+				return nil, nil, fmt.Errorf("convert: picture rule %s: %w", rn, err)
+			}
+		}
+		g, err := env.state(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("convert: picture rule %s: %w", rn, err)
+		}
+		lowered, err := env.lower(r.Lower)
+		if err != nil {
+			return nil, nil, fmt.Errorf("convert: picture rule %s: %w", rn, err)
+		}
+		var out []jlm.PreStep
+		for i, s := range steps {
+			if i == first {
+				out = append(out, lowered...)
+			}
+			if read[names[s.Kind]] {
+				continue
+			}
+			out = append(out, jlm.PreStep{Kind: s.Kind, Ints: slices.Clone(s.Ints), Floats: slices.Clone(s.Floats)})
+		}
+		return g, out, nil
+	}
+	if taken == "" {
+		return nil, nil, fmt.Errorf("convert: a picture never resized to the tower's size")
+	}
+	return nil, nil, fmt.Errorf("convert: no picture rule of the library reads exactly the steps %s", taken)
 }
 
-// value binds the value f states and is its operand.
-func (b *geom) value(f func(e *sizes) jlm.Arg) jlm.Arg {
-	b.g.Bind = append(b.g.Bind, jlm.PictureBind{Value: built(f)})
-	b.n++
-	return jlm.Operand(b.n - 1)
+// picEnv is a rule's scope while it is stated: constants by name (the
+// steps' numbers, the tower's facts, the resize names, constants and the
+// loops' variables), definitions, and the operands names read.
+type picEnv struct {
+	consts map[string]float64
+	defs   map[string]*exprNode
+	args   map[string]jlm.Arg
+	depth  int
 }
 
-// choose binds a row of rows by the choice's rule, its expressions given
-// the row's operands; the row's operands are returned, the chosen row's
-// values once bound.
-func (b *geom) choose(rows [][]float64, eligible func(e *sizes, row []jlm.Arg) jlm.Arg,
-	costs []func(e *sizes, row []jlm.Arg) jlm.Arg, tie func(e *sizes, row []jlm.Arg) jlm.Arg) []jlm.Arg {
-	cols := len(rows[0])
-	row := make([]jlm.Arg, cols)
-	for j := range row {
-		row[j] = jlm.Operand(b.n + uint32(j))
+func newPicEnv(c picContext) *picEnv {
+	e := &picEnv{consts: map[string]float64{"patch": float64(c.patch), "side": float64(c.side), "widest": widestPicture},
+		defs: map[string]*exprNode{}, args: pictureOperands()}
+	if c.marks {
+		e.consts["marks"] = 1
+	} else {
+		e.consts["marks"] = 0
+	}
+	for k, f := range map[string]jlm.Filter{"two_tap": jlm.FilterTwoTap, "pil_bilinear": jlm.FilterPILBilinear,
+		"pil_bicubic": jlm.FilterPILBicubic, "pil_lanczos": jlm.FilterPILLanczos} {
+		e.consts["filter."+k] = float64(f)
+	}
+	for k, p := range map[string]jlm.Precision{"float": jlm.PrecFloat, "pil": jlm.PrecPIL, "torch": jlm.PrecTorch} {
+		e.consts["prec."+k] = float64(p)
+	}
+	return e
+}
+
+// params names step s's numbers kind.name as d declares them.
+func (e *picEnv) params(kind string, d *mjPicStep, s *jlm.PreStep) error {
+	bind := func(names []string, n int, at func(i int) float64) error {
+		need := 0
+		for _, nm := range names {
+			if !strings.HasSuffix(nm, "?") {
+				need++
+			}
+		}
+		if n < need || n > len(names) {
+			return fmt.Errorf("a %s step of %d numbers where it states %d to %d", kind, n, need, len(names))
+		}
+		for i, nm := range names {
+			v := 0.0
+			if i < n {
+				v = at(i)
+			}
+			e.consts[kind+"."+strings.TrimSuffix(nm, "?")] = v
+		}
+		return nil
+	}
+	if err := bind(d.Ints, len(s.Ints), func(i int) float64 { return float64(s.Ints[i]) }); err != nil {
+		return err
+	}
+	return bind(d.Floats, len(s.Floats), func(i int) float64 { return float64(s.Floats[i]) })
+}
+
+// state is the geometry r states.
+func (e *picEnv) state(r *mjPicRule) (*jlm.PictureGeometry, error) {
+	for _, c := range r.Const {
+		v, err := e.constant(c)
+		if err != nil {
+			return nil, fmt.Errorf("const %s: %w", c.Let, err)
+		}
+		e.consts[c.Let] = v
+	}
+	for _, q := range r.Require {
+		v, err := e.number(q.That)
+		if err != nil {
+			return nil, err
+		}
+		if !(v > 0) {
+			return nil, fmt.Errorf("%s", q.Else)
+		}
+	}
+	for _, d := range r.Def {
+		n, err := parseExpr(d[1])
+		if err != nil {
+			return nil, err
+		}
+		e.defs[d[0]] = n
+	}
+	g := &jlm.PictureGeometry{}
+	n := uint32(jlm.PicBound)
+	if err := e.binds(g, &n, r.Bind); err != nil {
+		return nil, err
+	}
+	var err error
+	if g.Count, err = e.expr(r.Count); err != nil {
+		return nil, fmt.Errorf("count: %w", err)
+	}
+	src := maps.Clone(r.Square)
+	for _, f := range []string{"ow", "oh", "gw", "gh"} {
+		if src[f] == "" {
+			return nil, fmt.Errorf("the square's %s is not stated", f)
+		}
+	}
+	for f, d := range squareDefaults() {
+		if src[f] == "" {
+			src[f] = src[d]
+		}
+	}
+	for f, k := range squareFields() {
+		s := src[f]
+		if s == "" {
+			s = "0"
+		}
+		if g.Square[k], err = e.expr(s); err != nil {
+			return nil, fmt.Errorf("square %s: %w", f, err)
+		}
+	}
+	for _, s := range r.Stages {
+		if s.If != "" {
+			on, err := e.number(s.If)
+			if err != nil {
+				return nil, err
+			}
+			if !(on > 0) {
+				continue
+			}
+		}
+		var st jlm.PictureStage
+		if st.W, err = e.expr(s.W); err != nil {
+			return nil, err
+		}
+		if st.H, err = e.expr(s.H); err != nil {
+			return nil, err
+		}
+		px, err := e.whole(s.MaxPix)
+		if err != nil {
+			return nil, err
+		}
+		st.MaxPix = px
+		g.Stages = append(g.Stages, st)
+	}
+	b := &g.Bounds
+	for _, f := range []struct {
+		to  *int32
+		src string
+	}{{&b.Unit, r.Bounds.Unit}, {&b.MaxPix, r.Bounds.MaxPix}, {&b.MaxPatches, r.Bounds.MaxPatches}} {
+		if *f.to, err = e.whole(f.src); err != nil {
+			return nil, fmt.Errorf("bounds: %w", err)
+		}
+	}
+	return g, nil
+}
+
+// lower is the container's steps ss states.
+func (e *picEnv) lower(ss []mjPreStep) ([]jlm.PreStep, error) {
+	var out []jlm.PreStep
+	for _, s := range ss {
+		step := jlm.PreStep{Kind: containerSteps()[s.Kind]}
+		for _, src := range s.Ints {
+			v, err := e.whole(src)
+			if err != nil {
+				return nil, err
+			}
+			step.Ints = append(step.Ints, v)
+		}
+		for _, src := range s.Floats {
+			v, err := e.number(src)
+			if err != nil {
+				return nil, err
+			}
+			step.Floats = append(step.Floats, float32(v))
+		}
+		out = append(out, step)
+	}
+	return out, nil
+}
+
+// binds states bs's bindings into g, n the next operand.
+func (e *picEnv) binds(g *jlm.PictureGeometry, n *uint32, bs []mjPicBind) error {
+	for _, b := range bs {
+		switch {
+		case b.Each != nil:
+			if err := e.loop(b.Each, func() error { return e.binds(g, n, b.Bind) }); err != nil {
+				return err
+			}
+		case b.Choose != nil:
+			if err := e.choose(g, n, &b); err != nil {
+				return fmt.Errorf("choice of %v: %w", b.Choose, err)
+			}
+		default:
+			if b.Let == "" {
+				return fmt.Errorf("a binding of no name")
+			}
+			if _, ok := pictureOperands()[b.Let]; ok {
+				return fmt.Errorf("binding %s names a picture operand", b.Let)
+			}
+			var x sizes
+			a, err := e.lowered(&x, b.Value)
+			if err != nil {
+				return fmt.Errorf("%s: %w", b.Let, err)
+			}
+			if len(x.T) == 0 {
+				e.args[b.Let] = a
+				continue
+			}
+			g.Bind = append(g.Bind, jlm.PictureBind{Value: finished(&x, a)})
+			e.args[b.Let] = jlm.Operand(*n)
+			*n++
+		}
+	}
+	return nil
+}
+
+// choose binds a row of b's table, its columns the operands from n.
+func (e *picEnv) choose(g *jlm.PictureGeometry, n *uint32, b *mjPicBind) error {
+	if b.Rows == nil {
+		return fmt.Errorf("a choice of no table")
+	}
+	rows, err := e.table(b.Rows)
+	if err != nil {
+		return err
+	}
+	cols := len(b.Choose)
+	if len(rows) == 0 || cols == 0 {
+		return fmt.Errorf("a table of %d rows of %d columns", len(rows), cols)
 	}
 	c := &jlm.PictureChoice{Cols: int32(cols)}
 	for _, r := range rows {
+		if len(r) != cols {
+			return fmt.Errorf("a row of %d values where the choice names %d", len(r), cols)
+		}
 		c.Rows = append(c.Rows, r...)
 	}
-	of := func(f func(e *sizes, row []jlm.Arg) jlm.Arg) jlm.Expr {
-		if f == nil {
-			return jlm.Expr{}
+	for j, nm := range b.Choose {
+		e.args[nm] = jlm.Operand(*n + uint32(j))
+	}
+	of := func(src string) (jlm.Expr, error) {
+		if src == "" {
+			return jlm.Expr{}, nil
 		}
-		return built(func(e *sizes) jlm.Arg { return f(e, row) })
+		return e.expr(src)
 	}
-	c.Eligible, c.Tie = of(eligible), of(tie)
-	for _, f := range costs {
-		c.Cost = append(c.Cost, of(f))
+	if c.Eligible, err = of(b.Eligible); err != nil {
+		return err
 	}
-	b.g.Bind = append(b.g.Bind, jlm.PictureBind{Choice: c})
-	b.n += uint32(cols)
-	return row
-}
-
-// field states square field f.
-func (b *geom) field(f int, fn func(e *sizes) jlm.Arg) { b.g.Square[f] = built(fn) }
-
-// count states the squares' count.
-func (b *geom) count(fn func(e *sizes) jlm.Arg) { b.g.Count = built(fn) }
-
-// one states a picture of one square: the resize size, the window the whole
-// of it, the grid, the canvas the resize.
-func (b *geom) one(ow, oh, gw, gh jlm.Arg) {
-	b.count(func(e *sizes) jlm.Arg { return k(1) })
-	b.whole(ow, oh, gw, gh)
-}
-
-// whole states every field of a square that is the whole resize: ow x oh,
-// read as a gw x gh grid.
-func (b *geom) whole(ow, oh, gw, gh jlm.Arg) {
-	for f, a := range map[int]jlm.Arg{jlm.SqOw: ow, jlm.SqOh: oh, jlm.SqPw: ow, jlm.SqPh: oh, jlm.SqGw: gw, jlm.SqGh: gh,
-		jlm.SqCw: ow, jlm.SqCh: oh, jlm.SqX0: k(0), jlm.SqY0: k(0), jlm.SqCx: k(0), jlm.SqCy: k(0),
-		jlm.SqMark: k(0), jlm.SqMarkN: k(0), jlm.SqTrail: k(0), jlm.SqTrailN: k(0)} {
-		b.field(f, func(e *sizes) jlm.Arg { return a })
+	if c.Tie, err = of(b.Tie); err != nil {
+		return err
 	}
-}
-
-func (b *geom) done(unit, maxPix, maxPatches int) *jlm.PictureGeometry {
-	b.g.Bounds = jlm.PictureBounds{Unit: int32(unit), MaxPix: int32(maxPix), MaxPatches: int32(maxPatches)}
-	return &b.g
-}
-
-// Arithmetic of the builder.
-func (e *sizes) floor(a jlm.Arg) jlm.Arg     { return e.fn(jlm.FnFloor, a) }
-func (e *sizes) ceil(a jlm.Arg) jlm.Arg      { return e.fn(jlm.FnCeil, a) }
-func (e *sizes) trunc(a jlm.Arg) jlm.Arg     { return e.fn(jlm.FnTrunc, a) }
-func (e *sizes) roundEven(a jlm.Arg) jlm.Arg { return e.fn(jlm.FnRoundEven, a) }
-func (e *sizes) abs(a jlm.Arg) jlm.Arg       { return e.fn(jlm.FnAbs, a) }
-func (e *sizes) sqrt(a jlm.Arg) jlm.Arg      { return e.fn(jlm.FnSqrt, a) }
-func (e *sizes) log(a jlm.Arg) jlm.Arg       { return e.fn(jlm.FnLog, a) }
-func (e *sizes) f32(a jlm.Arg) jlm.Arg       { return e.fn(jlm.FnF32, a) }
-func (e *sizes) equal(a, b jlm.Arg) jlm.Arg  { return e.Fn(jlm.FnEqual, a, b) }
-
-// mod is a - b*floor(a/b), a whole and b positive.
-func (e *sizes) mod(a, b jlm.Arg) jlm.Arg { return e.sub(a, e.mul(b, e.floor(e.div(a, b)))) }
-
-// idiv is floor(a/b), a whole and b positive.
-func (e *sizes) idiv(a, b jlm.Arg) jlm.Arg { return e.floor(e.div(a, b)) }
-
-// fixedGeometry is a picture resized whole to pw x ph, read as a side x
-// side grid.
-func fixedGeometry(w, h, side int) *jlm.PictureGeometry {
-	b := newGeom()
-	b.one(k(float64(w)), k(float64(h)), k(float64(side)), k(float64(side)))
-	return b.done(0, w*h, side*side)
-}
-
-// shortCropGeometry is a picture resized so its shorter side is short and
-// its longer int(short * long / short), then its centre w x h window, read
-// as a side x side grid (transformers' resize and center_crop).
-func shortCropGeometry(short, w, h, side int) *jlm.PictureGeometry {
-	b := newGeom()
-	s := k(float64(short))
-	ow := b.value(func(e *sizes) jlm.Arg { return e.where(e.less(ph(), pw()), e.trunc(e.div(e.mul(s, pw()), ph())), s) })
-	oh := b.value(func(e *sizes) jlm.Arg { return e.where(e.less(ph(), pw()), s, e.trunc(e.div(e.mul(s, ph()), pw()))) })
-	b.one(ow, oh, k(float64(side)), k(float64(side)))
-	b.field(jlm.SqPw, func(e *sizes) jlm.Arg { return k(float64(w)) })
-	b.field(jlm.SqPh, func(e *sizes) jlm.Arg { return k(float64(h)) })
-	b.field(jlm.SqX0, func(e *sizes) jlm.Arg { return e.idiv(e.sub(ow, k(float64(w))), k(2)) })
-	b.field(jlm.SqY0, func(e *sizes) jlm.Arg { return e.idiv(e.sub(oh, k(float64(h))), k(2)) })
-	return b.done(0, w*h, side*side)
-}
-
-// smartSize binds a picture's own size under Qwen2-VL's smart_resize: where
-// lift, a side shorter than factor scaled up first so that side is factor
-// and each truncated; each side rounded half to even to a multiple of
-// factor -- none for a side under half of one, or at least one where floor
-// (LFM2-VL's); then past maxPix both scaled down by sqrt(area / maxPix) and
-// floored to factors, at least one, or short of minPix scaled up by
-// sqrt(minPix / area) and ceiled.
-func (b *geom) smartSize(w, h jlm.Arg, factor, minPix, maxPix int, lift, floor bool) (ow, oh jlm.Arg) {
-	fa := k(float64(factor))
-	if lift {
-		small := func(e *sizes) jlm.Arg { return e.add(e.less(w, fa), e.less(h, fa)) }
-		scale := func(e *sizes) jlm.Arg { return e.max(e.div(fa, h), e.div(fa, w)) }
-		lw := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(w, scale(e))), w) })
-		lh := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(h, scale(e))), h) })
-		w, h = lw, lh
-	}
-	round := func(e *sizes, v jlm.Arg) jlm.Arg {
-		n := e.roundEven(e.div(v, fa))
-		if floor {
-			n = e.max(n, k(1))
+	for _, src := range b.Cost {
+		x, err := of(src)
+		if err != nil {
+			return err
 		}
-		return e.mul(n, fa)
+		c.Cost = append(c.Cost, x)
 	}
-	rw := b.value(func(e *sizes) jlm.Arg { return round(e, w) })
-	rh := b.value(func(e *sizes) jlm.Arg { return round(e, h) })
-	// Side v of the picture, r its rounding.
-	side := func(v, r jlm.Arg) func(e *sizes) jlm.Arg {
-		return func(e *sizes) jlm.Arg {
-			area := e.mul(w, h)
-			pix := e.mul(rw, rh)
-			down := e.sqrt(e.div(area, k(float64(maxPix))))
-			up := e.sqrt(e.div(k(float64(minPix)), area))
-			shrunk := e.max(fa, e.mul(e.floor(e.div(e.div(v, down), fa)), fa))
-			grown := e.mul(e.ceil(e.div(e.mul(v, up), fa)), fa)
-			return e.where(e.less(k(float64(maxPix)), pix), shrunk, e.where(e.less(pix, k(float64(minPix))), grown, r))
-		}
-	}
-	return b.value(side(w, rw)), b.value(side(h, rh))
+	g.Bind = append(g.Bind, jlm.PictureBind{Choice: c})
+	*n += uint32(cols)
+	return nil
 }
 
-// FramesOf is the geometry of video v's frames where it reads them through
-// an entry of its own: one square, the size its resize (PreVideoResize)
-// gives frames of w x h sized together in PicFrames, read in the entry's
-// patches; none where the processor refuses them.
-func FramesOf(v *jlm.Video) (*jlm.PictureGeometry, error) {
-	if len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != jlm.TOpPatchify || v.Entry.Ops[0].Span < 1 {
-		return nil, fmt.Errorf("convert: a video's frames' geometry of an entry that does not begin with their patches")
-	}
-	for _, s := range v.Pre {
-		if s.Kind != PreVideoResize {
-			continue
+// table is t's rows.
+func (e *picEnv) table(t *mjPicTable) ([][]float64, error) {
+	var keys []float64
+	var rows [][]float64
+	err := e.loop(t.Each, func() error {
+		if t.If != "" {
+			ok, err := e.number(t.If)
+			if err != nil || !(ok > 0) {
+				return err
+			}
 		}
-		if len(s.Ints) != 6 && len(s.Ints) != 7 || s.Ints[0] <= 0 || s.Ints[5] < 1 {
-			return nil, fmt.Errorf("convert: a video resized with %v", s.Ints)
+		row := make([]float64, len(t.Row))
+		for j, src := range t.Row {
+			v, err := e.number(src)
+			if err != nil {
+				return err
+			}
+			row[j] = v
 		}
-		in := func(i int) int { return int(s.Ints[i]) }
-		alone := len(s.Ints) == 7 && s.Ints[6] == 1
-		return videoGeometry(in(0), in(1), in(2), in(5), alone, int(v.Entry.Ops[0].Span)), nil
-	}
-	return nil, fmt.Errorf("convert: a video's frames never resized")
-}
-
-// videoGeometry is Qwen's video smart_resize (PreVideoResize) of frames
-// sized together in PicFrames, or each alone, in multiples of factor; a
-// frame past an aspect of 200, or fewer frames than per sized together,
-// becomes no square.
-func videoGeometry(factor, minPix, maxPix, per int, alone bool, patch int) *jlm.PictureGeometry {
-	b := newGeom()
-	fa := k(float64(factor))
-	w, h, n, t := pw(), ph(), pf(), k(float64(per))
-	if alone {
-		n, t = k(1), k(1)
-	} else {
-		small := func(e *sizes) jlm.Arg { return e.add(e.less(w, fa), e.less(h, fa)) }
-		scale := func(e *sizes) jlm.Arg { return e.max(e.div(fa, h), e.div(fa, w)) }
-		lw := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(w, scale(e))), w) })
-		lh := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(h, scale(e))), h) })
-		w, h = lw, lh
-	}
-	wb := b.value(func(e *sizes) jlm.Arg { return e.mul(e.roundEven(e.div(w, fa)), fa) })
-	hb := b.value(func(e *sizes) jlm.Arg { return e.mul(e.roundEven(e.div(h, fa)), fa) })
-	tb := b.value(func(e *sizes) jlm.Arg { return e.mul(e.roundEven(e.div(n, t)), t) })
-	side := func(v, r jlm.Arg) func(e *sizes) jlm.Arg {
-		return func(e *sizes) jlm.Arg {
-			area := e.mul(n, e.mul(w, h))
-			pix := e.mul(tb, e.mul(wb, hb))
-			down := e.sqrt(e.div(area, k(float64(maxPix))))
-			up := e.sqrt(e.div(k(float64(minPix)), area))
-			shrunk := e.max(fa, e.mul(e.floor(e.div(e.div(v, down), fa)), fa))
-			grown := e.mul(e.ceil(e.div(e.mul(v, up), fa)), fa)
-			return e.where(e.less(k(float64(maxPix)), pix), shrunk, e.where(e.less(pix, k(float64(minPix))), grown, r))
+		key := 0.0
+		if t.Group != "" {
+			v, err := e.number(t.Group)
+			if err != nil {
+				return err
+			}
+			key = v
 		}
-	}
-	ow, oh := b.value(side(w, wb)), b.value(side(h, hb))
-	b.count(func(e *sizes) jlm.Arg {
-		long := e.less(k(200), e.div(e.max(w, h), e.min(w, h)))
-		few := k(0)
-		if !alone {
-			few = e.less(pf(), t)
+		if len(rows) >= maxPicTurns {
+			return fmt.Errorf("a table past %d rows", maxPicTurns)
 		}
-		return e.where(e.add(long, few), k(0), k(1))
+		keys, rows = append(keys, key), append(rows, row)
+		return nil
 	})
-	p := k(float64(patch))
-	gw := b.value(func(e *sizes) jlm.Arg { return e.idiv(ow, p) })
-	gh := b.value(func(e *sizes) jlm.Arg { return e.idiv(oh, p) })
-	b.whole(ow, oh, gw, gh)
-	most := maxPix
-	if !alone {
-		most = maxPix / per
+	if err != nil || t.Group == "" {
+		return rows, err
 	}
-	return b.done(factor, most, most/(patch*patch))
+	var order []float64
+	for _, k := range keys {
+		if !slices.Contains(order, k) {
+			order = append(order, k)
+		}
+	}
+	var out [][]float64
+	for _, k := range order {
+		for i, r := range rows {
+			if keys[i] == k {
+				out = append(out, r)
+			}
+		}
+	}
+	return out, nil
 }
 
-// smartGeometry is a picture at its own size under smart_resize (smartSize),
-// read in patches of patch pixels.
-func smartGeometry(factor, minPix, maxPix int, lift bool, patch int) *jlm.PictureGeometry {
-	b := newGeom()
-	ow, oh := b.smartSize(pw(), ph(), factor, minPix, maxPix, lift, false)
-	b.ownSize(ow, oh, patch)
-	return b.done(factor, maxPix, maxPix/(patch*patch))
+// loop runs body for every turn of each's loops, outermost first, each
+// variable a constant while its loop runs.
+func (e *picEnv) loop(each [][4]string, body func() error) error {
+	if len(each) == 0 {
+		return body()
+	}
+	l := each[0]
+	was, had := e.consts[l[0]]
+	defer func() {
+		if had {
+			e.consts[l[0]] = was
+		} else {
+			delete(e.consts, l[0])
+		}
+	}()
+	v, err := e.number(l[1])
+	if err != nil {
+		return err
+	}
+	for turn := 0; ; turn++ {
+		if turn >= maxPicTurns {
+			return fmt.Errorf("loop %s past %d turns", l[0], maxPicTurns)
+		}
+		e.consts[l[0]] = v
+		on, err := e.number(l[2])
+		if err != nil {
+			return err
+		}
+		if !(on > 0) {
+			return nil
+		}
+		if err := e.loop(each[1:], body); err != nil {
+			return err
+		}
+		e.consts[l[0]] = v
+		if v, err = e.number(l[3]); err != nil {
+			return err
+		}
+	}
 }
 
-// ownSize states a picture of one square at its own size ow x oh, read in
-// patches of patch pixels.
-func (b *geom) ownSize(ow, oh jlm.Arg, patch int) {
-	p := k(float64(patch))
-	gw := b.value(func(e *sizes) jlm.Arg { return e.idiv(ow, p) })
-	gh := b.value(func(e *sizes) jlm.Arg { return e.idiv(oh, p) })
-	b.one(ow, oh, gw, gh)
-}
-
-// naflexGeometry is a picture at SigLIP2's NaFlex size: its own whole
-// patches' count clamped to [lo, hi], then get_image_size_for_max_num_patches'
-// bisection for the largest scale whose sides, ceiled to whole patches and
-// at least one, hold that many -- its halvings unrolled, each a pair of
-// bounds.
-func naflexGeometry(patch, lo, hi int) *jlm.PictureGeometry {
-	b := newGeom()
-	p := k(float64(patch))
-	target := b.value(func(e *sizes) jlm.Arg {
-		n := e.max(e.mul(e.idiv(pw(), p), e.idiv(ph(), p)), k(1))
-		return e.min(e.max(n, k(float64(lo))), k(float64(hi)))
+// constant is c's value.
+func (e *picEnv) constant(c mjPicConst) (float64, error) {
+	if c.Each == nil {
+		return e.number(c.Value)
+	}
+	best, found := 0.0, false
+	err := e.loop(c.Each, func() error {
+		v, err := e.number(c.Max)
+		if err == nil && (!found || v > best) {
+			best, found = v, true
+		}
+		return err
 	})
-	scaled := func(e *sizes, scale, size jlm.Arg) jlm.Arg {
-		return e.max(p, e.mul(e.ceil(e.div(e.mul(size, scale), p)), p))
+	if err == nil && !found {
+		err = fmt.Errorf("a largest value over no turn")
 	}
-	const eps = 1e-5
-	smin, smax := k(eps/10), k(100)
-	for l := 100 - eps/10; l >= eps; l /= 2 {
-		lo, hi := smin, smax
-		over := func(e *sizes) jlm.Arg {
-			sc := e.div(e.add(lo, hi), k(2))
-			th, tw := scaled(e, sc, ph()), scaled(e, sc, pw())
-			return e.less(target, e.mul(e.div(th, p), e.div(tw, p)))
-		}
-		mid := func(e *sizes) jlm.Arg { return e.div(e.add(lo, hi), k(2)) }
-		smin = b.value(func(e *sizes) jlm.Arg { return e.where(over(e), lo, mid(e)) })
-		smax = b.value(func(e *sizes) jlm.Arg { return e.where(over(e), mid(e), hi) })
-	}
-	ow := b.value(func(e *sizes) jlm.Arg { return scaled(e, smin, pw()) })
-	oh := b.value(func(e *sizes) jlm.Arg { return scaled(e, smin, ph()) })
-	b.ownSize(ow, oh, patch)
-	return b.done(patch, hi*patch*patch, hi)
+	return best, err
 }
 
-// limitGeometry is a picture kept at its size unless its whole limitPatch
-// patches pass limit, where both sides are scaled by sqrt(limit / patches)
-// and truncated; read over its grid padded to multiples of pad pixels
-// (Kimi-VL's rescale with pad_input). Its squares reach the most patches a
-// picture pads to: a side of a whole patches pads to at most a over the
-// pad's patches plus one of them, and its other side has at most limit/a
-// (any up to the widest picture where a is zero).
-func limitGeometry(limitPatch, limit, pad, patch int) *jlm.PictureGeometry {
-	b := newGeom()
-	lp := k(float64(limitPatch))
-	scale := func(e *sizes) jlm.Arg {
-		n := e.mul(e.idiv(pw(), lp), e.idiv(ph(), lp))
-		return e.where(e.less(k(float64(limit)), n), e.sqrt(e.div(k(float64(limit)), n)), k(1))
+// number is src's value at conversion, an error where it reads an operand.
+func (e *picEnv) number(src string) (float64, error) {
+	n, err := parseExpr(src)
+	if err != nil {
+		return 0, err
 	}
-	ow := b.value(func(e *sizes) jlm.Arg { return e.trunc(e.mul(pw(), scale(e))) })
-	oh := b.value(func(e *sizes) jlm.Arg { return e.trunc(e.mul(ph(), scale(e))) })
-	padded := func(v jlm.Arg) func(e *sizes) jlm.Arg {
-		return func(e *sizes) jlm.Arg {
-			return e.idiv(e.mul(e.ceil(e.div(v, k(float64(pad)))), k(float64(pad))), k(float64(patch)))
+	v, ok, err := e.fold(n)
+	if err == nil && !ok {
+		err = fmt.Errorf("%q reads the picture, where a constant belongs", src)
+	}
+	return v, err
+}
+
+// whole is number(src) as an int32, an error where it is not one.
+func (e *picEnv) whole(src string) (int32, error) {
+	v, err := e.number(src)
+	if err == nil && (v != math.Trunc(v) || math.Abs(v) > math.MaxInt32) {
+		err = fmt.Errorf("%q is %v, not a whole number", src, v)
+	}
+	return int32(v), err
+}
+
+// expr is src's expression, its value its last term.
+func (e *picEnv) expr(src string) (jlm.Expr, error) {
+	var x sizes
+	a, err := e.lowered(&x, src)
+	if err != nil {
+		return jlm.Expr{}, err
+	}
+	return finished(&x, a), nil
+}
+
+func (e *picEnv) lowered(x *sizes, src string) (jlm.Arg, error) {
+	n, err := parseExpr(src)
+	if err != nil {
+		return jlm.Arg{}, err
+	}
+	return e.lowerNode(x, n)
+}
+
+// finished is x with a its value: an operand, a constant or an earlier term
+// is written as it plus zero.
+func finished(x *sizes, a jlm.Arg) jlm.Expr {
+	if a.Kind != jlm.ArgTerm || int(a.Index) != len(x.T)-1 {
+		x.add(a, jlm.ExactNum(0))
+	}
+	return x.expr()
+}
+
+func (e *picEnv) enter() error {
+	if e.depth++; e.depth > maxPicDepth {
+		return fmt.Errorf("an expression nested past %d (a definition that reads itself?)", maxPicDepth)
+	}
+	return nil
+}
+
+// fold is n's value where it reads no operand (ok), evaluated as the host
+// evaluates the expression.
+func (e *picEnv) fold(n *exprNode) (float64, bool, error) {
+	if err := e.enter(); err != nil {
+		return 0, false, err
+	}
+	defer func() { e.depth-- }()
+	switch n.op {
+	case "num":
+		return n.num, true, nil
+	case "bool":
+		if n.b {
+			return 1, true, nil
+		}
+		return 0, true, nil
+	case "path":
+		if a, ok := e.args[n.str]; ok {
+			return a.Exact, a.Kind == jlm.ArgExact, nil
+		}
+		if v, ok := e.consts[n.str]; ok {
+			return v, true, nil
+		}
+		if d, ok := e.defs[n.str]; ok {
+			return e.fold(d)
+		}
+		return 0, false, fmt.Errorf("%q is no picture operand, binding, definition or constant", n.str)
+	case "?:":
+		c, ok, err := e.fold(n.args[0])
+		if err != nil || !ok {
+			return 0, false, err
+		}
+		if c > 0 {
+			return e.fold(n.args[1])
+		}
+		return e.fold(n.args[2])
+	case "call":
+		if n.str == "where" && len(n.args) == 3 {
+			c, ok, err := e.fold(n.args[0])
+			if err != nil || !ok {
+				return 0, false, err
+			}
+			if c > 0 {
+				return e.fold(n.args[1])
+			}
+			return e.fold(n.args[2])
 		}
 	}
-	gw, gh := b.value(padded(ow)), b.value(padded(oh))
-	b.one(ow, oh, gw, gh)
-	b.field(jlm.SqCw, func(e *sizes) jlm.Arg { return e.mul(gw, k(float64(patch))) })
-	b.field(jlm.SqCh, func(e *sizes) jlm.Arg { return e.mul(gh, k(float64(patch))) })
-	u, most, maxPatches := pad/patch, widestPicture/patch, 0
-	for a := 0; a <= most; a++ {
-		other := most
+	var v [3]float64
+	if len(n.args) > len(v) {
+		return 0, false, fmt.Errorf("%s of %d operands", n.op, len(n.args))
+	}
+	all := true
+	for i, a := range n.args {
+		x, ok, err := e.fold(a)
+		if err != nil {
+			return 0, false, err
+		}
+		v[i], all = x, all && ok
+	}
+	if !all {
+		return 0, false, nil
+	}
+	f, swap, err := picFn(n)
+	if err != nil {
+		return 0, false, err
+	}
+	if swap {
+		v[0], v[1] = v[1], v[0]
+	}
+	return applyFn(f, n.op, v[0], v[1], v[2]), true, nil
+}
+
+// picFn is the function n applies, its two operands swapped where swap (a >
+// b is b < a), and the composite operators' leading function.
+func picFn(n *exprNode) (f jlm.Fn, swap bool, err error) {
+	switch n.op {
+	case "+":
+		return jlm.FnAdd, false, nil
+	case "-", "neg", "!", "!=", "<=", ">=", "%":
+		return jlm.FnSub, false, nil
+	case "*", "&&":
+		return jlm.FnMul, false, nil
+	case "||":
+		return jlm.FnAdd, false, nil
+	case "/":
+		return jlm.FnDiv, false, nil
+	case "<":
+		return jlm.FnLess, false, nil
+	case ">":
+		return jlm.FnLess, true, nil
+	case "==":
+		return jlm.FnEqual, false, nil
+	case "call":
+		f, ok := picFns()[n.str]
+		if !ok {
+			return 0, false, fmt.Errorf("%s is no function a picture's expression calls", n.str)
+		}
+		if f.Arity() != len(n.args) {
+			return 0, false, fmt.Errorf("%s of %d operands", n.str, len(n.args))
+		}
+		return f, false, nil
+	}
+	return 0, false, fmt.Errorf("%q is no operation a picture's expression writes", n.op)
+}
+
+func picFns() map[string]jlm.Fn {
+	return map[string]jlm.Fn{"min": jlm.FnMin, "max": jlm.FnMax, "where": jlm.FnWhere, "floor": jlm.FnFloor,
+		"ceil": jlm.FnCeil, "trunc": jlm.FnTrunc, "round": jlm.FnRound, "round_even": jlm.FnRoundEven, "abs": jlm.FnAbs,
+		"sqrt": jlm.FnSqrt, "log": jlm.FnLog, "f32": jlm.FnF32}
+}
+
+// applyFn is op over a, b and c in float64, as the host evaluates its
+// terms (lowerNode writes the same terms).
+func applyFn(f jlm.Fn, op string, a, b, c float64) float64 {
+	is := func(x bool) float64 {
+		if x {
+			return 1
+		}
+		return 0
+	}
+	switch op {
+	case "neg":
+		return 0 - a
+	case "!":
+		return 1 - a
+	case "!=":
+		return 1 - is(a == b)
+	case "<=":
+		return 1 - is(b < a)
+	case ">=":
+		return 1 - is(a < b)
+	case "%":
+		return a - b*math.Floor(a/b)
+	}
+	switch f {
+	case jlm.FnAdd:
+		return a + b
+	case jlm.FnSub:
+		return a - b
+	case jlm.FnMul:
+		return a * b
+	case jlm.FnDiv:
+		return a / b
+	case jlm.FnMin:
+		return min(a, b)
+	case jlm.FnMax:
+		return max(a, b)
+	case jlm.FnLess:
+		return is(a < b)
+	case jlm.FnEqual:
+		return is(a == b)
+	case jlm.FnWhere:
 		if a > 0 {
-			other = min(most, limit/a)
+			return b
 		}
-		maxPatches = max(maxPatches, (a/u+1)*u*((other/u+1)*u))
+		return c
+	case jlm.FnFloor:
+		return math.Floor(a)
+	case jlm.FnCeil:
+		return math.Ceil(a)
+	case jlm.FnTrunc:
+		return math.Trunc(a)
+	case jlm.FnRound:
+		return math.Round(a)
+	case jlm.FnRoundEven:
+		return math.RoundToEven(a)
+	case jlm.FnAbs:
+		return math.Abs(a)
+	case jlm.FnSqrt:
+		return math.Sqrt(a)
+	case jlm.FnLog:
+		return math.Log(a)
+	case jlm.FnF32:
+		return float64(float32(a))
 	}
-	return b.done(pad, limit*limitPatch*limitPatch, maxPatches)
+	return math.NaN()
 }
 
-// boxGeometry is a picture resized so its longer side is box pixels and its
-// shorter round-half-even(side * box / longer), at least boxMin, laid on the
-// box (Janus's resize and pad_to_square), read as a side x side grid.
-func boxGeometry(box, boxMin, side int) *jlm.PictureGeometry {
-	b := newGeom()
-	bx := k(float64(box))
-	d := func(e *sizes) jlm.Arg { return e.div(bx, e.max(pw(), ph())) }
-	ow := b.value(func(e *sizes) jlm.Arg { return e.max(e.roundEven(e.mul(pw(), d(e))), k(float64(boxMin))) })
-	oh := b.value(func(e *sizes) jlm.Arg { return e.max(e.roundEven(e.mul(ph(), d(e))), k(float64(boxMin))) })
-	b.one(ow, oh, k(float64(side)), k(float64(side)))
-	b.field(jlm.SqCw, func(e *sizes) jlm.Arg { return bx })
-	b.field(jlm.SqCh, func(e *sizes) jlm.Arg { return bx })
-	b.field(jlm.SqCx, func(e *sizes) jlm.Arg { return e.idiv(e.sub(bx, ow), k(2)) })
-	b.field(jlm.SqCy, func(e *sizes) jlm.Arg { return e.idiv(e.sub(bx, oh), k(2)) })
-	return b.done(0, box*box, side*side)
-}
-
-// capGeometry is a picture whose longer side, past capSide, is brought to it
-// -- both sides divided by longer / capSide and floored -- then each side
-// rounded up to a whole unit (Pixtral's resize), read in patch-pixel patches.
-func capGeometry(capSide, unit, patch int) *jlm.PictureGeometry {
-	b := newGeom()
-	r := func(e *sizes) jlm.Arg { return e.div(e.max(pw(), ph()), k(float64(capSide))) }
-	side := func(v jlm.Arg) func(e *sizes) jlm.Arg {
-		return func(e *sizes) jlm.Arg {
-			s := e.where(e.less(k(1), r(e)), e.floor(e.div(v, r(e))), v)
-			return e.mul(e.add(e.idiv(e.sub(e.max(s, k(1)), k(1)), k(float64(unit))), k(1)), k(float64(unit)))
+// lowerNode writes n's terms into x, its value the operand returned: a part
+// that reads no operand a constant, a condition that reads none its branch.
+func (e *picEnv) lowerNode(x *sizes, n *exprNode) (jlm.Arg, error) {
+	v, ok, err := e.fold(n)
+	if err != nil {
+		return jlm.Arg{}, err
+	}
+	if ok {
+		return jlm.ExactNum(v), nil
+	}
+	if err := e.enter(); err != nil {
+		return jlm.Arg{}, err
+	}
+	defer func() { e.depth-- }()
+	switch n.op {
+	case "path":
+		if a, ok := e.args[n.str]; ok {
+			return a, nil
 		}
-	}
-	ow, oh := b.value(side(pw())), b.value(side(ph()))
-	b.ownSize(ow, oh, patch)
-	top := (capSide + unit - 1) / unit * unit
-	return b.done(unit, top*top, top*top/(patch*patch))
-}
-
-// budgetGeometry is the largest size of the picture's aspect within budget
-// patches of budgetPatch pixels, each side whole units: both scaled by
-// sqrt(budget area / area) and floored to the unit; a side that floors to
-// nothing one unit, the other the aspect's whole multiple of it, at most the
-// budget's units a row (Gemma 4's get_aspect_ratio_preserving_size).
-func budgetGeometry(budget, budgetPatch, unit, patch int) *jlm.PictureGeometry {
-	b := newGeom()
-	u := k(float64(unit))
-	s := b.value(func(e *sizes) jlm.Arg {
-		return e.sqrt(e.div(k(float64(budget*budgetPatch*budgetPatch)), e.mul(ph(), pw())))
-	})
-	th := b.value(func(e *sizes) jlm.Arg { return e.mul(e.floor(e.div(e.mul(s, ph()), u)), u) })
-	tw := b.value(func(e *sizes) jlm.Arg { return e.mul(e.floor(e.div(e.mul(s, pw()), u)), u) })
-	g := unit / budgetPatch
-	most := k(float64((budget / (g * g)) * unit))
-	zero := func(e *sizes, v jlm.Arg) jlm.Arg { return e.equal(v, k(0)) }
-	ow := b.value(func(e *sizes) jlm.Arg {
-		both := e.mul(zero(e, th), zero(e, tw))
-		onlyH := e.mul(zero(e, th), e.sub(k(1), zero(e, tw)))
-		onlyW := e.mul(zero(e, tw), e.sub(k(1), zero(e, th)))
-		fromH := e.min(e.mul(e.floor(e.div(pw(), ph())), u), most)
-		return e.where(both, u, e.where(onlyH, fromH, e.where(onlyW, u, tw)))
-	})
-	oh := b.value(func(e *sizes) jlm.Arg {
-		both := e.mul(zero(e, th), zero(e, tw))
-		onlyH := e.mul(zero(e, th), e.sub(k(1), zero(e, tw)))
-		onlyW := e.mul(zero(e, tw), e.sub(k(1), zero(e, th)))
-		fromW := e.min(e.mul(e.floor(e.div(ph(), pw())), u), most)
-		return e.where(both, u, e.where(onlyH, u, e.where(onlyW, fromW, th)))
-	})
-	b.ownSize(ow, oh, patch)
-	return b.done(unit, budget*budgetPatch*budgetPatch, budget*budgetPatch*budgetPatch/(patch*patch))
-}
-
-// grids is every columns x rows grid of minT to maxT tiles in the order the
-// tilers walk them: by tile count, columns ascending (InternVL's
-// target_ratios, stably sorted).
-func grids(minT, maxT int) [][]float64 {
-	var out [][]float64
-	for n := minT; n <= maxT; n++ {
-		for c := 1; c <= maxT; c++ {
-			if n%c == 0 {
-				out = append(out, []float64{float64(c), float64(n / c)})
+		return e.lowerNode(x, e.defs[n.str])
+	case "?:", "call":
+		if n.op == "?:" || n.str == "where" && len(n.args) == 3 {
+			if c, ok, err := e.fold(n.args[0]); err != nil {
+				return jlm.Arg{}, err
+			} else if ok && c > 0 {
+				return e.lowerNode(x, n.args[1])
+			} else if ok {
+				return e.lowerNode(x, n.args[2])
 			}
 		}
 	}
-	return out
-}
-
-// closestGrid binds the grid of grids whose aspect is closest to the
-// picture's, a tie to the later grid while the picture's area is more than
-// half of it in s-pixel tiles (find_closest_aspect_ratio): its columns and
-// rows.
-func (b *geom) closestGrid(minT, maxT, s int) (cols, rows jlm.Arg) {
-	g := b.choose(grids(minT, maxT), nil,
-		[]func(e *sizes, row []jlm.Arg) jlm.Arg{func(e *sizes, row []jlm.Arg) jlm.Arg {
-			return e.abs(e.sub(e.div(pw(), ph()), e.div(row[0], row[1])))
-		}},
-		func(e *sizes, row []jlm.Arg) jlm.Arg {
-			return e.sub(e.mul(pw(), ph()), e.mul(k(0.5*float64(s*s)), e.mul(row[0], row[1])))
-		})
-	return g[0], g[1]
-}
-
-// tileGeometry is a picture cut into the grid of minT to maxT s-pixel tiles
-// closest to its aspect (closestGrid), resized onto it and cut row-major,
-// then, where thumb and the grid is more than one tile, the whole resized to
-// one tile; each read as a side x side grid (InternVL's dynamic_preprocess).
-func tileGeometry(minT, maxT int, thumb bool, s, side int) *jlm.PictureGeometry {
-	b := newGeom()
-	cols, rows := b.closestGrid(minT, maxT, s)
-	b.tiles(cols, rows, thumb, s, side, func(e *sizes) jlm.Arg { return e.mul(cols, k(float64(s))) },
-		func(e *sizes) jlm.Arg { return e.mul(rows, k(float64(s))) })
-	return b.done(0, s*s, side*side)
-}
-
-// longTileGeometry is Idefics3's cut (SmolVLM's): the picture's longer side
-// resized to longest pixels and its shorter at the aspect, truncated, a
-// whole even number, at least one (_resize_output_size_rescale_to_max_len);
-// then the longer side up to whole s-pixel tiles and the shorter at that
-// resize's aspect, truncated and up to whole tiles
-// (resize_for_vision_encoder), each resize a stage of its own; cut
-// row-major, or for a frame (SmolVLMVideoProcessor) the first resize to one
-// tile and no cut; then for more than one tile
-// the whole resized to one tile (split_images); each read as a side x side
-// grid. With marks, the marker runs PreLongTiles states, the double
-// newline doubled rows of the table and the tiles' pairs a grid-square
-// grid's.
-func longTileGeometry(longest, s, side, doubled, grid int, marks, frame bool) *jlm.PictureGeometry {
-	b := newGeom()
-	l, sz := k(float64(longest)), k(float64(s))
-	atLeast := func(e *sizes, a, c jlm.Arg) jlm.Arg { return e.sub(k(1), e.less(a, c)) }
-	even := func(e *sizes, v jlm.Arg) jlm.Arg { return e.max(e.add(v, e.mod(v, k(2))), k(1)) }
-	wide := b.value(func(e *sizes) jlm.Arg { return atLeast(e, pw(), ph()) })
-	w1 := b.value(func(e *sizes) jlm.Arg { return e.where(wide, l, even(e, e.trunc(e.mul(l, e.div(pw(), ph()))))) })
-	h1 := b.value(func(e *sizes) jlm.Arg { return e.where(wide, even(e, e.trunc(e.div(l, e.div(pw(), ph())))), l) })
-	up := func(e *sizes, v jlm.Arg) jlm.Arg { return e.mul(e.ceil(e.div(v, sz)), sz) }
-	wide1 := b.value(func(e *sizes) jlm.Arg { return atLeast(e, w1, h1) })
-	w2 := b.value(func(e *sizes) jlm.Arg {
-		if frame {
-			return sz
-		}
-		return e.where(wide1, up(e, w1), up(e, e.trunc(e.mul(up(e, h1), e.div(w1, h1)))))
-	})
-	h2 := b.value(func(e *sizes) jlm.Arg {
-		if frame {
-			return sz
-		}
-		return e.where(wide1, up(e, e.trunc(e.div(up(e, w1), e.div(w1, h1)))), up(e, h1))
-	})
-	cols := b.value(func(e *sizes) jlm.Arg { return e.div(w2, sz) })
-	rows := b.value(func(e *sizes) jlm.Arg { return e.div(h2, sz) })
-	n := b.value(func(e *sizes) jlm.Arg { return e.mul(cols, rows) })
-	b.tiles(cols, rows, true, s, side, func(e *sizes) jlm.Arg { return w2 }, func(e *sizes) jlm.Arg { return h2 })
-	if marks {
-		span := k(float64(grid))
-		fake, pairs := k(float64(2+doubled)), float64(4+doubled)
-		one := func(e *sizes) jlm.Arg { return e.equal(n, k(1)) }
-		tile := func(e *sizes) jlm.Arg { return e.mul(e.less(k(1), n), e.less(pi(), n)) }
-		global := func(e *sizes) jlm.Arg { return e.mul(e.less(k(1), n), e.equal(pi(), n)) }
-		b.field(jlm.SqMark, func(e *sizes) jlm.Arg {
-			place := e.add(e.mul(e.idiv(pi(), cols), span), e.mod(pi(), cols))
-			return e.where(tile(e), e.add(k(pairs), e.mul(k(2), place)), e.where(global(e), k(2), fake))
-		})
-		b.field(jlm.SqMarkN, func(e *sizes) jlm.Arg {
-			return e.where(one(e), k(2), e.where(global(e), k(float64(doubled+2)), k(2)))
-		})
-		rowEnd := func(e *sizes) jlm.Arg {
-			return e.mul(e.equal(e.mod(pi(), cols), e.sub(cols, k(1))), e.less(e.idiv(pi(), cols), e.sub(rows, k(1))))
-		}
-		b.field(jlm.SqTrail, func(e *sizes) jlm.Arg { return e.where(tile(e), rowEnd(e), fake) })
-		b.field(jlm.SqTrailN, func(e *sizes) jlm.Arg { return e.where(tile(e), rowEnd(e), k(1)) })
-	}
-	// The processor resizes the picture twice before it cuts, each resize
-	// reading the last one's uint8 output: the squares are of the second. A
-	// frame's square is the first resized once more.
-	most := (longest + s - 1) / s * s
-	b.g.Stages = []jlm.PictureStage{
-		{W: built(func(e *sizes) jlm.Arg { return w1 }), H: built(func(e *sizes) jlm.Arg { return h1 }), MaxPix: int32(longest * longest)},
-		{W: built(func(e *sizes) jlm.Arg { return w2 }), H: built(func(e *sizes) jlm.Arg { return h2 }), MaxPix: int32(most * most)},
-	}
-	if frame {
-		b.g.Stages = b.g.Stages[:1]
-	}
-	return b.done(0, s*s, side*side)
-}
-
-// tiles states cols x rows tiles of s pixels cut from the picture resized to
-// ow x oh, then a thumbnail of the whole where thumb and there is more than
-// one, each read as a side x side grid.
-func (b *geom) tiles(cols, rows jlm.Arg, thumb bool, s, side int, ow, oh func(e *sizes) jlm.Arg) {
-	sz := k(float64(s))
-	n := b.value(func(e *sizes) jlm.Arg { return e.mul(cols, rows) })
-	b.count(func(e *sizes) jlm.Arg {
-		if !thumb {
-			return n
-		}
-		return e.add(n, e.less(k(1), n))
-	})
-	tile := func(e *sizes) jlm.Arg { return e.less(pi(), n) }
-	for f, v := range map[int]func(e *sizes) jlm.Arg{
-		jlm.SqOw: func(e *sizes) jlm.Arg { return e.where(tile(e), ow(e), sz) },
-		jlm.SqOh: func(e *sizes) jlm.Arg { return e.where(tile(e), oh(e), sz) },
-		jlm.SqX0: func(e *sizes) jlm.Arg { return e.where(tile(e), e.mul(e.mod(pi(), cols), sz), k(0)) },
-		jlm.SqY0: func(e *sizes) jlm.Arg { return e.where(tile(e), e.mul(e.idiv(pi(), cols), sz), k(0)) },
-		jlm.SqPw: func(e *sizes) jlm.Arg { return sz }, jlm.SqPh: func(e *sizes) jlm.Arg { return sz },
-		jlm.SqGw: func(e *sizes) jlm.Arg { return k(float64(side)) }, jlm.SqGh: func(e *sizes) jlm.Arg { return k(float64(side)) },
-		jlm.SqCw: func(e *sizes) jlm.Arg { return sz }, jlm.SqCh: func(e *sizes) jlm.Arg { return sz },
-		jlm.SqCx: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqCy: func(e *sizes) jlm.Arg { return k(0) },
-		jlm.SqMark: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqMarkN: func(e *sizes) jlm.Arg { return k(0) },
-		jlm.SqTrail: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqTrailN: func(e *sizes) jlm.Arg { return k(0) },
-	} {
-		b.field(f, v)
-	}
-}
-
-// canvases is every rows x columns canvas of at most most tiles in the
-// order Llama 4's processor walks them: tile counts from most down, each
-// count's factor pairs by rows ascending, grouped by aspect in the order
-// each first appears.
-func canvases(most int) [][]float64 {
-	var ratios []float64
-	byRatio := map[float64][][]float64{}
-	for n := most; n >= 1; n-- {
-		for r := 1; r <= n; r++ {
-			if n%r != 0 {
-				continue
-			}
-			q := float64(r) / float64(n/r)
-			if _, ok := byRatio[q]; !ok {
-				ratios = append(ratios, q)
-			}
-			byRatio[q] = append(byRatio[q], []float64{float64(r), float64(n / r)})
+	var a [3]jlm.Arg
+	for i, m := range n.args {
+		if a[i], err = e.lowerNode(x, m); err != nil {
+			return jlm.Arg{}, err
 		}
 	}
-	var out [][]float64
-	for _, q := range ratios {
-		out = append(out, byRatio[q]...)
+	if n.op == "?:" {
+		return x.where(a[0], a[1], a[2]), nil
 	}
-	return out
-}
-
-// canvasGeometry is a picture on the canvas of at most most s-pixel tiles
-// whose limiting scale is the smallest upscale, or failing any the largest
-// downscale, the smallest area breaking a tie (the scales float32, as the
-// reference divides two integer tensors): resized onto it without
-// distortion at its top left and cut row-major, then, for more than one
-// tile, the whole resized to one tile; each read as a side x side grid; with
-// marks, the canvas's marker runs (Llama 4's).
-func canvasGeometry(most, s, side int, marks bool) *jlm.PictureGeometry {
-	b := newGeom()
-	sz := k(float64(s))
-	scale := func(e *sizes, row []jlm.Arg) jlm.Arg {
-		sw := e.f32(e.div(e.mul(row[1], sz), pw()))
-		sh := e.f32(e.div(e.mul(row[0], sz), ph()))
-		return e.min(sh, sw)
+	f, swap, err := picFn(n)
+	if err != nil {
+		return jlm.Arg{}, err
 	}
-	g := b.choose(canvases(most), nil, []func(e *sizes, row []jlm.Arg) jlm.Arg{
-		func(e *sizes, row []jlm.Arg) jlm.Arg { return e.less(scale(e, row), k(1)) },
-		func(e *sizes, row []jlm.Arg) jlm.Arg {
-			v := scale(e, row)
-			return e.where(e.less(v, k(1)), e.sub(k(0), v), v)
-		},
-		func(e *sizes, row []jlm.Arg) jlm.Arg { return e.mul(row[0], row[1]) },
-	}, nil)
-	rows, cols := g[0], g[1]
-	// canvasSize: the largest size of the picture's aspect within the canvas
-	// and its own size raised to one tile, the shorter scale's side floored.
-	th := b.value(func(e *sizes) jlm.Arg { return e.min(e.max(ph(), sz), e.mul(rows, sz)) })
-	tw := b.value(func(e *sizes) jlm.Arg { return e.min(e.max(pw(), sz), e.mul(cols, sz)) })
-	wide := func(e *sizes) jlm.Arg { return e.less(e.div(tw, pw()), e.div(th, ph())) }
-	ow := b.value(func(e *sizes) jlm.Arg {
-		return e.max(e.where(wide(e), tw, e.min(e.floor(e.mul(pw(), e.div(th, ph()))), tw)), k(1))
-	})
-	oh := b.value(func(e *sizes) jlm.Arg {
-		return e.max(e.where(wide(e), e.min(e.floor(e.mul(ph(), e.div(tw, pw()))), th), th), k(1))
-	})
-	b.tiles(cols, rows, true, s, side, func(e *sizes) jlm.Arg { return ow }, func(e *sizes) jlm.Arg { return oh })
-	if marks {
-		last := func(e *sizes) jlm.Arg { return e.equal(pi(), e.sub(pn(), k(1))) }
-		inRow := func(e *sizes) jlm.Arg { return e.less(e.mod(pi(), cols), e.sub(cols, k(1))) }
-		b.field(jlm.SqMark, func(e *sizes) jlm.Arg { return e.mul(last(e), k(3)) })
-		b.field(jlm.SqMarkN, func(e *sizes) jlm.Arg { return last(e) })
-		b.field(jlm.SqTrail, func(e *sizes) jlm.Arg {
-			return e.mul(e.sub(k(1), last(e)), e.where(inRow(e), k(1), k(2)))
-		})
-		b.field(jlm.SqTrailN, func(e *sizes) jlm.Arg { return e.sub(k(1), last(e)) })
+	one := jlm.ExactNum(1)
+	switch n.op {
+	case "neg":
+		return x.sub(jlm.ExactNum(0), a[0]), nil
+	case "!":
+		return x.sub(one, a[0]), nil
+	case "!=":
+		return x.sub(one, x.Fn(jlm.FnEqual, a[0], a[1])), nil
+	case "<=":
+		return x.sub(one, x.less(a[1], a[0])), nil
+	case ">=":
+		return x.sub(one, x.less(a[0], a[1])), nil
+	case "%":
+		return x.sub(a[0], x.mul(a[1], x.fn(jlm.FnFloor, x.div(a[0], a[1])))), nil
 	}
-	return b.done(0, s*s, side*side)
-}
-
-// smartTileGeometry is LFM2-VL's: the picture at its own size (smartSize
-// over unit, minPix and maxPix, no lift, each side at least a unit); where its sides, rounded half to
-// even to units and at least a patch each, hold more than tolerance times
-// maxPix pixels, cut into the grid of minT to maxT s-pixel tiles closest to
-// its aspect, resized onto it and cut row-major, each tile marked by its
-// place (rows by span), then the whole at its own size as a thumbnail
-// marked after them; else the one piece at its own size.
-func smartTileGeometry(s, minT, maxT, smartPatch, unit, minPix, maxPix int, tolerance float32, patch int) *jlm.PictureGeometry {
-	b := newGeom()
-	ow, oh := b.smartSize(pw(), ph(), unit, minPix, maxPix, false, true)
-	u := k(float64(unit))
-	round := func(e *sizes, v jlm.Arg) jlm.Arg {
-		return e.max(k(float64(smartPatch)), e.mul(e.roundEven(e.div(v, u)), u))
+	if swap {
+		a[0], a[1] = a[1], a[0]
 	}
-	tiled := b.value(func(e *sizes) jlm.Arg {
-		return e.less(e.mul(k(float64(maxPix)), k(float64(tolerance))), e.mul(round(e, ph()), round(e, pw())))
-	})
-	gc, gr := b.closestGrid(minT, maxT, s)
-	cols := b.value(func(e *sizes) jlm.Arg { return e.where(tiled, gc, k(1)) })
-	rows := b.value(func(e *sizes) jlm.Arg { return e.where(tiled, gr, k(1)) })
-	n := b.value(func(e *sizes) jlm.Arg { return e.where(tiled, e.add(e.mul(cols, rows), k(1)), k(1)) })
-	b.count(func(e *sizes) jlm.Arg { return n })
-	sz, p := k(float64(s)), k(float64(patch))
-	tile := func(e *sizes) jlm.Arg { return e.less(pi(), e.sub(n, k(1))) }
-	span := k(float64(maxT))
-	for f, v := range map[int]func(e *sizes) jlm.Arg{
-		jlm.SqOw: func(e *sizes) jlm.Arg { return e.where(tile(e), e.mul(cols, sz), ow) },
-		jlm.SqOh: func(e *sizes) jlm.Arg { return e.where(tile(e), e.mul(rows, sz), oh) },
-		jlm.SqX0: func(e *sizes) jlm.Arg { return e.where(tile(e), e.mul(e.mod(pi(), cols), sz), k(0)) },
-		jlm.SqY0: func(e *sizes) jlm.Arg { return e.where(tile(e), e.mul(e.idiv(pi(), cols), sz), k(0)) },
-		jlm.SqPw: func(e *sizes) jlm.Arg { return e.where(tile(e), sz, ow) },
-		jlm.SqPh: func(e *sizes) jlm.Arg { return e.where(tile(e), sz, oh) },
-		jlm.SqGw: func(e *sizes) jlm.Arg { return e.idiv(e.where(tile(e), sz, ow), p) },
-		jlm.SqGh: func(e *sizes) jlm.Arg { return e.idiv(e.where(tile(e), sz, oh), p) },
-		jlm.SqCw: func(e *sizes) jlm.Arg { return e.where(tile(e), sz, ow) },
-		jlm.SqCh: func(e *sizes) jlm.Arg { return e.where(tile(e), sz, oh) },
-		jlm.SqCx: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqCy: func(e *sizes) jlm.Arg { return k(0) },
-		jlm.SqMark: func(e *sizes) jlm.Arg {
-			place := e.add(e.add(e.mul(e.idiv(pi(), cols), span), e.mod(pi(), cols)), k(1))
-			return e.where(tile(e), place, e.mul(tiled, e.add(e.mul(span, span), k(1))))
-		},
-		jlm.SqMarkN:  func(e *sizes) jlm.Arg { return e.where(tile(e), k(1), tiled) },
-		jlm.SqTrail:  func(e *sizes) jlm.Arg { return k(0) },
-		jlm.SqTrailN: func(e *sizes) jlm.Arg { return k(0) },
-	} {
-		b.field(f, v)
-	}
-	most := max(maxPix, s*s)
-	return b.done(unit, most, most/(patch*patch))
-}
-
-// sliceGeometry is llava-uhd's cut (MiniCPM-V's): an overview at its own
-// size -- slice^2 pixels at the picture's aspect, each side whole
-// slicePatch-pixel patches rounded half to even, at least one -- then,
-// where the picture's area over slice^2 rounds up past one, the slices of
-// the grid of at most most whose aspect is closest to the picture's (the
-// counts one either side of that multiple, each count's factor pairs in
-// order, the first of the least error): the picture resized to whole
-// best-sized slices and cut row-major, the overview upscaled only where
-// nothing is cut. With marks, <image> and </image> about the overview,
-// <slice> and </slice> about a slice, a slice row's first after the first
-// taking the last two before it.
-func sliceGeometry(slice, slicePatch, most, patch int, marks bool) *jlm.PictureGeometry {
-	b := newGeom()
-	sp := k(float64(slicePatch))
-	ss := k(float64(slice * slice))
-	multiple := b.value(func(e *sizes) jlm.Arg { return e.min(e.ceil(e.div(e.mul(pw(), ph()), ss)), k(float64(most))) })
-	cut := b.value(func(e *sizes) jlm.Arg { return e.less(k(1), multiple) })
-	var table [][]float64
-	for n := 2; n <= most; n++ {
-		for m := 1; m <= n; m++ {
-			if n%m == 0 {
-				table = append(table, []float64{float64(m), float64(n / m), float64(n)})
-			}
-		}
-	}
-	g := b.choose(table, func(e *sizes, row []jlm.Arg) jlm.Arg {
-		return e.less(e.abs(e.sub(row[2], multiple)), k(1.5))
-	}, []func(e *sizes, row []jlm.Arg) jlm.Arg{func(e *sizes, row []jlm.Arg) jlm.Arg {
-		return e.abs(e.sub(e.log(e.div(pw(), ph())), e.log(e.div(row[0], row[1]))))
-	}}, nil)
-	cols := b.value(func(e *sizes) jlm.Arg { return e.where(cut, g[0], k(1)) })
-	rows := b.value(func(e *sizes) jlm.Arg { return e.where(cut, g[1], k(1)) })
-	units := func(e *sizes, v, u jlm.Arg) jlm.Arg { return e.max(e.mul(e.roundEven(e.div(v, u)), u), u) }
-	// sliceSize of w x h: past slice^2, or where up, slice^2 at its aspect
-	// (the height truncated, the width the height times the aspect,
-	// truncated), then each side whole patches.
-	best := func(w, h jlm.Arg, up func(e *sizes) jlm.Arg) (jlm.Arg, jlm.Arg) {
-		big := func(e *sizes) jlm.Arg { return e.add(e.less(ss, e.mul(w, h)), up(e)) }
-		nh := func(e *sizes) jlm.Arg { return e.trunc(e.div(k(float64(slice)), e.sqrt(e.div(w, h)))) }
-		bh := b.value(func(e *sizes) jlm.Arg { return units(e, e.where(big(e), nh(e), h), sp) })
-		bw := b.value(func(e *sizes) jlm.Arg { return units(e, e.where(big(e), e.trunc(e.mul(nh(e), e.div(w, h))), w), sp) })
-		return bw, bh
-	}
-	ow, oh := best(pw(), ph(), func(e *sizes) jlm.Arg { return e.sub(k(1), cut) })
-	rw0 := b.value(func(e *sizes) jlm.Arg { return units(e, pw(), cols) })
-	rh0 := b.value(func(e *sizes) jlm.Arg { return units(e, ph(), rows) })
-	pw0 := b.value(func(e *sizes) jlm.Arg { return e.div(rw0, cols) })
-	ph0 := b.value(func(e *sizes) jlm.Arg { return e.div(rh0, rows) })
-	sw, sh := best(pw0, ph0, func(e *sizes) jlm.Arg { return k(1) })
-	b.count(func(e *sizes) jlm.Arg { return e.add(k(1), e.mul(cut, e.mul(cols, rows))) })
-	over := func(e *sizes) jlm.Arg { return e.equal(pi(), k(0)) }
-	kk := func(e *sizes) jlm.Arg { return e.sub(pi(), k(1)) }
-	p := k(float64(patch))
-	for f, v := range map[int]func(e *sizes) jlm.Arg{
-		jlm.SqOw: func(e *sizes) jlm.Arg { return e.where(over(e), ow, e.mul(sw, cols)) },
-		jlm.SqOh: func(e *sizes) jlm.Arg { return e.where(over(e), oh, e.mul(sh, rows)) },
-		jlm.SqX0: func(e *sizes) jlm.Arg { return e.where(over(e), k(0), e.mul(e.mod(kk(e), cols), sw)) },
-		jlm.SqY0: func(e *sizes) jlm.Arg { return e.where(over(e), k(0), e.mul(e.idiv(kk(e), cols), sh)) },
-		jlm.SqPw: func(e *sizes) jlm.Arg { return e.where(over(e), ow, sw) },
-		jlm.SqPh: func(e *sizes) jlm.Arg { return e.where(over(e), oh, sh) },
-		jlm.SqGw: func(e *sizes) jlm.Arg { return e.idiv(e.where(over(e), ow, sw), p) },
-		jlm.SqGh: func(e *sizes) jlm.Arg { return e.idiv(e.where(over(e), oh, sh), p) },
-		jlm.SqCw: func(e *sizes) jlm.Arg { return e.where(over(e), ow, sw) },
-		jlm.SqCh: func(e *sizes) jlm.Arg { return e.where(over(e), oh, sh) },
-		jlm.SqCx: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqCy: func(e *sizes) jlm.Arg { return k(0) },
-		jlm.SqMark: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqMarkN: func(e *sizes) jlm.Arg { return k(0) },
-		jlm.SqTrail: func(e *sizes) jlm.Arg { return k(0) }, jlm.SqTrailN: func(e *sizes) jlm.Arg { return k(0) },
-	} {
-		b.field(f, v)
-	}
-	if marks {
-		rowStart := func(e *sizes) jlm.Arg {
-			return e.mul(e.less(k(0), kk(e)), e.equal(e.mod(kk(e), cols), k(0)))
-		}
-		b.field(jlm.SqMark, func(e *sizes) jlm.Arg { return e.where(over(e), k(1), e.where(rowStart(e), k(5), k(3))) })
-		b.field(jlm.SqMarkN, func(e *sizes) jlm.Arg { return e.where(over(e), k(1), e.where(rowStart(e), k(2), k(1))) })
-		b.field(jlm.SqTrail, func(e *sizes) jlm.Arg { return e.where(over(e), k(2), k(4)) })
-		b.field(jlm.SqTrailN, func(e *sizes) jlm.Arg { return k(1) })
-	}
-	top := (slice + slicePatch) * (slice + slicePatch)
-	return b.done(slicePatch, top, top/(patch*patch))
+	return x.Fn(f, a[:f.Arity()]...), nil
 }

@@ -20,7 +20,7 @@ import (
 // container's stated tower (jlm.Tower) to what the converter knows of
 // idefics3: it validates, every weight its programs bind is a tensor of the
 // container, its square and patch grid are the tower's, its shuffle the
-// file's; the picture cut as Idefics3's processor cuts it (PreLongTiles, the
+// file's; the picture cut as Idefics3's processor cuts it (long_tiles, the
 // longer side to four squares, its "\n\n" one token of this vocabulary)
 // and resized by torchvision's Lanczos; the head writing its markers
 // (TOpMarkRow) from a table whose rows are the text table's rows of
@@ -73,7 +73,7 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 	// one square at the tower's size.
 	var cuts [][]int32
 	for _, s := range steps {
-		if s.Kind == PreLongTiles {
+		if s.Kind == kindOf(t, "long_tiles") {
 			cuts = append(cuts, s.Ints)
 		}
 	}
@@ -254,7 +254,7 @@ func TestLlavaStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if len(stated) != 3 || stated[0].Kind != PreResizeShort || stated[1].Kind != PreCenterCrop ||
+	if len(stated) != 3 || stated[0].Kind != kindOf(t, "resize_short") || stated[1].Kind != kindOf(t, "center_crop") ||
 		stated[0].Ints[0] != 336 || jlm.Filter(stated[0].Ints[1]) != jlm.FilterPILBicubic ||
 		stated[1].Ints[0] != 336 || stated[1].Ints[1] != 336 {
 		t.Errorf("the processor's steps are %+v, want Pillow's bicubic of the shorter side to 336 and its 336 centre", stated)
@@ -322,7 +322,7 @@ func TestInternVLTilesAreTheFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tw.Pre) == 0 || tw.Pre[0].Kind != PreTile || !reflect.DeepEqual(tw.Pre[0].Ints, []int32{2, 6, 1}) {
+	if len(tw.Pre) == 0 || tw.Pre[0].Kind != kindOf(t, "tile") || !reflect.DeepEqual(tw.Pre[0].Ints, []int32{2, 6, 1}) {
 		t.Errorf("the tiling step is %+v, want 2 to 6 tiles and a thumbnail", tw.Pre)
 	}
 }
@@ -366,7 +366,7 @@ func TestInternVLStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if len(stated) != 3 || stated[0].Kind != PreTile || !reflect.DeepEqual(stated[0].Ints, []int32{1, 12, 1}) ||
+	if len(stated) != 3 || stated[0].Kind != kindOf(t, "tile") || !reflect.DeepEqual(stated[0].Ints, []int32{1, 12, 1}) ||
 		stated[1].Ints[0] != 448 || jlm.Filter(stated[1].Ints[2]) != jlm.FilterPILBicubic {
 		t.Errorf("the processor's steps are %+v, want 1 to 12 tiles and a thumbnail, Pillow's bicubic to 448", stated)
 	}
@@ -451,7 +451,7 @@ func TestQwen2VLStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if len(stated) < 2 || stated[0].Kind != PreSmartResize ||
+	if len(stated) < 2 || stated[0].Kind != kindOf(t, "smart_resize") ||
 		!reflect.DeepEqual(stated[0].Ints, []int32{28, 56 * 56, 28 * 28 * 1280, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}) {
 		t.Errorf("the processor's steps are %+v, want a size of its own in 28s within 56^2 and 28^2*1280, Pillow's bicubic", stated)
 	}
@@ -590,7 +590,7 @@ func TestQwen35VLStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if pre := stated[0]; pre.Kind != PreSmartResize || pre.Ints[0] != 32 || pre.Ints[1] != 65536 || pre.Ints[2] != 16777216 {
+	if pre := stated[0]; pre.Kind != kindOf(t, "smart_resize") || pre.Ints[0] != 32 || pre.Ints[1] != 65536 || pre.Ints[2] != 16777216 {
 		t.Errorf("the processor's resize is %+v, want merge windows of 32 pixels within [65536, 16777216]", pre)
 	}
 	if tw.Pre[0].Kind != jlm.PreResizeLive || tw.Geometry == nil {

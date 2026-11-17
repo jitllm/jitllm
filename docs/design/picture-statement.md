@@ -8,10 +8,11 @@ picture fit, its squares, tiles, windows and classes: a step kind with one
 family behind it is that family's code (AGENTS.md, "the architecture is the
 converter's alone"), as the video record's flags were
 (docs/design/video-statement.md). This is the statement that replaced them:
-the processors' steps are the converter's (`convert.PreSmartResize` and the
-rest, `convert/picstep.go`), the converter states each processor's geometry
-from them and lowers them to generic steps, and the engine evaluates the
-geometry.
+the processors' steps are the converter's, stated in the projector
+library (`convert/projectors.json`'s `pictures`: each step's numbers by
+name, and a rule for each processor), the rule a picture's steps select
+states its geometry and the generic steps they lower to, and the engine
+evaluates the geometry.
 
 ## What is already generic
 
@@ -57,9 +58,27 @@ limiting scale, then area), MiniCPM-V's slices (|log aspect| over the
 counts either side of the multiple).
 
 NaFlex's bisection is a fixed 24 halvings of [1e-6, 100] at a 1e-5
-tolerance: the converter unrolls them into bindings, the midpoint, the
-sides it gives and the bound each keeps. No step runs a loop the container
-does not state.
+tolerance: its rule states the loop, which the converter unrolls into
+bindings, the midpoint, the sides it gives and the bound each keeps. No
+step runs a loop the container does not state.
+
+## The rules
+
+A rule is the library's statement of one processor, in model.json's
+expression language: the steps it reads (a picture takes the rule whose
+steps are exactly its processor steps), what their numbers must satisfy,
+constants, definitions (an expression written wherever its name is read),
+the bindings in order -- a value, a choice from a table, or bindings once
+for each turn of a loop over constants -- the count, the square's fields,
+the stages, the bounds, and the container's steps the read ones lower to.
+Its expressions read the steps' numbers (`kind.name`), the tower's facts
+(`patch`, `side`, `marks`, `widest`), the resize names (`filter.*`,
+`prec.*`) and, where the picture is read, its operands (`w`, `h`, `i`,
+`squares`, `frames`) and the bindings; a part that reads no operand is
+evaluated at conversion, and a condition that reads none takes its branch
+there. A table is constant rows from loops, a filter and, where stated, a
+grouping. The Go is the interpreter alone (`convert/picturegeom.go`): a new
+processor is a library entry.
 
 The expressions are evaluated on the host in float64, as Python computes
 them, which needs constants exact in float64 (`jlm.Arg` holds a float32
@@ -102,8 +121,10 @@ lays a live picture on a canvas, a pad and a letterbox alike.
    (`engine/testdata/picturegeom.sums`, recorded while step 2's gate held
    the two equal). The picture op then takes the canvas from the call.
 4. The family kinds go from `format/jlm` into the converter, which lowers
-   them (`lowerPicture`); the tower record's revision moves to 11 and an
-   older container is reconverted.
+   them; the tower record's revision moves to 11 and an older container is
+   reconverted.
+5. The processors' steps and their geometry become the projector library's
+   rules, and the Go builder of each goes; the sums of step 3 hold them.
 
 Each step keeps every tower's transformers gates, its card and seam gates,
 `TestATallPictureRunsInBands` and the warm allocation gate green.

@@ -141,21 +141,25 @@ func putSquare(h hash.Hash, sq model.Square) {
 }
 
 // restateStep converts fixture name's pair again with the processor's step
-// of kind k rewritten by edit (convert.WithPictureStep) and gives m the
+// named step (convert.PictureStep) rewritten by edit (convert.WithPictureStep) and gives m the
 // picture geometry the converter states from it: a golden made under the
 // processor's other bounds, or a gate's violation. The tower's classes stay
 // as they were formed.
-func restateStep(t *testing.T, m *model.Model, name string, k jlm.PreKind, edit func(s *jlm.PreStep)) {
+func restateStep(t *testing.T, m *model.Model, name, step string, edit func(s *jlm.PreStep)) {
 	t.Helper()
-	if !restateIfStated(t, m, name, k, edit) {
-		t.Fatalf("%s's processor states no step of kind %d", name, k)
+	if !restateIfStated(t, m, name, step, edit) {
+		t.Fatalf("%s's processor states no %s step", name, step)
 	}
 }
 
 // restateIfStated is restateStep's restatement, false and m left as it
-// was where the processor states no step of kind k.
-func restateIfStated(t *testing.T, m *model.Model, name string, k jlm.PreKind, edit func(s *jlm.PreStep)) bool {
+// was where the processor states no such step.
+func restateIfStated(t *testing.T, m *model.Model, name, step string, edit func(s *jlm.PreStep)) bool {
 	t.Helper()
+	k, err := convert.PictureStep(step)
+	if err != nil {
+		t.Fatal(err)
+	}
 	found := false
 	restate := convert.WithPictureStep(func(s *jlm.PreStep) {
 		if s.Kind == k {

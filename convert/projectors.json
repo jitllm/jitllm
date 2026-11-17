@@ -1188,5 +1188,323 @@
     "span": {"mark": "[IMG]", "after_marks": ["[IMG_END]"]}
    }
   }
+ },
+ "pictures": {
+  "steps": {
+   "resize": {"ints": ["w", "h", "filter", "prec"]},
+   "resize_short": {"code": 100, "ints": ["short", "filter", "prec"]},
+   "center_crop": {"code": 101, "ints": ["w", "h"]},
+   "tile": {"code": 102, "ints": ["min", "max", "thumb"]},
+   "smart_resize": {"code": 103, "ints": ["factor", "min_pix", "max_pix", "filter", "prec", "lift?"]},
+   "limit_pad": {"code": 104, "ints": ["patch", "limit", "pad", "filter", "prec"]},
+   "long_box": {"code": 105, "ints": ["box", "min", "r", "g", "b", "filter", "prec"]},
+   "naflex": {"code": 106, "ints": ["patch", "min", "max", "filter", "prec"]},
+   "cap_unit": {"code": 107, "ints": ["cap", "unit", "filter", "prec"]},
+   "aspect_budget": {"code": 108, "ints": ["budget", "patch", "unit", "filter", "prec"]},
+   "tile_smart": {"code": 109, "ints": ["tile", "min", "max", "patch", "unit", "min_pix", "max_pix", "filter", "prec"], "floats": ["tolerance"]},
+   "best_fit": {"code": 110, "ints": ["max"]},
+   "slice_uhd": {"code": 111, "ints": ["slice", "patch", "max", "filter", "prec"]},
+   "video_resize": {"code": 112, "ints": ["factor", "min_pix", "max_pix", "filter", "prec", "per", "alone?"]},
+   "long_tiles": {"code": 113, "ints": ["longest", "doubled", "grid", "frame?"], "longest_edge": "longest"}
+  },
+  "rules": {
+   "fixed": {
+    "doc": "The picture resized whole to the resize's window, read as a side x side grid.",
+    "reads": ["resize"],
+    "count": "1",
+    "square": {"ow": "resize.w", "oh": "resize.h", "gw": "side", "gh": "side"},
+    "bounds": {"unit": "0", "max_pix": "resize.w * resize.h", "max_patches": "side * side"},
+    "lower": [{"kind": "resize", "ints": ["resize.w", "resize.h", "resize.filter", "resize.prec"]}]
+   },
+   "short_crop": {
+    "doc": "transformers' resize to a shorter side, then center_crop: the picture resized, aspect kept, so its shorter side is short pixels and its longer int(short * long / short), then its centre w x h window at ((ow - w) / 2, (oh - h) / 2) floored, read as a side x side grid.",
+    "reads": ["resize_short", "center_crop"],
+    "bind": [
+     {"let": "ow", "value": "h < w ? trunc(resize_short.short * w / h) : resize_short.short"},
+     {"let": "oh", "value": "h < w ? resize_short.short : trunc(resize_short.short * h / w)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "side", "gh": "side", "pw": "center_crop.w", "ph": "center_crop.h",
+     "x0": "floor((ow - center_crop.w) / 2)", "y0": "floor((oh - center_crop.h) / 2)"},
+    "bounds": {"unit": "0", "max_pix": "center_crop.w * center_crop.h", "max_patches": "side * side"},
+    "lower": [{"kind": "resize", "ints": ["center_crop.w", "center_crop.h", "resize_short.filter", "resize_short.prec"]}]
+   },
+   "tiles": {
+    "doc": "InternVL's dynamic_preprocess: the picture cut into the grid of tile.min to tile.max tiles of the resize's size whose aspect is closest to the picture's (find_closest_aspect_ratio over target_ratios: every columns x rows grid by tile count, columns ascending; a tie to the later grid while the picture's area is more than half of it), resized onto it and cut row-major, then, where tile.thumb is 1 and the grid is more than one tile, the whole resized to one tile; each read as a side x side grid.",
+    "reads": ["resize", "tile"],
+    "def": [["cut", "i < n"]],
+    "bind": [
+     {"choose": ["cols", "rows"],
+      "rows": {"each": [["t", "tile.min", "t <= tile.max", "t + 1"], ["c", "1", "c <= tile.max", "c + 1"]], "if": "t % c == 0", "row": ["c", "t / c"]},
+      "cost": ["abs(w / h - cols / rows)"], "tie": "w * h - 0.5 * resize.w * resize.w * (cols * rows)"},
+     {"let": "n", "value": "cols * rows"}
+    ],
+    "count": "tile.thumb == 1 ? n + (1 < n) : n",
+    "square": {"ow": "cut ? cols * resize.w : resize.w", "oh": "cut ? rows * resize.w : resize.w",
+     "x0": "cut ? i % cols * resize.w : 0", "y0": "cut ? floor(i / cols) * resize.w : 0",
+     "pw": "resize.w", "ph": "resize.w", "gw": "side", "gh": "side", "cw": "resize.w", "ch": "resize.w"},
+    "bounds": {"unit": "0", "max_pix": "resize.w * resize.w", "max_patches": "side * side"},
+    "lower": [{"kind": "resize", "ints": ["resize.w", "resize.h", "resize.filter", "resize.prec"]}]
+   },
+   "canvas": {
+    "doc": "Llama 4's processor: the picture on the canvas of at most best_fit.max tiles of the resize's size whose limiting scale is the smallest upscale, or failing any the largest downscale, the smallest area breaking a tie (the scales binary32, as the reference divides two integer tensors; the canvases every rows x columns pair by tile count from best_fit.max down, grouped by aspect in the order each first appears); resized onto it without distortion -- within the canvas and its own size raised to one tile, the shorter scale's side floored -- at its top left, black past it, and cut row-major; then, for more than one tile, the whole resized to one tile; each read as a side x side grid. With marks, a tile not its row's last takes the head's first marker row after it, a row's last the second, and the picture's last square the third before it.",
+    "reads": ["resize", "best_fit"],
+    "def": [["scale", "min(f32(rows * resize.w / h), f32(cols * resize.w / w))"], ["wide", "tw / w < th / h"],
+     ["cut", "i < n"], ["last", "i == squares - 1"]],
+    "bind": [
+     {"choose": ["rows", "cols"],
+      "rows": {"each": [["t", "best_fit.max", "t >= 1", "t - 1"], ["r", "1", "r <= t", "r + 1"]], "if": "t % r == 0", "row": ["r", "t / r"], "group": "r / (t / r)"},
+      "cost": ["scale < 1", "scale < 1 ? 0 - scale : scale", "rows * cols"]},
+     {"let": "th", "value": "min(max(h, resize.w), rows * resize.w)"},
+     {"let": "tw", "value": "min(max(w, resize.w), cols * resize.w)"},
+     {"let": "ow", "value": "max(wide ? tw : min(floor(w * (th / h)), tw), 1)"},
+     {"let": "oh", "value": "max(wide ? min(floor(h * (tw / w)), th) : th, 1)"},
+     {"let": "n", "value": "cols * rows"}
+    ],
+    "count": "n + (1 < n)",
+    "square": {"ow": "cut ? ow : resize.w", "oh": "cut ? oh : resize.w",
+     "x0": "cut ? i % cols * resize.w : 0", "y0": "cut ? floor(i / cols) * resize.w : 0",
+     "pw": "resize.w", "ph": "resize.w", "gw": "side", "gh": "side", "cw": "resize.w", "ch": "resize.w",
+     "mark": "marks ? last * 3 : 0", "mark_n": "marks ? last : 0",
+     "trail": "marks ? (1 - last) * (i % cols < cols - 1 ? 1 : 2) : 0", "trail_n": "marks ? 1 - last : 0"},
+    "bounds": {"unit": "0", "max_pix": "resize.w * resize.w", "max_patches": "side * side"},
+    "lower": [{"kind": "resize", "ints": ["resize.w", "resize.h", "resize.filter", "resize.prec"]}]
+   },
+   "long_tiles": {
+    "doc": "Idefics3's cut (SmolVLM's): the picture's longer side resized to longest pixels and its shorter at the aspect, truncated, made even, at least one (_resize_output_size_rescale_to_max_len); then the longer side up to whole tiles of the resize's size and the shorter at that resize's aspect, truncated and up to whole tiles (resize_for_vision_encoder), each resize a stage of its own, reading the last one's bytes; cut row-major, or for a video frame (frame 1, SmolVLMVideoProcessor) the first resize to one tile and no cut; then for more than one tile the whole resized to one tile (split_images); each read as a side x side grid. With marks, the head's marker rows are a newline, the global view's run -- a double newline, doubled rows of it, then <fake_token_around_image> and <global-img> -- then for each tile of a grid-square grid, row-major, <fake_token_around_image> and its <row_R_col_C>: a tile its pair, a row's last tile but the last row's the newline after it, the global view its run and <fake_token_around_image> after it, a picture of one tile its last two and that.",
+    "reads": ["resize", "long_tiles"],
+    "require": [{"that": "floor((long_tiles.longest + resize.w - 1) / resize.w) <= long_tiles.grid",
+     "else": "a longer side of more tiles than the processor names a side"}],
+    "const": [{"let": "s", "value": "resize.w"}, {"let": "l", "value": "long_tiles.longest"}, {"let": "frame", "value": "long_tiles.frame == 1"},
+     {"let": "most", "value": "floor((l + s - 1) / s) * s"}],
+    "def": [["cut", "i < n"], ["tile", "(1 < n) * (i < n)"], ["global", "(1 < n) * (i == n)"],
+     ["row_end", "(i % cols == cols - 1) * (floor(i / cols) < rows - 1)"]],
+    "bind": [
+     {"let": "wide", "value": "w >= h"},
+     {"let": "w1", "value": "wide ? l : max(trunc(l * (w / h)) + trunc(l * (w / h)) % 2, 1)"},
+     {"let": "h1", "value": "wide ? max(trunc(l / (w / h)) + trunc(l / (w / h)) % 2, 1) : l"},
+     {"let": "wide1", "value": "w1 >= h1"},
+     {"let": "w2", "value": "frame ? s : (wide1 ? ceil(w1 / s) * s : ceil(trunc(ceil(h1 / s) * s * (w1 / h1)) / s) * s)"},
+     {"let": "h2", "value": "frame ? s : (wide1 ? ceil(trunc(ceil(w1 / s) * s / (w1 / h1)) / s) * s : ceil(h1 / s) * s)"},
+     {"let": "cols", "value": "w2 / s"},
+     {"let": "rows", "value": "h2 / s"},
+     {"let": "n", "value": "cols * rows"}
+    ],
+    "count": "n + (1 < n)",
+    "square": {"ow": "cut ? w2 : s", "oh": "cut ? h2 : s", "x0": "cut ? i % cols * s : 0", "y0": "cut ? floor(i / cols) * s : 0",
+     "pw": "s", "ph": "s", "gw": "side", "gh": "side", "cw": "s", "ch": "s",
+     "mark": "marks ? (tile ? 4 + long_tiles.doubled + 2 * (floor(i / cols) * long_tiles.grid + i % cols) : (global ? 2 : 2 + long_tiles.doubled)) : 0",
+     "mark_n": "marks ? (n == 1 ? 2 : (global ? long_tiles.doubled + 2 : 2)) : 0",
+     "trail": "marks ? (tile ? row_end : 2 + long_tiles.doubled) : 0",
+     "trail_n": "marks ? (tile ? row_end : 1) : 0"},
+    "stages": [{"w": "w1", "h": "h1", "max_pix": "l * l"}, {"w": "w2", "h": "h2", "max_pix": "most * most", "if": "!frame"}],
+    "bounds": {"unit": "0", "max_pix": "s * s", "max_patches": "side * side"},
+    "lower": [{"kind": "resize", "ints": ["resize.w", "resize.h", "resize.filter", "resize.prec"]}]
+   },
+   "smart_resize": {
+    "doc": "Qwen2-VL's smart_resize: the picture at a size of its own, each side a multiple of factor pixels -- where lift is 1 (GLM-4V's), a picture a side shorter than factor scaled up first so that side is factor, each side truncated; each side rounded half to even to a multiple, none for a side under half of one; then, where the area passes max_pix, both scaled down by sqrt(area / max_pix) and floored to a multiple, at least one, or where it falls short of min_pix, scaled up by sqrt(min_pix / area) and ceiled -- read in the entry's patches.",
+    "reads": ["smart_resize"],
+    "const": [{"let": "fa", "value": "smart_resize.factor"}, {"let": "lo", "value": "smart_resize.min_pix"}, {"let": "hi", "value": "smart_resize.max_pix"},
+     {"let": "lift", "value": "smart_resize.lift == 1"}],
+    "def": [["small", "(w < fa) + (h < fa)"], ["scale", "max(fa / h, fa / w)"], ["area", "sw * sh"], ["pix", "rw * rh"]],
+    "bind": [
+     {"let": "sw", "value": "lift ? (small ? trunc(w * scale) : w) : w"},
+     {"let": "sh", "value": "lift ? (small ? trunc(h * scale) : h) : h"},
+     {"let": "rw", "value": "round_even(sw / fa) * fa"},
+     {"let": "rh", "value": "round_even(sh / fa) * fa"},
+     {"let": "ow", "value": "hi < pix ? max(fa, floor(sw / sqrt(area / hi) / fa) * fa) : (pix < lo ? ceil(sw * sqrt(lo / area) / fa) * fa : rw)"},
+     {"let": "oh", "value": "hi < pix ? max(fa, floor(sh / sqrt(area / hi) / fa) * fa) : (pix < lo ? ceil(sh * sqrt(lo / area) / fa) * fa : rh)"},
+     {"let": "gw", "value": "floor(ow / patch)"},
+     {"let": "gh", "value": "floor(oh / patch)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "gw", "gh": "gh"},
+    "bounds": {"unit": "fa", "max_pix": "hi", "max_patches": "floor(hi / (patch * patch))"},
+    "lower": [{"kind": "resize_live", "ints": ["smart_resize.filter", "prec.pil"]}]
+   },
+   "naflex": {
+    "doc": "SigLIP2's NaFlex size (get_image_size_for_max_num_patches): the picture at a size of its own in whole patch-pixel patches -- its own whole patches' count clamped to [min, max], then the largest scale whose sides, each ceiled to a patch and at least one, hold that many, found by its bisection, the halvings unrolled.",
+    "reads": ["naflex"],
+    "const": [{"let": "p", "value": "naflex.patch"}],
+    "def": [["mid", "(lo + hi) / 2"], ["over", "target < max(p, ceil(h * mid / p) * p) / p * (max(p, ceil(w * mid / p) * p) / p)"]],
+    "bind": [
+     {"let": "target", "value": "min(max(max(floor(w / p) * floor(h / p), 1), naflex.min), naflex.max)"},
+     {"let": "smin", "value": "0.000001"},
+     {"let": "smax", "value": "100"},
+     {"each": [["l", "100 - 0.000001", "l >= 0.00001", "l / 2"]], "bind": [
+      {"let": "lo", "value": "smin"},
+      {"let": "hi", "value": "smax"},
+      {"let": "smin", "value": "over ? lo : mid"},
+      {"let": "smax", "value": "over ? mid : hi"}
+     ]},
+     {"let": "ow", "value": "max(p, ceil(w * smin / p) * p)"},
+     {"let": "oh", "value": "max(p, ceil(h * smin / p) * p)"},
+     {"let": "gw", "value": "floor(ow / p)"},
+     {"let": "gh", "value": "floor(oh / p)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "gw", "gh": "gh"},
+    "bounds": {"unit": "p", "max_pix": "naflex.max * p * p", "max_patches": "naflex.max"},
+    "lower": [{"kind": "resize_live", "ints": ["naflex.filter", "prec.pil"]}]
+   },
+   "limit_pad": {
+    "doc": "Kimi-VL's rescale with pad_input: the picture kept at its size unless its whole limit_pad.patch-pixel patches pass limit, where both sides are scaled by sqrt(limit / patches) and truncated; then padded black, before it is normalised, on the right and at the bottom to multiples of pad pixels, read over that grid. Its squares reach the most patches a picture pads to: a side of a whole patches pads to at most a over the pad's patches plus one of them, and its other side has at most limit / a (any up to the widest picture where a is zero).",
+    "reads": ["limit_pad"],
+    "const": [{"let": "lp", "value": "limit_pad.patch"}, {"let": "pad", "value": "limit_pad.pad"}, {"let": "u", "value": "floor(pad / patch)"},
+     {"let": "most", "value": "floor(widest / patch)"},
+     {"let": "top", "max": "(floor(a / u) + 1) * u * ((floor((a > 0 ? min(most, floor(limit_pad.limit / a)) : most) / u) + 1) * u)",
+      "each": [["a", "0", "a <= most", "a + 1"]]}],
+    "def": [["n", "floor(w / lp) * floor(h / lp)"], ["scale", "limit_pad.limit < n ? sqrt(limit_pad.limit / n) : 1"]],
+    "bind": [
+     {"let": "ow", "value": "trunc(w * scale)"},
+     {"let": "oh", "value": "trunc(h * scale)"},
+     {"let": "gw", "value": "floor(ceil(ow / pad) * pad / patch)"},
+     {"let": "gh", "value": "floor(ceil(oh / pad) * pad / patch)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "gw", "gh": "gh", "cw": "gw * patch", "ch": "gh * patch"},
+    "bounds": {"unit": "pad", "max_pix": "limit_pad.limit * lp * lp", "max_patches": "top"},
+    "lower": [{"kind": "resize_live", "ints": ["limit_pad.filter", "prec.pil"]}, {"kind": "canvas", "ints": ["0", "0", "0", "0", "0"]}]
+   },
+   "long_box": {
+    "doc": "Janus's resize and pad_to_square: the picture resized so its longer side is box pixels and its shorter round-half-even(side * box / longer), at least min; then centred on a box-pixel square of the colour r, g, b (bytes, before normalising), each margin the floor of half the slack; read as a side x side grid.",
+    "reads": ["long_box"],
+    "const": [{"let": "box", "value": "long_box.box"}],
+    "def": [["d", "box / max(w, h)"]],
+    "bind": [
+     {"let": "ow", "value": "max(round_even(w * d), long_box.min)"},
+     {"let": "oh", "value": "max(round_even(h * d), long_box.min)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "side", "gh": "side", "cw": "box", "ch": "box",
+     "cx": "floor((box - ow) / 2)", "cy": "floor((box - oh) / 2)"},
+    "bounds": {"unit": "0", "max_pix": "box * box", "max_patches": "side * side"},
+    "lower": [{"kind": "resize_live", "ints": ["long_box.filter", "prec.pil"]},
+     {"kind": "canvas", "ints": ["long_box.r", "long_box.g", "long_box.b", "box", "box"]}]
+   },
+   "cap_unit": {
+    "doc": "Pixtral's resize: the picture whose longer side, past cap pixels, is brought to it -- both sides divided by longer / cap and floored -- then each side rounded up to a whole unit pixels, read in the entry's patches.",
+    "reads": ["cap_unit"],
+    "const": [{"let": "u", "value": "cap_unit.unit"}, {"let": "top", "value": "floor((cap_unit.cap + u - 1) / u) * u"}],
+    "def": [["r", "max(w, h) / cap_unit.cap"]],
+    "bind": [
+     {"let": "ow", "value": "(floor((max(1 < r ? floor(w / r) : w, 1) - 1) / u) + 1) * u"},
+     {"let": "oh", "value": "(floor((max(1 < r ? floor(h / r) : h, 1) - 1) / u) + 1) * u"},
+     {"let": "gw", "value": "floor(ow / patch)"},
+     {"let": "gh", "value": "floor(oh / patch)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "gw", "gh": "gh"},
+    "bounds": {"unit": "u", "max_pix": "top * top", "max_patches": "floor(top * top / (patch * patch))"},
+    "lower": [{"kind": "resize_live", "ints": ["cap_unit.filter", "prec.pil"]}]
+   },
+   "aspect_budget": {
+    "doc": "Gemma 4's get_aspect_ratio_preserving_size: the largest size of the picture's aspect within budget patches of patch pixels, each side a whole unit pixels -- both scaled by sqrt(budget area / area) and floored to the unit; a side that floors to nothing one unit, the other the aspect's whole multiple of it, at most the budget's units a row -- read in the entry's patches.",
+    "reads": ["aspect_budget"],
+    "const": [{"let": "u", "value": "aspect_budget.unit"}, {"let": "area", "value": "aspect_budget.budget * aspect_budget.patch * aspect_budget.patch"},
+     {"let": "g", "value": "floor(u / aspect_budget.patch)"}, {"let": "most", "value": "floor(aspect_budget.budget / (g * g)) * u"}],
+    "def": [["both", "(th == 0) * (tw == 0)"], ["only_h", "(th == 0) * (1 - (tw == 0))"], ["only_w", "(tw == 0) * (1 - (th == 0))"]],
+    "bind": [
+     {"let": "s", "value": "sqrt(area / (h * w))"},
+     {"let": "th", "value": "floor(s * h / u) * u"},
+     {"let": "tw", "value": "floor(s * w / u) * u"},
+     {"let": "ow", "value": "both ? u : (only_h ? min(floor(w / h) * u, most) : (only_w ? u : tw))"},
+     {"let": "oh", "value": "both ? u : (only_h ? u : (only_w ? min(floor(h / w) * u, most) : th))"},
+     {"let": "gw", "value": "floor(ow / patch)"},
+     {"let": "gh", "value": "floor(oh / patch)"}
+    ],
+    "count": "1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "gw", "gh": "gh"},
+    "bounds": {"unit": "u", "max_pix": "area", "max_patches": "floor(area / (patch * patch))"},
+    "lower": [{"kind": "resize_live", "ints": ["aspect_budget.filter", "prec.pil"]}]
+   },
+   "tile_smart": {
+    "doc": "LFM2-VL's: the picture one piece at its own size or cut. Its own size each side a whole unit pixels, rounded half to even, at least one, then scaled into [min_pix, max_pix] pixels as smart_resize scales it; a picture whose sides, rounded so and at least a patch-pixel patch each, hold more than tolerance times max_pix pixels is cut into the grid of min to max tile-pixel tiles closest to its aspect (as tile chooses one), resized onto it and cut row-major, each tile marked by its place (rows by max), then the whole at its own size as a thumbnail marked after them.",
+    "reads": ["tile_smart"],
+    "const": [{"let": "fa", "value": "tile_smart.unit"}, {"let": "lo", "value": "tile_smart.min_pix"}, {"let": "hi", "value": "tile_smart.max_pix"},
+     {"let": "sz", "value": "tile_smart.tile"}, {"let": "span", "value": "tile_smart.max"}],
+    "def": [["area", "w * h"], ["pix", "rw * rh"], ["cut", "i < n - 1"]],
+    "bind": [
+     {"let": "rw", "value": "max(round_even(w / fa), 1) * fa"},
+     {"let": "rh", "value": "max(round_even(h / fa), 1) * fa"},
+     {"let": "sw", "value": "hi < pix ? max(fa, floor(w / sqrt(area / hi) / fa) * fa) : (pix < lo ? ceil(w * sqrt(lo / area) / fa) * fa : rw)"},
+     {"let": "sh", "value": "hi < pix ? max(fa, floor(h / sqrt(area / hi) / fa) * fa) : (pix < lo ? ceil(h * sqrt(lo / area) / fa) * fa : rh)"},
+     {"let": "tiled", "value": "hi * tile_smart.tolerance < max(tile_smart.patch, round_even(h / fa) * fa) * max(tile_smart.patch, round_even(w / fa) * fa)"},
+     {"choose": ["gc", "gr"],
+      "rows": {"each": [["t", "tile_smart.min", "t <= tile_smart.max", "t + 1"], ["c", "1", "c <= tile_smart.max", "c + 1"]], "if": "t % c == 0", "row": ["c", "t / c"]},
+      "cost": ["abs(w / h - gc / gr)"], "tie": "w * h - 0.5 * sz * sz * (gc * gr)"},
+     {"let": "cols", "value": "tiled ? gc : 1"},
+     {"let": "rows", "value": "tiled ? gr : 1"},
+     {"let": "n", "value": "tiled ? cols * rows + 1 : 1"}
+    ],
+    "count": "n",
+    "square": {"ow": "cut ? cols * sz : sw", "oh": "cut ? rows * sz : sh", "x0": "cut ? i % cols * sz : 0", "y0": "cut ? floor(i / cols) * sz : 0",
+     "pw": "cut ? sz : sw", "ph": "cut ? sz : sh", "gw": "floor((cut ? sz : sw) / patch)", "gh": "floor((cut ? sz : sh) / patch)",
+     "cw": "cut ? sz : sw", "ch": "cut ? sz : sh",
+     "mark": "cut ? floor(i / cols) * span + i % cols + 1 : tiled * (span * span + 1)", "mark_n": "cut ? 1 : tiled"},
+    "bounds": {"unit": "fa", "max_pix": "max(hi, sz * sz)", "max_patches": "floor(max(hi, sz * sz) / (patch * patch))"},
+    "lower": [{"kind": "resize_live", "ints": ["tile_smart.filter", "tile_smart.prec"]}]
+   },
+   "slice_uhd": {
+    "doc": "llava-uhd's cut (MiniCPM-V's): an overview at its own size -- slice^2 pixels at the picture's aspect, each side whole patch-pixel patches rounded half to even, at least one -- then, where the picture's area over slice^2 rounds up past one, the slices of the grid of at most max whose aspect is closest to the picture's (the counts one either side of that multiple, each count's factor pairs in order, the first of the least error): the picture resized to whole best-sized slices and cut row-major; the overview upscaled only where nothing is cut. With marks, the head's marker runs are <image> and </image> about the overview, <slice> and </slice> about a slice, a slice row's first after the first taking the last two (a newline and <slice>) before it.",
+    "reads": ["slice_uhd"],
+    "const": [{"let": "sp", "value": "slice_uhd.patch"}, {"let": "sl", "value": "slice_uhd.slice"}, {"let": "ss", "value": "sl * sl"},
+     {"let": "top", "value": "(sl + sp) * (sl + sp)"}],
+    "def": [["big", "(ss < w * h) + (1 - cut)"], ["nh", "trunc(sl / sqrt(w / h))"],
+     ["big_s", "(ss < pw0 * ph0) + 1"], ["nh_s", "trunc(sl / sqrt(pw0 / ph0))"],
+     ["over", "i == 0"], ["k", "i - 1"], ["row_start", "(0 < k) * (k % cols == 0)"]],
+    "bind": [
+     {"let": "multiple", "value": "min(ceil(w * h / ss), slice_uhd.max)"},
+     {"let": "cut", "value": "1 < multiple"},
+     {"choose": ["gc", "gr", "gn"],
+      "rows": {"each": [["t", "2", "t <= slice_uhd.max", "t + 1"], ["m", "1", "m <= t", "m + 1"]], "if": "t % m == 0", "row": ["m", "t / m", "t"]},
+      "eligible": "abs(gn - multiple) < 1.5", "cost": ["abs(log(w / h) - log(gc / gr))"]},
+     {"let": "cols", "value": "cut ? gc : 1"},
+     {"let": "rows", "value": "cut ? gr : 1"},
+     {"let": "oh0", "value": "max(round_even((big ? nh : h) / sp) * sp, sp)"},
+     {"let": "ow0", "value": "max(round_even((big ? trunc(nh * (w / h)) : w) / sp) * sp, sp)"},
+     {"let": "rw0", "value": "max(round_even(w / cols) * cols, cols)"},
+     {"let": "rh0", "value": "max(round_even(h / rows) * rows, rows)"},
+     {"let": "pw0", "value": "rw0 / cols"},
+     {"let": "ph0", "value": "rh0 / rows"},
+     {"let": "sh", "value": "max(round_even((big_s ? nh_s : ph0) / sp) * sp, sp)"},
+     {"let": "sw", "value": "max(round_even((big_s ? trunc(nh_s * (pw0 / ph0)) : pw0) / sp) * sp, sp)"}
+    ],
+    "count": "1 + cut * (cols * rows)",
+    "square": {"ow": "over ? ow0 : sw * cols", "oh": "over ? oh0 : sh * rows",
+     "x0": "over ? 0 : k % cols * sw", "y0": "over ? 0 : floor(k / cols) * sh",
+     "pw": "over ? ow0 : sw", "ph": "over ? oh0 : sh", "gw": "floor((over ? ow0 : sw) / patch)", "gh": "floor((over ? oh0 : sh) / patch)",
+     "cw": "over ? ow0 : sw", "ch": "over ? oh0 : sh",
+     "mark": "marks ? (over ? 1 : (row_start ? 5 : 3)) : 0", "mark_n": "marks ? (over ? 1 : (row_start ? 2 : 1)) : 0",
+     "trail": "marks ? (over ? 2 : 4) : 0", "trail_n": "marks ? 1 : 0"},
+    "bounds": {"unit": "sp", "max_pix": "top", "max_patches": "floor(top / (patch * patch))"},
+    "lower": [{"kind": "resize_live", "ints": ["slice_uhd.filter", "slice_uhd.prec"]}]
+   },
+   "video_resize": {
+    "doc": "Qwen's video smart_resize of frames sized together (frames of them), in multiples of factor pixels: a frame a side shorter than factor scaled up first so that side is factor, each side truncated; each side rounded half to even to a multiple; then, where the frame count rounded half to even to a multiple of per times that area passes max_pix, both sides scaled down by sqrt(count * area / max_pix) of the unrounded sides and floored to a multiple, at least one, or where it falls short of min_pix, scaled up by sqrt(min_pix / (count * area)) and ceiled to one (Qwen3-VL's). Where alone is 1, each frame is sized alone: no side lifted and the count not read, the area held to [min_pix, max_pix] (Qwen2-VL's, the picture's). A frame more than 200 times as long as it is wide, or fewer frames than per sized together, the processor refuses: it becomes no square.",
+    "reads": ["video_resize"],
+    "require": [{"that": "video_resize.factor > 0 && video_resize.per >= 1", "else": "a video resized in multiples of nothing or groups of no frames"}],
+    "const": [{"let": "fa", "value": "video_resize.factor"}, {"let": "lo", "value": "video_resize.min_pix"}, {"let": "hi", "value": "video_resize.max_pix"},
+     {"let": "alone", "value": "video_resize.alone == 1"}, {"let": "t", "value": "alone ? 1 : video_resize.per"},
+     {"let": "most", "value": "alone ? hi : floor(hi / video_resize.per)"}],
+    "def": [["nf", "alone ? 1 : frames"], ["small", "(w < fa) + (h < fa)"], ["scale", "max(fa / h, fa / w)"],
+     ["area", "nf * (sw * sh)"], ["pix", "tb * (wb * hb)"]],
+    "bind": [
+     {"let": "sw", "value": "alone ? w : (small ? trunc(w * scale) : w)"},
+     {"let": "sh", "value": "alone ? h : (small ? trunc(h * scale) : h)"},
+     {"let": "wb", "value": "round_even(sw / fa) * fa"},
+     {"let": "hb", "value": "round_even(sh / fa) * fa"},
+     {"let": "tb", "value": "round_even(nf / t) * t"},
+     {"let": "ow", "value": "hi < pix ? max(fa, floor(sw / sqrt(area / hi) / fa) * fa) : (pix < lo ? ceil(sw * sqrt(lo / area) / fa) * fa : wb)"},
+     {"let": "oh", "value": "hi < pix ? max(fa, floor(sh / sqrt(area / hi) / fa) * fa) : (pix < lo ? ceil(sh * sqrt(lo / area) / fa) * fa : hb)"},
+     {"let": "gw", "value": "floor(ow / patch)"},
+     {"let": "gh", "value": "floor(oh / patch)"}
+    ],
+    "count": "(200 < max(sw, sh) / min(sw, sh)) + (alone ? 0 : frames < t) ? 0 : 1",
+    "square": {"ow": "ow", "oh": "oh", "gw": "gw", "gh": "gh"},
+    "bounds": {"unit": "fa", "max_pix": "most", "max_patches": "floor(most / (patch * patch))"},
+    "lower": [{"kind": "resize_live", "ints": ["video_resize.filter", "video_resize.prec"]}]
+   }
+  }
  }
 }

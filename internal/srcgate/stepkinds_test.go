@@ -14,9 +14,9 @@ import (
 
 // TestContainerStepsAreGeneric holds the container's picture steps
 // (jlm.PreKind) to the generic ones, each with what makes it so. A
-// processor's own resize, tiling or canvas is the converter's
-// (convert/picstep.go): stated there as the picture's geometry and lowered
-// to these. A step kind with one processor behind it is that family's code
+// processor's own resize, tiling or canvas is the converter's (the
+// projector library's pictures, convert/projectors.json): stated there as
+// the picture's geometry and lowered to these. A step kind with one processor behind it is that family's code
 // under the format's name, which the architecture rule keeps in the
 // converter.
 func TestContainerStepsAreGeneric(t *testing.T) {
@@ -47,7 +47,7 @@ func TestContainerStepsAreGeneric(t *testing.T) {
 		for _, k := range stepKinds(t, p, src) {
 			if _, ok := allowed[k]; !ok {
 				t.Errorf("format/jlm/%s declares the picture step %s: a processor's step is the converter's "+
-					"(convert/picstep.go), stated as geometry and lowered to the generic ones", filepath.Base(p), k)
+					"(convert/projectors.json's pictures), stated as geometry and lowered to the generic ones", filepath.Base(p), k)
 			}
 			found[k] = true
 		}

@@ -238,6 +238,10 @@ func projectorLibrary() (map[string]*projStates, error) {
 	if err := json.Unmarshal(projectorsJSON, &lib); err != nil {
 		return nil, fmt.Errorf("convert: projectors.json: %w", err)
 	}
+	kinds, err := towerSteps()
+	if err != nil {
+		return nil, err
+	}
 	for _, name := range slices.Sorted(maps.Keys(lib.Projectors)) {
 		p := lib.Projectors[name]
 		if p.As != "" {
@@ -248,19 +252,21 @@ func projectorLibrary() (map[string]*projStates, error) {
 			lib.Projectors[name] = to
 			continue
 		}
-		if err := p.check(); err != nil {
+		if err := p.check(kinds); err != nil {
 			return nil, fmt.Errorf("convert: projectors.json: %s: %w", name, err)
 		}
 	}
 	return lib.Projectors, nil
 }
 
-func (p *projStates) check() error {
+// check refuses an entry that states less than it must, or a tower whose
+// steps are none of kinds (towerSteps).
+func (p *projStates) check(kinds map[string]jlm.PreKind) error {
 	if p.Code == 0 || p.Output.Tensor == "" || p.Output.Dim < 0 || p.Output.Dim > 1 {
 		return fmt.Errorf("an entry states its code and its output matrix's tensor and dim (0 or 1)")
 	}
 	if t := p.Tower; t != nil {
-		if err := t.check(); err != nil {
+		if err := t.check(kinds); err != nil {
 			return fmt.Errorf("tower: %w", err)
 		}
 	}
@@ -681,7 +687,11 @@ func libraryAudio(name string) (*audioStates, error) {
 	if a == nil || a.Tower == nil || a.Code == 0 {
 		return nil, fmt.Errorf("convert: projectors.json states no audio tower %q, or no code for it", name)
 	}
-	if err := a.Tower.check(); err != nil {
+	kinds, err := towerSteps()
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Tower.check(kinds); err != nil {
 		return nil, fmt.Errorf("convert: projectors.json: audio %s: %w", name, err)
 	}
 	return a, nil

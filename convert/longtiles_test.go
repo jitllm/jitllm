@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// TestLongTileGeometryFollowsTheProcessor holds PreLongTiles' geometry to
+// TestLongTileGeometryFollowsTheProcessor holds long_tiles' geometry to
 // transformers' Idefics3ImageProcessor on every picture size
 // scripts/idefics3sizes.py records, under SmolVLM-256M's config and the
 // 2.2B's: the squares' count, each tile's resize to the grid and its window
@@ -36,7 +36,8 @@ func TestLongTileGeometryFollowsTheProcessor(t *testing.T) {
 	}
 	const doubled = 1
 	parts := func(longest, tile, w, h, rows, cols, squares int) error {
-		geo := longTileGeometry(longest, tile, tile/16, doubled, smolvlmGrid, true, false)
+		geo := ruleGeometry(t, picContext{side: tile / 16, marks: true}, pictureStep(t, "resize", int32(tile), int32(tile), 0, 0),
+			pictureStep(t, "long_tiles", int32(longest), doubled, smolvlmGrid, 0))
 		_, n, err := model.GeometrySquare(geo, w, h, 0)
 		if err != nil {
 			return err
