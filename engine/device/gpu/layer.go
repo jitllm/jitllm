@@ -61,8 +61,8 @@ type layer struct {
 	// is set from the plan, not inferred from a nil weight.
 	linear bool
 	// withAttn is a block that runs attention beside its mixer (its graph
-	// appends to a history, graphAttends): it keeps a KV history and a
-	// recurrent state both.
+	// appends to a history or reads another block's, graphAttends): it reads
+	// a KV history and keeps a recurrent state both.
 	withAttn bool
 	// noRuns is a block whose attention stays causal inside a call's
 	// bidirectional key runs (graph.Attrs.NoRuns). A call carries one set of

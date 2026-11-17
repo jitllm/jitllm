@@ -2302,8 +2302,8 @@ func attendSoftcap(gr *graph.Graph) float64 {
 	return 0
 }
 
-// graphAttends reports that gr appends to a history of its own, which its
-// attention reads.
+// graphAttends reports that gr's attention runs: it appends to a history of
+// its own, or reads another block's (KV sharing).
 func graphAttends(gr *graph.Graph) bool {
 	if gr == nil {
 		return false
@@ -2311,6 +2311,11 @@ func graphAttends(gr *graph.Graph) bool {
 	for _, o := range gr.Ops {
 		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && o.Writes[0].Hist == 0 {
 			return true
+		}
+		for _, r := range o.Reads {
+			if r.State == graph.StateKV && r.From != 0 {
+				return true
+			}
 		}
 	}
 	return false
