@@ -112,7 +112,12 @@ schema; `convert/modeljson.go` reads it. Its sections:
   - A partial rotary is `rope.dimension_count` among the keys, stated only
     by a file whose class rotates part of each head (Phi-3, GLM-4-MoE,
     Qwen3.5); every other class rotates the whole head whatever
-    `partial_rotary_factor` says, so its file leaves the key unread.
+    `partial_rotary_factor` says, so its file leaves the key unread. In
+    transformers 5.17 those three are the only library classes whose
+    `apply_rotary_pos_emb` cuts q and k at the rotary's width and passes the
+    rest through; every other class's rotates all of what it is given (GLM-4
+    MoE Lite reads the factor into its frequencies and rotates its whole
+    rope slice, so a factor below one does not run there either).
 - `config.window.layers`: which layers slide, deciding after configOf --
   `list`, each layer's type (`layer_types`), a layer sliding where its type
   is `slides`; where the list is null, `period` (every layer but each
