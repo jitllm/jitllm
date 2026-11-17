@@ -65,13 +65,14 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					vals[o] = make([]uint32, g.Values[o].Width)
 				}
 				if a.k {
-					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ), f(xtc), f(mix), 0, f(1)}
+					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ), f(xtc), f(mix), 0, f(1), f(invT)}
 				} else {
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
 					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), 0}
 					if a.typ {
 						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], 0, f(typ), f(xtc), f(mix), 0, f(1))
 					}
+					vals[in["sample.cut"]] = append(vals[in["sample.cut"]], f(invT))
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 					t.Fatal(err)

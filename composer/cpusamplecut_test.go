@@ -43,7 +43,7 @@ func TestComposedCPUSampleCut(t *testing.T) {
 		vals := map[graph.ValueID][]uint32{
 			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {math.Float32bits(pen), 0, 0},
 			in["sample.ids"]: append([]uint32(nil), ids...),
-			in["sample.cut"]: {math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u)},
+			in["sample.cut"]: {math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u), math.Float32bits(invT)},
 			tokV:             {0},
 		}
 		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
@@ -169,7 +169,7 @@ func TestComposedCPUSampleCutTopK(t *testing.T) {
 		vals := map[graph.ValueID][]uint32{
 			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {f(pen), 0, 0},
 			in["sample.ids"]: append([]uint32(nil), ids...),
-			in["sample.cut"]: {f(invT), f(float32(topp)), f(float32(minp)), f(float32(u)), f(float32(k))},
+			in["sample.cut"]: {f(invT), f(float32(topp)), f(float32(minp)), f(float32(u)), f(float32(k)), f(invT)},
 			tokV:             {0},
 		}
 		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {

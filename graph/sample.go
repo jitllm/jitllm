@@ -77,7 +77,7 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 
 // SampleWalk is SampleTopK's candidates drawn as the host's sampler draws
 // them: of the first k, typical-p, then top-p and min-p over the survivors'
-// softmax at temperature 1, the best survivor always kept, then the
+// softmax at the temperature, the best survivor always kept, then the
 // inverse-CDF walk at a uniform u the caller draws over the survivors'
 // softmax at the temperature -- the first survivor whose mass up to and
 // including it passes u times the survivors' mass, the last survivor where
@@ -87,7 +87,9 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 // sample.walk (k, 1/T, top-p +Inf where off, min-p 0 where off, u,
 // typical-p +Inf where off, XTC's threshold +Inf where off, XTC's
 // probability, which only Prob reads, then the dynamic temperature's range,
-// on above 0, and exponent); its output the token. With Prob the distribution is the mixture
+// on above 0, and exponent, and its last word the 1/T the cuts read: 1/T
+// where the temperature comes before them, 1 where it comes after, the cuts
+// then over the softmax at temperature 1); its output the token. With Prob the distribution is the mixture
 // the draw is: the XTC cut's at its probability, the survivors' before it at
 // the rest. The mass before each survivor is a KxK sum,
 // as top-p's. With Prob the outputs are the distribution the draw draws
@@ -117,9 +119,9 @@ type SampleWalk struct {
 func (s *SampleWalk) Build() *Graph {
 	b := New()
 	v, vals, ids := s.emit(b)
-	words := 10
+	words := 11
 	if s.Infill {
-		words = 11
+		words = 12
 	}
 	walk := b.In("sample.walk", words)
 	K := b.G.Values[vals].Width
@@ -128,11 +130,11 @@ func (s *SampleWalk) Build() *Graph {
 		thr := e.sigma(v, e.word(walk, 10, "sample.sigma"))
 		vals = e.mapc(MapWhere, math.Inf(-1), "sample.sig.vals", K, e.not("sample.sig.keep", K, e.mapc(MapLess, 0, "sample.sig.under", K, vals, thr)), vals)
 	}
-	place, d, cut := e.cuts(vals, walk)
-	keep := e.xtc(e.mapc(MapExp, 0, "sample.xtc.ed", K, d), cut, place, e.word(walk, 6, "sample.xtc"))
 	invT, u := e.word(walk, 1, "sample.invtemp"), e.word(walk, 4, "sample.u")
+	place, d, dt, cut := e.cuts(vals, walk, e.word(walk, words-1, "sample.cuttemp"))
+	keep := e.xtc(e.mapc(MapExp, 0, "sample.xtc.ed", K, dt), cut, place, e.word(walk, 6, "sample.xtc"))
 	rng, ex := e.word(walk, 8, "sample.dyn.range"), e.word(walk, 9, "sample.dyn.exp")
-	ed := e.mapc(MapExp, 0, "sample.dyn.ed", K, d)
+	ed := e.mapc(MapExp, 0, "sample.dyn.ed", K, dt)
 	edt := e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, e.dynTemp(ed, keep, invT, rng, ex, "sample.dyn")))
 	var forced, eot ValueID
 	if s.Infill {
@@ -206,7 +208,7 @@ func (s *SampleRow) Build() *Graph {
 }
 
 // SampleCut is the host sampler's draw with no top-k and a cut: over the
-// penalized row's softmax at temperature 1 in its order (the larger first,
+// penalized row's softmax at the temperature in its order (the larger first,
 // the lower id of two equal), min-p keeps the tokens at least min-p times
 // the best's probability and top-p those before the first at which the mass
 // up to and including it reaches top-p, that one kept, the best always; the
@@ -234,7 +236,8 @@ func (s *SampleRow) Build() *Graph {
 // (0 < k < NVocab), and the draw is the host's top-k draw past the bound
 // SampleWalk is formed for: the cuts read the softmax over the k best (the
 // k-th found by a selection counting tokens), and the survivors are walked
-// whether or not a cut fires.
+// whether or not a cut fires. sample.cut's last word, past all of these, is
+// the 1/T the cuts read, as SampleWalk's.
 type SampleCut struct {
 	NVocab              int
 	Prob, TopK, Typical bool
@@ -257,6 +260,7 @@ func (s *SampleCut) Build() *Graph {
 	if s.Typical {
 		words += 6
 	}
+	words++
 	cut := b.In("sample.cut", words)
 	e := sampleEmitter{b}
 	v := penalizedRow(b, l, win, pen)
@@ -269,7 +273,8 @@ func (s *SampleCut) Build() *Graph {
 		thr := e.sigma(v, e.word(cut, x, "sample.sigma"))
 		v = e.mapc(MapWhere, math.Inf(-1), "sample.sig.v", n, notv("sample.sig.keep", n, e.mapc(MapLess, 0, "sample.sig.under", n, v, thr)), v)
 	}
-	order := e.softmax(v, "sample.q1")
+	scaled := e.mapc(MapMul, 0, "sample.scaled", n, v, invT)
+	order := e.softmax(e.mapc(MapMul, 0, "sample.cutscaled", n, v, e.word(cut, words-1, "sample.cuttemp")), "sample.q1")
 	all := e.mapc(MapLess, 2, "sample.all", n, order)
 	// q1 is the probabilities the cuts read, over pool: the row, or the k
 	// best renormalized.
@@ -320,7 +325,6 @@ func (s *SampleCut) Build() *Graph {
 		fired = e.mapc(MapLess, 2, "sample.fired.k", 1, fired)
 	}
 	// The survivors' softmax at the temperature, walked in the cut's order.
-	scaled := e.mapc(MapMul, 0, "sample.scaled", n, v, invT)
 	share := func(keep ValueID, name string) ValueID {
 		scaled := scaled
 		if s.Typical {
@@ -333,7 +337,7 @@ func (s *SampleCut) Build() *Graph {
 	}
 	pt := share(keep, "sample")
 	if s.Typical {
-		// XTC: of the survivors' softmax at temperature 1, those at or above
+		// XTC: of the survivors' softmax at the temperature, those at or above
 		// the threshold but the last in the order -- the least, the higher id
 		// of two equal.
 		thr := e.word(cut, x+2, "sample.xtc")
@@ -655,15 +659,17 @@ func (e sampleEmitter) xtc(w, keep, place, thr ValueID) ValueID {
 }
 
 // cuts is the K candidates' (vals, best first) places, their distances from
-// the best, and whether each survives: among the first k (params' word 0),
-// typical-p over their softmax at temperature 1 (word 5, +Inf where off: in
+// the best, those distances at the temperature (invT), and whether each
+// survives: among the first k (params' word 0), typical-p over their softmax
+// at the temperature, as the reference's warpers scale the logits before any
+// cut (word 5, +Inf where off: in
 // the order of their surprise's distance from the entropy, the nearest
 // first, a candidate survives while the mass before it is at most
 // typical-p, the nearest always), then over the survivors' softmax top-p
 // (word 2: while the mass before it is under top-p) and min-p (word 3: while
 // its probability is at least min-p times the best survivor's), the best
 // survivor always.
-func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
+func (e sampleEmitter) cuts(vals, params, invT ValueID) (place, d, dt, keep ValueID) {
 	K := e.b.G.Values[vals].Width
 	k, topp, minp := e.word(params, 0, "sample.k"), e.word(params, 2, "sample.topp"), e.word(params, 3, "sample.minp")
 	typ := e.word(params, 5, "sample.typical")
@@ -672,7 +678,8 @@ func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
 	inK := e.mapc(MapLess, 0, "sample.ink", K, place, k)
 	v0 := e.one(OpReduce, "sample.v0", 1, Attrs{Fn: MapMax}, vals)
 	d = e.mapc(MapSub, 0, "sample.d", K, vals, v0)
-	ex := e.mapc(MapMul, 0, "sample.e", K, e.mapc(MapExp, 0, "sample.ed", K, d), inK)
+	dt = e.mapc(MapMul, 0, "sample.dt.cuts", K, d, invT)
+	ex := e.mapc(MapMul, 0, "sample.e", K, e.mapc(MapExp, 0, "sample.ed", K, dt), inK)
 	p := e.mapc(MapDiv, 0, "sample.p", K, ex, e.one(OpReduce, "sample.sum", 1, Attrs{Fn: MapAdd}, ex))
 	// Typical-p: the entropy, each candidate's key -|log p + H| (-Inf past
 	// the k), their order by it and the mass before each in that order.
@@ -704,7 +711,7 @@ func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
 	fp := e.one(OpReduce, "sample.first.place", 1, Attrs{Fn: MapMin}, e.mapc(MapWhere, math.Inf(1), "sample.first.places", K, keepT, place))
 	first := e.mapc(MapEqual, 0, "sample.first", K, place, fp)
 	keep = e.mapc(MapMax, 0, "sample.keep", K, e.mapc(MapMul, 0, "sample.keep.pmk", K, e.mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), keepT), first)
-	return place, d, keep
+	return place, d, dt, keep
 }
 
 // not is 1 - x.

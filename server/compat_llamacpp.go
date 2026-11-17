@@ -158,9 +158,10 @@ func llamaSamplers(raw json.RawMessage) ([]string, error) {
 }
 
 // llamaStages is samplers as the draw's stages where their order is not
-// llamaChain's (engine.Sampler.Stages): nil where the draw runs them in
-// llama.cpp's own order; infill and adaptive_p draw in place of the last
-// draw, as llama.cpp runs adaptive_p.
+// llamaChain's (engine.Sampler.Stages): nil where they are in its order,
+// which the fused draw runs with the temperature last
+// (engine.Sampler.TempLast); infill and adaptive_p draw in place of the
+// last draw.
 func llamaStages(samplers []string) []engine.Stage {
 	kinds := map[string]engine.Stage{"penalties": engine.StagePenalties, "dry": engine.StageDRY, "top_n_sigma": engine.StageTopNSigma,
 		"top_k": engine.StageTopK, "typ_p": engine.StageTypical, "top_p": engine.StageTopP, "min_p": engine.StageMinP,
@@ -1222,7 +1223,7 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
 		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
-		Stages: llamaStages(s.Samplers), DryMultiplier: s.DryMultiplier, DryBase: s.DryBase,
+		Stages: llamaStages(s.Samplers), TempLast: true, DryMultiplier: s.DryMultiplier, DryBase: s.DryBase,
 		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: s.DryPenaltyLastN, DryBreakers: s.DrySequenceBreakers,
 		MinKeep: s.MinKeep}
 	sm.Temp, sm.MinP = max(sm.Temp, 0), min(max(sm.MinP, 0), 1)

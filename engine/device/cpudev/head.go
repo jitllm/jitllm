@@ -57,24 +57,25 @@ type Head struct {
 	noWin []float32
 	pen   nn.Penalties
 	// walkArgs is the walk's words: k, 1/T, top-p, min-p, u, typical-p,
-	// XTC's threshold and its probability; rowArgs the row's (1/T, u),
-	// cutArgs the cut's (1/T, top-p, min-p, u, then typical-p, XTC's
-	// threshold and probability for its typical form) and cutKArgs its top-k
-	// variant's (then k, then the same three).
-	walkArgs [10]float32
+	// XTC's threshold and its probability, the dynamic temperature's, then
+	// the cuts' 1/T; rowArgs the row's (1/T, u), cutArgs the cut's (1/T,
+	// top-p, min-p, u, then typical-p, XTC's threshold and probability for
+	// its typical form, the cuts' 1/T last) and cutKArgs its top-k variant's
+	// (then k, then the same).
+	walkArgs [11]float32
 	// miroArgs is a Mirostat draw's words (1/T, tau, eta, mu, u), miroMu the
 	// next mu it writes and miroKept how many tokens it keeps.
 	miroArgs [5]float32
 	miroMu   [1]float32
 	miroKept [1]float32
 	rowArgs  [2]float32
-	cutArgs  [10]float32
-	cutKArgs [11]float32
+	cutArgs  [11]float32
+	cutKArgs [12]float32
 	// infill is the vocabulary's tables an infill draw reads, infArgs its
 	// walk's words (walkArgs' and top-n-sigma's n) and infEOT its end-of-turn
 	// token.
 	infill  nn.InfillTables
-	infArgs [11]float32
+	infArgs [12]float32
 	infEOT  [1]uint32
 	// infP, infIDs and infForced are what an infill draw writes beside its
 	// token: the distribution it draws from over its candidates, their ids,
@@ -411,17 +412,14 @@ func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	h.rowArgs = [2]float32{a.InvTemp, u}
 	switch {
 	case a.TopK > 0 && a.TopK < n:
-		p, words = &h.p.CutK, unsafe.Pointer(&h.cutKArgs[0])
-		h.cutKArgs = [11]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), a.Sigma, typ, xtc, 1, a.DynRange, a.DynExp}
+		p, words = &h.p.CutK, h.cutWords(&a, u, typ, xtc, 1, true, typOn)
 		if typOn {
 			p = &h.p.CutKTyp
 		}
 	case typOn:
-		p, words = &h.p.CutTyp, unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [10]float32{a.InvTemp, a.TopP, a.MinP, u, a.Sigma, typ, xtc, 1, a.DynRange, a.DynExp}
+		p, words = &h.p.CutTyp, h.cutWords(&a, u, typ, xtc, 1, false, true)
 	case a.MinP > 0 || a.TopP < 1:
-		p, words = &h.p.Cut, unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [10]float32{a.InvTemp, a.TopP, a.MinP, u}
+		p, words = &h.p.Cut, h.cutWords(&a, u, typ, xtc, 1, false, false)
 	}
 	f, _, why := h.form(p, false)
 	if why != nn.DeclineServes {
@@ -471,7 +469,7 @@ func (h *Head) walk(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
 	}
 	win := h.window(a)
 	typ, xtc, _ := ext(a)
-	h.walkArgs = [10]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp}
+	h.walkArgs = [11]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.CutInvTemp}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
 		unsafe.Pointer(&h.token[0]))
 	h.steps.Serve(nn.PartSample)
@@ -496,7 +494,7 @@ func (h *Head) walkInfill(logits []float32, a *nn.DrawArgs, u float32) (int32, b
 	}
 	win := h.window(a)
 	typ, xtc, _ := ext(a)
-	h.infArgs = [11]float32{float32(k), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.Sigma}
+	h.infArgs = [12]float32{float32(k), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.Sigma, a.CutInvTemp}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.infArgs[0]),
 		unsafe.Pointer(&h.infill.Class[0]), unsafe.Pointer(&h.infill.Parent[0]), unsafe.Pointer(&h.infill.EOG[0]),
 		unsafe.Pointer(&h.infEOT[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.infP[0]), unsafe.Pointer(&h.infIDs[0]),
@@ -526,7 +524,7 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 		if k >= n {
 			k = 0
 		}
-		a = nn.DrawArgs{TopK: k, InvTemp: a.InvTemp, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties()}
+		a = nn.DrawArgs{TopK: k, InvTemp: a.InvTemp, CutInvTemp: a.CutInvTemp, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties()}
 	}
 	if a.Infill {
 		if _, ok := h.walkInfill(logits, &a, 0); !ok {
@@ -558,16 +556,11 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 	}
 	win := h.window(&a)
 	if bounded {
-		h.walkArgs = [10]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, 0, typ, xtc, a.XTCMix, a.DynRange, a.DynExp}
+		h.walkArgs = [11]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, 0, typ, xtc, a.XTCMix, a.DynRange, a.DynExp, a.CutInvTemp}
 		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
 			unsafe.Pointer(&h.probVals[0]), unsafe.Pointer(&h.probIDs[0]))
 	} else {
-		words := unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [10]float32{a.InvTemp, a.TopP, a.MinP, 0, a.Sigma, typ, xtc, a.XTCMix, a.DynRange, a.DynExp}
-		if topK {
-			words = unsafe.Pointer(&h.cutKArgs[0])
-			h.cutKArgs = [11]float32{a.InvTemp, a.TopP, a.MinP, 0, float32(a.TopK), a.Sigma, typ, xtc, a.XTCMix, a.DynRange, a.DynExp}
-		}
+		words := h.cutWords(&a, 0, typ, xtc, a.XTCMix, topK, typOn)
 		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]), words,
 			unsafe.Pointer(&pall[0]))
 	}
@@ -680,4 +673,22 @@ func (h *Head) Decide(vals, keep, params, prior, probs, stats []float32) bool {
 		unsafe.Pointer(&prior[0]), unsafe.Pointer(&probs[0]), unsafe.Pointer(&stats[0]))
 	h.steps.Serve(nn.PartSample)
 	return true
+}
+
+// cutWords is a's words for graph.SampleCut at the uniform u, in the layout
+// of the form topK and typOn choose, the cuts' 1/T its last word.
+func (h *Head) cutWords(a *nn.DrawArgs, u, typ, xtc, mix float32, topK, typOn bool) unsafe.Pointer {
+	switch {
+	case topK && typOn:
+		h.cutKArgs = [12]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), a.Sigma, typ, xtc, mix, a.DynRange, a.DynExp, a.CutInvTemp}
+	case topK:
+		h.cutKArgs = [12]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), a.CutInvTemp}
+	case typOn:
+		h.cutArgs = [11]float32{a.InvTemp, a.TopP, a.MinP, u, a.Sigma, typ, xtc, mix, a.DynRange, a.DynExp, a.CutInvTemp}
+		return unsafe.Pointer(&h.cutArgs[0])
+	default:
+		h.cutArgs = [11]float32{a.InvTemp, a.TopP, a.MinP, u, a.CutInvTemp}
+		return unsafe.Pointer(&h.cutArgs[0])
+	}
+	return unsafe.Pointer(&h.cutKArgs[0])
 }

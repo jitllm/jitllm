@@ -294,7 +294,7 @@ func mirostatKeep(q []float64, order []int, v1 bool, mu float64) (keep int, marg
 }
 
 // xtcCut is llama.cpp's XTC over the survivors surv (in their order, largest
-// first) with probabilities p, the share of their softmax at temperature 1:
+// first) with probabilities p, the share of their softmax at the temperature:
 // those at or above thr, every one but the last of them, where two or more
 // are, and where at least minKeep are left; +Inf cuts none. It returns what
 // is left and how near a survivor is to the threshold.
@@ -324,7 +324,7 @@ func xtcCut(surv []int, p func(i int) float64, thr float64, minKeep int) ([]int,
 
 // SampleWalk is the top-k draw with no penalty: the K best logits (the lower
 // id on a tie), the first k of them, typical-p (typicalCut; +Inf where off),
-// then top-p and min-p over the survivors' softmax at temperature 1 with the
+// then top-p and min-p over the survivors' softmax at the temperature with the
 // best survivor always kept, XTC at threshold xtc (xtcCut), then the walk at
 // u over the
 // survivors' softmax at 1/T -- the first whose mass up to and including it
@@ -361,7 +361,7 @@ func walkSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc float6
 	p := make([]float64, K)
 	sum := 0.0
 	for i := range min(k, K) {
-		p[i] = math.Exp(float64(logits[order[i]]) - v0)
+		p[i] = math.Exp((float64(logits[order[i]]) - v0) * invT)
 		sum += p[i]
 	}
 	in := make([]bool, K)
@@ -589,7 +589,7 @@ func infillSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc, sig
 }
 
 // SampleCut is the draw with no top-k and a cut: the repeat penalty once a
-// history entry in float32, the row's softmax at temperature 1 in float64 and
+// history entry in float32, the row's softmax at the temperature in float64 and
 // its order (the larger first, the lower id of two equal); min-p stops at the
 // first token under min-p times the best's probability, before it joins the
 // mass, and top-p at the first whose mass up to it reaches top-p, after; the
@@ -616,7 +616,7 @@ func SampleCutMinKeep(logits []float32, hist []int, pen, invT float32, topp, min
 	q1 := make([]float64, n)
 	sum := 0.0
 	for i := range v {
-		q1[i] = math.Exp(float64(v[i]) - m)
+		q1[i] = math.Exp((float64(v[i]) - m) * float64(invT))
 		sum += q1[i]
 	}
 	for i := range q1 {
@@ -714,7 +714,7 @@ func typicalOrder(q []float64, order []int, in []bool, typ float64, minKeep int)
 // SampleProb is the probability the draw gives token x: of the candidates
 // (the k best penalized logits, or the whole row where k is 0) in their
 // order, typical-p (+Inf where off), then min-p and top-p over the
-// survivors' softmax at temperature 1 (the best kept), then x's share of the
+// survivors' softmax at the temperature (the best kept), then x's share of the
 // survivors' softmax at 1/T; with no top-k and no cut firing, x's share of
 // the row's softmax at 1/T. It returns the probability and how far the cuts
 // are from flipping.
@@ -742,7 +742,7 @@ func SampleProbMinKeep(logits []float32, hist []int, pen, invT float32, k int, t
 	in := make([]bool, n)
 	sum := 0.0
 	for _, i := range cand {
-		q[i] = math.Exp(float64(v[i]) - v0)
+		q[i] = math.Exp((float64(v[i]) - v0) * float64(invT))
 		in[i] = true
 		sum += q[i]
 	}

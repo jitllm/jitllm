@@ -284,7 +284,8 @@ type Head struct {
 	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
 	// off, the caller's uniform, typical-p +Inf where off, XTC's threshold
 	// +Inf where off, a word the draw does not read, and the dynamic
-	// temperature's range, 0 where off, and exponent) -- exactly the CPU's
+	// temperature's range, 0 where off, and exponent, then the cuts' 1/T,
+	// DrawArgs.CutInvTemp's) -- exactly the CPU's
 	// draw
 	// (engine.Instance.Sample). Penalties that are off leave the row as it
 	// is, whatever the window holds. A tier that serves it sets Token and Sampled and
@@ -294,7 +295,7 @@ type Head struct {
 	SampleWindow  []float32
 	SamplePenalty Penalties
 	Sampled       bool
-	WalkArgs      [10]float32
+	WalkArgs      [11]float32
 	// Pick, when non-empty, asks for the logits at these vocabulary ids alone
 	// in place of the row: a decision readout's label ids. A tier that serves
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched

@@ -13,12 +13,13 @@ import (
 // itself is the composed forms' (Instance.Sample: graph.Sample, SampleWalk,
 // SampleRow and SampleCut), which read the window as a count row.
 //
-// The filters run penalty, top-n-sigma, top-k, typical-p, top-p, min-p,
-// XTC, then the temperature (dynamic where DynatempRange is set),
-// llama.cpp's order: typical-p, top-p and min-p cut the
-// candidates' softmax at temperature 1, each over what the one before it
-// left, and the temperature shapes only the draw over what survives them. Equal logits are ordered
-// higher logit first, lower id on a tie.
+// The filters run penalty, the temperature, top-n-sigma, top-k, typical-p,
+// top-p, min-p, then XTC, the reference's order (generate applies its
+// temperature warper before top-k, top-p and min-p): typical-p, top-p and
+// min-p cut the candidates' softmax at the temperature, each over what the
+// one before it left, and a dynamic temperature (DynatempRange) shapes the
+// draw over what survives them. Equal logits are ordered higher logit first,
+// lower id on a tie.
 type Sampler struct {
 	Temp     float64 // 0 = greedy; llama.cpp's --temp
 	TopK     int     // 0 = disabled
@@ -70,7 +71,7 @@ type Sampler struct {
 	// MinKeep is llama.cpp's min_keep: typical-p, top-p, min-p and XTC each
 	// leave at least that many of their candidates, at most nn.SampleMaxK
 	// past a cut; 0 or 1 is llama.cpp's default. A draw asking more runs its
-	// stages (llama.cpp's own order where Stages names none), min_keep after
+	// stages (the fused draw's order where Stages names none), min_keep after
 	// each cut (graph.SampleKeep).
 	MinKeep int
 	// Adaptive draws through llama.cpp's adaptive-p sampler in place of the
@@ -85,9 +86,15 @@ type Sampler struct {
 	// samplers list) where it is set: each over the row the one before it
 	// leaves (graph.SampleStage), then the row's walk at temperature 1, or
 	// adaptive-p or the infill sampler in its place. Nil is the fused draw,
-	// llama.cpp's own order. A stage the list does not name does not run;
+	// the reference's order (Sampler), or TempLast's. A stage the list does not name does not run;
 	// at temperature 0 the draw is the greedy one, as with every order.
 	Stages []Stage
+	// TempLast applies the temperature after every cut where Stages names
+	// no order: penalties, DRY, top-n-sigma, top-k, typical-p, top-p, min-p
+	// and XTC over the softmax at temperature 1, the temperature (dynamic
+	// where DynatempRange is set) shaping only the draw over what survives
+	// them -- the order the completion endpoint's samplers list states.
+	TempLast bool
 	// ad is adaptive-p's words for the next draw (graph.SampleAdaptive's
 	// sample.adaptive), adSet once they are; adDrew the last draw's.
 	ad, adDrew [6]float32
@@ -220,19 +227,30 @@ const (
 	StageDRY
 )
 
-// defaultStage is the i-th of the default chain, llama.cpp's own order
-// (common_sampler's default samplers), the one a draw with DRY runs where it
-// names none.
+// defaultStage is the i-th of the default chain, the fused draw's order, the
+// one a draw with DRY or a min_keep runs where it names none: the penalties,
+// then the temperature before every cut, as the reference's generate applies
+// its temperature warper before top-k, top-p and min-p.
 func defaultStage(i int) Stage {
+	return [...]Stage{StagePenalties, StageDRY, StageTemperature, StageTopNSigma, StageTopK, StageTypical, StageTopP,
+		StageMinP, StageXTC}[i]
+}
+
+// lastStage is the i-th of TempLast's chain, the temperature after every
+// cut.
+func lastStage(i int) Stage {
 	return [...]Stage{StagePenalties, StageDRY, StageTopNSigma, StageTopK, StageTypical, StageTopP, StageMinP, StageXTC,
 		StageTemperature}[i]
 }
 
 // chain is how many stages a staged draw runs and the i-th of them: its
-// own, or llama.cpp's order where it names none.
+// own, or the fused draw's order where it names none.
 func (s *Sampler) chain() (int, func(int) Stage) {
 	if s.Stages != nil {
 		return len(s.Stages), func(i int) Stage { return s.Stages[i] }
+	}
+	if s.TempLast {
+		return 9, lastStage
 	}
 	return 9, defaultStage
 }

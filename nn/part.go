@@ -223,6 +223,9 @@ type KVConvDevice interface {
 type DrawArgs struct {
 	TopK                int
 	InvTemp, TopP, MinP float32
+	// CutInvTemp is the 1/T the cuts read: InvTemp where the temperature
+	// comes before them, 1 where it comes after.
+	CutInvTemp float32
 	// Typical is typical-p, off at 0 and at 1 or more. XTC is XTC's
 	// threshold this draw, 0 for none; XTCMix the probability a
 	// distribution mixes its cut in at.

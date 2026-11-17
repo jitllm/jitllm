@@ -7758,10 +7758,7 @@ reference does not sample, its repetition penalty over the whole window, as
 the reference's reads every token), a server session opened with no sampling
 draws with it (seeded apart), and the app's settings start as the model's own
 (`session.Sampling.Stated`; a knob set makes them the caller's). The settings
-the app persisted before keep their values. Not yet the reference's: the fused
-draw's cuts read the softmax at temperature 1 and the temperature applies to
-the survivors, where generate's warpers apply the temperature first, then
-top-k, top-p and min-p. Gates: `engine.TestStatedSamplerIsTheContainers` (the
+the app persisted before keep their values. Gates: `engine.TestStatedSamplerIsTheContainers` (the
 qwen3 fixture's file reaches the opened model and the sampler),
 `common/engine.TestTheDefaultSettingsAreTheModelsOwn`.
 
@@ -10750,6 +10747,29 @@ at a temperature other than 1 the two keep different candidates; at 4,
 tempering first keeps several more (`TestSamplerCutsBeforeTheTemperature`
 pins the order and fails on the old one). One order on every device was the
 user's decision; the forward-sample gate passes on the V100 with it.
+
+The user's decision of #404 turns the order to the reference's, still one on
+every device: the penalty, then the temperature, then top-k, top-p and min-p
+over the candidates' softmax at the temperature, as `generate`'s warpers run
+(the fused draw's cuts read `exp((v - v0)/T)`, graph.SampleWalk and
+graph.SampleCut, and the oracle's walk, cut and probability the same; the
+staged draw's own order puts the temperature after the penalties and DRY).
+Typical-p still cuts before top-p, where the reference's typical warper runs
+after min-p; the two orders differ only with both on (docs/divergences.md).
+
+The completion endpoint's own chain keeps the temperature last, as before:
+its default samplers list, and every list in that order, ran the fused draw
+(no `Sampler.Stages`), which now cuts at the temperature. The cuts' 1/T is a
+word of its own in the walk and cut forms (the last of `sample.walk` and
+`sample.cut`, `nn.DrawArgs.CutInvTemp`): 1/T in the reference's order, 1 with
+`Sampler.TempLast`, which the endpoint sets on every request; a staged draw
+with no order of its own (DRY, min_keep) takes the temperature-last chain
+with it. The forms are composed once a model as before, and a draw writes
+one more word. `engine.TestSamplerStagesRunInTheirOrder` holds the fused
+draw with `TempLast` to the chain's definition (oracle.Chain) token for
+token and in its sampled probability, on the top-k walk and on the full-row
+cut, and the endpoint's samplers gate in `server` that every request asks
+for it.
 
 ## min_keep, a stage after each cut
 

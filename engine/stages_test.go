@@ -16,9 +16,10 @@ import (
 // row, each one llama.cpp's (oracle.Chain), then the row's walk at
 // temperature 1 (oracle.SampleRow) at the draw's uniform, XTC at its
 // chance as it fell -- and SampledProbs the chain's distribution. The
-// order moves the token against the fused draw, llama.cpp's own order over
+// order moves the token against the fused draw, the reference's order over
 // the same parameters, on a share of the draws, or the comparison cannot
-// see it.
+// see it. Where the chain is TempLast's order, the fused draw with TempLast
+// draws the chain's token and samples it at the chain's probability.
 func TestSamplerStagesRunInTheirOrder(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
 		t.Fatalf("MODEL MISSING: %v", err)
@@ -33,27 +34,31 @@ func TestSamplerStagesRunInTheirOrder(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		smp  Sampler
+		last bool
 	}{
-		{"temperature first", Sampler{Temp: 2.5, TopK: 30, TopP: 0.5, MinP: 0.03, Seed: 51,
-			Stages: []Stage{StageTemperature, StageTopK, StageTopP, StageMinP}}},
-		{"min-p after the temperature", Sampler{Temp: 2, TopK: 40, MinP: 0.15, Seed: 53,
-			Stages: []Stage{StageTopK, StageTemperature, StageMinP}}},
+		{"temperature last", Sampler{Temp: 2.5, TopK: 30, TopP: 0.5, MinP: 0.03, Seed: 51,
+			Stages: []Stage{StageTopK, StageTopP, StageMinP, StageTemperature}}, true},
+		{"min-p before the temperature", Sampler{Temp: 2, TopK: 40, MinP: 0.15, Seed: 53,
+			Stages: []Stage{StageTopK, StageMinP, StageTemperature}}, true},
+		{"top-p and min-p over the row before the temperature", Sampler{Temp: 1.8, TopP: 0.6, MinP: 0.05, Seed: 63,
+			Stages: []Stage{StageTopP, StageMinP, StageTemperature}}, true},
 		{"xtc first, the penalties last", Sampler{Temp: 1.3, TopP: 0.9, XTCProbability: 0.7, XTCThreshold: 0.05,
 			RepeatPen: 1.5, PresencePen: 0.4, FreqPen: 0.2, RepeatLastN: 16, Seed: 57,
-			Stages: []Stage{StageXTC, StageTopP, StageTemperature, StagePenalties}}},
+			Stages: []Stage{StageXTC, StageTopP, StageTemperature, StagePenalties}}, false},
 		{"typical and top-n-sigma after a dynamic temperature", Sampler{Temp: 1.6, TypicalP: 0.7, TopNSigma: 1.1,
 			DynatempRange: 0.5, DynatempExponent: 1.3, Seed: 59,
-			Stages: []Stage{StageTemperature, StageTypical, StageTopNSigma}}},
-		{"min-keep through min-p after a dynamic temperature", Sampler{Temp: 1.5, DynatempRange: 1, DynatempExponent: 1, MinP: 0.7,
-			MinKeep: 5, Seed: 61, Stages: []Stage{StageTemperature, StageMinP}}},
+			Stages: []Stage{StageTemperature, StageTypical, StageTopNSigma}}, false},
+		{"min-keep through min-p before a dynamic temperature", Sampler{Temp: 1.5, DynatempRange: 1, DynatempExponent: 1, MinP: 0.7,
+			MinKeep: 5, Seed: 61, Stages: []Stage{StageMinP, StageTemperature}}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := testInstance(t, m, 96)
 			defer st.Close()
 			// Copies before the first draw: each seeds a stream of its own
 			// from the same seed, and draws as many uniforms a token.
-			smp, peek, fused := c.smp, c.smp, c.smp
+			smp, peek, fused, last := c.smp, c.smp, c.smp, c.smp
 			fused.Stages = nil
+			last.Stages, last.TempLast = nil, true
 			lg, err := st.Prefill([]int32{1, 450, 3014, 471, 263})
 			if err != nil {
 				t.Fatal(err)
@@ -126,8 +131,22 @@ func TestSamplerStagesRunInTheirOrder(t *testing.T) {
 				if w := math.Exp(float64(row[got])-top) / mass; math.Abs(float64(pc)-w) > 1e-4*w+1e-6 && min(cm, wm) >= 1e-5 {
 					t.Fatalf("draw %d: the drawn token %d sampled at %.7g, its definition's %.7g", i, got, pc, w)
 				}
+				if c.last {
+					lt, err := st.Sample(&last, lg)
+					if err != nil {
+						t.Fatal(err)
+					}
+					lp, err := st.SampledProbs(&l, &last, lg, got)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if min(cm, wm) >= 1e-5 && (lt != got || math.Abs(float64(lp-pc)) > 1e-4*float64(pc)+1e-6) {
+						t.Fatalf("draw %d: the fused draw with the temperature last drew %d at %.7g, the chain %d at %.7g", i, lt, lp, got, pc)
+					}
+				}
 				smp.Observe(got)
 				fused.Observe(got)
+				last.Observe(got)
 				if lg, err = st.Forward(got); err != nil {
 					t.Fatal(err)
 				}

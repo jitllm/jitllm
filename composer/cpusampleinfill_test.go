@@ -83,7 +83,7 @@ func infillGate(t *testing.T, K int) {
 		vals := map[graph.ValueID][]uint32{
 			in["logits"]: lw, in["sample.window"]: make([]uint32, n), in["sample.penalty"]: {f32(1), 0, 0},
 			in["sample.walk"]: {f32(float64(k)), f32(invT), f32(topp), f32(minp), f32(u), f32(math.Inf(1)), f32(math.Inf(1)), 0, 0,
-				f32(1), f32(sigma)},
+				f32(1), f32(sigma), f32(invT)},
 			in["sample.infill.class"]: append([]uint32(nil), class...), in["sample.infill.parent"]: append([]uint32(nil), parent...),
 			in["sample.eog"]: eogBits, in["sample.eot"]: {eot},
 			tokV: {0},

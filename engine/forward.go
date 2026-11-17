@@ -3025,7 +3025,11 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 			walkXTC = xtc
 		}
 		rng, ex := smp.dyn()
-		h.WalkArgs, h.Token = [10]float32{float32(k), float32(1 / smp.Temp), topp, minp, u, smp.typical(), walkXTC, 1, rng, ex}, -1
+		cutT := float32(1 / smp.Temp)
+		if smp.TempLast {
+			cutT = 1
+		}
+		h.WalkArgs, h.Token = [11]float32{float32(k), float32(1 / smp.Temp), topp, minp, u, smp.typical(), walkXTC, 1, rng, ex, cutT}, -1
 		defer func() { h.SampleK, h.Sampled = 0, false }()
 	}
 	logits, err := s.Forward(token)

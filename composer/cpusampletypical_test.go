@@ -83,7 +83,7 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 				}
 				dyn := [2]float64{}
 				if c%5 == 2 {
-					dyn = [2]float64{float64(float32(0.2 + 0.8*rng.Float64())), float64(float32(0.5 + 1.5*rng.Float64()))}
+					dyn = [2]float64{float64(float32(0.5 + 1.0*rng.Float64())), float64(float32(0.5 + 1.5*rng.Float64()))}
 				}
 				// Top-n-sigma is the cut's forms' alone; the walk never reads it.
 				ns, lo, sm := 0.0, l, inf
@@ -106,7 +106,7 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 					plain, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, inf, xtc, dyn, u)
 					noX, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, inf, dyn, u)
 					noD, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, xtc, [2]float64{}, u)
-					vals[in["sample.walk"]] = []uint32{f(float64(k)), f(invT), f(topp), f(minp), f(u), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1])}
+					vals[in["sample.walk"]] = []uint32{f(float64(k)), f(invT), f(topp), f(minp), f(u), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1]), f(invT)}
 				case a.topK:
 					want, margin = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, xtc, dyn, u)
 					plain, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, inf, xtc, dyn, u)
@@ -114,7 +114,7 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 					noS, _ = oracle.SampleWalk(l, n, k, invT, topp, minp, typ, xtc, dyn, u)
 					noD, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, xtc, [2]float64{}, u)
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
-					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(float64(k)), f(ns), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1])}
+					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(float64(k)), f(ns), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1]), f(invT)}
 				default:
 					want, margin = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, xtc, dyn, u)
 					plain, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, inf, xtc, dyn, u)
@@ -122,7 +122,7 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 					noS, _ = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, typ, xtc, dyn, u)
 					noD, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, xtc, [2]float64{}, u)
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
-					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(ns), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1])}
+					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(ns), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1]), f(invT)}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 					t.Fatal(err)

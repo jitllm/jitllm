@@ -15,9 +15,9 @@ import (
 // from, in float64 (distRef): over a real model's logits, at temperatures
 // either side of 1 with top-p and min-p cutting, with a top-k (within the
 // walk's bound and past it) and without, every token's probability within
-// float32's rounding. Cutting at the temperature instead (the rule the host's
-// dist kept) is the violation: it must read off the definition somewhere, or
-// this gate cannot tell the two apart.
+// float32's rounding. Cutting at temperature 1 instead (the order the draw
+// kept before the reference's) is the violation: it must read off the
+// definition somewhere, or this gate cannot tell the two apart.
 func TestSpecDistIsTheDrawsDistribution(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
 		t.Fatalf("MODEL MISSING: %v", err)
@@ -62,19 +62,19 @@ func TestSpecDistIsTheDrawsDistribution(t *testing.T) {
 		}
 	}
 	if !apart {
-		t.Fatal("cutting at the temperature reads as cutting at 1 everywhere: the gate cannot see it")
+		t.Fatal("cutting at 1 reads as cutting at the temperature everywhere: the gate cannot see it")
 	}
 }
 
 // distRef is the distribution Sample's draw draws from over logits, every
 // token's probability in float64, the penalty off: the candidates (the k
-// best, or the row), min-p and top-p over their softmax at temperature 1 (at
-// the temperature with atT, the violation), the best kept, then each
+// best, or the row), min-p and top-p over their softmax at the temperature
+// (at temperature 1 with atOne, the violation), the best kept, then each
 // survivor's share of the survivors' softmax at the temperature, or of the
 // row's where no top-k is set and no cut fires. It returns it and how far
 // the cuts are from flipping, which is the whole margin of every
 // probability.
-func distRef(logits []float32, smp *Sampler, atT bool) (p []float64, margin float64) {
+func distRef(logits []float32, smp *Sampler, atOne bool) (p []float64, margin float64) {
 	n := len(logits)
 	order := make([]int, n)
 	for i := range order {
@@ -86,9 +86,9 @@ func distRef(logits []float32, smp *Sampler, atT bool) (p []float64, margin floa
 		cand = order[:smp.TopK]
 	}
 	invT := float64(float32(1 / smp.Temp))
-	cutT := 1.0
-	if atT {
-		cutT = invT
+	cutT := invT
+	if atOne {
+		cutT = 1
 	}
 	v0 := float64(logits[cand[0]])
 	q := make([]float64, len(cand))

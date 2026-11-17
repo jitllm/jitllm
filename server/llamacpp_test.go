@@ -560,7 +560,8 @@ func TestLlamaPicturesReachTheGenerate(t *testing.T) {
 // order, as llama-server reads it: a stage it leaves out is off whatever its
 // field says (no temperature draws at 1), its names take llama.cpp's
 // aliases and letters, and an order the draw does not run, an unknown name or
-// a stage not built is refused naming samplers.
+// a stage not built is refused naming samplers. Every request's draw takes
+// the temperature last, its chain's order, the fused draw's included.
 func TestLlamaSamplersChooseTheStages(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
@@ -582,8 +583,8 @@ func TestLlamaSamplersChooseTheStages(t *testing.T) {
 	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x",`+fields+`}`); code != 200 {
 		t.Fatalf("no samplers: %d", code)
 	}
-	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 {
-		t.Errorf("the default chain ran %+v, want every stage", sm)
+	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 || sm.Stages != nil || !sm.TempLast {
+		t.Errorf("the default chain ran %+v, want every stage, fused with the temperature last", sm)
 	}
 	// Any order runs as listed, the stages one by one; llamaChain's own runs
 	// fused.
@@ -602,8 +603,8 @@ func TestLlamaSamplersChooseTheStages(t *testing.T) {
 		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+c.list+`}`); code != 200 {
 			t.Fatalf("samplers %s: %d %v", c.list, code, out)
 		}
-		if sm := f.opts().Sampling; !slices.Equal(sm.Stages, c.stages) || sm.Infill != c.infill {
-			t.Errorf("samplers %s: stages %v, infill %v; want %v, %v", c.list, sm.Stages, sm.Infill, c.stages, c.infill)
+		if sm := f.opts().Sampling; !slices.Equal(sm.Stages, c.stages) || sm.Infill != c.infill || !sm.TempLast {
+			t.Errorf("samplers %s: stages %v, infill %v, temperature last %v; want %v, %v", c.list, sm.Stages, sm.Infill, sm.TempLast, c.stages, c.infill)
 		}
 	}
 	for _, bad := range []string{`["top_k","foo"]`, `"kq"`, `7`} {

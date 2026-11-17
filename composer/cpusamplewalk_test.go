@@ -39,7 +39,7 @@ func TestComposedCPUSampleWalk(t *testing.T) {
 		}
 		vals := map[graph.ValueID][]uint32{
 			in["logits"]: lw, in["sample.window"]: append([]uint32(nil), win...), in["sample.penalty"]: {math.Float32bits(1), 0, 0},
-			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u), math.Float32bits(float32(math.Inf(1))), math.Float32bits(float32(math.Inf(1))), 0, 0, math.Float32bits(1)},
+			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u), math.Float32bits(float32(math.Inf(1))), math.Float32bits(float32(math.Inf(1))), 0, 0, math.Float32bits(1), math.Float32bits(invT)},
 			tokV:              {0},
 		}
 		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {

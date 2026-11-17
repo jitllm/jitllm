@@ -211,6 +211,10 @@ func (s *Instance) drawArgs(smp *Sampler, xtc, mix float32) nn.DrawArgs {
 	rng, ex := smp.dyn()
 	a := nn.DrawArgs{TopK: smp.TopK, DynRange: rng, DynExp: ex, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Typical: float32(smp.TypicalP),
 		XTC: xtc, XTCMix: mix, Sigma: float32(smp.TopNSigma), Penalty: smp.penalties(), Infill: smp.Infill}
+	a.CutInvTemp = a.InvTemp
+	if smp.TempLast {
+		a.CutInvTemp = 1
+	}
 	if smp.Mirostat != 0 {
 		a.Mirostat, a.Penalty = smp.Mirostat, nn.NoPenalties()
 		var mu *float32
@@ -252,7 +256,7 @@ func (s *Instance) draw(logits []float32, smp *Sampler, u, xtc float32) (int32, 
 // plainArgs is the row's draw at temperature 1 with no cut and no penalty,
 // infill's where infill is set.
 func plainArgs(infill bool) nn.DrawArgs {
-	return nn.DrawArgs{InvTemp: 1, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties(), Infill: infill}
+	return nn.DrawArgs{InvTemp: 1, CutInvTemp: 1, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties(), Infill: infill}
 }
 
 // stagedRows is a chain run in an order of its own on an instance
