@@ -367,14 +367,14 @@ func (r *Remote) activate(path string) {
 	}
 	r.active, r.session, r.window = path, resp.Msg.GetSession().GetSessionId(), window
 	r.publishModels()
-	chatOK, vision := info.GetChatCapable(), info.GetHasVisionTower()
+	chatOK, vision, own := info.GetChatCapable(), info.GetHasVisionTower(), info.GetStatedSampling()
 	r.sh.Post(func() {
 		if !chatOK {
 			r.st.Chat.Set(false)
 		}
 		r.st.ChatCapable.Set(chatOK)
 		r.st.Vision.Set(vision)
-		r.st.Own.Set(session.Sampling{})
+		r.st.Own.Set(ownOf(own))
 		r.st.ModelPath.Set(path)
 		r.st.Loaded.Set(true)
 		r.st.Problem.Set(session.Problem{})
@@ -655,6 +655,16 @@ func (r *Remote) opensThinking(req session.ChatRequest) bool {
 		return false
 	}
 	return strings.HasSuffix(strings.TrimRight(resp.Msg.GetPrompt(), " \t\r\n"), thinkOpen)
+}
+
+// ownOf is the service's statement of a model's draw as the app's settings
+// (Own set), none where it states none.
+func ownOf(p *v1.SamplingParams) session.Sampling {
+	if p == nil {
+		return session.Sampling{}
+	}
+	return session.Sampling{Temp: p.GetTemperature(), TopK: int(p.GetTopK()), TopP: p.GetTopP(), MinP: p.GetMinP(),
+		TypicalP: p.GetTypicalP(), RepeatPen: p.GetRepeatPenalty(), RepeatLastN: int(p.GetRepeatLastN()), Own: true}
 }
 
 // samplingOf is the settings as a request asks them: none where they are the

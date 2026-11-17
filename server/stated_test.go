@@ -53,4 +53,17 @@ func TestASessionWithNoSamplingDrawsTheStatedDraw(t *testing.T) {
 	if _, undrawn := sessionSampler(&own, old, 64, ""); undrawn != nil {
 		t.Errorf("a session opened with its own draw was refused: %v", undrawn)
 	}
+
+	// ModelInfo states the draw a session opened with none takes, and the
+	// wire's sampling of it draws that.
+	p := pbStatedSampling(lm, 64)
+	got := pbSampling(p)
+	near := func(a, b float64) bool { return a > b-1e-6 && a < b+1e-6 }
+	if p == nil || !near(got.Temp, want.Temp) || got.TopK != want.TopK || !near(got.TopP, want.TopP) || !near(got.MinP, want.MinP) ||
+		!near(got.TypicalP, want.TypicalP) || !near(got.RepeatPen, want.RepeatPen) || got.RepeatLastN != want.RepeatLastN {
+		t.Errorf("ModelInfo states the draw as %+v, the container's is %+v", got, *want)
+	}
+	if pbStatedSampling(old, 64) != nil {
+		t.Error("ModelInfo stated a draw for a container stating none")
+	}
 }

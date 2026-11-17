@@ -185,6 +185,7 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		Encoder:           c.NonCausal,
 		Aliases:           e.aliasesOf(lm.path),
 		DefaultMaxSeq:     int32(e.defaultMaxSeq(lm)),
+		StatedSampling:    pbStatedSampling(lm, e.defaultMaxSeq(lm)),
 		Capabilities: modelCapabilities(lm.m.ChatCapable(), lm.m.Tower != nil,
 			lm.m.IsEmbedding(), c.NonCausal),
 	}

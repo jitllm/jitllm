@@ -133,4 +133,13 @@ func TestAKnobMovedOffTheModelsOwnKeepsTheRest(t *testing.T) {
 	if ownSampling(nil, 4096).Own {
 		t.Error("a container stating no draw gave the knobs one to show")
 	}
+	// A service's statement of the draw reads back as the same settings.
+	o := ownOf(samplingOf(session.Sampling{Temp: own.Temp, TopK: own.TopK, TopP: own.TopP, MinP: own.MinP,
+		TypicalP: own.TypicalP, RepeatPen: own.RepeatPen, RepeatLastN: own.RepeatLastN}))
+	if o != own {
+		t.Errorf("the service's statement of the draw reads back as %+v, not %+v", o, own)
+	}
+	if ownOf(nil).Own {
+		t.Error("a service stating no draw gave the knobs one to show")
+	}
 }

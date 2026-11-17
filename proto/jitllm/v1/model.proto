@@ -125,6 +125,11 @@ message ModelInfo {
   // How many sessions currently hold this model.
   int32 session_count = 20;
 
+  // The model's own draw, the one its container states, at the default
+  // window: what a session opened with no sampling draws. Unset where the
+  // container states none, and a session that asks for no draw is refused.
+  SamplingParams stated_sampling = 27;
+
   // Default placement newly created sessions inherit.
   repeated string default_device_ids = 21;
 
