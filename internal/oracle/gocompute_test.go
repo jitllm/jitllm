@@ -28,9 +28,7 @@ func goComputeAllowed() map[string]string {
 		// Constants built once at load from the config, like the tables a kernel is
 		// compiled with.
 		"nn/ropetable.go:foldRopeTab": "the rotary table's folded constant planes, once per configuration",
-		"nn/ropetable.go:YarnFreqs":   "YaRN's per-dimension frequencies, once per configuration",
 		"nn/ropeaxes.go:runFreqs":     "a multi-axis rotary's per-pair frequencies, once per configuration",
-		"model/model.go:ropeScale":    "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
 		"graph/sample.go:selection":   "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
 		// A clip's resample: libswresample's filter bank, once a pair of rates,
 		// as Pillow's taps are once a size (the sound op reads it).

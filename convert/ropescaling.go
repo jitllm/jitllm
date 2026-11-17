@@ -34,14 +34,14 @@ type hfLlama3 struct {
 }
 
 // llama3RopeOf reads a rope scaling object, transformers' rope_parameters or
-// rope_scaling: for llama3's method, the function of the rotated width and the
-// base that computes its per-pair factors; nil for any other method. factor,
-// low_freq_factor and high_freq_factor are required, as transformers'
+// rope_scaling: for llama3's method, the parameters rotary.json's llama3
+// statement computes its per-pair factors from; nil for any other method.
+// factor, low_freq_factor and high_freq_factor are required, as transformers'
 // _compute_llama3_parameters reads them. The original context is origTop, a
 // top-level original_max_position_embeddings, which standardize_rope_params
 // prefers to the object's; then the object's; then maxPos,
 // max_position_embeddings.
-func llama3RopeOf(obj json.RawMessage, origTop, maxPos *float64) (func(rotated uint32, base float64) []float32, error) {
+func llama3RopeOf(obj json.RawMessage, origTop, maxPos *float64) (map[string]any, error) {
 	var r hfLlama3
 	if err := json.Unmarshal(obj, &r); err != nil {
 		return nil, err
@@ -71,35 +71,5 @@ func llama3RopeOf(obj json.RawMessage, origTop, maxPos *float64) (func(rotated u
 	if !(factor > 0) || !(low > 0) || !(high > low) || !(ctx > 0) {
 		return nil, fmt.Errorf("llama3 factor %g, low_freq_factor %g, high_freq_factor %g over %g positions", factor, low, high, ctx)
 	}
-	return func(rotated uint32, base float64) []float32 {
-		return llama3Freqs(rotated, base, factor, low, high, ctx)
-	}, nil
-}
-
-// llama3Freqs is convert_hf_to_gguf.py's LlamaModel.generate_extra_tensors,
-// every step in float32 as its torch tensors run it, so the factors are the
-// GGUF's to the bit: freq = 1/base^(i/dim) over even i, then 1 where the
-// wavelength is under orig/high, factor where it is over orig/low, and the
-// smooth blend between.
-func llama3Freqs(headDim uint32, base, factor, low, high, orig float64) []float32 {
-	dim := float32(headDim)
-	lowWave, highWave := orig/low, orig/high
-	twoPi := float32(2 * math.Pi)
-	var out []float32
-	for i := uint32(0); i < headDim; i += 2 {
-		e := float32(float32(i) / dim)
-		p := float32(math.Pow(float64(float32(base)), float64(e)))
-		freq := float32(1 / p)
-		wave := float32(twoPi / freq)
-		switch {
-		case float64(wave) < highWave:
-			out = append(out, 1)
-		case float64(wave) > lowWave:
-			out = append(out, float32(factor))
-		default:
-			s := float32(float32(float32(float32(orig)/wave)-float32(low)) / float32(high-low))
-			out = append(out, float32(1/float32(float32(float32(1-s)/float32(factor))+s)))
-		}
-	}
-	return out
+	return map[string]any{"factor": factor, "low_freq_factor": low, "high_freq_factor": high, "original_context": ctx}, nil
 }

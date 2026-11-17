@@ -11050,3 +11050,37 @@ generic, neither naming a model:
 The description of each class's models is still a line of Go
 (internal/modelsdoc/describe.go) until that table moves into the library.
 
+## Rotary scaling, stated per pair
+
+The engine computed a scaled rotary's per-pair divisors at open, in Go:
+nn.YarnFreqs for YaRN, a constant for a linear factor, each times the
+per-pair factors a file ships (model.ropeScale), selected by the
+container's YarnFactor, YarnBetaFast/YarnBetaSlow, FlagYarnExact and
+RopeLinear. The converter states them now: convert/rotary.json states each
+method (linear, yarn, llama3) as a per-pair divisor in the model.json
+expression language, with log, floor, ceil, min, max, sqrt and f32 calls and
+named values, and StateRotary, the first step of stating a source's block
+graphs, evaluates the method into rope_freqs (or the short factors a file
+ships in its place) and the long factors, then clears the method's fields.
+model/ reads only the factors; a container still carrying a method's fields
+is refused for reconversion (jlm.UpgradeError). The llama3 factors the
+safetensors path wrote from a Go transcription of the float32 reference are
+the llama3 statement's, every step rounded through f32() as the reference's
+float32 tensors run it.
+
+The statements are held bit for bit to the Go each replaced
+(TestRotaryStatementsMatchTheirTranscription: 7 widths x 7 bases x 7 factors
+x 7 contexts, YaRN both ways of truncating, and llama3) and to transformers'
+inverse frequencies (TestRotaryYarnMatchesTransformers, the golden
+scripts/yarngold.py writes). Every converted model's rotary -- each
+rotary's divisors, folded table planes and every stated rotary op -- was
+dumped from containers converted by the previous build and by this one and
+compared byte for byte. Floor for ceil in the yarn statement fails both
+statement gates; dropping one f32() from llama3's wavelength moves one
+divisor by an ulp, which the transcription gate names.
+
+What stays a field: YarnFactor, for the score's magnitude with YarnLogMul
+(not a frequency); YarnOrigCtx, past which LongRoPE turns its long factors;
+the sliding layers' own base, width and magnitude, which the stated rotary
+ops carry and model/ still reads from the config to build its second
+rotary.

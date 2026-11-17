@@ -1,0 +1,29 @@
+{
+  "methods": {
+    "linear": {
+      "params": ["factor"],
+      "divisor": "factor"
+    },
+    "yarn": {
+      "params": ["factor", "original_context", "beta_fast", "beta_slow", "truncate"],
+      "values": [
+        ["lo0", "rotated * log(original_context / (2 * 3.141592653589793 * beta_fast)) / (2 * log(base))"],
+        ["hi0", "rotated * log(original_context / (2 * 3.141592653589793 * beta_slow)) / (2 * log(base))"],
+        ["lo", "max(truncate ? floor(lo0) : lo0, 0)"],
+        ["hi1", "min(truncate ? ceil(hi0) : hi0, rotated - 1)"],
+        ["hi", "hi1 == lo ? hi1 + 0.001 : hi1"],
+        ["e", "1 - min(max((pair - lo) / (hi - lo), 0), 1)"]
+      ],
+      "divisor": "1 / ((1 - e) / factor + e)"
+    },
+    "llama3": {
+      "params": ["factor", "low_freq_factor", "high_freq_factor", "original_context"],
+      "values": [
+        ["freq", "f32(1 / f32(f32(base) ** f32(f32(2 * pair) / f32(rotated))))"],
+        ["wave", "f32(f32(2 * 3.141592653589793) / freq)"],
+        ["s", "f32(f32(f32(f32(original_context) / wave) - f32(low_freq_factor)) / f32(high_freq_factor - low_freq_factor))"]
+      ],
+      "divisor": "wave < original_context / high_freq_factor ? 1 : wave > original_context / low_freq_factor ? f32(factor) : f32(1 / f32(f32(f32(1 - s) / f32(factor)) + s))"
+    }
+  }
+}

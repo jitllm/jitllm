@@ -807,7 +807,7 @@ unblocks what.
 One multiply. It is a hard prerequisite for every DeepSeek model, it has a
 standing refusal in the tree naming it, and it is gateable against
 `transformers._compute_yarn_parameters` the same way
-`nn.TestYarnFreqsMatchTransformers` already gates the gpt-oss path. Do it first
+`convert.TestRotaryYarnMatchesTransformers` already gates the gpt-oss path. Do it first
 because it is the cheapest thing on the critical path, not because it is
 valuable alone.
 

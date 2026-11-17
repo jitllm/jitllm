@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -657,8 +658,12 @@ func TestDeepseekYarnIsRead(t *testing.T) {
 				t.Fatalf("a yarn deepseek was refused: %v", err)
 			}
 			cf := s.Config
-			if cf.YarnFactor != 40 || cf.YarnOrigCtx != 32 || cf.YarnBetaFast != 32 || cf.YarnBetaSlow != 1 {
+			if cf.YarnFactor != 40 || cf.YarnOrigCtx != 32 || cf.YarnBetaFast != 0 || cf.YarnBetaSlow != 0 {
 				t.Errorf("yarn %v/%v/%v/%v", cf.YarnFactor, cf.YarnOrigCtx, cf.YarnBetaFast, cf.YarnBetaSlow)
+			}
+			want := yarnFreqs(int(cf.NRot), float64(cf.RopeBase), 40, 32, 32, 1, false)
+			if got := statedRopeFreqs(t, s); !slices.Equal(f32Bits(got), f32Bits(want)) {
+				t.Errorf("the stated rotary factors %v, want YaRN's %v", got, want)
 			}
 			if cf.YarnLogMul != c.logMul {
 				t.Errorf("YarnLogMul = %v, want %v", cf.YarnLogMul, c.logMul)

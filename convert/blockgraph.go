@@ -606,6 +606,10 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, tak
 	if c.HeadBlocks() != 0 && c.NMTP != 0 {
 		return fmt.Errorf("convert: %d head blocks beside %d prediction blocks, which both follow the trunk", c.HeadBlocks(), c.NMTP)
 	}
+	// The rotary ops turn by the factors stated per pair.
+	if err := StateRotary(c.Config, s); err != nil {
+		return err
+	}
 	names, err := readTensorNames()
 	if err != nil {
 		return err
@@ -1954,14 +1958,14 @@ func (bf *blockFacts) ropeOf(g *mjGraph, o mjBlockOp, vars map[string]jinja.Valu
 // rope is the rotary the block turns by: the sliding layers' where the
 // model trains them their own base or width and global does not ask for
 // the model's, the model's otherwise, with its per-pair factors where it
-// stores them or scales its rotary.
+// stores them (StateRotary states a scaled rotary's).
 func (bf *blockFacts) rope(global bool) (graph.Attrs, error) {
 	c := bf.c
 	nrot, base, scale := int(c.NRot), float64(c.RopeBase), float64(c.AttnFactor)
 	if scale == 0 {
 		scale = 1
 	}
-	freqs := bf.dense[jlm.RoleRopeFreqs] || bf.dense[jlm.RoleRopeFactorsShort] || c.YarnFactor > 0 || c.RopeLinear > 0
+	freqs := bf.dense[jlm.RoleRopeFreqs] || bf.dense[jlm.RoleRopeFactorsShort]
 	local := 0
 	for i := range c.Geoms {
 		if c.Sliding(i) {

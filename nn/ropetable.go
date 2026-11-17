@@ -14,8 +14,9 @@ type Rope struct {
 	// Neox rotates (i, i+NRot/2) instead of (2i, 2i+1). llama is NORM; gemma,
 	// qwen and phi3 are NEOX. See the note on Apply.
 	Neox bool
-	// Freqs divides theta per pair, from rope_freqs.weight (llama 3.1+) or
-	// rope_factors_short.weight (phi3 LongRoPE). nil is no rescaling.
+	// Freqs divides theta per pair, as the container states it
+	// (rope_freqs.weight or rope_factors_short.weight): a scaling method's
+	// divisors times the factors the file ships. nil is no rescaling.
 	Freqs []float32
 	// Scale multiplies cos and sin -- ggml's mscale, from
 	// rope.scaling.attn_factor. Zero means one.
@@ -29,37 +30,6 @@ type Rope struct {
 	// first and stride select a frequency sequence other than 0, 1, 2, ...
 	// for one run's folded planes (runRope); zero values are the plain table.
 	first, stride int
-}
-
-// YarnFreqs is YaRN's rotary scaling as per-pair divisors for Rope.Freqs:
-// pair p's angle pos*base^(-2p/nrot) becomes that times
-// (1-e)/factor + e, where e is 1 below the correction range, 0 above it and a
-// linear ramp between.
-//
-// The range ends are corr(b) = nrot*ln(origCtx/(2*pi*b)) / (2*ln(base)) for
-// b = betaFast and betaSlow. llama.cpp and transformers' default floor the
-// first and ceil the second; exact skips that, as gpt-oss's config
-// (truncate false) asks. The magnitude correction is not here -- it scales
-// cos and sin, which Rope.Scale does.
-func YarnFreqs(nrot int, base, factor float64, origCtx int, betaFast, betaSlow float64, exact bool) []float32 {
-	corr := func(b float64) float64 {
-		return float64(nrot) * math.Log(float64(origCtx)/(2*math.Pi*b)) / (2 * math.Log(base))
-	}
-	lo, hi := corr(betaFast), corr(betaSlow)
-	if !exact {
-		lo, hi = math.Floor(lo), math.Ceil(hi)
-	}
-	lo, hi = math.Max(lo, 0), math.Min(hi, float64(nrot-1))
-	if hi == lo {
-		hi += 0.001
-	}
-	out := make([]float32, nrot/2)
-	for p := range out {
-		ramp := math.Min(math.Max((float64(p)-lo)/(hi-lo), 0), 1)
-		e := 1 - ramp
-		out[p] = float32(1 / ((1-e)/factor + e))
-	}
-	return out
 }
 
 // TabPlanes is the folded constant block a generated rotary-table kernel reads

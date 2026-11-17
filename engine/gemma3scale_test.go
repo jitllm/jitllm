@@ -38,8 +38,13 @@ func TestGemma3GlobalLayersAreLinearlyScaled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if m.Cfg.RopeLinear != 8 {
-		t.Fatalf("RopeLinear %v, want the file's 8", m.Cfg.RopeLinear)
+	// The container states the factor per pair, as the global rotary's
+	// divisors, and the sliding layers' rotary keeps none.
+	if len(m.Rope.Freqs) != m.Cfg.NRot/2 || slices.ContainsFunc(m.Rope.Freqs, func(f float32) bool { return f != 8 }) {
+		t.Fatalf("the global rotary divides by %v, want the file's 8 at each of %d pairs", m.Rope.Freqs, m.Cfg.NRot/2)
+	}
+	if len(m.Ropes) == 0 || m.Ropes[0].Freqs != nil {
+		t.Fatalf("the sliding layers' rotary %v divides its angles too", m.Ropes)
 	}
 	ids := m.Vocab.Encode("The capital", true)
 	// The rotated K is the history each block wrote: every position's keys,

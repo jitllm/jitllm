@@ -40,7 +40,8 @@ func TestYarnAgreesAcrossInputs(t *testing.T) {
 						"this gate proved nothing", q)
 				}
 			}
-			a, b := hfSourceLazy(t, dir).Config, ggufSource(t, gp).Config
+			sa, sb := hfSourceLazy(t, dir), ggufSource(t, gp)
+			a, b := sa.Config, sb.Config
 			if a.YarnFactor <= 1 {
 				t.Fatalf("the safetensors config carries no YaRN (factor %v)", a.YarnFactor)
 			}
@@ -50,8 +51,7 @@ func TestYarnAgreesAcrossInputs(t *testing.T) {
 			}{
 				{"YarnFactor", a.YarnFactor, b.YarnFactor},
 				{"YarnOrigCtx", a.YarnOrigCtx, b.YarnOrigCtx},
-				{"YarnBetaFast", a.YarnBetaFast, b.YarnBetaFast},
-				{"YarnBetaSlow", a.YarnBetaSlow, b.YarnBetaSlow},
+				{"the stated rotary factors", statedRopeFreqs(t, sa), statedRopeFreqs(t, sb)},
 				{"AttnFactor", a.AttnFactor, b.AttnFactor},
 				{"YarnLogMul", a.YarnLogMul, b.YarnLogMul},
 			} {

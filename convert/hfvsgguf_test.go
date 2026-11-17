@@ -67,9 +67,16 @@ func hfSource(t testing.TB, dir string) *jlm.Source {
 	return s
 }
 
+// ggufSource is the source of the GGUF at path as sourceOf reads it, its
+// rotary stated per pair as every source the converter builds states it
+// (StateRotary), so it compares with a built safetensors source.
 func ggufSource(t testing.TB, path string) *jlm.Source {
 	t.Helper()
-	return ggufConverted(t, path, false)
+	s := ggufConverted(t, path, false)
+	if err := StateRotary(s.Config, s); err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // ggufConverted is the source of the GGUF at path as sourceOf reads it, or,

@@ -565,6 +565,10 @@ func ropeScalingOf(f *meta.File, c *Config) error {
 		c.YarnOrigCtx = uint32(f.UintKey("rope.scaling.original_context_length", uint64(c.NCtx)))
 		c.YarnBetaFast = float32(f.FloatKey("rope.scaling.yarn_beta_fast", 32))
 		c.YarnBetaSlow = float32(f.FloatKey("rope.scaling.yarn_beta_slow", 1))
+		if !(c.YarnBetaFast > 0) || !(c.YarnBetaSlow > 0) {
+			return fmt.Errorf("rope.scaling.yarn_beta_fast %g and yarn_beta_slow %g are not a correction range",
+				c.YarnBetaFast, c.YarnBetaSlow)
+		}
 		explicit, haveExplicit := 0.0, false
 		if kv, ok := f.Key("rope.scaling.yarn_attn_factor"); ok {
 			v, ok := kv.Float()

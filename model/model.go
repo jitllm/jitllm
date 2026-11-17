@@ -119,15 +119,15 @@ type Config struct {
 	// full layers'.
 	RopeScaleSWA float64
 
-	// Rotary scaling; see jlm.Config. YarnFactor 0 is no YaRN and RopeLinear 0
-	// no linear interpolation. Both scale the global rotary only.
-	YarnFactor, YarnBetaFast, YarnBetaSlow float64
-	YarnOrigCtx                            int
-	YarnExact                              bool
+	// YarnFactor is a YaRN's factor, which the score's magnitude reads (0 is
+	// no YaRN); the rotary's angles turn by the factors the container states
+	// per pair (convert.StateRotary). YarnOrigCtx is the context past which a
+	// LongRoPE turns its long factors.
+	YarnFactor  float64
+	YarnOrigCtx int
 	// NoPosEnc: the attention blocks apply no positional encoding at all.
 	// Position still orders the causal mask and never reaches q or k.
-	NoPosEnc   bool
-	RopeLinear float64
+	NoPosEnc bool
 
 	// Multi-head Latent Attention; see jlm.Config for the graph. KVLoraRank 0
 	// is every architecture but DeepSeek's.
@@ -626,12 +626,8 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		AttnSoftcap:  c.AttnSoftcap,
 		FinalSoftcap: c.FinalSoftcap,
 		YarnFactor:   float64(c.YarnFactor),
-		YarnBetaFast: float64(c.YarnBetaFast),
-		YarnBetaSlow: float64(c.YarnBetaSlow),
 		YarnOrigCtx:  int(c.YarnOrigCtx),
-		YarnExact:    c.Flags.Has(jlm.FlagYarnExact),
 		NoPosEnc:     c.Flags.Has(jlm.FlagNoPosEnc),
-		RopeLinear:   float64(c.RopeLinear),
 		TiedEmbd:     c.Flags.Has(jlm.FlagTiedEmbd),
 		QKNorm:       c.Flags.Has(jlm.FlagQKNorm),
 		QKNormWide:   c.Flags.Has(jlm.FlagQKNormWide),
@@ -2125,34 +2121,6 @@ func spansOf(t Tensor) bankSpans {
 	return s
 }
 
-// ropeScale is the rotary's per-pair divisors under cfg's scaling (YaRN,
-// linear), times the factors the file ships where it ships them: each
-// pair's theta divided by its factor, then scaled -- a ramp over the pair's
-// index, so the divisors multiply (ggml_rope_ext's freq_factors under its
-// YaRN). Once at open, a constant the rotary's table is formed with.
-func ropeScale(cfg *Config, factors []float32) ([]float32, error) {
-	var scale []float32
-	if cfg.YarnFactor > 0 {
-		scale = nn.YarnFreqs(cfg.NRot, cfg.RopeBase, cfg.YarnFactor, cfg.YarnOrigCtx,
-			cfg.YarnBetaFast, cfg.YarnBetaSlow, cfg.YarnExact)
-	} else {
-		scale = make([]float32, cfg.NRot/2)
-		for i := range scale {
-			scale[i] = float32(cfg.RopeLinear)
-		}
-	}
-	if factors == nil {
-		return scale, nil
-	}
-	if len(factors) != len(scale) {
-		return nil, fmt.Errorf("model: %d rotary factors for %d pairs", len(factors), len(scale))
-	}
-	for i := range scale {
-		scale[i] *= factors[i]
-	}
-	return scale, nil
-}
-
 func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	cfg, err := configFrom(c.Config(), func(r jlm.Role) bool {
 		for bi := range c.Config().NLayer {
@@ -2367,9 +2335,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		m.Ropes = append(m.Ropes, r)
 	}
-	// Per-pair rotary factors are a tensor: llama 3.1+ ships rope_freqs and
-	// phi3 rope_factors_short/long, dividing theta per pair: the short within
-	// the original context, the long an instance past it turns (RopeLong).
+	// The full layers' rotary divides each pair's angle by the factor the
+	// container states for it (rope_freqs, or LongRoPE's short factors), the
+	// long factors an instance past the original context turns (RopeLong):
+	// the converter states a scaling method's divisors in them
+	// (convert.StateRotary). The sliding layers' rotary, copied above, keeps
+	// none.
 	for _, role := range []jlm.Role{jlm.RoleRopeFreqs, jlm.RoleRopeFactorsShort} {
 		if c.Has(role, jlm.DenseBlock, -1) {
 			if m.Rope.Freqs, err = vec(role, jlm.DenseBlock); err != nil {
@@ -2378,23 +2349,10 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			break
 		}
 	}
-	// Rotary scaling (YaRN, linear) is a per-pair divisor too, so it rides the
-	// same field. It is set after the local rotary was copied above, because
-	// llama.cpp leaves gemma3's sliding layers unscaled.
-	if cfg.YarnFactor > 0 || cfg.RopeLinear > 0 {
-		if m.Rope.Freqs, err = ropeScale(cfg, m.Rope.Freqs); err != nil {
-			return nil, err
-		}
-	}
 	if c.Has(jlm.RoleRopeFactorsLong, jlm.DenseBlock, -1) {
 		long := m.Rope
 		if long.Freqs, err = vec(jlm.RoleRopeFactorsLong, jlm.DenseBlock); err != nil {
 			return nil, err
-		}
-		if cfg.YarnFactor > 0 || cfg.RopeLinear > 0 {
-			if long.Freqs, err = ropeScale(cfg, long.Freqs); err != nil {
-				return nil, err
-			}
 		}
 		m.RopeLong, m.LongCtx = &long, cfg.YarnOrigCtx
 		if m.LongCtx == 0 {

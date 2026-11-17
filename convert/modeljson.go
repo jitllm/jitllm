@@ -1859,7 +1859,8 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 // mjRopeScaling states a rope scaling object, transformers' rope_parameters
 // or rope_scaling, by its published method: none and default state nothing;
 // llama3 states its per-pair factors over the rotated width as
-// rope_freqs.weight, reading what transformers reads from env (llama3RopeOf);
+// rope_freqs.weight, rotary.json's llama3 method over what transformers reads
+// from env (llama3RopeOf);
 // yarn states its factor, original context, correction range and magnitude
 // as transformers computes them (hfYarnApply); longrope states its two factor
 // vectors and original context as rope_factors_short and rope_factors_long,
@@ -1895,7 +1896,7 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, methods []string, env exprEn
 			}
 			return nil
 		}
-		freqs, err := llama3RopeOf(raw, num("original_max_position_embeddings"), num("max_position_embeddings"))
+		params, err := llama3RopeOf(raw, num("original_max_position_embeddings"), num("max_position_embeddings"))
 		if err != nil {
 			return fmt.Errorf("rope scaling llama3: %w", err)
 		}
@@ -1903,7 +1904,11 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, methods []string, env exprEn
 		if rot == 0 {
 			rot = cfg.HeadDim
 		}
-		c.extra = append(c.extra, ropeFreqsTensor(freqs(rot, float64(cfg.RopeBase))))
+		freqs, err := rotaryDivisors("llama3", int(rot)/2, float64(rot), float64(cfg.RopeBase), params)
+		if err != nil {
+			return fmt.Errorf("rope scaling llama3: %w", err)
+		}
+		c.extra = append(c.extra, ropeFreqsTensor(freqs))
 		return nil
 	case "longrope", "su":
 		raw, err := json.Marshal(obj)

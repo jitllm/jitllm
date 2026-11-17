@@ -24,7 +24,6 @@ func imagePathAllowed() map[string]string {
 		"model.go:AttnTemp":        "Llama 4's attention temperature at a position, the config's statement its gates read; the composed blocks state it as ops",
 		"model.go:configFrom":      "YaRN's attention scale from the config, once at open",
 		"hotness.go:ExpertUses":    "expert-use accounting for the report",
-		"model.go:ropeScale":       "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
 		"decide.go:answer":         "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
 		"tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
 		"video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry from its frames and rate",

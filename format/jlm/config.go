@@ -168,25 +168,24 @@ type Config struct {
 	AttnSoftcap  float32
 	FinalSoftcap float32
 
-	// YaRN rotary scaling. YarnFactor 0 means none. The per-pair frequency is
-	// base^(-2p/NRot) mixed toward that divided by YarnFactor by a linear ramp
-	// over pairs, from full extrapolation below the pair corr(YarnBetaFast) to
-	// full interpolation above corr(YarnBetaSlow), where
+	// YaRN rotary scaling. YarnFactor 0 means none. The rotary's angles turn
+	// by the factors the container states per pair (RoleRopeFreqs, and
+	// RoleRopeFactorsLong past YarnOrigCtx), where the converter states
+	// YaRN's divisors (convert.StateRotary); YarnFactor stays for the score's
+	// magnitude (YarnLogMul), which is not a frequency. YarnOrigCtx is the
+	// context the rotary was trained to, past which LongRoPE turns its long
+	// factors. The cos and sin magnitude is AttnFactor's.
 	//
-	//	corr(b) = NRot * ln(YarnOrigCtx / (2*pi*b)) / (2 * ln(RopeBase))
-	//
-	// floored and ceiled respectively unless FlagYarnExact is set, and clamped
-	// to [0, NRot-1]. The magnitude correction is not here: the converter folds
-	// it into AttnFactor, which already scales cos and sin.
+	// YarnBetaFast, YarnBetaSlow and RopeLinear are a scaling stated by its
+	// method, which an older writer kept: the correction range and a linear
+	// factor dividing every angle. A container carrying either is refused
+	// (UpgradeError) and converted again, since the rotary's per-pair
+	// factors it carries do not include them.
 	YarnFactor   float32
 	YarnOrigCtx  uint32
 	YarnBetaFast float32
 	YarnBetaSlow float32
-
-	// RopeLinear divides every rotary angle of the global layers by itself
-	// (linear position interpolation, gemma-3-4b's factor 8). Zero means none.
-	// Layers on the local rotary (RopeBaseSWA) are not scaled.
-	RopeLinear float32
+	RopeLinear   float32
 
 	// HeadDimV is the value head's width when it differs from HeadDim. Zero
 	// means they are equal, which is every architecture but MLA: its absorbed
@@ -699,10 +698,11 @@ const (
 	// both this and FlagGELU is refused at load.
 	FlagSwiGLUOAI Flags = 1 << 11
 
-	// FlagYarnExact uses YaRN's correction range as computed rather than
-	// floored and ceiled. gpt-oss's own configuration says so ("truncate":
-	// false), which matches OpenAI's reference implementation; llama.cpp always
-	// rounds. The source GGUF does not carry the choice.
+	// FlagYarnExact takes YaRN's correction range as computed rather than
+	// floored and ceiled, as gpt-oss's own configuration says ("truncate":
+	// false), matching OpenAI's reference implementation. It is the
+	// converter's: StateRotary states the range's divisors per pair and
+	// clears it.
 	FlagYarnExact Flags = 1 << 12
 
 	// FlagExpertSigmoid makes the router's gate sigmoid over each expert's
