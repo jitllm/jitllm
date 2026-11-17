@@ -23,6 +23,7 @@ func TestForwardSampleMatchesSampleOverForward(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "gemma-2-2b-it-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) { forwardSampleMatches(t, name, sampleGateSampler) })
 		t.Run(name+"-typical", func(t *testing.T) { forwardSampleMatches(t, name, typicalGateSampler) })
+		t.Run(name+"-temperature-last", func(t *testing.T) { forwardSampleMatches(t, name, tempLastGateSampler) })
 	}
 }
 
@@ -35,6 +36,15 @@ func sampleGateSampler() *Sampler {
 func typicalGateSampler() *Sampler {
 	s := sampleGateSampler()
 	s.TypicalP, s.XTCProbability, s.XTCThreshold, s.DynatempRange, s.Seed = 0.85, 0.5, 0.08, 0.4, 4243
+	return s
+}
+
+// tempLastGateSampler is sampleGateSampler's draw tempered after its cuts
+// (Sampler.TempLast), the cuts' temperature a word of the card's walk of its
+// own.
+func tempLastGateSampler() *Sampler {
+	s := sampleGateSampler()
+	s.TempLast, s.Seed = true, 4244
 	return s
 }
 
