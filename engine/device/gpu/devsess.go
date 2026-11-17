@@ -514,33 +514,88 @@ func (g *devTier) takeLane(ds *devSess) *lane {
 // freeLane holds a lane for ds if one is free or can be built, nil if not.
 // Callers hold g.mu.
 func (g *devTier) freeLane(ds *devSess) *lane {
-	pick := func(l *lane) *lane {
+	g.tidyLanes()
+	if l := g.idleLane(ds); l != nil {
 		l.held = true
 		return l
 	}
-	g.tidyLanes()
+	if !g.cloneMayFit() {
+		return nil
+	}
+	u := g.used
+	l, ok := g.dv.cloneLane()
+	g.noCloneBytes = 0
+	if ok && !g.laneFits(0) {
+		g.noCloneBytes = max(g.used-min(g.used, u), 1)
+		g.dv.dropLane(l)
+		ok = false
+	}
+	if !ok {
+		g.noClone, g.noCloneRoom, g.noCloneGen = true, g.roomGen.Load(), g.laneGen
+		// The build lets g.mu go where it waits (a quiesce): a lane given
+		// back meanwhile woke that wait, not this caller's, so it is asked
+		// for again rather than waited for.
+		l = g.idleLane(ds)
+		if l == nil {
+			return nil
+		}
+	} else {
+		g.noClone = false
+		g.lanes = append(g.lanes, l)
+	}
+	l.held = true
+	return l
+}
+
+// idleLane is a lane no call holds for ds: the lane it ran in last, if
+// current, then lane0, then any clone; nil if every one is held. Callers
+// hold g.mu.
+func (g *devTier) idleLane(ds *devSess) *lane {
 	if l := ds.last; l != nil && !l.held && g.liveLane(l) && (l != g.lane0 || g.lane0Want == 0) {
-		return pick(l)
+		return l
 	}
 	if !g.lane0.held && g.lane0Want == 0 {
-		return pick(g.lane0)
+		return g.lane0
 	}
 	for _, l := range g.lanes {
 		if !l.held {
-			return pick(l)
+			return l
 		}
-	}
-	// A clone that did not fit is not tried again until the device may have
-	// room (roomGen) or lane0 changed shape (laneGen).
-	if room := g.roomGen.Load(); !g.noClone || room != g.noCloneRoom || g.laneGen != g.noCloneGen {
-		if l, ok := g.dv.cloneLane(); ok {
-			g.noClone = false
-			g.lanes = append(g.lanes, l)
-			return pick(l)
-		}
-		g.noClone, g.noCloneRoom, g.noCloneGen = true, g.roomGen.Load(), g.laneGen
 	}
 	return nil
+}
+
+// laneFits reports that the device holds n more bytes of lanes beside what
+// it holds now. A lane is held for good beside the blocks, as a history is,
+// so it leaves the blocks paging through the budget a slot (slotsIfPerm) --
+// a clone built under a budget cut to two slots took both, and the next
+// page-in found nothing to page out (TestSessionsPageAtOnce) -- whether the
+// blocks were marked streamed or a budget cut paged them out. Streamed
+// blocks page out for it (swapRoom); otherwise the budget holds it now or it
+// is not built. Callers hold g.mu.
+func (g *devTier) laneFits(n uint64) bool {
+	if g.widest > 0 && g.slotsIfPerm(n+g.reserved()) < minSlots {
+		return false
+	}
+	if len(g.stream) > 0 {
+		return g.swapRoom(n)
+	}
+	return g.room(n)
+}
+
+// cloneMayFit says a clone may be built: none was refused since lane0 last
+// changed shape (laneGen), or the bytes the refused one held fit now, or,
+// for one whose buffers the device refused, the device has had room back
+// (roomGen). Under paging room comes back every page-out, so a clone the
+// budget refused is asked again by its bytes. Callers hold g.mu.
+func (g *devTier) cloneMayFit() bool {
+	switch {
+	case !g.noClone || g.laneGen != g.noCloneGen:
+		return true
+	case g.noCloneBytes > 0:
+		return g.laneFits(g.noCloneBytes)
+	}
+	return g.roomGen.Load() != g.noCloneRoom
 }
 
 // liveLane reports that l is lane0 or one of its current clones. Callers hold

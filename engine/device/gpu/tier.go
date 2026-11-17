@@ -1228,10 +1228,12 @@ type devShared struct {
 	laneGen uint64
 	dv      *devTier
 	// noClone says the last clone did not fit, at roomGen noCloneRoom and
-	// laneGen noCloneGen: until one of them moves, a call with no free lane
-	// waits for one rather than building another (takeLane).
-	noClone                 bool
-	noCloneRoom, noCloneGen uint64
+	// laneGen noCloneGen: until it may (cloneMayFit), a call with no free lane
+	// waits for one rather than building another (takeLane). noCloneBytes is
+	// what the clone held when the budget refused it, 0 when the device
+	// refused its buffers.
+	noClone                               bool
+	noCloneRoom, noCloneGen, noCloneBytes uint64
 	// laneNext and laneServe are the line of calls waiting for a lane: the
 	// next ticket to give out and the one served next (takeLane).
 	laneNext, laneServe uint64

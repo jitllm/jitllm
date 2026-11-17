@@ -338,6 +338,14 @@ func lanesHold(g *gpu.GPU, blocks int, parts nn.Parts, lanes int) error {
 // exactly the ids and logits each produces alone with every block resident.
 // PageIns and PageOuts during the run at once are the selection check that the
 // budget bound, and RanBeside that the sessions stepped together.
+//
+// Two calls take a lane each only when they overlap, which one step at once
+// does by chance. So the second session's lane is built before the budget is
+// cut (lane-first), the steps at once repeated until it is, or asked for under
+// the cut budget (lane-after), the first step one session after the other:
+// there a lane may not take the streamed blocks' last slot, and the sessions
+// take turns instead (tier laneFits). Built anyway, it took both slots, and
+// the next page-in found nothing to page out.
 func TestSessionsPageAtOnce(t *testing.T) {
 	m, err := model.Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")))
 	if err != nil {
@@ -345,92 +353,137 @@ func TestSessionsPageAtOnce(t *testing.T) {
 	}
 	defer m.Close()
 	prompts := atOncePrompts(m)
-	const seq, gen = 256, 24
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
-		t.Run(spec, func(t *testing.T) {
-			g := atOnceTier(t, spec, nil)
-			for li := range m.Cfg.NLayer {
-				g.Stream(li, true)
+		for _, arm := range []struct {
+			name      string
+			laneFirst bool
+		}{{"lane-first", true}, {"lane-after", false}} {
+			t.Run(spec+"/"+arm.name, func(t *testing.T) {
+				pageAtOnce(t, m, prompts, spec, arm.laneFirst)
+			})
+		}
+	}
+}
+
+// laneCount is how many lanes g's one device holds.
+func laneCount(g *gpu.GPU) int {
+	return len(g.LaneParts()[0])
+}
+
+// pageAtOnce is TestSessionsPageAtOnce on spec, the second session's lane
+// built before the budget is cut where laneFirst, after it otherwise.
+func pageAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, laneFirst bool) {
+	const seq, gen = 256, 24
+	g := atOnceTier(t, spec, nil)
+	// The head projects on the CPU in both arms: the budget that pages
+	// the blocks leaves no slot for it, where every block resident
+	// does, and a projection on another device reduces in another
+	// order. What is compared is the blocks paging.
+	place := func(prompt []int32) (*Instance, int32) {
+		st := testInstance(t, m, seq, WithHeadPlacement(false))
+		t.Cleanup(func() { st.Close() })
+		// The marks are the model's on the tier: they go when its last
+		// instance there closes (releaseModel), as the runs alone do.
+		for li := range m.Cfg.NLayer {
+			g.Stream(li, true)
+		}
+		if err := st.SetDeviceLayers(g, m.Cfg.NLayer); err != nil {
+			t.Fatal(err)
+		}
+		if st.devCount() != m.Cfg.NLayer || st.HeadOnDevice() {
+			t.Fatalf("%d of %d blocks on the device, head there %v: %s", st.devCount(), m.Cfg.NLayer,
+				st.HeadOnDevice(), g.Err())
+		}
+		lg, err := st.Prefill(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st, Greedy(lg)
+	}
+	// Alone, each with every block resident: paging must not change
+	// a bit of it.
+	var alone [2]atOnceRun
+	for k := range prompts {
+		st, next := place(prompts[k])
+		if err := alone[k].decode(st, next, gen); err != nil {
+			t.Fatal(err)
+		}
+		st.Close()
+	}
+	a, na := place(prompts[0])
+	b, nb := place(prompts[1])
+	sts, next := []*Instance{a, b}, []int32{na, nb}
+	first := make([]atOnceRun, 2)
+	if laneFirst {
+		for laneCount(g) < 2 {
+			if len(first[0].ids) == gen/2 {
+				t.Fatalf("%d steps at once and the second session never took a lane of its own", gen/2)
 			}
-			// The head projects on the CPU in both arms: the budget that pages
-			// the blocks leaves no slot for it, where every block resident
-			// does, and a projection on another device reduces in another
-			// order. What is compared is the blocks paging.
-			place := func(prompt []int32) (*Instance, int32) {
-				st := testInstance(t, m, seq, WithHeadPlacement(false))
-				t.Cleanup(func() { st.Close() })
-				if err := st.SetDeviceLayers(g, m.Cfg.NLayer); err != nil {
-					t.Fatal(err)
-				}
-				if st.devCount() != m.Cfg.NLayer || st.HeadOnDevice() {
-					t.Fatalf("%d of %d blocks on the device, head there %v: %s", st.devCount(), m.Cfg.NLayer,
-						st.HeadOnDevice(), g.Err())
-				}
-				lg, err := st.Prefill(prompt)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return st, Greedy(lg)
+			for k, r := range atOnce(t, sts, next, 1) {
+				first[k].ids = append(first[k].ids, r.ids...)
+				first[k].logits = append(first[k].logits, r.logits...)
+				next[k] = r.ids[0]
 			}
-			// Alone, each with every block resident: paging must not change
-			// a bit of it.
-			var alone [2]atOnceRun
-			for k := range prompts {
-				st, next := place(prompts[k])
-				if err := alone[k].decode(st, next, gen); err != nil {
-					t.Fatal(err)
-				}
-				st.Close()
-			}
-			// At once: both placed and prefilled, one step together so the
-			// second's lane is built and charged, then the tightest budget
-			// that still leaves two slots: every block pages out and back in
-			// every token, under the other session's submissions.
-			a, na := place(prompts[0])
-			b, nb := place(prompts[1])
-			first := atOnce(t, []*Instance{a, b}, []int32{na, nb}, 1)
-			hi := g.Stats().BudgetUsed
-			if _, err := g.SetBudget(hi); err != nil || g.Stats().Slots < 2 {
-				t.Fatalf("the budget the sessions charged (%d bytes) leaves %d slot(s): %v %s", hi,
-					g.Stats().Slots, err, g.Err())
-			}
-			lo := uint64(0)
-			for hi-lo > 4<<10 {
-				mid := lo + (hi-lo)/2
-				if _, err := g.SetBudget(mid); err == nil && g.Stats().Slots >= 2 {
-					hi = mid
-				} else {
-					lo = mid
-				}
-			}
-			if _, err := g.SetBudget(hi); err != nil {
+		}
+	} else {
+		for k, st := range sts {
+			if err := first[k].decode(st, next[k], 1); err != nil {
 				t.Fatal(err)
 			}
-			if s := g.Stats().Slots; s < 2 || s >= m.Cfg.NLayer {
-				t.Fatalf("%d slot(s) for %d blocks: the budget does not page", s, m.Cfg.NLayer)
-			}
-			before := g.Stats()
-			rest := atOnce(t, []*Instance{a, b}, []int32{first[0].ids[0], first[1].ids[0]}, gen-1)
-			after := g.Stats()
-			for k := range rest {
-				got := first[k]
-				got.ids = append(got.ids, rest[k].ids...)
-				got.logits = append(got.logits, rest[k].logits...)
-				sameRun(t, []string{"session 0", "session 1"}[k], got, alone[k])
-			}
-			ins, outs := after.PageIns-before.PageIns, after.PageOuts-before.PageOuts
-			beside := after.RanBeside - before.RanBeside
-			t.Logf("%s: %d slot(s) for %d blocks, %d page-in(s) and %d page-out(s) while the sessions "+
-				"stepped at once, %d submissions beside another; ids and logits identical to each alone "+
-				"with every block resident", g.Name(), after.Slots, m.Cfg.NLayer, ins, outs, beside)
-			if ins == 0 || outs == 0 {
-				t.Fatalf("%d page-ins and %d page-outs: nothing paged while the sessions ran", ins, outs)
-			}
-			if a.devCount() != m.Cfg.NLayer || b.devCount() != m.Cfg.NLayer {
-				t.Fatalf("%d and %d of %d blocks still the device's: the budget sent blocks home, which "+
-					"is not paging", a.devCount(), b.devCount(), m.Cfg.NLayer)
-			}
-		})
+			next[k] = first[k].ids[0]
+		}
+		if n := laneCount(g); n != 1 {
+			t.Fatalf("%d lanes after the sessions stepped one after the other", n)
+		}
+	}
+	// The tightest budget that still leaves two slots: every block
+	// pages out and back in every token, under the other session's
+	// submissions.
+	hi := g.Stats().BudgetUsed
+	if _, err := g.SetBudget(hi); err != nil || g.Stats().Slots < 2 {
+		t.Fatalf("the budget the sessions charged (%d bytes) leaves %d slot(s): %v %s", hi,
+			g.Stats().Slots, err, g.Err())
+	}
+	lo := uint64(0)
+	for hi-lo > 4<<10 {
+		mid := lo + (hi-lo)/2
+		if _, err := g.SetBudget(mid); err == nil && g.Stats().Slots >= 2 {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	if _, err := g.SetBudget(hi); err != nil {
+		t.Fatal(err)
+	}
+	if s := g.Stats().Slots; s < 2 || s >= m.Cfg.NLayer {
+		t.Fatalf("%d slot(s) for %d blocks: the budget does not page", s, m.Cfg.NLayer)
+	}
+	before := g.Stats()
+	rest := atOnce(t, sts, next, gen-len(first[0].ids))
+	after := g.Stats()
+	for k := range rest {
+		got := first[k]
+		got.ids = append(got.ids, rest[k].ids...)
+		got.logits = append(got.logits, rest[k].logits...)
+		sameRun(t, []string{"session 0", "session 1"}[k], got, alone[k])
+	}
+	ins, outs := after.PageIns-before.PageIns, after.PageOuts-before.PageOuts
+	beside := after.RanBeside - before.RanBeside
+	waited := after.LanesWaited - before.LanesWaited
+	t.Logf("%s: %d slot(s) for %d blocks, %d page-in(s) and %d page-out(s) while the sessions "+
+		"stepped at once, %d submissions beside another, %d lane(s), %d call(s) waited for one; ids "+
+		"and logits identical to each alone with every block resident", g.Name(), after.Slots, m.Cfg.NLayer,
+		ins, outs, beside, laneCount(g), waited)
+	if ins == 0 || outs == 0 {
+		t.Fatalf("%d page-ins and %d page-outs: nothing paged while the sessions ran", ins, outs)
+	}
+	if a.devCount() != m.Cfg.NLayer || b.devCount() != m.Cfg.NLayer {
+		t.Fatalf("%d and %d of %d blocks still the device's: the budget sent blocks home, which "+
+			"is not paging", a.devCount(), b.devCount(), m.Cfg.NLayer)
+	}
+	if !laneFirst && laneCount(g) == 1 && waited == 0 {
+		t.Fatal("one lane and no call waited for it: the sessions never stepped at once")
 	}
 }
 
