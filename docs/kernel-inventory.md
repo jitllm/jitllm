@@ -158,7 +158,7 @@ These are implemented alternatives for known operations. An unknown weight repre
 
 The higher-level generators construct their kernels from lower-level operations at runtime:
 
-- **CPU:** `Buf` encodes x86 instructions and branches; `A64` encodes ARM64; SSE helpers provide legacy encodings and vector/scalar loop bodies. Dot-product, unpack, exponentiation, half conversion, reduction, and tail helpers are reused inside generated kernels. `cpuidProbe` itself emits a small executable hardware probe. These helpers are not separately launched NN kernels.
+- **CPU:** `Buf` encodes x86 instructions and branches; `A64` encodes ARM64; SSE helpers provide legacy encodings and vector/scalar loop bodies. Dot-product, unpack, exponentiation, half conversion, reduction, and tail helpers are reused inside generated kernels. `CPUIDRead` and `XCR0Read` are the host's feature reads, mapped and called once by the CPU device. These helpers are not separately launched NN kernels.
 - **GPU IR:** typed values, constants, parameters, thread/group IDs, integer/float arithmetic, shifts/masks, min/max, exponent/square root, conversions/bitcasts, loads/stores, packed dot products, FMA, comparisons/selects, loops/phis, subgroup shuffles, shared memory, barriers, fragment MMA, and collective tile operations.
 - **GPU lowerers:** turn those operations into PTX, SPIR-V instructions, or MSL source. A supported operation can be expanded into several target instructions or expressions. Unsupported matrix forms are explicitly rejected so the tier can choose an alternate kernel family.
 

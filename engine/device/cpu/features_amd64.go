@@ -85,10 +85,14 @@ func withoutDotProd(*Features) {}
 // below that. See tier.go.
 func tierOfCPU(f Features) Tier { return tierOf(f) }
 
-// cpuid runs the JIT-compiled CPUID probe and returns EAX, EBX, ECX, EDX
-// (see feature_amd64.go).
+// cpuid runs the composer's CPUID read (x86.CPUIDRead) and returns EAX, EBX,
+// ECX, EDX. It is generated at run time, as every kernel is, which reads
+// CPUID with no dependency and no assembly of this package's own: every
+// amd64 OS answers it alike, where the OS's own report of the features is
+// partial on some (Windows names neither AVX-VNNI nor, before 10 2004, the
+// SSE4 and AVX levels).
 func cpuid(leaf, sub int32) (eax, ebx, ecx, edx uint32, ok bool) {
-	code, err := mapProbe(cpuidProbe(leaf, sub))
+	code, err := mapProbe(x86.CPUIDRead(leaf, sub))
 	if err != nil {
 		return 0, 0, 0, 0, false
 	}
@@ -105,18 +109,6 @@ func mapProbe(b []byte, err error) (*Code, error) {
 		return nil, err
 	}
 	return mapExec(b)
-}
-
-// xcr0Probe emits: ECX = 0, XGETBV, store EDX:EAX through Args.Out.
-func xcr0Probe() ([]byte, error) {
-	var a x86.Buf
-	a.MOVLoad(x86.R10, x86.At(x86.RDI, 0))
-	a.MOVimm32(x86.RCX, 0)
-	a.XGETBV()
-	a.MOVStore(x86.At(x86.R10, 0), x86.RAX)
-	a.MOVStore(x86.At(x86.R10, 8), x86.RDX)
-	a.RET()
-	return a.Bytes()
 }
 
 func probeFeatures() Features {
@@ -145,7 +137,7 @@ func probeFeatures() Features {
 
 	// XGETBV is only legal when OSXSAVE is set; otherwise it raises #UD.
 	if osxsave {
-		if code, err := mapProbe(xcr0Probe()); err == nil {
+		if code, err := mapProbe(x86.XCR0Read()); err == nil {
 			var out [2]uint64
 			args := Args{Out: (*float32)(unsafe.Pointer(&out[0]))}
 			code.Call(&args)
