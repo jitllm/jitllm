@@ -91,7 +91,7 @@ func gemma4Fixtures() []struct {
 		{"synth-gemma4-moe", func(m *model.Model) bool {
 			c := m.Cfg
 			ok := c.MixedGeom() && m.Layers[0].Vector(jlm.RoleFFNNorm2) != nil && c.NExpert == 8 &&
-				c.NExpertUsed == 2 && c.NFFNExp == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
+				c.NExpertUsed == 2 && int(m.Container.Config().NFFNExp) == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && c.MoEAt(i) && matRows(l, jlm.RoleRouter) == c.NExpert && l.ShGate.Rows == c.NFFN &&

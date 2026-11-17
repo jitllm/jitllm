@@ -50,7 +50,7 @@ func mamba1Fixtures() []struct {
 			// attention with a dense MLP, Mamba-1 with a mixture.
 			c := m.Cfg
 			ok := c.Scan() && c.NLayer == 4 && c.NExpert == 4 && c.NExpertUsed == 2 &&
-				c.NoExpertNorm && !c.ExpertSigmoid && c.NoPosEnc && c.NKVHead == 2 && c.NFFNExp == 96
+				c.NoExpertNorm && !c.ExpertSigmoid && c.NoPosEnc && c.NKVHead == 2 && int(m.Container.Config().NFFNExp) == 96
 			for i, want := range []struct{ rec, moe bool }{{true, false}, {true, true}, {false, false}, {true, true}} {
 				l := &m.Layers[i]
 				ok = ok && c.LayerKind(i).Recurrent() == want.rec && c.MoEAt(i) == want.moe && !l.NoFFN

@@ -42,7 +42,7 @@ func moeBaseFixtures() []struct {
 			dense, moe := &m.Layers[0], &m.Layers[1]
 			return c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
-				c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 &&
 				c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
 				dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil && dense.Vector(jlm.RoleFFNNorm) != nil &&
 				moe.Matrix(jlm.RoleRouter) != nil && moe.Vector(jlm.RoleExpProbsB) != nil && moe.ShGate.E != nil && moe.Vector(jlm.RoleShRouter) == nil &&
@@ -54,7 +54,7 @@ func moeBaseFixtures() []struct {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 0 && c.NMTP == 0 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) && c.NDenseLead == 0 && c.NMTP == 0 &&
 				c.NKVHead < c.NHead && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E != nil &&
 				len(l.Vector(jlm.RoleShRouter)) == c.NEmbd && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil &&
 				l.Vector(jlm.RoleFFNNorm) != nil && !c.TiedEmbd
@@ -63,7 +63,7 @@ func moeBaseFixtures() []struct {
 			c, l := m.Cfg, &m.Layers[1]
 			return !c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
-				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 1 && c.MoEStep == 2 &&
+				c.NExpertUsed == 2 && c.NFFNShExp == 2*int(m.Container.Config().NFFNExp) && c.NDenseLead == 1 && c.MoEStep == 2 &&
 				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
 				m.Layers[0].Gate.E != nil && m.Layers[2].Gate.E != nil && m.Layers[2].Matrix(jlm.RoleRouter) == nil &&
 				l.Matrix(jlm.RoleRouter) != nil && len(l.Vector(jlm.RoleExpProbsB)) == c.NExpert && l.ShGate.E != nil && l.Vector(jlm.RoleShRouter) == nil &&
@@ -78,7 +78,7 @@ func moeBaseFixtures() []struct {
 			c := m.Cfg
 			ok := c.RopeNeox && c.NRot == c.HeadDim && c.HeadDim == 128 &&
 				c.QKNorm && c.QKNormPost && !c.QKNormWide && !c.ExpertSigmoid && !c.NoExpertNorm &&
-				c.ExpertScale == 1 && c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp &&
+				c.ExpertScale == 1 && c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == int(m.Container.Config().NFFNExp) &&
 				c.NDenseLead == 0 && c.NKVHead < c.NHead && c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]

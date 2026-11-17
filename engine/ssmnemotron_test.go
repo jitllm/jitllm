@@ -42,7 +42,7 @@ func nemotronhFixtures() []struct {
 			c := m.Cfg
 			ok := c.SSD() && c.NLayer == 4 && c.NExpert == 8 && c.NExpertUsed == 2 &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpertGroup == 0 &&
-				c.NFFNExp == 64 && c.NFFNShExp == 96 && m.Container.Config().Flags.Has(jlm.FlagReLU2) && c.NoPosEnc
+				int(m.Container.Config().NFFNExp) == 64 && c.NFFNShExp == 96 && m.Container.Config().Flags.Has(jlm.FlagReLU2) && c.NoPosEnc
 			for i, want := range []struct {
 				rec, moe bool
 			}{{true, true}, {false, true}, {true, false}, {true, true}} {

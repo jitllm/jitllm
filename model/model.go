@@ -93,10 +93,10 @@ type Config struct {
 	// entry of its own (graph.RopeSplit).
 	RopePairs int
 
-	// Mixture of experts. NExpert 0 is a dense FFN. NFFNExp is the per-expert
-	// FFN width, distinct from NFFN, which a MoE file carries for a dense width
+	// Mixture of experts. NExpert 0 is a dense FFN. Each expert's width is its
+	// bank's (sheetRows), not NFFN, which a MoE file carries for a dense width
 	// the model never uses.
-	NExpert, NExpertUsed, NFFNExp int
+	NExpert, NExpertUsed int
 
 	// NFFNShExp is the SHARED expert's width. A shared expert runs for every
 	// token beside the routed ones and carries its own sigmoid gate; zero means
@@ -254,9 +254,6 @@ type Config struct {
 	// (jlm.Streams, the container's own): N of them, each block's reads and
 	// writes; nil for a config no container made.
 	stated *jlm.Streams
-	// expWidth is the routed experts' input and output width as their banks
-	// state it (expertWidth), zero for n_embd.
-	expWidth int
 	// LatentNormEps is the MLA latent norms' epsilon.
 	LatentNormEps float64
 	// routed marks the blocks that store a router, the mixture blocks
@@ -680,7 +677,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		AttnFactor:   float64(c.AttnFactor),
 		NExpert:      int(c.NExpert),
 		NExpertUsed:  int(c.NExpertUsed),
-		NFFNExp:      int(c.NFFNExp),
 		RopeBaseSWA:  float64(c.RopeBaseSWA),
 		RopeScaleSWA: float64(c.RopeScaleSWA),
 		AttnSoftcap:  c.AttnSoftcap,
@@ -2050,9 +2046,9 @@ func (m *Model) EnsureExperts(fr *jlm.Frames, li int, sel []int32, h *ExpertHold
 	}
 	for _, x := range sel {
 		v := &l.Experts[x]
-		bindSheet(cf, &l.Gate, cfg.NFFNExp, int(x), &v.Gate)
-		bindSheet(cf, &l.Up, cfg.NFFNExp, int(x), &v.Up)
-		bindSheet(cf, &l.Down, cfg.ExpWidth(), int(x), &v.Down)
+		bindSheet(cf, &l.Gate, sheetRows(&l.Gate, cfg.NExpert), int(x), &v.Gate)
+		bindSheet(cf, &l.Up, sheetRows(&l.Up, cfg.NExpert), int(x), &v.Up)
+		bindSheet(cf, &l.Down, sheetRows(&l.Down, cfg.NExpert), int(x), &v.Down)
 	}
 	return nil
 }
@@ -2222,14 +2218,14 @@ func bindPacked(c *jlm.Frames, cfg *Config, l *Layer) error {
 		x := &l.Experts[e]
 		var err error
 		if !l.UngatedExp {
-			if x.Gate, err = bankExpert(l.Gate, jlm.RoleExpGateBank, cfg.NExpert, cfg.NFFNExp, cfg.ExpWidth(), e); err != nil {
+			if x.Gate, err = bankExpert(l.Gate, jlm.RoleExpGateBank, cfg.NExpert, e); err != nil {
 				return err
 			}
 		}
-		if x.Up, err = bankExpert(l.Up, jlm.RoleExpUpBank, cfg.NExpert, cfg.NFFNExp, cfg.ExpWidth(), e); err != nil {
+		if x.Up, err = bankExpert(l.Up, jlm.RoleExpUpBank, cfg.NExpert, e); err != nil {
 			return err
 		}
-		if x.Down, err = bankExpert(l.Down, jlm.RoleExpDownBank, cfg.NExpert, cfg.ExpWidth(), cfg.NFFNExp, e); err != nil {
+		if x.Down, err = bankExpert(l.Down, jlm.RoleExpDownBank, cfg.NExpert, e); err != nil {
 			return err
 		}
 	}
@@ -2303,7 +2299,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.expWidth = expertWidth(c, cfg)
 	// A marker head's feed-forward is as wide as its blocks store it.
 	if h := cfg.Head; h != nil {
 		e, ok := c.Find(jlm.RoleFFNUp, int32(cfg.Trunk), -1)
@@ -2866,8 +2861,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			{"attn_sinks", l.Vector(jlm.RoleAttnSinks), cfg.NHeadAt(i)},
 			{"router bias", l.Vector(jlm.RoleRouterBias), cfg.NExpert},
 			{"expert selection bias", l.Vector(jlm.RoleExpProbsB), cfg.NExpert},
-			{"expert gate bias", l.Vector(jlm.RoleExpGateBias), cfg.NExpert * cfg.NFFNExp},
-			{"expert up bias", l.Vector(jlm.RoleExpUpBias), cfg.NExpert * cfg.NFFNExp},
+			{"expert gate bias", l.Vector(jlm.RoleExpGateBias), l.Up.Rows},
+			{"expert up bias", l.Vector(jlm.RoleExpUpBias), l.Up.Rows},
 			{"expert down bias", l.Vector(jlm.RoleExpDownBias), cfg.NExpert * cfg.NEmbd},
 			{"attn_norm bias", attnNormB, cfg.NEmbd},
 			{"ffn_norm bias", ffnNormB, cfg.NEmbd},
@@ -3068,15 +3063,15 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			for e := range l.Experts {
 				x := &l.Experts[e]
 				if !l.UngatedExp {
-					if x.Gate, err = bankExpert(l.Gate, jlm.RoleExpGateBank, cfg.NExpert, cfg.NFFNExp, cfg.ExpWidth(), e); err != nil {
+					if x.Gate, err = bankExpert(l.Gate, jlm.RoleExpGateBank, cfg.NExpert, e); err != nil {
 						return nil, err
 					}
 				}
-				if x.Up, err = bankExpert(l.Up, jlm.RoleExpUpBank, cfg.NExpert, cfg.NFFNExp, cfg.ExpWidth(), e); err != nil {
+				if x.Up, err = bankExpert(l.Up, jlm.RoleExpUpBank, cfg.NExpert, e); err != nil {
 					return nil, err
 				}
-				// down's shape is the transpose of gate's: [n_ff_exp, n_embd].
-				if x.Down, err = bankExpert(l.Down, jlm.RoleExpDownBank, cfg.NExpert, cfg.ExpWidth(), cfg.NFFNExp, e); err != nil {
+				// down's shape is the transpose of gate's: [n_ff_exp, width].
+				if x.Down, err = bankExpert(l.Down, jlm.RoleExpDownBank, cfg.NExpert, e); err != nil {
 					return nil, err
 				}
 			}
@@ -3164,10 +3159,11 @@ func buildMTP(c *jlm.File, m *Model,
 // The check is the exact byte total, not the dimensions: a bank short by an
 // expert would otherwise slice inside the buffer and return another expert's
 // weights, which every tier would agree on.
-func bankExpert(b Tensor, role jlm.Role, nExpert, nrow, k, e int) (Tensor, error) {
-	if b.K != k || b.Rows != nExpert*nrow {
-		return Tensor{}, fmt.Errorf("model: %v is %d x %d, want %d x %d (%d experts of %d)",
-			role, b.K, b.Rows, k, nExpert*nrow, nExpert, nrow)
+func bankExpert(b Tensor, role jlm.Role, nExpert, e int) (Tensor, error) {
+	nrow := sheetRows(&b, nExpert)
+	if nrow == 0 || b.Rows != nExpert*nrow {
+		return Tensor{}, fmt.Errorf("model: %v is %d x %d, want %d experts of %d rows",
+			role, b.K, b.Rows, nExpert, nrow)
 	}
 	be, bb := int(b.Typ.BlockElems()), int(b.Typ.BlockBytes())
 	if be == 0 || b.K%be != 0 {
@@ -3472,28 +3468,15 @@ func (c *Config) SpecHidW() int {
 	return c.NEmbd
 }
 
-// ExpWidth is the routed experts' input and output width: their banks' own
-// where they read a latent of their own, n_embd everywhere else.
-func (c *Config) ExpWidth() int {
-	if c.expWidth != 0 {
-		return c.expWidth
+// sheetRows is the rows each of a bank's n experts holds: its stored
+// sheets' (the bank's second dimension, what the block's graph binds an
+// expert at), b's rows over n for a bank stored as one matrix.
+func sheetRows(b *Tensor, n int) int {
+	if b.E != nil && b.E.NDim >= 3 {
+		return int(b.E.Dims[1])
 	}
-	return c.NEmbd
-}
-
-// expertWidth is the routed experts' width as the first mixture block's up
-// bank states it (its rows' width), zero where no block holds one or it is
-// n_embd.
-func expertWidth(f *jlm.File, cfg *Config) int {
-	for bi := range cfg.NLayer {
-		e, ok := f.Find(jlm.RoleExpUpBank, int32(bi), -1)
-		if !ok || e.NDim < 1 {
-			continue
-		}
-		if w := int(e.Dims[0]); w != cfg.NEmbd {
-			return w
-		}
-		return 0
+	if n > 0 {
+		return b.Rows / n
 	}
 	return 0
 }

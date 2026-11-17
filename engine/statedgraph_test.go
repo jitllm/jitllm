@@ -300,6 +300,23 @@ func quantizesRows(m *model.Model) bool {
 	return false
 }
 
+// expertWidthOf is the width m's routed experts read and write: the K of
+// the first up bank a block's graph binds, 0 where none does.
+func expertWidthOf(m *model.Model) int {
+	for li := range m.Cfg.NLayer {
+		if g := m.Composing().BlockGraph(li); g != nil {
+			for _, o := range g.Ops {
+				for _, w := range o.Weight {
+					if w.Role == jlm.RoleExpUpBank {
+						return w.K
+					}
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // ropesAt reports that block li's graph turns its queries and keys by a
 // rotary.
 func ropesAt(m *model.Model, li int) bool {

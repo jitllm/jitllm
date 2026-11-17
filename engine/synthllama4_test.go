@@ -88,7 +88,7 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 	// reference is compared against a different model.
 	if w, chunked := windowAt(m, 0); !c.SWAChunked || !chunked || !c.NoPEGlobal || !c.QKL2Norm || !c.ExpertWeightIn ||
 		w != 4 || m.Container.Config().SWAPeriod != 4 || c.MoEStep != 2 || c.AttnTempFloor != 4 ||
-		c.AttnTempScale == 0 || c.NFFNShExp != c.NFFNExp || m.Rope.Freqs == nil {
+		c.AttnTempScale == 0 || c.NFFNShExp != int(m.Container.Config().NFFNExp) || m.Rope.Freqs == nil {
 		t.Fatalf("the container does not carry the fixture's graph: %+v", c)
 	}
 	if !c.MoEAt(1) || !c.MoEAt(3) || c.MoEAt(0) || c.MoEAt(2) || ropesAt(m, 3) || !ropesAt(m, 2) || slides(m, 3) || !slides(m, 2) {

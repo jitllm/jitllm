@@ -985,7 +985,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		SWAWindow: windowFor(s.winOf, s.maxSeq),
 		// Zero for a dense model, which is what makes every existing plan
 		// unchanged.
-		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
+		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed,
 		// The shared expert's width, which the tier checks the shared
 		// expert's weights against.
 		NFFNShExp: c.NFFNShExp,
@@ -1982,7 +1982,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	// The mixture is a property of the block: DeepSeek's dense lead blocks
 	// (Config.MoEAt) must not carry the model-wide expert counts.
 	if !c.MoEAt(li) {
-		plan.NExpert, plan.NExpertUsed, plan.NFFNExp, plan.NFFNShExp = 0, 0, 0, 0
+		plan.NExpert, plan.NExpertUsed, plan.NFFNShExp = 0, 0, 0
 	}
 	if c.LayerKind(li).Recurrent() {
 		g := c.Delta()

@@ -634,10 +634,9 @@ type LayerPlan struct {
 	// FFNWide says this block's NFFN is not the model's (its own geometry's),
 	// which a tier that bakes the FFN width into its scratch keeps apart.
 	FFNWide bool
-	// NExpert is 0 for a dense block. NExpertUsed is the top-k, and NFFNExp is
-	// one expert's hidden width -- not NFFN, which for a MoE file is the dense
-	// width the architecture would have used and is read by nothing here.
-	NExpert, NExpertUsed, NFFNExp int
+	// NExpert is 0 for a dense block. NExpertUsed is the top-k; one expert's
+	// hidden width is its bank's, which the block's graph binds.
+	NExpert, NExpertUsed int
 	// NFFNShExp is the shared expert's hidden width, 0 when the model has none.
 	// It runs for every token beside the routed ones and its gate is a vector
 	// rather than a router.
