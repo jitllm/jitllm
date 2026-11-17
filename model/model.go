@@ -134,7 +134,7 @@ type Config struct {
 	// HeadDimV is the value head's width, filled in even where the container
 	// stores zero for "same as HeadDim".
 	KVLoraRank int
-	HeadDimV                                    int
+	HeadDimV   int
 
 	// The DeepSeek router: sigmoid gating, a selection-only bias, grouped
 	// scoring and a scale on the surviving weights. NExpertGroup <= 1 is the
