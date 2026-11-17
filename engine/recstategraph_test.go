@@ -14,6 +14,12 @@ import (
 func TestRecurrentStateIsTheGraphs(t *testing.T) {
 	blocks := 0
 	for _, name := range relocModels() {
+		// A restated fixture's first recurrent block departs from the
+		// geometry on purpose (twoStateSuffix): its graph is not the
+		// converter's.
+		if _, _, ok := restatedFixture(name); ok {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			m, err := model.Open(jlmOf(t, testmodels.Path(name)))
 			if err != nil {

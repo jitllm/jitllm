@@ -259,10 +259,12 @@ type Instance struct {
 	// declines counts, by reason, the blocks no device took. See DeviceDeclines.
 	declines map[string]int
 
-	// recConv and recState are a hybrid's recurrent blocks' state for one
-	// sequence, as their stated graphs keep it: the convolution's window and
-	// the scan's slot, in floats (graph.Graph.RecurrentState).
-	recConv, recState int
+	// recConv and recState are each block's recurrent state for one
+	// sequence, as its stated graph keeps it: the convolution's window and
+	// the scan's slot, in floats (graph.Graph.RecurrentState), nil for a
+	// model keeping none; recMax is the largest block's two together.
+	recConv, recState []int
+	recMax            int
 
 	// res keeps the hot experts resident and drops the rest; nil when the model
 	// fits its budget, which is every model but a large MoE on a small one.
@@ -684,13 +686,11 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	}
 	s.bpos = make([]int, 1)
 	s.rmarks = model.RopeMarks{}
-	if err := s.allocRecurrent(); err != nil {
-		return nil, err
-	}
+	s.allocRecurrent()
 
 	s.setPlace(routeLanes, g.dev.AttachExecution(nn.ExecutionSetup{Model: m.Id, Frames: fr,
 		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q,
-		Width: c.NEmbd, Seqs: 1, Streams: c.Streams(), ConvLen: s.recConv,
+		Width: c.NEmbd, Seqs: 1, Streams: c.Streams(), ConvLens: s.recConv,
 		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }}))
 	s.placeRange(routeLanes)
 	s.holdFrames()

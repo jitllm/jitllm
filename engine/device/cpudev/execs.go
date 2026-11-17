@@ -61,5 +61,5 @@ func (x *Execs) AttachExecution(st nn.ExecutionSetup) nn.BlockPlacer {
 	q, _ := st.Quota.(*Quota)
 	return x.c.Attach(Setup{Model: st.Model, Frames: st.Frames, Float: x.float, Split: x.split, NoFuse: st.NoFuse,
 		Chunk: st.Chunk, Tries: st.Tries, Runs: st.Runs, Quota: q, Width: st.Width, Seqs: st.Seqs,
-		Streams: st.Streams, ConvLen: st.ConvLen, Trace: st.Trace})
+		Streams: st.Streams, ConvLens: st.ConvLens, Trace: st.Trace})
 }

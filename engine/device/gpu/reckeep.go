@@ -149,8 +149,13 @@ func (g *devTier) growKept(rows int) error {
 		return nil
 	}
 	lis := g.linearBlocks()
-	sB, cB := max(rows*g.recS, 1)*4, max(rows*g.recC, 1)*4
-	need := uint64(len(lis)) * uint64(sB+cB)
+	// keptBytes is block l's kept states and windows, at its own widths.
+	keptBytes := func(l *layer) (s, c int) { return max(rows*l.recS, 1) * 4, max(rows*l.recC, 1) * 4 }
+	var need uint64
+	for _, li := range lis {
+		sB, cB := keptBytes(g.layers[li])
+		need += uint64(sB + cB)
+	}
 	g.freeKeptBufs(k)
 	if !g.stateFits(need, nil) {
 		return fmt.Errorf("tier: %d kept rows of %d linear blocks want %.1f MiB, which this device's budget does not hold",
@@ -158,6 +163,7 @@ func (g *devTier) growKept(rows int) error {
 	}
 	for _, li := range lis {
 		l := g.layers[li]
+		sB, cB := keptBytes(l)
 		s, err := g.dev.Alloc(sB)
 		if err != nil {
 			g.freeKeptBufs(k)
@@ -261,11 +267,11 @@ func (g *devTier) recRestoreRow(sid uint64, row int) bool {
 			return false
 		}
 		for h := range 2 {
-			if g.recC > 0 {
-				list = append(list, backend.CopyRange{Dst: l.pool.c[h], DstOff: st.base * g.recC * 4, Src: k.c[l], SrcOff: row * g.recC * 4, N: g.recC * 4})
+			if l.recC > 0 {
+				list = append(list, backend.CopyRange{Dst: l.pool.c[h], DstOff: st.base * l.recC * 4, Src: k.c[l], SrcOff: row * l.recC * 4, N: l.recC * 4})
 			}
-			if g.recS > 0 && l.pool.s[h] != nil {
-				list = append(list, backend.CopyRange{Dst: l.pool.s[h], DstOff: st.base * g.recS * 4, Src: k.s[l], SrcOff: row * g.recS * 4, N: g.recS * 4})
+			if l.recS > 0 && l.pool.s[h] != nil {
+				list = append(list, backend.CopyRange{Dst: l.pool.s[h], DstOff: st.base * l.recS * 4, Src: k.s[l], SrcOff: row * l.recS * 4, N: l.recS * 4})
 			}
 		}
 	}

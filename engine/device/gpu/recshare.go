@@ -17,16 +17,17 @@ type recSnapKey struct {
 }
 
 // recSnap is one snapshot: the convolution window and the delta state of one
-// sequence, recC and recS floats.
+// sequence, its block's recC and recS floats, and the bytes it is charged.
 type recSnap struct {
-	c, s backend.Buf
-	key  recSnapKey
+	c, s  backend.Buf
+	key   recSnapKey
+	bytes uint64
 }
 
 // recSnapCap is how many snapshots a block keeps: as many as fit 32 MiB, at
 // least 4 and at most 64.
-func (g *devTier) recSnapCap() int {
-	b := (g.recC + g.recS) * 4
+func (g *devTier) recSnapCap(l *layer) int {
+	b := (l.recC + l.recS) * 4
 	if b <= 0 {
 		return 0
 	}
@@ -39,7 +40,7 @@ func (g *devTier) recSeatOf(sid uint64, li int) (*layer, *recPair, recSeat, bool
 	l := g.layers[li]
 	rp := l.recOf(sid)
 	st, ok := g.recSeats[sid]
-	if l == nil || rp == nil || !ok || st.rows != 1 || l.pool == nil || g.recC == 0 {
+	if l == nil || rp == nil || !ok || st.rows != 1 || l.pool == nil || l.recC == 0 {
 		return nil, nil, recSeat{}, false
 	}
 	return l, rp, st, true
@@ -68,9 +69,9 @@ func (g *devTier) snapRec(sid uint64, li int, key string) bool {
 	}
 	// Queued, and run with the rest of the point's blocks in one call
 	// (flushSnaps).
-	g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.c, Src: l.pool.c[rp.cur], SrcOff: st.base * g.recC * 4, N: g.recC * 4})
-	if g.recS > 0 {
-		g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.s, Src: l.pool.s[sh], SrcOff: st.base * g.recS * 4, N: g.recS * 4})
+	g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.c, Src: l.pool.c[rp.cur], SrcOff: st.base * l.recC * 4, N: l.recC * 4})
+	if l.recS > 0 {
+		g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.s, Src: l.pool.s[sh], SrcOff: st.base * l.recS * 4, N: l.recS * 4})
 	}
 	g.snapCount++
 	return true
@@ -105,7 +106,11 @@ func (g *devTier) recSnapSlot(li int) *recSnap {
 			n++
 		}
 	}
-	if n >= g.recSnapCap() {
+	l := g.layers[li]
+	if l == nil {
+		return nil
+	}
+	if n >= g.recSnapCap(l) {
 		for i, k := range g.recSnapOrder {
 			if k.li != li {
 				continue
@@ -116,23 +121,20 @@ func (g *devTier) recSnapSlot(li int) *recSnap {
 			return sn
 		}
 	}
-	c, err := g.dev.Alloc(max(g.recC, 1) * 4)
+	c, err := g.dev.Alloc(max(l.recC, 1) * 4)
 	if err != nil {
 		return nil
 	}
-	sn := &recSnap{c: c}
-	if g.recS > 0 {
-		if sn.s, err = g.dev.Alloc(g.recS * 4); err != nil {
+	sn := &recSnap{c: c, bytes: uint64(max(l.recC, 1)+l.recS) * 4}
+	if l.recS > 0 {
+		if sn.s, err = g.dev.Alloc(l.recS * 4); err != nil {
 			c.Free()
 			return nil
 		}
 	}
-	g.charge(g.recSnapBytes())
+	g.charge(sn.bytes)
 	return sn
 }
-
-// recSnapBytes is one snapshot's charge.
-func (g *devTier) recSnapBytes() uint64 { return uint64(max(g.recC, 1)+g.recS) * 4 }
 
 // hasRec says block li keeps the snapshot named key. Callers hold g.mu.
 func (g *devTier) hasRec(li int, key string) bool {
@@ -149,14 +151,14 @@ func (g *devTier) loadRec(sid uint64, li int, key string) bool {
 		return false
 	}
 	for i := 0; i < 2; i++ {
-		if err := g.dev.Copy(l.pool.c[i], st.base*g.recC*4, sn.c, 0, g.recC*4); err != nil {
+		if err := g.dev.Copy(l.pool.c[i], st.base*l.recC*4, sn.c, 0, l.recC*4); err != nil {
 			g.LastErr = "LoadRec: " + err.Error()
 			return false
 		}
-		if l.pool.s[i] == nil || g.recS == 0 {
+		if l.pool.s[i] == nil || l.recS == 0 {
 			continue
 		}
-		if err := g.dev.Copy(l.pool.s[i], st.base*g.recS*4, sn.s, 0, g.recS*4); err != nil {
+		if err := g.dev.Copy(l.pool.s[i], st.base*l.recS*4, sn.s, 0, l.recS*4); err != nil {
 			g.LastErr = "LoadRec: " + err.Error()
 			return false
 		}
@@ -176,7 +178,7 @@ func (g *devTier) freeRecSnaps(li int) {
 		sn := g.recSnaps[k]
 		delete(g.recSnaps, k)
 		freeKV2(sn.c, sn.s)
-		g.refund(g.recSnapBytes())
+		g.refund(sn.bytes)
 	}
 	g.recSnapOrder = kept
 }

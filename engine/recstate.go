@@ -9,25 +9,28 @@ import "github.com/jitllm/jitllm/nn"
 
 // recurrent reports that this session carries a linear block's running state,
 // which is what makes re-running a block from the embeddings unsound.
-func (s *Instance) recurrent() bool { return s.recConv > 0 || s.recState > 0 }
+func (s *Instance) recurrent() bool { return s.recMax > 0 }
 
 // keepsRec says block li keeps a recurrent state.
 func (s *Instance) keepsRec(li int) bool {
-	return s.recurrent() && li >= 0 && li < s.c.NLayer && s.c.LayerKind(li).Recurrent()
+	return s.recurrent() && li >= 0 && li < len(s.recConv) && s.recConv[li]+s.recState[li] > 0
 }
 
-// recLens is a block's recurrent state's widths: its convolution rows' and
-// its summary's, every sequence's.
-func (s *Instance) recLens() (conv, state int) {
-	return s.recConv, s.recState
+// recLens is block li's recurrent state's widths: its convolution rows' and
+// its summary's, a sequence's.
+func (s *Instance) recLens(li int) (conv, state int) {
+	if li < 0 || li >= len(s.recConv) {
+		return 0, 0
+	}
+	return s.recConv[li], s.recState[li]
 }
 
-// recStaged is the instance's buffer for one block's state, kept so a warm
-// prompt allocates nothing for it.
-func (s *Instance) recStaged() (conv, state []float32) {
-	nc, ns := s.recLens()
-	if cap(s.recBuf) < nc+ns {
-		s.recBuf = make([]float32, nc+ns)
+// recStaged is the instance's buffer for block li's state, sized for the
+// largest block's and kept so a warm prompt allocates nothing for it.
+func (s *Instance) recStaged(li int) (conv, state []float32) {
+	nc, ns := s.recLens(li)
+	if cap(s.recBuf) < s.recMax {
+		s.recBuf = make([]float32, s.recMax)
 	}
 	b := s.recBuf[:nc+ns]
 	return b[:nc], b[nc:]

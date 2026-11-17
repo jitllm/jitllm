@@ -779,14 +779,15 @@ type FrameKeeper interface {
 // policy, the counters of fused runs, the geometry its lanes are sized for,
 // and a trace of each block's output.
 type ExecutionSetup struct {
-	Model                         uint64
-	Frames                        *jlm.Frames
-	Quota                         Quota
-	NoFuse                        bool
-	Chunk                         int
-	Tries, Runs                   *atomic.Int64
-	Width, Seqs, Streams, ConvLen int
-	Trace                         func(li int)
+	Model                uint64
+	Frames               *jlm.Frames
+	Quota                Quota
+	NoFuse               bool
+	Chunk                int
+	Tries, Runs          *atomic.Int64
+	Width, Seqs, Streams int
+	ConvLens             []int
+	Trace                func(li int)
 }
 
 // ExecutionAttacher attaches an instance's execution to a device.

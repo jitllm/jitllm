@@ -38,14 +38,24 @@ type recPool struct {
 // recSeat is a session's run of slots, one per sequence of its batch.
 type recSeat struct{ base, rows int }
 
-// recSlotBytes is one slot of a pool in the device's current form, both halves
-// of each buffer that has two.
-func (g *devTier) recSlotBytes(shared bool) uint64 {
-	n := 2*g.recC + 2*g.recS
+// recSlotBytes is one slot of l's pool in the given form, both halves of
+// each buffer that has two.
+func (g *devTier) recSlotBytes(l *layer, shared bool) uint64 {
+	n := 2*l.recC + 2*l.recS
 	if shared {
-		n -= g.recS
+		n -= l.recS
 	}
 	return uint64(n) * 4
+}
+
+// recPoolsSlotBytes is one slot of every pool on this device, each block's
+// at its own widths (recSlotBytes).
+func (g *devTier) recPoolsSlotBytes(shared bool) uint64 {
+	var n uint64
+	for _, l := range g.recPools() {
+		n += g.recSlotBytes(l, shared)
+	}
+	return n
 }
 
 // recPools is every linear block on this device that holds a pool.
@@ -95,9 +105,9 @@ func (g *devTier) recEnd() int {
 // to be carried in from the old pool by a device copy, so only the slots
 // between them are zeroed from the host: a resize uploads zeros for the slots
 // that changed hands, not for the whole pool.
-func (g *devTier) newRecPool(slots int, shared bool, filled []recSeat) (*recPool, error) {
+func (g *devTier) newRecPool(l *layer, slots int, shared bool, filled []recSeat) (*recPool, error) {
 	p := &recPool{slots: slots}
-	sB, cB := slots*g.recS*4, slots*g.recC*4
+	sB, cB := slots*l.recS*4, slots*l.recC*4
 	zs := make([]byte, max(sB, cB))
 	// zero writes zeros to every slot of b outside filled.
 	zero := func(b backend.Buf, w int) error {
@@ -124,14 +134,14 @@ func (g *devTier) newRecPool(slots int, shared bool, filled []recSeat) (*recPool
 			if p.s[i], err = g.dev.Alloc(max(sB, 4)); err != nil {
 				break
 			}
-			if err = zero(p.s[i], g.recS); err != nil {
+			if err = zero(p.s[i], l.recS); err != nil {
 				break
 			}
 		}
 		if p.c[i], err = g.dev.Alloc(cB); err != nil {
 			break
 		}
-		err = zero(p.c[i], g.recC)
+		err = zero(p.c[i], l.recC)
 	}
 	if err != nil {
 		p.free()
@@ -187,7 +197,7 @@ func (g *devTier) recResize(slots int, shared bool) error {
 		if g.recFaulted("resize") {
 			filled = nil
 		}
-		np, err := g.newRecPool(slots, shared, filled)
+		np, err := g.newRecPool(l, slots, shared, filled)
 		if err != nil {
 			return err
 		}
@@ -207,20 +217,20 @@ func (g *devTier) recResize(slots int, shared bool) error {
 			return nil
 		}
 		for i := 0; i < 2 && err == nil; i++ {
-			if err = move(old.c[i], np.c[i], g.recC, every); err == nil && shared == g.recShared {
-				err = move(old.s[i], np.s[i], g.recS, every)
+			if err = move(old.c[i], np.c[i], l.recC, every); err == nil && shared == g.recShared {
+				err = move(old.s[i], np.s[i], l.recS, every)
 			}
 		}
 		// Into the shared form, each session's current half becomes the one
 		// state.
 		for h := 0; h < 2 && err == nil && shared && !g.recShared; h++ {
-			err = move(old.s[h], np.s[0], g.recS, func(rp *recPair) bool { return rp.cur == h })
+			err = move(old.s[h], np.s[0], l.recS, func(rp *recPair) bool { return rp.cur == h })
 		}
 		if err != nil {
 			np.free()
 			return err
 		}
-		ob, nb := l.recBytes, uint64(slots)*g.recSlotBytes(shared)
+		ob, nb := l.recBytes, uint64(slots)*g.recSlotBytes(l, shared)
 		old.free()
 		l.pool = np
 		g.refund(ob)
@@ -274,7 +284,7 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 			for _, b := range []struct {
 				buf backend.Buf
 				w   int
-			}{{l.pool.s[i], g.recS}, {l.pool.c[i], g.recC}} {
+			}{{l.pool.s[i], l.recS}, {l.pool.c[i], l.recC}} {
 				if b.buf == nil || b.w == 0 {
 					continue
 				}
@@ -368,13 +378,12 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 	}
 	base := g.seatPlace(sid, rows)
 	slots := max(g.recSlots, base+rows)
-	pools := uint64(len(g.recPools()))
 	cost := func(shared bool) uint64 {
 		var held uint64
 		for _, l := range g.recPools() {
 			held += l.recBytes
 		}
-		next := pools * uint64(slots) * g.recSlotBytes(shared)
+		next := uint64(slots) * g.recPoolsSlotBytes(shared)
 		if next <= held {
 			return 0
 		}
@@ -390,9 +399,9 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 	}
 	if need+extra > 0 && !g.stateFits(need+extra, nil) {
 		g.LastErr = fmt.Sprintf("rows: a batch's recurrent states do not fit in this device's budget: "+
-			"%d sequences want %.1f MiB a block (%.1f MiB doubled), %.1f MiB used of %.1f",
-			rows, float64(uint64(rows)*g.recSlotBytes(true))/(1<<20),
-			float64(uint64(rows)*g.recSlotBytes(false))/(1<<20),
+			"%d sequences want %.1f MiB (%.1f MiB doubled), %.1f MiB used of %.1f",
+			rows, float64(uint64(rows)*g.recPoolsSlotBytes(true))/(1<<20),
+			float64(uint64(rows)*g.recPoolsSlotBytes(false))/(1<<20),
 			float64(g.used)/(1<<20), float64(g.limit)/(1<<20))
 		restore()
 		return false
@@ -440,7 +449,7 @@ func (g *devTier) readSeat(st recSeat) (seatStates, error) {
 		for k, b := range [2]struct {
 			buf [2]backend.Buf
 			w   int
-		}{{l.pool.s, g.recS}, {l.pool.c, g.recC}} {
+		}{{l.pool.s, l.recS}, {l.pool.c, l.recC}} {
 			for h := 0; h < 2; h++ {
 				// A short convolution's state slot is empty (recS 0).
 				if b.buf[h] == nil || b.w == 0 {
@@ -497,7 +506,7 @@ func (g *devTier) writeSeat(sid uint64, kept seatStates, base, rows int, wasShar
 		for k, b := range [2]struct {
 			buf [2]backend.Buf
 			w   int
-		}{{l.pool.s, g.recS}, {l.pool.c, g.recC}} {
+		}{{l.pool.s, l.recS}, {l.pool.c, l.recC}} {
 			for h := 0; h < 2; h++ {
 				src := v[k][h]
 				if k == 0 && g.recShared && !wasShared {
@@ -732,11 +741,11 @@ func (g *devTier) copyMark(sid uint64) {
 		if !g.markBufs(l) {
 			return
 		}
-		if g.recS > 0 {
-			list = append(list, backend.CopyRange{Dst: m.s[l], Src: l.pool.s[0], SrcOff: st.base * g.recS * 4, N: g.recS * 4})
+		if l.recS > 0 {
+			list = append(list, backend.CopyRange{Dst: m.s[l], Src: l.pool.s[0], SrcOff: st.base * l.recS * 4, N: l.recS * 4})
 		}
-		if g.recC > 0 {
-			list = append(list, backend.CopyRange{Dst: m.c[l], Src: l.pool.c[rp.cur], SrcOff: st.base * g.recC * 4, N: g.recC * 4})
+		if l.recC > 0 {
+			list = append(list, backend.CopyRange{Dst: m.c[l], Src: l.pool.c[rp.cur], SrcOff: st.base * l.recC * 4, N: l.recC * 4})
 		}
 	}
 	if err := backend.CopyAll(g.dev, list); err != nil {
@@ -762,7 +771,7 @@ func (g *devTier) markBufs(l *layer) bool {
 	if m.s[l] != nil {
 		return true
 	}
-	sB, cB := max(g.recS, 1)*4, max(g.recC, 1)*4
+	sB, cB := max(l.recS, 1)*4, max(l.recC, 1)*4
 	if !g.stateFits(uint64(sB+cB), nil) {
 		g.LastErr = "recurrent mark: no room for a copy of a marked state"
 		return false
@@ -808,11 +817,11 @@ func (g *devTier) keepMarkHalves(sid uint64, lo, hi int) {
 		if !g.markBufs(l) {
 			return
 		}
-		if g.recS > 0 && l.pool.s[rp.mark] != nil {
-			list = append(list, backend.CopyRange{Dst: m.s[l], Src: l.pool.s[rp.mark], SrcOff: st.base * g.recS * 4, N: g.recS * 4})
+		if l.recS > 0 && l.pool.s[rp.mark] != nil {
+			list = append(list, backend.CopyRange{Dst: m.s[l], Src: l.pool.s[rp.mark], SrcOff: st.base * l.recS * 4, N: l.recS * 4})
 		}
-		if g.recC > 0 {
-			list = append(list, backend.CopyRange{Dst: m.c[l], Src: l.pool.c[rp.mark], SrcOff: st.base * g.recC * 4, N: g.recC * 4})
+		if l.recC > 0 {
+			list = append(list, backend.CopyRange{Dst: m.c[l], Src: l.pool.c[rp.mark], SrcOff: st.base * l.recC * 4, N: l.recC * 4})
 		}
 		m.half[l] = true
 	}
@@ -850,11 +859,11 @@ func (g *devTier) restoreMark(sid uint64) bool {
 			continue
 		}
 		for h := range 2 {
-			if g.recS > 0 && l.pool.s[h] != nil {
-				list = append(list, backend.CopyRange{Dst: l.pool.s[h], DstOff: st.base * g.recS * 4, Src: m.s[l], N: g.recS * 4})
+			if l.recS > 0 && l.pool.s[h] != nil {
+				list = append(list, backend.CopyRange{Dst: l.pool.s[h], DstOff: st.base * l.recS * 4, Src: m.s[l], N: l.recS * 4})
 			}
-			if g.recC > 0 {
-				list = append(list, backend.CopyRange{Dst: l.pool.c[h], DstOff: st.base * g.recC * 4, Src: m.c[l], N: g.recC * 4})
+			if l.recC > 0 {
+				list = append(list, backend.CopyRange{Dst: l.pool.c[h], DstOff: st.base * l.recC * 4, Src: m.c[l], N: l.recC * 4})
 			}
 		}
 	}
@@ -1109,7 +1118,7 @@ func (g *devTier) moveHalf(l *layer, st recSeat, from, to int) bool {
 	for _, b := range []struct {
 		src, dst backend.Buf
 		w        int
-	}{{l.pool.c[from], l.pool.c[to], g.recC}, {l.pool.s[from], l.pool.s[to], g.recS}} {
+	}{{l.pool.c[from], l.pool.c[to], l.recC}, {l.pool.s[from], l.pool.s[to], l.recS}} {
 		if b.src == nil || b.dst == nil || b.w == 0 {
 			continue // the shared form's one state has no other half, a short convolution none
 		}

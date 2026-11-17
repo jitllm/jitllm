@@ -2518,7 +2518,7 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	case !l.weightsHeld():
 		r, _ := l.missingWeight()
 		return fmt.Errorf("its graph binds %v, which the block does not hold", r)
-	case l.linear && !g.recHeld(l, p, bs):
+	case l.linear && !g.recHeld(l, bs):
 		return errors.New("its recurrent state is not where the form steps it")
 	case len(l.graph.Out) != p.Streams() || len(l.graph.In) > len(l.graph.Out) && (len(l.graph.In) != len(l.graph.Out)+1 || bs.pleIn == nil):
 		// A block reads each residual stream and, past them, the rows'
@@ -2559,14 +2559,15 @@ func (g *devTier) unserved(li int) string {
 
 // recHeld says linear block l's recurrent state is where the composer's
 // form steps it: in the block's pool of slots of the delta rule's state
-// and any tail its graph states, the step's recurrent descriptor naming
+// and any tail its graph states, at the block's own slot (layer.recS, not
+// the scratch's plan, which is its set's first block's), the step's recurrent descriptor naming
 // each run's slots -- a decode's one row, a prompt chunk's rows as one run, a ragged step's
 // sequences a run each. A pool of two halves is read in one and written in
 // the other; a pool of one shared half is stepped in place, through the
 // composer's own descriptor (bs.cRows).
-func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
+func (g *devTier) recHeld(l *layer, bs *blockScratch) bool {
 	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
-		slotsArePools(l.graph, p.Recurrent.StateLen)
+		slotsArePools(l.graph, l.recS)
 }
 
 // slotsArePools says every op of graph gr over the recurrent state that

@@ -113,6 +113,9 @@ type layer struct {
 	kvBytes  uint64 // this block's KV cache, so ReleaseLayers can refund it
 	recBytes uint64 // and its recurrent state, refunded on the same walks
 	recHist  uint64 // one session's recurrent pair; see devTier.reserved
+	// recS and recC are one slot of the block's delta state and of its
+	// convolution's window, in floats: its own, as its plan states them.
+	recS, recC int
 	// auxBytes is everything else charged to the budget for this block (the
 	// norms), so ReleaseLayers refunds it too.
 	auxBytes uint64
@@ -982,7 +985,8 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	if !r.Keeps() {
 		return true // not a linear block; nothing to carry
 	}
-	g.recS, g.recC = r.StateLen, r.ConvState
+	l.recS, l.recC = r.StateLen, r.ConvState
+	g.recS, g.recC = max(g.recS, r.StateLen), max(g.recC, r.ConvState)
 	need := 2 * uint64(r.StateLen*4+r.ConvState*4)
 	l.recHist = need
 	if g.recSeats == nil {
@@ -999,10 +1003,9 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	if g.recSlots == 0 {
 		shared = g.SharedRec
 	}
-	slot := g.recSlotBytes(shared)
-	cost := uint64(slots-g.recSlots) * slot * uint64(len(g.recPools()))
+	cost := uint64(slots-g.recSlots) * g.recPoolsSlotBytes(shared)
 	if l.pool == nil {
-		cost += uint64(slots) * slot
+		cost += uint64(slots) * g.recSlotBytes(l, shared)
 	}
 	// A card its pages fill makes room for the state as for a history
 	// growing (stateFits): a page goes home before a session is refused.
@@ -1024,12 +1027,12 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 		}
 	}
 	if l.pool == nil {
-		np, err := g.newRecPool(g.recSlots, g.recShared, nil)
+		np, err := g.newRecPool(l, g.recSlots, g.recShared, nil)
 		if err != nil {
 			return fail(err)
 		}
 		l.pool = np
-		n := uint64(g.recSlots) * slot
+		n := uint64(g.recSlots) * g.recSlotBytes(l, g.recShared)
 		g.charge(n)
 		l.recBytes += n
 		g.RecBytes += n
@@ -1833,6 +1836,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// the plan's NKVHead/HeadDim are the model-wide attention shape.
 	linear := p.Recurrent.Keeps()
 	l.linear = linear
+	l.recS, l.recC = p.Recurrent.StateLen, p.Recurrent.ConvState
 	l.withAttn = linear && graphAttends(p.Graph)
 	l.noRuns = p.Graph.AttendNoRuns()
 	l.noFFN = p.NoFFN
@@ -4885,15 +4889,15 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 		// exactly as MigrateKV treats a block with no cache.
 		return true
 	}
-	if l.pool == nil || g.recC == 0 {
+	if l.pool == nil || l.recC == 0 {
 		return false
 	}
 	// A batch hands every row's state back to back, row r at r*ConvState and
 	// r*StateLen: the seat's own layout, one slot a row.
-	rows := len(conv) / g.recC
-	if rows < 1 || len(conv) != rows*g.recC || len(state) != rows*g.recS {
+	rows := len(conv) / l.recC
+	if rows < 1 || len(conv) != rows*l.recC || len(state) != rows*l.recS {
 		g.LastErr = fmt.Sprintf("MigrateRec: block %d wants a multiple of %d conv and %d state floats, "+
-			"the caller offered %d and %d", li, g.recC, g.recS, len(conv), len(state))
+			"the caller offered %d and %d", li, l.recC, l.recS, len(conv), len(state))
 		return false
 	}
 	st := g.recSeats[sid]
@@ -4957,20 +4961,20 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 			}
 			return true
 		}
-		return rd(l.pool.c[rp.cur], conv, g.recC, "conv") && rd(l.pool.s[sh], state, g.recS, "state")
+		return rd(l.pool.c[rp.cur], conv, l.recC, "conv") && rd(l.pool.s[sh], state, l.recS, "state")
 	}
 	// Both halves. Seeding cur alone is already correct (the next submission
 	// writes 1-cur before anything reads it); writing both is defence, so no
 	// future caller depends on that parity argument.
 	for i := 0; i < 2; i++ {
-		if err := l.pool.c[i].WriteAt(st.base*g.recC*4, f32b(conv)); err != nil {
+		if err := l.pool.c[i].WriteAt(st.base*l.recC*4, f32b(conv)); err != nil {
 			g.LastErr = fmt.Sprintf("MigrateRec: block %d conv half %d: %v", li, i, err)
 			return false
 		}
 		if l.pool.s[i] == nil || len(state) == 0 {
 			continue // a shared pool's second half is the device's scratch
 		}
-		if err := l.pool.s[i].WriteAt(st.base*g.recS*4, f32b(state)); err != nil {
+		if err := l.pool.s[i].WriteAt(st.base*l.recS*4, f32b(state)); err != nil {
 			g.LastErr = fmt.Sprintf("MigrateRec: block %d state half %d: %v", li, i, err)
 			return false
 		}

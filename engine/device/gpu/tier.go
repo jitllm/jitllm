@@ -1305,8 +1305,9 @@ type devShared struct {
 	packing []*packing
 	// recSeats is each session's run of slots in every linear block's
 	// recurrent pool (recpool.go), recSlots the slots every pool holds, and
-	// recShared the pools' form. recS and recC are one slot of the delta
-	// state and of the convolution's window, in floats.
+	// recShared the pools' form. recS and recC are the largest block's slot
+	// of the delta state and of the convolution's window, in floats: what a
+	// buffer every block's state passes through is sized for.
 	recSeats map[uint64]recSeat
 	// recSnaps are the prefix cache's restore points of the linear blocks,
 	// by block and name, and recSnapOrder them oldest first (recshare.go).

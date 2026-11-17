@@ -36,7 +36,12 @@ func jlmOf(t testing.TB, path string) string { return jlmOfPair(t, path, "") }
 const q8Suffix = "@q8"
 
 // fixtureSource is the file or directory a model name reads from.
-func fixtureSource(path string) string { return strings.TrimSuffix(path, q8Suffix) }
+func fixtureSource(path string) string {
+	if src, _, ok := restatedFixture(path); ok {
+		return src
+	}
+	return strings.TrimSuffix(path, q8Suffix)
+}
 
 // ModelConfigForTest is the publisher's config.json the GGUF at path
 // converts with (modelConfigs), "" for none. It is exported for the external
@@ -179,6 +184,9 @@ func jlmOfPair(t testing.TB, path, mmproj string) string {
 // convertPair is jlmOfPair without a test: the container's path, or why there
 // is none.
 func convertPair(path, mmproj string) (string, error) {
+	if src, suffix, ok := restatedFixture(path); ok && mmproj == "" {
+		return convertTwoState(src, suffix)
+	}
 	if strings.HasSuffix(path, jlm.Ext) {
 		// A container an earlier build left is reconverted from the GGUF
 		// beside it; one that opens passes straight through.

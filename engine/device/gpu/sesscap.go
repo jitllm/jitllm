@@ -85,7 +85,7 @@ func (g *devTier) heldBy(sid uint64) uint64 {
 			n += kvp.bytes
 		}
 		if l.rec[sid] != nil {
-			n += uint64(g.recSeats[sid].rows) * g.recSlotBytes(g.recShared)
+			n += uint64(g.recSeats[sid].rows) * g.recSlotBytes(l, g.recShared)
 		}
 	}
 	return n + g.pagedHeldBy(sid)

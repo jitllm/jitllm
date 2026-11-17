@@ -839,7 +839,7 @@ func (s *Instance) migrateRec(li int, toDevice bool) bool {
 // goes to, through the instance's buffer.
 func (s *Instance) migrateRecLayer(li int, toDevice bool) bool {
 	from, to := s.moveRoutes(toDevice)
-	conv, state := s.recStaged()
+	conv, state := s.recStaged(li)
 	return from.recmig != nil && to.recmig != nil && from.recmig.MigrateRec(li, conv, state, false) && to.recmig.MigrateRec(li, conv, state, true)
 }
 
@@ -2789,11 +2789,11 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 	if s.recStage == nil {
 		s.recStage = make([][]float32, s.c.NLayer)
 	}
-	nc, ns := s.recLens()
 	for li := range s.c.NLayer {
 		if !s.keepsRec(li) || s.recDev(li) != nil {
 			continue
 		}
+		nc, ns := s.recLens(li)
 		w := nc + ns
 		if cap(s.recStage[li]) < w {
 			s.recStage[li] = make([]float32, w)
@@ -2820,6 +2820,7 @@ func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
 			}
 			continue
 		}
+		nc, ns := s.recLens(li)
 		buf := s.recStage[li]
 		if !s.recIO(li, buf[:nc], buf[nc:nc+ns], true) {
 			return false

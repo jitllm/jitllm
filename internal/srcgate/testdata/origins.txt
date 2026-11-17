@@ -839,7 +839,6 @@ input	engine/decideio.go	"state must be provided"
 context	engine/decideio.go	"the request is not JSON: %w"
 input	engine/decideio.go	"the request must be a JSON object"
 fault	engine/deltarun.go	"model: the recurrent state on the device could not be reset%s"
-refusal	engine/deltarun.go	"engine: block %d keeps %d window and %d state floats a sequence, block %d %d and %d: an instance stages one size of recurrent state"	an instance stages one block's recurrent state at a time in one buffer sized once (recStaged, recLens): blocks keeping state of two sizes need those sized per block
 context	engine/devfail.go	"model: the device declined block %d: %s"	the device's reason
 limit	engine/devfail.go	"model: the device has no room for the call's history now"	a device's memory: a call's history past the card's free pages after the instance moved blocks to the CPU until it fit (reserveMoving), so only where nothing can move; the server parks the row while other rows hold pages (parkForRoom)
 limit	engine/device/cpu/baseline.go	"cpu: %s cannot run here: this host lacks %s"	the host's instructions (RULE 8, nn.HostRefusal)
@@ -1135,7 +1134,7 @@ bug	engine/device/gpu/recpool.go	"recurrent rewind: a linear block with no mark"
 bug	engine/device/gpu/recpool.go	"row %d's sequence starts at slot %d, not a multiple of the %d positions a sequence spans"
 bug	engine/device/gpu/recpool.go	"rows %d and %d of one sequence are at positions %d and %d: a sequence's rows in one step are consecutive positions"
 context	engine/device/gpu/recpool.go	"rows: %v"
-limit	engine/device/gpu/recpool.go	"rows: a batch's recurrent states do not fit in this device's budget: %d sequences want %.1f MiB a block (%.1f MiB doubled), %.1f MiB used of %.1f"
+limit	engine/device/gpu/recpool.go	"rows: a batch's recurrent states do not fit in this device's budget: %d sequences want %.1f MiB (%.1f MiB doubled), %.1f MiB used of %.1f"
 context	engine/device/gpu/recpool.go	"sessions: %v"
 bug	engine/device/gpu/recpool.go	"sessions: block %d holds no recurrent state for session %d"
 bug	engine/device/gpu/recpool.go	"sessions: session %d holds %d recurrent state(s) here; a step across sessions takes one a session"

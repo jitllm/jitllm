@@ -50,9 +50,10 @@ type Lanes struct {
 	// ChunkFault starts each prompt chunk after the first from a cleared
 	// summary.
 	ChunkFault bool
-	// width and streams are a row's width and its residual streams, convLen
-	// a sequence's recurrent window.
-	width, streams, convLen int
+	// width and streams are a row's width and its residual streams,
+	// convLens each block's recurrent window a sequence.
+	width, streams int
+	convLens       []int
 	// runs is the prompt's bidirectional runs, windowed that a row reads
 	// inside its run only, wins each position's own window (KeyRuns).
 	runs     []nn.KeyRun
@@ -74,9 +75,17 @@ type Lanes struct {
 // NewLanes runs e's blocks for a session, their weights bound by b and read
 // in through src, a row's residual streams stride apart, their history seqs
 // sequences wide; trace, where set, is told each block a run finishes.
-func NewLanes(e *Exec, b *Bindings, src Source, stride, seqs, streams, convLen int, trace func(li int)) *Lanes {
-	return &Lanes{e: e, b: b, src: src, stride: stride, seqs: seqs, width: stride, streams: streams, convLen: convLen,
+func NewLanes(e *Exec, b *Bindings, src Source, stride, seqs, streams int, convLens []int, trace func(li int)) *Lanes {
+	return &Lanes{e: e, b: b, src: src, stride: stride, seqs: seqs, width: stride, streams: streams, convLens: convLens,
 		trace: trace}
+}
+
+// convLen is block li's recurrent window a sequence.
+func (l *Lanes) convLen(li int) int {
+	if li < 0 || li >= len(l.convLens) {
+		return 0
+	}
+	return l.convLens[li]
 }
 
 // KeyRuns is the prompt's bidirectional runs the next calls of rows read,
@@ -187,7 +196,7 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	if f.Rec {
 		in.RecLi = l.recLi(li)
 		in.RecState, in.RecConv = l.recAddrs(in.RecLi)
-		in.Conv, in.ConvLen = l.v.Conv(in.RecLi), l.convLen
+		in.Conv, in.ConvLen = l.v.Conv(in.RecLi), l.convLen(in.RecLi)
 	}
 	if err := l.e.rows.Rows(li, f, in, runs); err != nil {
 		return err
@@ -657,7 +666,7 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x []float32, cs nn.RopeTab
 // clearRec clears linear block li's summary of sequence slot (ChunkFault).
 func (l *Lanes) clearRec(li, slot int) {
 	if st, cv := l.v.State(li), l.v.Conv(li); st != nil && cv != nil {
-		ns, nc := len(st)/max(l.seqs, 1), l.convLen
+		ns, nc := len(st)/max(l.seqs, 1), l.convLen(li)
 		clear(st[slot*ns:][:ns])
 		clear(cv[slot*nc:][:nc])
 	}

@@ -544,7 +544,7 @@ func (s *Instance) recBytesOf(li int) uint64 {
 	if !s.keepsRec(li) {
 		return 0
 	}
-	nc, ns := s.recLens()
+	nc, ns := s.recLens(li)
 	return uint64(nc+ns) * 4
 }
 

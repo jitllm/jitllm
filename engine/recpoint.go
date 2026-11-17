@@ -33,11 +33,9 @@ func (s *Instance) recEvery() int {
 		return 0
 	}
 	var point, perPos uint64
-	nc, ns := s.recLens()
 	for li := range s.c.NLayer {
-		if s.keepsRec(li) {
-			point += uint64(nc+ns) * 4
-		}
+		nc, ns := s.recLens(li)
+		point += uint64(nc+ns) * 4
 	}
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		if pg := &s.kv.layers[li]; pg.p > 0 {
@@ -97,7 +95,7 @@ func (s *Instance) sealRecLayer(li, pos int) bool {
 	if d := s.recDev(li); d != nil {
 		return d.SnapRec(li, key)
 	}
-	conv, state := s.recStaged()
+	conv, state := s.recStaged(li)
 	if !s.recIO(li, conv, state, false) {
 		s.kv.syncFailed++
 		return false

@@ -99,7 +99,7 @@ func (e *Exec) Place(n int, ex Lease, planes [nn.MaxRopeTables][]float32, nExper
 	res := resources{ExpertPager: ex, b: e.b}
 	if e.lanes == nil {
 		st := e.setup
-		e.lanes = NewLanes(e, e.b, ex, st.Width, st.Seqs, st.Streams, st.ConvLen, st.Trace)
+		e.lanes = NewLanes(e, e.b, ex, st.Width, st.Seqs, st.Streams, st.ConvLens, st.Trace)
 	}
 	e.blocks = make([]*Block, n)
 	// The counts are the instance's whole life: a placement again for a new
@@ -369,11 +369,12 @@ type Setup struct {
 	// drop; nil for one another instance's covers.
 	Quota *Quota
 	// Width is the residual's width, Seqs the sequences its history is
-	// strided by, Streams the residual streams and ConvLen a linear block's
+	// strided by, Streams the residual streams and ConvLens each block's
 	// convolution rows a sequence: what the execution's lanes run (Lanes).
 	// Trace is called with each block's residual once it ran.
-	Width, Seqs, Streams, ConvLen int
-	Trace                         func(li int)
+	Width, Seqs, Streams int
+	ConvLens             []int
+	Trace                func(li int)
 }
 
 // Attach makes an instance's execution on c from st: its workers, its
