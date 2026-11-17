@@ -42,10 +42,6 @@ type Config struct {
 	// container's flags; see jlm.FlagPoolMean and jlm.FlagNonCausal.
 	Pooling   jlm.Pooling
 	NonCausal bool
-	// RowWindowed says a non-causal block's rows attend inside windows of
-	// their own, which its convolution's taps keep to as well: a media
-	// prefix's rows the prefix alone (an LFM2 encoder's, rowWindows).
-	RowWindowed bool
 	// chanDecay is ChanDecay()'s backing field: a delta rule whose forget
 	// gate is its own low-rank pair (RoleSSMFA, RoleSSMFB) decays per channel
 	// rather than per head.
@@ -707,7 +703,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
 		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
 		MarkPointer:      c.Flags2.Has(jlm.Flag2MarkerPointer),
-		RowWindowed:      c.Flags2.Has(jlm.Flag2MediaPrefix),
 		Joint:            c.JointHead != nil,
 		KVLoraRank:       int(c.KVLoraRank),
 		HeadDimV:         int(c.HeadDimV),
