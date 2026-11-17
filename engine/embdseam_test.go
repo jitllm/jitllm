@@ -83,7 +83,7 @@ func embdRows(t *testing.T, m *model.Model, ids []int32) []float32 {
 // seam -- the token an embedding row stands for on a model whose rows read
 // their token past the embedding: per-layer embeddings (Gemma 4's E models)
 // and a router that routes by token (DeepSeek V4's hash-routed blocks) take
-// token 0's (ple.go, as llama.cpp does for an image's rows; a token-routed
+// token 0's (ple.go, for an image's rows; a token-routed
 // gather reads row 0 for a row naming none), and an n-gram block's window
 // the model's image id (graph.OpTokenWindow), as the row's own and as a later
 // row's predecessor. The token path equals the seam exactly for that token

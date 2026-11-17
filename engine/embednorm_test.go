@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// llamaNormalize is llama.cpp's common_embd_normalize over v in float64, the
+// llamaNormalize is the GGUF oracle's normalisation of v, in float64, the
 // gate's reference: v as it is below 0, scaled into int16's range by its
 // largest magnitude at 0, unit length at 2, over its k-norm otherwise; a
 // norm of 0 gives zeros.
@@ -42,11 +42,11 @@ func llamaNormalize(v []float32, k int) []float64 {
 	return out
 }
 
-// TestEmbedNormFollowsLlamaCpp holds each kind of llama.cpp's
-// embd_normalize to llama.cpp's own arithmetic over the model's pooled row:
-// the row as the readout leaves it (-1) has a length of its own and the
+// TestEmbedNormFollowsLlamaCpp holds each norm code (a request's
+// embd_normalize) to the GGUF oracle's own arithmetic over the model's pooled
+// row: the row as the readout leaves it (-1) has a length of its own and the
 // default vector's direction, and every other kind is that row as
-// common_embd_normalize leaves it, within the composed form's f32 rounding.
+// llamaNormalize leaves it, within the composed form's f32 rounding.
 func TestEmbedNormFollowsLlamaCpp(t *testing.T) {
 	ran := 0
 	for _, g := range loadEmbedGoldens(t) {
@@ -90,7 +90,7 @@ func TestEmbedNormFollowsLlamaCpp(t *testing.T) {
 					}
 					t.Logf("text %d, embd_normalize %d: worst %.3g of the largest component %.4g", i, k, worst/big, big)
 					if !(worst <= 2e-5*big) {
-						t.Errorf("text %d, embd_normalize %d: %.3g of the largest component from llama.cpp's", i, k, worst/big)
+						t.Errorf("text %d, embd_normalize %d: %.3g of the largest component from the GGUF oracle's", i, k, worst/big)
 					}
 				}
 				ran++

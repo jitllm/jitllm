@@ -13,21 +13,20 @@ import (
 )
 
 // TestComposedPromptMatchesLlamaCppF32 holds the composed prompt -- its
-// attention on the matrix unit over binary16 operands -- to llama.cpp's CPU
-// arithmetic with a float32 KV cache and no flash attention
+// attention on the matrix unit over binary16 operands -- to the GGUF oracle's
+// CPU arithmetic with a float32 KV cache and no flash attention
 // (JITLLM_LLAMACPP_CPU), teacher-forced over a 2048-token document: at every
-// 64th position of its second half, each prefix prefilled whole by the
-// composer on cuda:0, the log-softmax over llama.cpp's top-16-nat window is
-// held to a median and worst NMSE and a mean KL(reference||arm). Each bound
-// is the arm's own reading plus the spread llama.cpp's CUDA arms (flash
-// attention on and off) and main's CUDA tier take against the same
-// reference: what a reduction order alone moves. The violation, every
-// position's logits read against the next position's, must fall outside a
-// bound.
+// 64th position of its second half, each prefix prefilled whole by the composer
+// on cuda:0, the log-softmax over the GGUF oracle's top-16-nat window is held
+// to a median and worst NMSE and a mean KL(reference||arm). Each bound is the
+// arm's own reading plus the spread the GGUF oracle's CUDA arms (flash
+// attention on and off) and main's CUDA tier take against the same reference:
+// what a reduction order alone moves. The violation, every position's logits
+// read against the next position's, must fall outside a bound.
 func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 	dir := os.Getenv("JITLLM_LLAMACPP_CPU")
 	if dir == "" {
-		t.Fatal("JITLLM_LLAMACPP_CPU is unset: it names a llama.cpp build holding llama-perplexity, the reference")
+		t.Fatal("JITLLM_LLAMACPP_CPU is unset: it names a GGUF oracle build holding llama-perplexity, the reference")
 	}
 	text, err := os.ReadFile("testdata/prompt-28k.txt")
 	if err != nil {
@@ -82,7 +81,7 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 			med, worst, kl := score(0)
 			t.Logf("%d positions: NMSE median %.3g worst %.3g, mean KL %.3g (bounds %.3g, %.3g, %.3g)", len(at), med, worst, kl, c.median, c.worst, c.kl)
 			if !(med <= c.median && worst <= c.worst && kl <= c.kl) {
-				t.Errorf("against llama.cpp's float32 CPU arithmetic the composed prompt reads NMSE median %.3g worst %.3g and mean KL %.3g, past %.3g, %.3g and %.3g",
+				t.Errorf("against the GGUF oracle's float32 CPU arithmetic the composed prompt reads NMSE median %.3g worst %.3g and mean KL %.3g, past %.3g, %.3g and %.3g",
 					med, worst, kl, c.median, c.worst, c.kl)
 			}
 			bm, bw, bk := score(1)

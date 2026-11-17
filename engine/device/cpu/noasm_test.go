@@ -14,8 +14,8 @@ import (
 // (PTX, CUDA, HIP, OpenCL, Metal, GLSL, HLSL, WGSL, SPIR-V, C); every kernel is
 // emitted at run time for the device in front of it. The two trampolines are
 // the Go-to-generated-code call boundary, which Go can only express in its own
-// assembler. The C allowed is llama.cpp's harness: it measures or drives the
-// reference, and no jitllm token runs it.
+// assembler. The C allowed is the GGUF oracle's harness: it measures or drives
+// the reference, and no jitllm token runs it.
 func TestNoAssemblyBesidesTheTrampolines(t *testing.T) {
 	testmodels.SourceTree(t)
 	allowed := map[string]bool{

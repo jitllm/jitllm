@@ -18,16 +18,15 @@ type TopLogprob struct {
 //
 // The distribution is the model's own -- the log-softmax of the logits the
 // head returned, final softcap and head bias included -- before temperature,
-// the repeat penalty and every cut. That is what vLLM returns by default
-// (logprobs_mode "raw_logprobs") and what the OpenAI API reports: a
+// the repeat penalty and every cut. That is what the OpenAI API reports: a
 // log-probability that does not move with the request's temperature.
 type Logprobs struct {
 	N   int          // alternatives per token, 0 to the vocabulary
 	Top []TopLogprob // the last call's alternatives, most likely first
 }
 
-// SampledProbs is Logprobs after every sampler, as llama.cpp's
-// post_sampling_probs reports it: chosen's probability under the
+// SampledProbs is Logprobs after every sampler, as a request's
+// post_sampling_probs asks for it: chosen's probability under the
 // distribution smp's last draw over logits drew from (Sample), and in l.Top
 // the l.N likeliest tokens of what survived, the likeliest first, each
 // Logprob a probability. It reads the draw as Sample left it in smp, so it

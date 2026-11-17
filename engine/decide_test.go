@@ -13,8 +13,8 @@ import (
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
-// The label readouts against llama.cpp's /v1/systemone on the same GGUF
-// (scripts/decisiongold.sh writes the goldens). RULE 7m: llama.cpp is the
+// The label readouts against the GGUF oracle's /v1/systemone on the same GGUF
+// (scripts/decisiongold.sh writes the goldens). RULE 7m: it is the
 // oracle for the readout here because it reads the GGUF's own template and
 // metadata, which is what the container carries.
 
@@ -29,9 +29,9 @@ type decisionGold struct {
 	} `json:"answers"`
 }
 
-// decisionCases are the label readouts and the llama.cpp answers they are
+// decisionCases are the label readouts and the GGUF oracle's answers they are
 // held to: gold is the golden's prefix, <gold>.<request>.llamacpp.json, and
-// tol how far a probability may sit from llama.cpp's on the same bytes on
+// tol how far a probability may sit from the GGUF oracle's on the same bytes on
 // either KV cache. d1 measured 0.021 at worst (the billing/returns near-tie),
 // lev 0.090 (the ambiguous request's tone, a near-tie that Q8_0 rounding
 // moves), vllm-d3 0.078 (its ambiguous issue question, a near-tie).
@@ -103,7 +103,7 @@ func readDecisionGold(t *testing.T, name string) decisionGold {
 }
 
 // TestDecisionMatchesLlamaCpp holds each label readout's answers to
-// llama.cpp's on both requests, on an f32 and an f16 KV cache: every
+// the GGUF oracle's on both requests, on an f32 and an f16 KV cache: every
 // prompt's labels picked by the head and read by the composed readout part.
 // A readout whose calibration is rewritten (every question at temperature 8)
 // must move the answers past decisionSeen.
@@ -129,7 +129,7 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 						t.Fatalf("kv f16 %v, %s: %v", f16, req, err)
 					}
 					worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold+"."+req+".llamacpp.json"), c.tol)
-					t.Logf("kv f16 %v, %s: %d prompt tokens, worst difference from llama.cpp %.5f", f16, req, d.InputTokens(), worst)
+					t.Logf("kv f16 %v, %s: %d prompt tokens, worst difference from the GGUF oracle %.5f", f16, req, d.InputTokens(), worst)
 				}
 				if !f16 {
 					cfg := *d.cfg
@@ -190,7 +190,7 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 			d := math.Abs(got - want)
 			worst = max(worst, d)
 			if d > tol {
-				t.Errorf("%s %s: %.4f, llama.cpp %.4f", q.ID, what, got, want)
+				t.Errorf("%s %s: %.4f, the GGUF oracle %.4f", q.ID, what, got, want)
 			}
 		}
 		if q.Type == jlm.QuestionNoul {
@@ -198,13 +198,13 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 			continue
 		}
 		// The pick is held unless the two options are a tie within the
-		// tolerance: llama.cpp's own probabilities of its choice and ours
+		// tolerance: the GGUF oracle's own probabilities of its choice and ours
 		// less than two tolerances apart. The values are held either way.
 		if q.Type == jlm.QuestionChoice && a.Choice != g.Choice {
 			if m := g.Probabilities[g.Choice] - g.Probabilities[a.Choice]; m < 2*tol {
-				t.Logf("%s: chose %q, llama.cpp %q, a tie: llama.cpp's margin %.4f is under %.4f", q.ID, a.Choice, g.Choice, m, 2*tol)
+				t.Logf("%s: chose %q, the GGUF oracle %q, a tie: the oracle's margin %.4f is under %.4f", q.ID, a.Choice, g.Choice, m, 2*tol)
 			} else {
-				t.Errorf("%s: chose %q, llama.cpp %q", q.ID, a.Choice, g.Choice)
+				t.Errorf("%s: chose %q, the GGUF oracle %q", q.ID, a.Choice, g.Choice)
 			}
 		}
 		if q.Type == jlm.QuestionScore {
@@ -218,10 +218,10 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 	return worst
 }
 
-// TestDecisionResponseMatchesLlamaCpp holds the response body to llama.cpp's
-// for vllm-d3's legend request: the answer's shape, and a score's legend
-// with each description that is not text as its sorted-key JSON, a string,
-// as the container states. Without the statement the legend is the
+// TestDecisionResponseMatchesLlamaCpp holds the response body to the GGUF
+// oracle's for vllm-d3's legend request: the answer's shape, and a score's
+// legend with each description that is not text as its sorted-key JSON, a
+// string, as the container states. Without the statement the legend is the
 // request's own JSON, which must fail it.
 func TestDecisionResponseMatchesLlamaCpp(t *testing.T) {
 	c := decisionCases()[3]
@@ -275,17 +275,17 @@ func TestDecisionResponseMatchesLlamaCpp(t *testing.T) {
 	}
 	want := gold.Answers["anger"].Legend
 	if len(got) != len(want) || len(want) == 0 {
-		t.Fatalf("legend %v, llama.cpp %v", got, want)
+		t.Fatalf("legend %v, the GGUF oracle %v", got, want)
 	}
 	for k, w := range want {
 		if got[k] != w {
-			t.Errorf("legend %s: %q, llama.cpp %q", k, got[k], w)
+			t.Errorf("legend %s: %q, the GGUF oracle %q", k, got[k], w)
 		}
 	}
 	lab := *d.lab
 	lab.SortedLegend = false
 	d.lab = &lab
 	if off, err := legend(d.DecisionResponse(c.gguf, qs, ans)); err == nil && off["0"] == want["0"] {
-		t.Errorf("the legend without the statement is llama.cpp's too: the gate does not see it")
+		t.Errorf("the legend without the statement is the GGUF oracle's too: the gate does not see it")
 	}
 }

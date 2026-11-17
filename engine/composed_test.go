@@ -346,10 +346,11 @@ func declinesOf(st gpu.Stats) string {
 // bandRatio and bandWorst hold a composed arm to a reference implementation's
 // distance from the float reference: at the median step no further than
 // bandRatio times the reference's, and at its worst no further than bandWorst
-// times the widest the reference comes. The serving gate's reference is
-// llama.cpp: each step the wider of its CUDA and CPU arms, teacher-forced on
-// the panel; main's tier where llama.cpp does not read the model (the user's
-// decision). Both gates that hold an arm to a reference take them from here.
+// times the widest the reference comes. The serving gate's reference is the
+// GGUF oracle: each step the wider of its CUDA and CPU arms, teacher-forced on
+// the panel; main's tier where the GGUF oracle does not read the model (the
+// user's decision). Both gates that hold an arm to a reference take them from
+// here.
 const bandRatio, bandWorst = 1.5, 4.0
 
 // bandFloor is the least distance from the float reference a model of
@@ -508,25 +509,24 @@ const crossingPrompt = "The clerk counted barrels of salt on the upper floor of 
 // matrix unit takes (jit's gpu profile, Flash.Keys).
 const flashBlock = 32
 
-// TestComposedBlocksServe decodes dense models with each block served whole
-// by the composer from its graph (the model's front end's, from the
-// container), the prompt's blocks at the chunk's rows, and
-// the head, in main's runtime, against the tier's own
-// kernels: every block placed, with and without the captured graph, on each
-// prompt of servePanel (each of two chunks crossing several blocks of
-// positions) its last row and teacher-forced steps: 140 on crossingPrompt
-// (past the first key bound, and on a model whose sliding window cuts inside
-// its context, past the window) and panelSteps on the others. Each arm is
-// held to a float reference -- the same blocks and head formed with float
-// activations, which neither the tier nor the arm computes: its distance from
-// it may be no more than bandRatio times the tier's at the median prompt's
-// median step, and no more than bandWorst times the widest the
-// tier's own backends and llama.cpp's come at their worst: a model whose decode passes a
-// near tie (OLMo 2's fifth step) sends each implementation to one side of it
-// or the other, main's CUDA and Vulkan tiers 0.118 apart there, and the arm
-// is held to that spread, not to the side one backend's tier landed on.
-// Stats().ServedPart with ReplayedPart is the selection check, every block
-// of every step served whether emitted or replayed, a poisoned arm must change
+// TestComposedBlocksServe decodes dense models with each block served whole by
+// the composer from its graph (the model's front end's, from the container),
+// the prompt's blocks at the chunk's rows, and the head, in main's runtime,
+// against the tier's own kernels: every block placed, with and without the
+// captured graph, on each prompt of servePanel (each of two chunks crossing
+// several blocks of positions) its last row and teacher-forced steps: 140 on
+// crossingPrompt (past the first key bound, and on a model whose sliding window
+// cuts inside its context, past the window) and panelSteps on the others. Each
+// arm is held to a float reference -- the same blocks and head formed with
+// float activations, which neither the tier nor the arm computes: its distance
+// from it may be no more than bandRatio times the tier's at the median prompt's
+// median step, and no more than bandWorst times the widest the tier's own
+// backends and the GGUF oracle's come at their worst: a model whose decode
+// passes a near tie (OLMo 2's fifth step) sends each implementation to one side
+// of it or the other, main's CUDA and Vulkan tiers 0.118 apart there, and the
+// arm is held to that spread, not to the side one backend's tier landed on.
+// Stats().ServedPart with ReplayedPart is the selection check, every block of
+// every step served whether emitted or replayed, a poisoned arm must change
 // nothing, and one position off must be ten times the arm's worst: the
 // comparison discriminates.
 func TestComposedBlocksServe(t *testing.T) {
@@ -610,19 +610,19 @@ func TestComposedBlocksServe(t *testing.T) {
 				}
 				panel = append(panel, prompt{ids, toks})
 			}
-			// The band's reference first: llama.cpp's cuda arm against the float
-			// reference on every device, or the tier's where llama.cpp does not
-			// read the model (the user's decision).
+			// The band's reference first: the GGUF oracle's cuda arm against
+			// the float reference on every device, or the tier's where the GGUF
+			// oracle does not read the model (the user's decision).
 			lcppDir := os.Getenv("JITLLM_LCPP")
 			if lcppDir == "" {
-				t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of llama.cpp holding scripts/lcpplogits, the worst-step bound's oracle")
+				t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of the GGUF oracle holding scripts/lcpplogits, the worst-step bound's oracle")
 			}
 			var lcpp [][][]float32
 			for _, ngl := range []int{99, 0} {
 				for _, p := range panel {
 					lg, ok := lcppSteps(t, lcppDir, fixtureSource(path), p.ids, p.toks, ngl)
 					if !ok {
-						t.Logf("llama.cpp does not read %s: the band is held to the tier's backends", file)
+						t.Logf("the GGUF oracle does not read %s: the band is held to the tier's backends", file)
 						lcpp = nil
 						break
 					}
@@ -653,8 +653,9 @@ func TestComposedBlocksServe(t *testing.T) {
 							var tr tierRun
 							pi := len(r[g])
 							tr.ref = unsplitRef(t, m, dev, p.ids, p.toks, nn.ComposedStep, noGraph, instOpts...)
-							// Where llama.cpp does not read the model the band is
-							// the floor: the reference stands for itself.
+							// Where the GGUF oracle does not read the model the
+							// band is the floor: the reference stands for
+							// itself.
 							tr.want = tr.ref
 							if lcpp != nil {
 								tr.want = lcpp[pi]
@@ -664,7 +665,7 @@ func TestComposedBlocksServe(t *testing.T) {
 							}
 							for li := pi; li < len(lcpp); li += len(panel) {
 								if len(lcpp[li][0]) != len(tr.ref[0]) {
-									t.Fatalf("llama.cpp's logits are %d wide where the model's are %d", len(lcpp[li][0]), len(tr.ref[0]))
+									t.Fatalf("the GGUF oracle's logits are %d wide where the model's are %d", len(lcpp[li][0]), len(tr.ref[0]))
 								}
 								for i := 1; i < len(tr.ref); i++ {
 									if e := logitNMSE(lcpp[li][i], tr.ref[i]); e > widestLcpp[g] {
@@ -688,9 +689,9 @@ func TestComposedBlocksServe(t *testing.T) {
 						floor := bandFloor(m.Cfg.NLayer)
 						wide := max(widest[g], floor)
 						if lcpp != nil {
-							t.Logf("graph %v: the band's reference is the wider of llama.cpp's cuda and cpu arms, which reach %.3g at their worst step (%s)", !noGraph, widestLcpp[g], lcppAt[g])
+							t.Logf("graph %v: the band's reference is the wider of the GGUF oracle's cuda and cpu arms, which reach %.3g at their worst step (%s)", !noGraph, widestLcpp[g], lcppAt[g])
 						} else {
-							t.Logf("graph %v: llama.cpp does not read this model: the band is the floor, %.3g", !noGraph, floor)
+							t.Logf("graph %v: the GGUF oracle does not read this model: the band is the floor, %.3g", !noGraph, floor)
 						}
 						for _, a := range arms {
 							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {

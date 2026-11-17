@@ -48,7 +48,7 @@ func TestComposedCPURowsServe(t *testing.T) {
 	// A batch steps its sequences batchDecode times: its median is of
 	// ratios two runs' rounding sets apart row by row, and over 21 rows it
 	// read 0.71 and 1.73 for stories15M's q8_0 and q4_0, whose paths sit as
-	// near the float forms as llama.cpp's; over 63, 1.39 and 1.07.
+	// near the float forms as the GGUF oracle's; over 63, 1.39 and 1.07.
 	const page, decode, batchDecode = 32, 6, 20
 	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 60)

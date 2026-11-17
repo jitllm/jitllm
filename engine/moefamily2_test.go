@@ -14,7 +14,7 @@ import (
 // mixture-family harness: scripts/moegold.py builds each fixture with the
 // family's own reference class -- inclusionAI's remote code for Ling 2.0 --
 // with every parameter and the router's selection bias randomised, and writes
-// it to GGUF with llama.cpp's converter. They are appended here rather than in
+// it to GGUF with convert_hf_to_gguf.py. They are appended here rather than in
 // moefamily_test.go, so the gates are TestMoEFamiliesMatchTransformers,
 // TestMoEFamilyFeaturesAreLoadBearing, TestMoEFamiliesOnEveryDevice and
 // TestMoEFamiliesPageWithTheSameAnswer under each fixture's name.
@@ -112,7 +112,7 @@ func moe2Violations() map[string][]c6Violation {
 			{"NORM rotary for NEOX", hostNormRotary},
 		},
 		"synth-phimoe": {
-			{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
+			{"the GGUF oracle's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
 			{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
 			// The threshold moved, so the fixture's logits are known to sit near
 			// it: a router whose every other expert fell outside would weight each
@@ -183,7 +183,7 @@ func moe2DevViolations() map[string][]c6Violation {
 			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
 		},
 		"synth-phimoe": {
-			{"llama.cpp's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
+			{"the GGUF oracle's router (a renormalised softmax top-2)", llamaCppPhiMoERouter},
 			{"no sparsemixer mask (a softmax over every expert)", unmaskedSoftmax},
 			{"a threshold of zero (each weight one)", mixerEps(1e-12)},
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
@@ -195,8 +195,8 @@ func moe2DevViolations() map[string][]c6Violation {
 	}
 }
 
-// llamaCppPhiMoERouter routes Phi-3.5-MoE as llama.cpp does: a softmax top-2,
-// renormalised.
+// llamaCppPhiMoERouter routes Phi-3.5-MoE as the GGUF oracle does: a softmax
+// top-2, renormalised.
 func llamaCppPhiMoERouter(m *model.Model) func() {
 	undo := cfgMut(m, func(c *model.Config) { c.NoExpertNorm = false })
 	undoR := statedRouter(m, unstatedScore(&jlm.Config{NExpert: 2}), jlm.Expr{})

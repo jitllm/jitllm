@@ -14,7 +14,7 @@ import (
 // Gemma 4 held to transformers' own Gemma4ForCausalLM: scripts/gemma4gold.py
 // builds each fixture with random weights (layer_scalar included, which
 // transformers initialises to the identity) and writes it to GGUF with
-// llama.cpp's own converter. Every tensor is F32, so the bound is c6NMSE.
+// convert_hf_to_gguf.py. Every tensor is F32, so the bound is c6NMSE.
 
 const gemma4GoldScript = "scripts/gemma4gold.py"
 

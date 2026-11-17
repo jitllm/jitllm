@@ -942,17 +942,17 @@ func towerPairs() map[string]string {
 
 // modelConfigs are the GGUFs, relative to the model directory, that convert
 // only with their publisher's config.json (convert.WithModelConfig):
-// llama.cpp's converter names a LongRoPE it writes no factors of.
+// convert_hf_to_gguf.py names a LongRoPE it writes no factors of.
 func modelConfigs() map[string]string {
 	return map[string]string{
 		"synth-minicpmv.gguf": "vlmb/fixtures/synth-minicpmv/config.json",
 	}
 }
 
-// keyConfigs are the publisher's config.json files, under testdata, each
-// GGUF by its name converts with because it does not state a key the
-// converter reads (a sliding window) and llama.cpp assumes what the config
-// states: the same model as llama.cpp's.
+// keyConfigs are the publisher's config.json files, under testdata, each GGUF
+// by its name converts with because it does not state a key the converter reads
+// (a sliding window) and the GGUF oracle assumes what the config states: the
+// same model as the GGUF oracle's.
 func keyConfigs() map[string]string {
 	return map[string]string{"EXAONE-4.0-1.2B-Q4_K_M.gguf": "testdata/configs/EXAONE-4.0-1.2B/config.json"}
 }

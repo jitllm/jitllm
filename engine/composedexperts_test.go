@@ -219,15 +219,15 @@ func cpuExpertModels() []string {
 		"synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix}
 }
 
-// TestComposedCPUExpertPagesServe runs each mixture's blocks on the CPU
-// device composed, its banks read in the host's expert pages at a page's
-// stride, teacher-forced, against the CPU's float reference within
-// llama.cpp's spread from it (TestComposedCPUBlocksServe's band): every block step served, none
-// declined. Under a one-page budget every expert page is evicted and read
-// again from the file between the steps that use it, and the composed
-// logits are the resident run's bit for bit, the page-ins counted. With the
-// pager made to hold another expert's page than the one a kernel reads, the
-// logits leave the resident run's.
+// TestComposedCPUExpertPagesServe runs each mixture's blocks on the CPU device
+// composed, its banks read in the host's expert pages at a page's stride,
+// teacher-forced, against the CPU's float reference within the GGUF oracle's
+// spread from it (TestComposedCPUBlocksServe's band): every block step served,
+// none declined. Under a one-page budget every expert page is evicted and read
+// again from the file between the steps that use it, and the composed logits
+// are the resident run's bit for bit, the page-ins counted. With the pager made
+// to hold another expert's page than the one a kernel reads, the logits leave
+// the resident run's.
 func TestComposedCPUExpertPagesServe(t *testing.T) {
 	const steps, page = 40, 32
 	names := cpuExpertModels()
@@ -237,7 +237,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 	for _, file := range names {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
-			// A fixture llama.cpp cannot read is held to its transformers
+			// A fixture the GGUF oracle cannot read is held to its transformers
 			// class over the golden's text, forced a step a token.
 			src := fixtureSource(testmodels.Path(file))
 			fm, openOpts := cpuFloat(t, path, page)
@@ -386,7 +386,7 @@ func cpuMixtureRowsModels() []string {
 // the rows' form holds and its decode, and a batch of three sequences, each
 // prompted into its own slot and stepped together -- the sequences of
 // scripts/rowsgold.py, whose transformers rows are the band of a fixture
-// llama.cpp cannot read, over that golden's ids. Every call holds the
+// the GGUF oracle cannot read, over that golden's ids. Every call holds the
 // experts its rows pick, each once (cpuExperts), every block step served
 // and none declined, the logits within main's own spread (or, for a float
 // mixture, within f32's reduction order); under a one-page budget the

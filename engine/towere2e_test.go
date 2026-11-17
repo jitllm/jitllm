@@ -354,7 +354,7 @@ func jlmWithConfig(t *testing.T, text, proj, cfg string) string {
 }
 
 // longRopeViolations: the model converted with its LongRoPE factors restated
-// to one -- the rotary llama.cpp's GGUF runs, which drops them.
+// to one -- the rotary the GGUF oracle runs on the GGUF, which drops them.
 func longRopeViolations(x *e2eArm) {
 	t := x.t
 	raw, err := os.ReadFile(testmodels.Path(x.c.config))

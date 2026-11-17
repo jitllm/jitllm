@@ -16,7 +16,8 @@ import (
 // feature at a value that bites (scripts/hfgold.py).
 func hfDenseSelected() map[string]func(m *model.Model) bool {
 	return map[string]func(m *model.Model) bool{
-		// NoPE every THIRD layer, read off no_rope_layers rather than llama.cpp's 4.
+		// NoPE every THIRD layer, read off no_rope_layers rather than the GGUF
+		// oracle's 4.
 		"synth-hf-smollm3": func(m *model.Model) bool {
 			c := m.Cfg
 			return !c.RopeNeox && c.NoPEGlobal && windowOf(m) == 0 && m.Container.Config().SWAPeriod == 3 &&

@@ -23,8 +23,8 @@ import (
 // lcppLogProbs runs llama-perplexity from dir on gguf over text with a context
 // of nctx, saving its log-probabilities (--kl-divergence-base), and returns the
 // chunk's tokens and, for positions nctx/2 .. nctx-2, each position's
-// log-softmax over the vocabulary. llama.cpp stores them quantized to 16 bits
-// over the top 16 nats; an entry below that window comes back as -Inf. At
+// log-softmax over the vocabulary. The GGUF oracle stores them quantized to 16
+// bits over the top 16 nats; an entry below that window comes back as -Inf. At
 // ngl 0 no device is visible, so a CUDA build offloads no batch to one.
 func lcppLogProbs(t *testing.T, dir, gguf, text string, nctx int, ngl int, args ...string) ([]int32, [][]float32) {
 	t.Helper()
@@ -109,7 +109,7 @@ func logSoftmax(lg []float32) []float32 {
 }
 
 // lpDiff is the largest |a-b| over the entries both hold above the top 16 nats
-// of b (llama.cpp's window), and whether their argmaxes differ.
+// of b (the GGUF oracle's window), and whether their argmaxes differ.
 func lpDiff(a, b []float32) (float64, bool) {
 	mb := float32(math.Inf(-1))
 	ia, ib := 0, 0
@@ -131,10 +131,10 @@ func lpDiff(a, b []float32) (float64, bool) {
 	return d, ia != ib
 }
 
-// lcppSteps teacher-forces llama.cpp (scripts/lcpplogits, built in dir beside
-// its libraries) over ids then toks at ngl, returning the logits of the
-// prompt's last row and of every step, as composedDecode does; false when
-// llama.cpp does not read the file.
+// lcppSteps teacher-forces the GGUF oracle (scripts/lcpplogits, built in dir
+// beside its libraries) over ids then toks at ngl, returning the logits of the
+// prompt's last row and of every step, as composedDecode does; false when the
+// GGUF oracle does not read the file.
 func lcppSteps(t *testing.T, dir, gguf string, ids, toks []int32, ngl int) ([][]float32, bool) {
 	t.Helper()
 	tmp := t.TempDir()
@@ -190,19 +190,19 @@ const postNormText = "The history of the city begins with a small fishing villag
 // models' device logits, which sit above the 0.2-0.94 band against the host on
 // real Q4_K checkpoints, are a device defect or the model amplifying the
 // reduction-order difference every device has -- by RULE 11c's method and
-// against llama.cpp, teacher-forced over one chunk of text:
+// against the GGUF oracle, teacher-forced over one chunk of text:
 //
 //   - ONE block on the device, moved in depth: a defect in the block shows the
 //     same at every depth, amplification tracks the blocks below it. The last
 //     block, with nothing below, must sit inside the band, and the first must
 //     read several times the last.
-//   - what two independent engines differ by on the same file: llama.cpp's
+//   - what two independent engines differ by on the same file: the GGUF oracle's
 //     own CUDA build against its CPU build, and jitllm's host against
-//     llama.cpp's CPU. jitllm's device against its host may not exceed the
-//     larger by half. llama.cpp's cross-backend figure alone moves with its
+//     the GGUF oracle's CPU. jitllm's device against its host may not exceed the
+//     larger by half. The GGUF oracle's cross-backend figure alone moves with its
 //     build (OLMo 2: 1.157 from an sm_86 build, 0.693 from an sm_70
 //     one) while jitllm's Vulkan arm reads 1.106 on both, as far
-//     from the host as the host is from llama.cpp (0.977).
+//     from the host as the host is from the GGUF oracle (0.977).
 //   - jitllm's host against itself with only the KV cache's width changed
 //     (f16 V against f32): a perturbation with no device in it at all.
 //
@@ -217,13 +217,13 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 		models = strings.Split(v, ",")
 	}
 	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal")
-	// The oracles: a CPU build of llama.cpp (JITLLM_LLAMACPP_CPU, a directory
-	// holding llama-perplexity and its libraries) and, optionally, the CUDA
-	// build in JITLLM_LCPP.
+	// The oracles: a CPU build of the GGUF oracle (JITLLM_LLAMACPP_CPU, a
+	// directory holding llama-perplexity and its libraries) and, optionally,
+	// the CUDA build in JITLLM_LCPP.
 	cpuDir := os.Getenv("JITLLM_LLAMACPP_CPU")
 	if cpuDir == "" {
 		t.Skip("JITLLM_LLAMACPP_CPU is unset: it names the directory of a CPU build of " +
-			"llama.cpp (llama-perplexity and its libraries), the oracle this gate " +
+			"the GGUF oracle (llama-perplexity and its libraries), the oracle this gate " +
 			"compares against -- this gate proved nothing")
 	}
 	cudaDir := os.Getenv("JITLLM_LCPP")
@@ -242,7 +242,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(cudaDir, "libggml-cuda.so")); cudaDir != "" && err == nil {
 				_, lg := lcppLogProbs(t, cudaDir, gguf, postNormText, nctx, 99)
 				lcGPU, _ = lpWorst(lg, lc)
-				t.Logf("%-38s max|dlogp| %.3f", "llama.cpp cuda vs its cpu", lcGPU)
+				t.Logf("%-38s max|dlogp| %.3f", "the GGUF oracle cuda vs its cpu", lcGPU)
 			}
 			path := jlmOf(t, gguf)
 			c, err := model.Open(path)
@@ -320,13 +320,13 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			host := decode(nil, false, 1)
 			host32 := decode(nil, true, 1)
 			// engines is what two independent implementations of this model
-			// differ by: llama.cpp's CUDA build against its CPU build, and
-			// jitllm's host against llama.cpp's CPU. The larger is the band a
-			// device is held to.
-			engines := report("jitllm host vs llama.cpp cpu", host, lc)
-			who := "jitllm's host against llama.cpp's cpu"
+			// differ by: the GGUF oracle's CUDA build against its CPU build,
+			// and jitllm's host against the GGUF oracle's CPU. The larger is
+			// the band a device is held to.
+			engines := report("jitllm host vs the GGUF oracle cpu", host, lc)
+			who := "jitllm's host against the GGUF oracle's cpu"
 			if lcGPU > engines {
-				engines, who = lcGPU, "llama.cpp's own cuda against its cpu"
+				engines, who = lcGPU, "the GGUF oracle's own cuda against its cpu"
 			}
 			report("jitllm host, f32 KV vs f16 KV", host32, host)
 			bent := decode(nil, true, 1.05)
@@ -344,7 +344,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 						return decode(g, true, 1, WithPlacement(pl))
 					}
 					all := decode(g, true, 1)
-					report(spec+" vs llama.cpp cpu", all, lc)
+					report(spec+" vs the GGUF oracle cpu", all, lc)
 					whole := report(spec+" vs host", all, host32)
 					if shared > 0 {
 						// A KV-sharing reader runs only beside its source

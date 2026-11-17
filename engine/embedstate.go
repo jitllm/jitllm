@@ -29,7 +29,7 @@ type embedMode struct {
 	total int // positions in the sequence
 	// out is the readout (Instance.readout): through the dense heads, or with
 	// raw (Embedder.skipDense) before them, normalised as norm asks
-	// (llama.cpp's embd_normalize; 2 is unit length).
+	// (EmbedNorm's codes; 2 is unit length).
 	out  []float32
 	raw  bool
 	norm float32
@@ -142,7 +142,7 @@ func readsRowWindows(gr *graph.Graph) bool {
 
 // embedPrefill runs ids from position zero and leaves the composer's readout
 // in out: through the dense heads, or with raw before them, normalised as
-// llama.cpp's embd_normalize norm asks.
+// norm asks (EmbedNorm's codes).
 func (s *Instance) embedPrefill(ids []int32, out []float32, raw bool, norm int) error {
 	c := s.c
 	if len(ids) > s.maxSeq {

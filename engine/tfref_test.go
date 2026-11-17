@@ -21,8 +21,8 @@ import (
 // TestTeacherForcedAgainstReference feeds a fixed id sequence and compares the
 // logits at every row from the prompt's last on with a reference's own -- a
 // transformers run over the same ids -- argmax, margin and NMSE. It is the
-// instrument for a real checkpoint whose llama.cpp graph is not the model's
-// (RULE 7m): which engine is right at a confident disagreement is the
+// instrument for a real checkpoint whose graph in the GGUF oracle is not the
+// model's (RULE 7m): which engine is right at a confident disagreement is the
 // reference's call.
 //
 //	JITLLM_REF_MODEL    a GGUF or container

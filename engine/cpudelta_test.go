@@ -172,12 +172,12 @@ func linearRun(t *testing.T, m *model.Model, prompt, toks []int32, f cpuFault, i
 }
 
 // TestComposedCPUDeltaFeaturesAreLoadBearing holds a hybrid's decode on the
-// composed CPU, its linear blocks the composer's delta rule, to the CPU's
-// float reference within llama.cpp's spread from it (TestComposedCPUBlocksServe's
-// band), and drops each of the delta rule's
-// features from the statement in turn -- the decay, the output gate, the
-// key's norm, the convolution -- and binds each block to another block's
-// state (cpuFaultRec): each must leave the band.
+// composed CPU, its linear blocks the composer's delta rule, to the CPU's float
+// reference within the GGUF oracle's spread from it
+// (TestComposedCPUBlocksServe's band), and drops each of the delta rule's
+// features from the statement in turn -- the decay, the output gate, the key's
+// norm, the convolution -- and binds each block to another block's state
+// (cpuFaultRec): each must leave the band.
 func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 	const steps, page = 40, 32
 	path := jlmOf(t, testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"))

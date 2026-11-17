@@ -18,15 +18,16 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// tieMargin is how close the top two logits must be for a disagreement with
-// llama.cpp to be acceptable. It duplicates the constant in forward_test.go,
+// tieMargin is how close the top two logits must be for a disagreement with the
+// GGUF oracle to be acceptable. It duplicates the constant in forward_test.go,
 // which is in the internal test package.
 const tieMargin = 0.5
 
-// partedEarly reports whether jitllm's chain parted from llama.cpp's ids at
-// token i-1 although the text still matched there: llama.cpp's token extends
-// jitllm's as text (" then" against " the"), so the text comparison sees the
-// parting one token late. want is llama.cpp's own ids for the continuation.
+// partedEarly reports whether jitllm's chain parted from the GGUF oracle's ids
+// at token i-1 although the text still matched there: the GGUF oracle's token
+// extends jitllm's as text (" then" against " the"), so the text comparison
+// sees the parting one token late. want is the GGUF oracle's own ids for the
+// continuation.
 func partedEarly(m *model.Model, out, want []int32, i int) bool {
 	if i == 0 || i > len(want) || !slices.Equal(out[:i-1], want[:i-1]) || out[i-1] == want[i-1] {
 		return false
@@ -35,28 +36,28 @@ func partedEarly(m *model.Model, out, want []int32, i int) bool {
 	return len(b) > len(a) && strings.HasPrefix(b, a)
 }
 
-// sidesWithTheSessionRun reports whether jitllm's chain, where it left
-// llama.cpp's plain run's text at token i, is token for token the run that
-// saved the session (want) through token i. The greedy chain is compared as
-// text against the plain run, and the session run is a second llama.cpp answer
-// whose reduction order differs; where the two part, llama.cpp disagrees with
+// sidesWithTheSessionRun reports whether jitllm's chain, where it left the GGUF
+// oracle's plain run's text at token i, is token for token the run that saved
+// the session (want) through token i. The greedy chain is compared as text
+// against the plain run, and the session run is a second oracle answer whose
+// reduction order differs; where the two part, the GGUF oracle disagrees with
 // itself and a chain that follows one of them has no oracle to fail against.
 // google_gemma-3-4b-it-Q4_K_M at "The capital of France is", token 14: the
 // plain CPU run says "," (and on to " on the Seine River."), the session run
-// and llama.cpp's CUDA run say ".", jitllm "." by 0.879.
+// and the GGUF oracle's CUDA run say ".", jitllm "." by 0.879.
 func sidesWithTheSessionRun(out, want []int32, i int) bool {
 	return i < len(out) && i < len(want) && slices.Equal(out[:i+1], want[:i+1])
 }
 
-// recordedNearTies are teacher-forced positions where no two engines agree,
-// so a margin there says how one host rounded rather than whether the graph
-// is right. Apertus-8B's token 11 after "The capital of France is Paris,
-// which is also the country's largest city.": llama.cpp " region" on an x86
-// Xeon and " urban" on the M4, transformers' float32 checkpoint " not" with
-// " Paris" outside its top five, jitllm " thus" at a 0.19 margin on the Xeon
-// (its f16 cache) and " Paris" at 0.80 on the M4 (its f32 cache), " best" at
-// 0.87 with the M4's cache at f16. Its residual stream reaches 2.6e4, and the
-// two hosts' 7e-4 apart after layer 0's MLP are 16% apart at the output norm
+// recordedNearTies are teacher-forced positions where no two engines agree, so
+// a margin there says how one host rounded rather than whether the graph is
+// right. Apertus-8B's token 11 after "The capital of France is Paris, which is
+// also the country's largest city.": the GGUF oracle " region" on an x86 Xeon
+// and " urban" on the M4, transformers' float32 checkpoint " not" with " Paris"
+// outside its top five, jitllm " thus" at a 0.19 margin on the Xeon (its f16
+// cache) and " Paris" at 0.80 on the M4 (its f32 cache), " best" at 0.87 with
+// the M4's cache at f16. Its residual stream reaches 2.6e4, and the two hosts'
+// 7e-4 apart after layer 0's MLP are 16% apart at the output norm
 // (docs/engineering-history/model-correctness.md, "Apertus").
 func recordedNearTies() map[string]map[string]int {
 	return map[string]map[string]int{
@@ -64,18 +65,18 @@ func recordedNearTies() map[string]map[string]int {
 	}
 }
 
-// TestGreedyMatchesLlamaCpp decodes the same prompt on jitllm and on llama.cpp
-// and requires the text to agree. It is the test that catches a wrong graph:
-// the internal reference is an oracle for kernels, not for the architecture,
-// and only an independent implementation of the model is. It decodes 20 tokens
-// because a wrong graph can get the first few right.
+// TestGreedyMatchesLlamaCpp decodes the same prompt on jitllm and on the GGUF
+// oracle and requires the text to agree. It is the test that catches a wrong
+// graph: the internal reference is an oracle for kernels, not for the
+// architecture, and only an independent implementation of the model is. It
+// decodes 20 tokens because a wrong graph can get the first few right.
 func TestGreedyMatchesLlamaCpp(t *testing.T) { greedyMatchesLlamaCpp(t) }
 
 // greedyMatchesLlamaCpp is TestGreedyMatchesLlamaCpp with extra on every model it opens.
 func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 	lcpp := os.Getenv("JITLLM_LCPP")
 	if lcpp == "" {
-		t.Skip("set JITLLM_LCPP to a llama.cpp build directory holding llama-completion")
+		t.Skip("set JITLLM_LCPP to a GGUF oracle build directory holding llama-completion")
 	}
 	bin := lcppBin(lcpp, "llama-completion")
 	if _, err := os.Stat(bin); err != nil {
@@ -116,29 +117,29 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 		if strings.Contains(name, "stories") || strings.Contains(name, "260K") {
 			continue // toy models babble; there is nothing to agree about
 		}
-		// synth-llama4's chunk and temperature floor are 4, which llama.cpp
-		// hardcodes at 8192, so llama.cpp runs a different model. Its oracle is
+		// synth-llama4's chunk and temperature floor are 4, which the GGUF
+		// oracle hardcodes at 8192, so it runs a different model. Its oracle is
 		// transformers (TestSynthLlama4MatchesTransformers).
 		if strings.HasPrefix(name, "synth-llama4") {
 			continue
 		}
 		// synth-exaone4 slides a window on three layers in four, as the 32B
-		// does; llama.cpp's exaone4 turns sliding off for any model that is not
-		// 64 layers deep, so on four layers it runs every layer global and
-		// rotated -- a different model. Its oracle is transformers
-		// (TestC6MatchesTransformers); the real 1.2B, which slides nothing,
-		// is held to llama.cpp here.
+		// does; the GGUF oracle's exaone4 turns sliding off for any model that
+		// is not 64 layers deep, so on four layers it runs every layer global
+		// and rotated -- a different model. Its oracle is transformers
+		// (TestC6MatchesTransformers); the real 1.2B, which slides nothing, is
+		// held to the GGUF oracle here.
 		if strings.HasPrefix(name, "synth-exaone4") {
 			continue
 		}
-		// A phimoe model is PhimoeForCausalLM, whose LayerNorm llama.cpp runs
-		// as an RMSNorm plus a bias and whose sparsemixer router it runs as a
-		// renormalised softmax top-2 -- a different model (RULE 7m, chosen:
-		// the class). synth-phimoe's oracle is transformers
+		// A phimoe model is PhimoeForCausalLM, whose LayerNorm the GGUF oracle
+		// runs as an RMSNorm plus a bias and whose sparsemixer router it runs
+		// as a renormalised softmax top-2 -- a different model (RULE 7m,
+		// chosen: the class). synth-phimoe's oracle is transformers
 		// (TestMoEFamiliesMatchTransformers); the real checkpoints' is
 		// transformers on the GGUF's own weights (scripts/phimoestream.py).
-		// Read off the file, not the name: Phi-mini-MoE carries no "phimoe"
-		// in its name and parted from llama.cpp at a 2.7 margin.
+		// Read off the file, not the name: Phi-mini-MoE carries no "phimoe" in
+		// its name and parted from the GGUF oracle at a 2.7 margin.
 		if f, err := gguf.Open(path); err == nil {
 			arch, _ := f.KV["general.architecture"].String()
 			f.Close()
@@ -146,16 +147,16 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 				continue
 			}
 		}
-		// The -af fixtures state YaRN's attention_factor, which llama.cpp's
-		// converter writes as rope.scaling.yarn_attn_factor and its runtime
-		// never reads -- a different model (RULE 7m). Their oracle is
-		// transformers (TestC6MatchesTransformers).
+		// The -af fixtures state YaRN's attention_factor, which
+		// convert_hf_to_gguf.py writes as rope.scaling.yarn_attn_factor and the
+		// oracle's runtime never reads -- a different model (RULE 7m). Their
+		// oracle is transformers (TestC6MatchesTransformers).
 		if strings.HasPrefix(name, "synth-") && strings.HasSuffix(name, "-af.gguf") {
 			continue
 		}
 		// A GGUF that converts only with its publisher's config.json states
-		// what llama.cpp's converter dropped -- synth-minicpmv's LongRoPE
-		// factors, which llama.cpp runs without: a different model
+		// what convert_hf_to_gguf.py dropped -- synth-minicpmv's LongRoPE
+		// factors, which the GGUF oracle runs without: a different model
 		// (docs/divergences.md, "MiniCPM-V's text rotary"). Its oracle is
 		// transformers (TestStatedTowerMatchesTransformersEndToEnd).
 		if engine.DivergesFromLlamaCppForTest(path) {
@@ -193,14 +194,14 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 			// per-process kernel choice: on arm64 a timed choice once
 			// flipped a near-tie.
 			var opts []engine.Option
-			// Hunyuan-A13B runs on an f32 KV cache. At "The capital of
-			// France is"'s tenth position its 64-expert router holds the 8th
-			// and 9th experts 1e-4 apart in most blocks, and which side the
-			// cascade falls on is decided by precision, not graph: transformers
-			// on the file's own weights says "<th", as llama.cpp's default
+			// Hunyuan-A13B runs on an f32 KV cache. At "The capital of France
+			// is"'s tenth position its 64-expert router holds the 8th and 9th
+			// experts 1e-4 apart in most blocks, and which side the cascade
+			// falls on is decided by precision, not graph: transformers on the
+			// file's own weights says "<th", as the GGUF oracle's default
 			// (flash attention) and jitllm's f32 cache do; jitllm's f16 cache
-			// and llama.cpp without flash attention say " capital", and the
-			// final margin, 10.5, is no measure of how near the tie sat
+			// and the GGUF oracle without flash attention say " capital", and
+			// the final margin, 10.5, is no measure of how near the tie sat
 			// upstream (model-correctness.md, "hunyuan"). The oracle runs its
 			// default, so jitllm runs the width that agrees with the reference
 			// there; every other position, and the f16 cache on every other
@@ -250,24 +251,24 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 					}
 				}
 
-				// Offload llama.cpp when the model fits the card; its CPU and
-				// CUDA paths agree on the graph, and offload is faster.
+				// Offload the GGUF oracle when the model fits the card; its CPU
+				// and CUDA paths agree on the graph, and offload is faster.
 				ngl := "99"
 				if fi, err := os.Stat(path); err == nil && fi.Size() > 3<<30/2 {
 					ngl = "0"
 				}
-				// -c 512 is required: otherwise llama.cpp allocates the training
-				// context (131072 for some models), tens of GB of KV cache. A
-				// failed offload falls back to the CPU. sess != "" saves the ids
-				// to that file (--prompt-cache-all).
+				// -c 512 is required: otherwise the GGUF oracle allocates the
+				// training context (131072 for some models), tens of GB of KV
+				// cache. A failed offload falls back to the CPU. sess != ""
+				// saves the ids to that file (--prompt-cache-all).
 				//
-				// llama.cpp runs MiniMax Sparse Attention only under flash
-				// attention and otherwise attends to every block -- a different
-				// model. Its default, -fa auto, turns flash attention off when
-				// the layer's device has no kernel for the head width (CUDA
-				// at synth-minimaxm3's 16), and says so only in its log, so an
-				// MSA model forces it on and a log that still reports it off
-				// is refused.
+				// The GGUF oracle runs MiniMax Sparse Attention only under
+				// flash attention and otherwise attends to every block -- a
+				// different model. Its default, -fa auto, turns flash attention
+				// off when the layer's device has no kernel for the head width
+				// (CUDA at synth-minimaxm3's 16), and says so only in its log,
+				// so an MSA model forces it on and a log that still reports it
+				// off is refused.
 				msa := m.Cfg.Selection() != nil && m.Cfg.Selection().Block > 1 && !m.Cfg.MLA()
 				run := func(sess, text string, n int, gs ...string) []byte {
 					for _, g := range gs {
@@ -286,7 +287,7 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 						cmd.Stderr = &log
 						if out, e := cmd.Output(); e == nil {
 							if msa && strings.Contains(log.String(), "Flash Attention not supported, set to disabled") {
-								t.Fatalf("llama.cpp turned flash attention off (-ngl %s), so it ran "+
+								t.Fatalf("the GGUF oracle turned flash attention off (-ngl %s), so it ran "+
 									"MiniMax Sparse Attention as dense attention: not this model", g)
 							}
 							return out
@@ -310,10 +311,11 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 					continue
 				}
 
-				// The teacher-forced golden is llama.cpp's own token ids, read
-				// back from its session file. Re-tokenizing its text is not the
-				// inverse of decoding (a model may emit " JO"+"B" where the
-				// canonical split is " JOB"; random-weight fixtures do often).
+				// The teacher-forced golden is the GGUF oracle's own token ids,
+				// read back from its session file. Re-tokenizing its text is
+				// not the inverse of decoding (a model may emit " JO"+"B" where
+				// the canonical split is " JOB"; random-weight fixtures do
+				// often).
 				//
 				// It is a second run because saving a session changes the first
 				// logits' reduction order; the teacher-forced arm tolerates the
@@ -323,23 +325,24 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 				llama(sess)
 				lids, err := sessionTokens(sess)
 				if err != nil {
-					t.Fatalf("llama.cpp's session file: %v", err)
+					t.Fatalf("the GGUF oracle's session file: %v", err)
 				}
 				// The prompt halves must match, or a tokenizer defect would be
 				// reported as a graph one.
 				if len(lids) < len(ids) || !slices.Equal(lids[:len(ids)], ids) {
-					t.Errorf("%q: llama.cpp tokenized the prompt as %v, jitllm as %v",
+					t.Errorf("%q: the GGUF oracle tokenized the prompt as %v, jitllm as %v",
 						prompt, lids[:min(len(ids), len(lids))], ids)
 					return
 				}
 				want := lids[len(ids):]
-				// The offloaded run's backend can part from llama.cpp's own CPU
-				// run: on the M4, ERNIE-4.5-0.3B's "Once upon a time" chain from
-				// llama.cpp on Metal reads "}." at position 16, where llama.cpp on
-				// the CPU reads "," from the same ids, on the M4 and on an x86 host
-				// alike, as jitllm does by 0.833. cpuSays is llama.cpp's CPU run's
-				// next token after want[:at], or -1 where the prefix does not
-				// tokenize back to the same ids.
+				// The offloaded run's backend can part from the GGUF oracle's
+				// own CPU run: on the M4, ERNIE-4.5-0.3B's "Once upon a time"
+				// chain from the GGUF oracle on Metal reads "}." at position
+				// 16, where the oracle on the CPU reads "," from the same ids,
+				// on the M4 and on an x86 host alike, as jitllm does by 0.833.
+				// cpuSays is the GGUF oracle's CPU run's next token after
+				// want[:at], or -1 where the prefix does not tokenize back to
+				// the same ids.
 				cpuSays := func(at int) int32 {
 					if ngl == "0" {
 						return -1
@@ -356,12 +359,12 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 					return got[len(fed)]
 				}
 
-				// Teacher-forced: feed llama.cpp's own ids and compare at every
-				// position. The greedy prefix below stops at the first near-tie,
-				// so on a chaotic model it measures tie luck; here both engines
-				// see identical input and a tie costs one position. It compares
-				// argmax with a margin because only llama.cpp's ids, not its
-				// logits, are available.
+				// Teacher-forced: feed the GGUF oracle's own ids and compare at
+				// every position. The greedy prefix below stops at the first
+				// near-tie, so on a chaotic model it measures tie luck; here
+				// both engines see identical input and a tie costs one
+				// position. It compares argmax with a margin because only the
+				// GGUF oracle's ids, not its logits, are available.
 				if len(want) > 0 {
 					fst := testInstance(t, m, len(ids)+len(want)+1, opts...)
 					fl, ferr := fst.Prefill(ids)
@@ -383,15 +386,15 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 						case bi == want[i]:
 							agreed++
 						case recorded && pos == i:
-							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), llama.cpp %q -- a "+
+							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), the GGUF oracle %q -- a "+
 								"recorded near-tie (recordedNearTies)", i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]))
 						case best-second > tieMargin && cpuSays(i) == bi:
-							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), llama.cpp offloaded %q and on "+
-								"the CPU %q from the same ids: llama.cpp disagrees with itself here",
+							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), the GGUF oracle offloaded %q and on "+
+								"the CPU %q from the same ids: the GGUF oracle disagrees with itself here",
 								i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]), m.Vocab.Text(bi))
 						case best-second > tieMargin:
 							t.Errorf("teacher-forced position %d: jitllm %q (margin %.3f), "+
-								"llama.cpp %q -- fed llama.cpp's own ids, so both engines saw "+
+								"the GGUF oracle %q -- fed its own ids, so both engines saw "+
 								"an identical input here and a CONFIDENT disagreement is a wrong "+
 								"answer rather than a chain that parted earlier",
 								i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]))
@@ -401,7 +404,7 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 						}
 					}
 					fst.Close()
-					t.Logf("teacher-forced: %d of %d positions agree with llama.cpp", agreed, len(want))
+					t.Logf("teacher-forced: %d of %d positions agree with the GGUF oracle", agreed, len(want))
 				}
 
 				// The greedy chain is compared as text against the ordinary run,
@@ -414,16 +417,17 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 						continue
 					}
 					if strings.HasPrefix(got, text) {
-						break // llama.cpp stopped (EOS) or its tail was trimmed inside this token
+						break // the GGUF oracle stopped (EOS) or its tail was trimmed inside this token
 					}
 					rest := text[min(len(text), len(prompt+m.Vocab.Decode(out[:i]))):]
 					rest = rest[:min(len(rest), 24)]
 					// The text matched through token i-1 only as a prefix where
-					// llama.cpp's token extends jitllm's: ERNIE's " the" against
-					// llama.cpp's " then" passes as text and the parting surfaces
-					// one token late, at "following" by 3.6, where the decision
-					// was " the" against " then" at 0.40. The verdict is the token
-					// that parted, read off llama.cpp's ids.
+					// the GGUF oracle's token extends jitllm's: ERNIE's " the"
+					// against the GGUF oracle's " then" passes as text and the
+					// parting surfaces one token late, at "following" by 3.6,
+					// where the decision was " the" against " then" at 0.40.
+					// The verdict is the token that parted, read off the GGUF
+					// oracle's ids.
 					if partedEarly(m, out, want, i) {
 						i--
 						covered = i
@@ -434,13 +438,13 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 					// engines quantize and sum differently, so near-ties may go
 					// either way.
 					if pos, ok := recordedNearTies()[name][prompt]; ok && pos == i && i > 0 {
-						t.Logf("%q: diverged at token %d, a recorded near-tie (%q at %.3f vs llama.cpp's %q...)",
+						t.Logf("%q: diverged at token %d, a recorded near-tie (%q at %.3f vs the GGUF oracle's %q...)",
 							prompt, i, m.Vocab.Text(out[i]), margins[i], rest)
 						break
 					}
 					if sidesWithTheSessionRun(out, want, i) {
-						t.Logf("%q: token %d: llama.cpp's plain run says %q... where its session run says %q, as jitllm "+
-							"does by %.3f: llama.cpp disagrees with itself here; compared up to there",
+						t.Logf("%q: token %d: the GGUF oracle's plain run says %q... where its session run says %q, as jitllm "+
+							"does by %.3f: the GGUF oracle disagrees with itself here; compared up to there",
 							prompt, i, rest, m.Vocab.Text(out[i]), margins[i])
 						covered = i
 						break
@@ -449,16 +453,16 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 						// A tie at position 0 compares nothing, so it counts as
 						// a tie for this prompt rather than a pass.
 						if i == 0 {
-							tie(prompt, fmt.Sprintf("tied at token 0 by %.3f (%q vs llama.cpp's %q...)",
+							tie(prompt, fmt.Sprintf("tied at token 0 by %.3f (%q vs the GGUF oracle's %q...)",
 								margins[i], m.Vocab.Text(out[i]), rest))
 							covered = 0
 							break
 						}
-						t.Logf("%q: diverged at token %d on a %.3f tie (%q vs llama.cpp's %q...); not a bug",
+						t.Logf("%q: diverged at token %d on a %.3f tie (%q vs the GGUF oracle's %q...); not a bug",
 							prompt, i, margins[i], m.Vocab.Text(out[i]), rest)
 						break
 					}
-					t.Errorf("token %d: jitllm %q (margin %.3f), llama.cpp %q...\n jitllm:       %q\n llama.cpp: %q",
+					t.Errorf("token %d: jitllm %q (margin %.3f), the GGUF oracle %q...\n jitllm: %q\n oracle: %q",
 						i, m.Vocab.Text(out[i]), margins[i], rest,
 						prompt+m.Vocab.Decode(out), text)
 					covered = -1
@@ -487,18 +491,18 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("GGUFs are present and not one model reached llama.cpp; this gate " +
+		t.Fatal("GGUFs are present and not one model reached the GGUF oracle; this gate " +
 			"proved nothing and a skip here would hide that (RULE 10)")
 	}
 }
 
-// llamaCppCoverage is how many tokens each model walked with llama.cpp before
-// the first near-tie, measured against llama-completion. It is a
-// record, not a floor: where a greedy chain meets a tie, and which way the tie
-// goes, depends on the host's reduction order (a one-ulp change in the rotary
-// table moved four rows, two each way), so another host parts elsewhere with
-// every position teacher-forced in agreement. The teacher-forced sweep and the
-// tie rule are what guard every position.
+// llamaCppCoverage is how many tokens each model walked with the GGUF oracle
+// before the first near-tie, measured against llama-completion. It is a record,
+// not a floor: where a greedy chain meets a tie, and which way the tie goes,
+// depends on the host's reduction order (a one-ulp change in the rotary table
+// moved four rows, two each way), so another host parts elsewhere with every
+// position teacher-forced in agreement. The teacher-forced sweep and the tie
+// rule are what guard every position.
 func llamaCppCoverage() map[string]int {
 	return map[string]int{
 		"Llama-3.2-1B-Instruct-Q4_K_M.gguf": 20,
@@ -514,7 +518,7 @@ func llamaCppCoverage() map[string]int {
 		// Held against the container streamed from safetensors, through
 		// JITLLM_GREEDY_PAIR: jitllm takes Kimi-Linear only from safetensors.
 		"moonshotai_Kimi-Linear-48B-A3B-Instruct-Q8_0-00001-of-00002.gguf": 20,
-		// A GPU server, host tier, against llama.cpp's CPU path: 20 of 20
+		// A GPU server, host tier, against the GGUF oracle's CPU path: 20 of 20
 		// teacher-forced as well.
 		"Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf": 20,
 		"synth-gptoss.gguf": 7,
@@ -533,12 +537,12 @@ func llamaCppCoverage() map[string]int {
 		"synth-starcoder2.gguf":            20,
 		"google_gemma-3-1b-it-Q4_K_M.gguf": 20,
 		// Held through JITLLM_GREEDY_PAIR (it is over the 2 GiB default): the
-		// first K-quant falcon, whose attn_qkv is Q5_1. llama.cpp ends at EOS
-		// after 11 tokens, all 11 teacher-forced positions agreeing.
+		// first K-quant falcon, whose attn_qkv is Q5_1. The GGUF oracle ends at
+		// EOS after 11 tokens, all 11 teacher-forced positions agreeing.
 		"falcon-7b-instruct.Q4_K_M.gguf": 10,
 		"tiny-qwen3moe-f32.gguf":         19,
 		"tinyllama-1.1b-q3_K_M.gguf":     7,
-		// The flagships, on a GPU server's host tier against llama.cpp's
+		// The flagships, on a GPU server's host tier against the GGUF oracle's
 		// CPU path (JITLLM_GREEDY_MODEL): every teacher-forced position agrees.
 		// The 26B compared 12 teacher-forced positions, all agreeing.
 		"gemma-4-31B-it-Q4_K_M.gguf":            20,
@@ -558,11 +562,12 @@ func llamaCppCoverage() map[string]int {
 		"SmolLM3-3B-Q4_K_M.gguf":                   20,
 		"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf": 20,
 		"AFM-4.5B-Q4_K_M.gguf":                     20,
-		// llama.cpp ends at EOS after 8 tokens, all 8 teacher-forced positions
-		// agreeing.
+		// The GGUF oracle ends at EOS after 8 tokens, all 8 teacher-forced
+		// positions agreeing.
 		"EXAONE-4.0-1.2B-Q4_K_M.gguf": 7,
-		// Against llama.cpp's MiniMax Sparse Attention, i.e. with flash attention
-		// on; its dense fallback agrees at 8 of 20 teacher-forced positions.
+		// Against the GGUF oracle's MiniMax Sparse Attention, i.e. with flash
+		// attention on; its dense fallback agrees at 8 of 20 teacher-forced
+		// positions.
 		"synth-minimaxm3.gguf": 20,
 	}
 }
@@ -576,7 +581,7 @@ func sessionTokens(path string) ([]int32, error) {
 		return nil, err
 	}
 	if len(b) < 12 || binary.LittleEndian.Uint32(b) != 0x6767736e {
-		return nil, errors.New("not a llama.cpp session file")
+		return nil, errors.New("not a GGUF oracle session file")
 	}
 	n := int(binary.LittleEndian.Uint32(b[8:]))
 	if n > (len(b)-12)/4 {
@@ -602,8 +607,8 @@ func itoa(n int) string {
 }
 
 // TestSidesWithTheSessionRunIsNarrow holds the excuse above to a chain that is
-// llama.cpp's session run token for token: a token of neither run, or a chain
-// that left the session run earlier, is still a parting the gate judges.
+// the GGUF oracle's session run token for token: a token of neither run, or a
+// chain that left the session run earlier, is still a parting the gate judges.
 func TestSidesWithTheSessionRunIsNarrow(t *testing.T) {
 	want := []int32{5, 6, 7, 8}
 	for _, c := range []struct {

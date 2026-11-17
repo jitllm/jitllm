@@ -55,8 +55,8 @@ func ModelConfigForTest(path string) string {
 }
 
 // DivergesFromLlamaCppForTest is whether the GGUF at path converts with a
-// config.json stating what llama.cpp runs without (modelConfigs), a
-// different model than llama.cpp's.
+// config.json stating what the GGUF oracle runs without (modelConfigs), a
+// different model than the GGUF oracle's.
 func DivergesFromLlamaCppForTest(path string) bool {
 	rel, err := filepath.Rel(testmodels.Dir(), path)
 	return err == nil && modelConfigs()[rel] != ""

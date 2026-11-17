@@ -49,7 +49,7 @@ func TestARequestPicksItsTemplateAsTransformersDoes(t *testing.T) {
 	}
 }
 
-// synth-commandr was written by llama.cpp's converter from Command-R's named
+// synth-commandr was written by convert_hf_to_gguf.py from Command-R's named
 // list -- default, rag and tool_use -- and a request with tools renders with
 // tool_use, one without with default. Command-R's default template never reads
 // `tools`, so a tools request is never rendered with it.

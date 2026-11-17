@@ -130,7 +130,7 @@ func k3Violations() []c6Violation {
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.DeltaDecay = jlm.DeltaDecaySoftplus() })
 		}},
-		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *model.Model) func() {
+		{"the MLA latent norms at rms_norm_eps (the GGUF oracle's)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.LatentNormEps = c.RMSEps })
 		}},
 		{"plain SwiGLU", actSwap(0)},

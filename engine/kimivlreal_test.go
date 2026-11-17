@@ -9,16 +9,16 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// TestKimiVLRealMatchesMoonshot holds the real Kimi-VL-A3B-Instruct's
-// MoonViT and projector -- its published tensors, converted by llama.cpp's
-// converter -- to Moonshot's own modeling_kimi_vl.py on the picture the
-// golden carries (scripts/kimivlreal.py): the rows within 5e-3 of Moonshot's
-// at the engine's arithmetic (Q8_0 matrices, int8 activations), and on each
-// card, every block and then half of them, within twice the CPU device's
-// distance from Moonshot's float32 (towerRunsOnTheCard, whose violation is a
-// grey picture). The text model is Kimi-VL-A3B-Thinking-2506's, whose
-// vocabulary spells the tower's markers; nothing past the tower is read. The
-// violation: the rotary's column and row pairs swapped.
+// TestKimiVLRealMatchesMoonshot holds the real Kimi-VL-A3B-Instruct's MoonViT
+// and projector -- its published tensors, converted by convert_hf_to_gguf.py --
+// to Moonshot's own modeling_kimi_vl.py on the picture the golden carries
+// (scripts/kimivlreal.py): the rows within 5e-3 of Moonshot's at the engine's
+// arithmetic (Q8_0 matrices, int8 activations), and on each card, every block
+// and then half of them, within twice the CPU device's distance from Moonshot's
+// float32 (towerRunsOnTheCard, whose violation is a grey picture). The text
+// model is Kimi-VL-A3B-Thinking-2506's, whose vocabulary spells the tower's
+// markers; nothing past the tower is read. The violation: the rotary's column
+// and row pairs swapped.
 func TestKimiVLRealMatchesMoonshot(t *testing.T) {
 	g := qvlGoldenOf(t, "real-Kimi-VL-A3B-Instruct-tower")
 	text, proj := testmodels.Path("Kimi-VL-A3B-Thinking-2506-Q4_K_M.gguf"), testmodels.Path("mmproj-Kimi-VL-A3B-Instruct-f16.gguf")

@@ -12,7 +12,7 @@ import (
 
 // The dense llama-family architectures (smollm3 and its siblings) are
 // gated by the classic-transformer (C6) harness: transformers' own class,
-// written to GGUF by llama.cpp's convert_hf_to_gguf.py (scripts/c6gold.py), on
+// written to GGUF by convert_hf_to_gguf.py (scripts/c6gold.py), on
 // decode, prefill at every length and the batch, against the host and against
 // every device. They join its lists here rather than in c6_test.go, so the
 // gates are TestC6MatchesTransformers, TestC6FeaturesAreLoadBearing and

@@ -1021,9 +1021,10 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 			if max > pg.p-1 {
 				max = pg.p - 1
 			}
-			// One lookup per chunk boundary, as vLLM and LMCache do. A hybrid
-			// probes its restore points (recpoint.go): the spaced ones, the
-			// exact end and the mark, each taken only with every summary there.
+			// One lookup per chunk boundary, the fills a partial page is
+			// sealed at (kvChunkFills). A hybrid probes its restore points
+			// (recpoint.go): the spaced ones, the exact end and the mark, each
+			// taken only with every summary there.
 			step := kvChunk
 			if kc.recurrent {
 				step = kvChunk // the spaced points and every prompt's mark are on it
@@ -1888,8 +1889,7 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 // kvChunk is the cache's addressing granularity, in positions, and it is
 // deliberately not the page size: the page size is set by the attention
 // kernel, while what a prefix cache can name is a different question. 16 is
-// vLLM's block size, not a tuned value; a shared prefix shorter than a chunk
-// misses, as it does in vLLM, SGLang and LMCache.
+// not a tuned value; a shared prefix shorter than a chunk misses.
 const kvChunk = 16
 
 // kvChunkFills is the fills a partial page is sealed at: every chunk boundary
@@ -2246,8 +2246,9 @@ func (kv *kvCache) writable(li, pos int) {
 // inside the namespace, so the store answers "which prefix is cached". A hit
 // proves every token up to that boundary matches, the longest prefix is found
 // by walking boundaries until a miss, and sessions sharing a prefix share its
-// pages. The hash is cumulative (LMCache's chunk_hash) because RoPE is applied
-// before the cache write: a span is reusable only as a prefix.
+// pages. The hash is cumulative, each boundary's key covering every token
+// before it, because RoPE is applied before the cache write: a span is
+// reusable only as a prefix.
 
 // geomDigest is everything a page's byte count cannot distinguish. Different
 // head factorizations (tinyllama, Qwen2-1.5B and gemma-2b all have kvDim 256)

@@ -473,7 +473,7 @@ func ssemKVF16(fn func(*testing.T, ...Option)) func(*testing.T, ...Option) {
 }
 
 // TestSSEModelGates runs the architecture gates -- the hybrid's four, the
-// batch transcriptions, the llama.cpp and transformers goldens, the tower --
+// batch transcriptions, the GGUF oracle and transformers goldens, the tower --
 // with every model they open on the CPU device at the SSE tier. Each is the
 // unchanged gate: what it checks on the AVX2 tier it checks here.
 func TestSSEModelGates(t *testing.T) {
@@ -488,10 +488,10 @@ func TestSSEModelGates(t *testing.T) {
 		{"HybridPrefillMatchesForward", hybridPrefillMatchesForward},
 		{"HybridBatchMatchesForward", hybridBatchMatchesForward},
 		{"HybridStateIsConstantInContext", hybridStateIsConstantInContext},
-		// llama.cpp's goldens use its default f16 KV cache, and one (qwen2vl)
-		// has a first token the KV width alone decides, so this arm runs the
-		// f16 cache. That also puts the SSE f16 attention kernels under a
-		// model-level gate.
+		// The GGUF oracle's goldens use its default f16 KV cache, and one
+		// (qwen2vl) has a first token the KV width alone decides, so this arm
+		// runs the f16 cache. That also puts the SSE f16 attention kernels
+		// under a model-level gate.
 		{"GreedyMatchesLlamaCpp", ssemKVF16(greedyMatchesLlamaCpp)},
 		{"BatchMatchesForward", batchMatchesForward},
 		{"RaggedBatchMatchesForward", raggedBatchMatchesForward},

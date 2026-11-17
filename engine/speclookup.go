@@ -8,9 +8,8 @@ import "slices"
 // verifies them exactly as it verifies the prediction block's drafts, with
 // the same rollback of attention by position and of a recurrence by
 // SpecRollback. Nothing runs to draft, so a round that finds no match is a
-// decode step: one row, no wasted verification. This is llama.cpp's
-// prompt lookup and vLLM's ngram proposer; the choice of n and of the latest
-// occurrence is in docs/engineering-history/model-correctness.md,
+// decode step: one row, no wasted verification. The choice of n and of the
+// latest occurrence is in docs/engineering-history/model-correctness.md,
 // "engine/speclookup.go".
 //
 // RULE 8: the search compares token ids, integers the sampler has already

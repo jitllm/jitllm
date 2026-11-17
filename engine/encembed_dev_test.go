@@ -125,7 +125,7 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 							for i := range got {
 								if i < len(g.Llamacpp) {
 									if lc := cosine(got[i], g.Llamacpp[i]); !(lc >= embedCosBound) && g.LGGUF == "" {
-										t.Errorf("text %d on %s: cosine to llama.cpp %.7f < %v", i, spec, lc, embedCosBound)
+										t.Errorf("text %d on %s: cosine to the GGUF oracle %.7f < %v", i, spec, lc, embedCosBound)
 									}
 								}
 							}

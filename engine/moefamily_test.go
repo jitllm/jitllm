@@ -17,7 +17,7 @@ import (
 // transformers' own classes: scripts/moegold.py builds each fixture with the
 // family's class and random weights -- the router's selection bias included,
 // which transformers initialises to the identity -- and writes it to GGUF with
-// llama.cpp's own converter. Every tensor is F32, so the bound is c6NMSE.
+// convert_hf_to_gguf.py. Every tensor is F32, so the bound is c6NMSE.
 
 const moeGoldScript = "scripts/moegold.py"
 

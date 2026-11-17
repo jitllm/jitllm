@@ -50,11 +50,11 @@ func bitnetRealModels() []struct {
 		// release's (six to nine reference ties within tieMargin, against two),
 		// and every position that parts is one of them, so it agrees at 95%.
 		{"bitnet-b1.58-2B-4T-bf16", "bitnet-b1.58-2B-4T-bf16", quant.TQ2_0, 2e-1, 0.95, 0},
-		// Microsoft's I2_S GGUF (microsoft/bitnet-b1.58-2B-4T-gguf, bitnet.cpp's
-		// converter), its per-tensor f32 scales carried as TQ2_F32 and its
-		// embedding F16. Its weights are neither golden's -- its scales are f32
-		// means, the release's bf16 -- so it is held to the release's within the
-		// two models' own distance.
+		// Microsoft's I2_S GGUF (microsoft/bitnet-b1.58-2B-4T-gguf, written by
+		// convert-hf-to-gguf-bitnet.py), its per-tensor f32 scales carried as
+		// TQ2_F32 and its embedding F16. Its weights are neither golden's --
+		// its scales are f32 means, the release's bf16 -- so it is held to the
+		// release's within the two models' own distance.
 		{"bitnet-b1.58-2B-4T-i2_s.gguf", "bitnet-b1.58-2B-4T", quant.TQ2_F32, 2e-1, 0.98, 2},
 	}
 }
@@ -97,9 +97,9 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 				t.Fatalf("%s does not carry BitNet's graph with %s projections: %+v", c.file, c.typ, m.Cfg)
 			}
 			// The release's tokenizer.json is the authority. Microsoft's GGUF
-			// states no tokenizer.ggml.pre, so it splits as llama.cpp's
-			// "default" does ("(n):\n" into four pieces, not tokenizer.json's
-			// two); its arm reads the golden's ids either way.
+			// states no tokenizer.ggml.pre, so it splits by the unlabelled
+			// pipeline, pretok.DefaultBPE ("(n):\n" into four pieces, not
+			// tokenizer.json's two); its arm reads the golden's ids either way.
 			gguf := strings.HasSuffix(c.file, ".gguf")
 			for _, s := range g.Seqs {
 				if got := m.Vocab.Encode(s.Text, true); !slices.Equal(got, s.Prompt) {

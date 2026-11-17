@@ -12,11 +12,11 @@ import (
 
 // TestD1OmniDecidesOverItsVoice asks d1-omni the voice request's questions
 // about its clip on the CPU device: each question's prompt after the clip's
-// rows is the reference's token for token (the options as the audio
-// questions were trained, jlm.PromptClips), and the answers are the
-// reference's (scripts/d1omnigold.py, its own code) within 0.03, the int8
-// blocks' band, and llama.cpp's within the same. The same questions with no
-// clip are the violation: their answers must part from the clip's.
+// rows is the reference's token for token (the options as the audio questions
+// were trained, jlm.PromptClips), and the answers are the reference's
+// (scripts/d1omnigold.py, its own code) within 0.03, the int8 blocks' band, and
+// the GGUF oracle's within the same. The same questions with no clip are the
+// violation: their answers must part from the clip's.
 func TestD1OmniDecidesOverItsVoice(t *testing.T) {
 	m := d1OmniOpen(t)
 	defer m.Close()
@@ -70,8 +70,8 @@ func TestD1OmniDecidesOverItsVoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	worst := checkDecisions(t, qs, ans, readDecisionGold(t, "d1-omni.voice.reference.json"), 0.03)
-	// llama.cpp writes TypeSafe's confidence where d1-omni's code writes the
-	// largest probability (docs/divergences.md): its probabilities, nouls
+	// The GGUF oracle writes TypeSafe's confidence where d1-omni's code writes
+	// the largest probability (docs/divergences.md): its probabilities, nouls
 	// and scores are held, its confidences replaced by the reference's.
 	ref, lc := readDecisionGold(t, "d1-omni.voice.reference.json"), readDecisionGold(t, "d1-omni-600M-F16.voice.llamacpp.json")
 	for id, a := range lc.Answers {
@@ -79,7 +79,7 @@ func TestD1OmniDecidesOverItsVoice(t *testing.T) {
 		lc.Answers[id] = a
 	}
 	worstL := checkDecisions(t, qs, ans, lc, 0.03)
-	t.Logf("a clip of %d rows: worst %.5f from the reference, %.5f from llama.cpp, %d prompt rows", sp.ClipRows, worst, worstL, d.InputTokens())
+	t.Logf("a clip of %d rows: worst %.5f from the reference, %.5f from the GGUF oracle, %d prompt rows", sp.ClipRows, worst, worstL, d.InputTokens())
 	deaf, err := d.Decide(state, qs, []model.Span{}...)
 	if err != nil {
 		t.Fatal(err)

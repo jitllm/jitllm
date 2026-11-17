@@ -9,7 +9,7 @@ import (
 )
 
 // TestPointerDecisionMatchesLlamaCpp holds a pointer readout
-// (jlm.Flag2MarkerPointer) to llama.cpp's answers on the same GGUF: Kev's
+// (jlm.Flag2MarkerPointer) to the GGUF oracle's answers on the same GGUF: Kev's
 // prompt from the container's program, its scores the last row's query
 // against each option's <|box_end|> row, on the CPU and with every block on
 // each card.
@@ -52,7 +52,7 @@ func TestPointerDecisionMatchesLlamaCpp(t *testing.T) {
 				t.Fatalf("%s: %v", req, err)
 			}
 			worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold+"."+req+".llamacpp.json"), c.tol)
-			t.Logf("%s: %d prompt tokens, worst difference from llama.cpp %.5f", req, d.InputTokens(), worst)
+			t.Logf("%s: %d prompt tokens, worst difference from the GGUF oracle %.5f", req, d.InputTokens(), worst)
 		}
 	}
 	t.Run("cpu", func(t *testing.T) { arm(t, nil) })

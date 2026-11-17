@@ -14,7 +14,7 @@ import (
 // The state-space hybrids (jlm.LayerSSD) held to transformers' own classes:
 // scripts/ssmgold.py builds each fixture with the family's class and random
 // weights -- A, D and the dt bias included -- and writes it to GGUF with
-// llama.cpp's own converter. Every tensor is F32, so the bound is c6NMSE. The
+// convert_hf_to_gguf.py. Every tensor is F32, so the bound is c6NMSE. The
 // golden is the class's full-sequence forward, Mamba-2's chunked scan; every
 // path here steps the recurrence, so this holds the recurrence to the scan.
 

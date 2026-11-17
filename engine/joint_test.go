@@ -40,11 +40,11 @@ func TestJointDecisionMatchesTheReference(t *testing.T) {
 		{"clef/fixture/clef-fixture.gguf", "clef-fixture", "clef-fixture", 1e-3, 2e-3},
 		// The release: its prompts, logits and answers held to Clef's own code
 		// (f32 on the BF16 weights, clefgold.py real). The band is Q8_0's
-		// rounding with the CPU's int8 activations through the backbone, as
-		// llama.cpp's: logits 0.106 and 0.181, answers 0.026 and 0.053 on the
-		// CPU (a near tie), 0.040 and 0.058, 0.014 and 0.011 on a card;
-		// llama.cpp's answers sit 0.017 and 0.038 from the reference's. Not
-		// llama.cpp's answers: its confidence is not the chosen option's
+		// rounding with the CPU's int8 activations through the backbone, as the
+		// GGUF oracle's: logits 0.106 and 0.181, answers 0.026 and 0.053 on the
+		// CPU (a near tie), 0.040 and 0.058, 0.014 and 0.011 on a card; the
+		// GGUF oracle's answers sit 0.017 and 0.038 from the reference's. Not
+		// the GGUF oracle's answers: its confidence is not the chosen option's
 		// probability (docs/divergences.md).
 		{"clef/Clef-Flash-Q8_0.gguf", "clef", "clef", 0.06, 0.2},
 	}

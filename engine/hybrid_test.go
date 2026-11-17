@@ -31,9 +31,10 @@ func init() {
 // against 32 value heads, a fused q|k|v projection, a gated double-width query,
 // a short convolution) at a tiny size, so the plumbing gates run in a second.
 //
-// It is not an arithmetic oracle for the architecture -- only llama.cpp on the
-// real weights can say that. It gates that the three entry points compute the
-// same thing, which is what the recurrent state makes fragile.
+// It is not an arithmetic oracle for the architecture -- only an independent
+// implementation on the real weights (the model's own reference, or the GGUF
+// oracle) can say that. It gates that the three entry points compute the same
+// thing, which is what the recurrent state makes fragile.
 const (
 	hyEmbd   = 32
 	hyLayer  = 4

@@ -20,7 +20,7 @@ import (
 )
 
 // qvlFixtures are the Qwen-VL family fixtures scripts/qwenvlgold.py writes:
-// transformers' own classes, converted by llama.cpp's own converter. Qwen3-VL's
+// transformers' own classes, converted by convert_hf_to_gguf.py. Qwen3-VL's
 // two (synth-qwen3vl, synth-qwen3vlmoe) add their tower's deepstack rows into
 // the text model's first blocks: their spans carry the golden's (Span.Deep)
 // on the model their pair converts to, whose tower states how many.

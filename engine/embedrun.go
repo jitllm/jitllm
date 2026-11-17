@@ -17,8 +17,8 @@ type Embedder struct {
 	// max is the tokens an embedder on a session's lease embeds at most
 	// (EmbedderFor), 0 for one with an instance of its own.
 	max int
-	// skipDense reads the vector out before any projection head, matching
-	// llama.cpp on a GGUF converted without the dense modules. Tests only.
+	// skipDense reads the vector out before any projection head, as a GGUF
+	// converted without the dense modules leaves it. Tests only.
 	skipDense bool
 }
 
@@ -83,13 +83,12 @@ func (e *Embedder) EmbedText(text string) ([]float32, error) {
 // call; copy it to keep it.
 func (e *Embedder) Embed(ids []int32) ([]float32, error) { return e.EmbedNorm(ids, NormUnit) }
 
-// NormUnit is unit length, llama.cpp's embd_normalize 2 and Embed's.
+// NormUnit is unit length, the L2 norm's p and Embed's.
 const NormUnit = 2
 
-// EmbedNorm is Embed's vector normalised as llama.cpp's embd_normalize norm
-// asks (common_embd_normalize): below 0 as the readout leaves it, 0 scaled
-// into int16's range by its largest magnitude, 2 unit length (NormUnit), any
-// other the norm-norm. The slice is Embed's.
+// EmbedNorm is Embed's vector normalised as norm asks: below 0 as the readout
+// leaves it, 0 scaled into int16's range by its largest magnitude, 2 unit
+// length (NormUnit), any other p its Lp norm. The slice is Embed's.
 func (e *Embedder) EmbedNorm(ids []int32, norm int) ([]float32, error) {
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("model: Embed called with no tokens")

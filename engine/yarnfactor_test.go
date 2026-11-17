@@ -11,7 +11,7 @@ import (
 // (convert.ropeScalingOf, rotary.json's yarn statement): a config's stated
 // attention_factor on cos and sin, else the derived one, and for the DeepSeek
 // family the score's own mscale(f, mscale_all_dim)^2. Each fixture is
-// transformers' class written to GGUF by llama.cpp's converter
+// transformers' class written to GGUF by convert_hf_to_gguf.py
 // (scripts/c6gold.py), so the gates are TestC6MatchesTransformers,
 // TestC6FeaturesAreLoadBearing and TestC6OnEveryDevice under its name; the same
 // weights as safetensors (<name>-hf) run TestSafetensorsMatchTransformers.

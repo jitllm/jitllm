@@ -39,7 +39,7 @@ type k3RealGolden struct {
 }
 
 // k3RealModels are the trained Kimi-K3 checkpoints held to the reference, each
-// relative to JITLLM_MODELS: a GGUF (llama.cpp's converter's from the
+// relative to JITLLM_MODELS: a GGUF (convert_hf_to_gguf.py's from the
 // checkpoint the golden names, or a published one), or the checkpoint's own
 // safetensors directory converted by this tree. A missing file is skipped by
 // name.
@@ -69,7 +69,7 @@ func k3RealModels() []struct {
 		flips        int
 		exact        bool
 	}{
-		// llama.cpp's convert_hf_to_gguf.py --outtype f32 on
+		// convert_hf_to_gguf.py --outtype f32 on
 		// inference-optimization/Kimi-K3-0.40B, the reference's weights exactly.
 		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-F32.gguf", 1e-8, 0, true},
 		// The published F16 conversion of it (murillo2000/Kimi-K3-0.40B-GGUF).
@@ -91,10 +91,11 @@ func k3RealModels() []struct {
 		// (real-Kimi-K3-0.40B) reads 4.3e-2, the experts' quantization, over
 		// 400 times this bound.
 		{"Kimi-K3-0.40B-MXFP4", "kimik3/Kimi-K3-0.40B-MXFP4-hf", 1e-4, 0, false},
-		// A mixed quantization: attn_q at Q4_K beside attn_k and attn_v at Q8_0,
-		// which convert.kdaJoinRows re-stores as one Q8_0 projection. Its one flip
-		// is "The capital of France" -> "ith" where the reference says " my", a
-		// 0.955 margin, and llama.cpp reading the same file answers "ith" too.
+		// A mixed quantization: attn_q at Q4_K beside attn_k and attn_v at
+		// Q8_0, which convert.kdaJoinRows re-stores as one Q8_0 projection. Its
+		// one flip is "The capital of France" -> "ith" where the reference says
+		// " my", a 0.955 margin, and the GGUF oracle reading the same file
+		// answers "ith" too.
 		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B.Q4_K_M.gguf", 2e-1, 1, false},
 		{"Kimi-K3-0.40B", "kimik3/Kimi-K3-0.40B-MXFP4.gguf", 1e-1, 1, false},
 		// convert_hf_to_gguf.py --outtype f16 on
@@ -116,7 +117,7 @@ func k3RealViolations() []c6Violation {
 	for _, v := range k3Violations() {
 		switch v.name {
 		case "the KDA decay unbounded (Kimi-Linear's softplus)",
-			"the MLA latent norms at rms_norm_eps (llama.cpp's)":
+			"the MLA latent norms at rms_norm_eps (the GGUF oracle's)":
 		default:
 			out = append(out, v)
 		}

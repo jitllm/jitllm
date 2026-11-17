@@ -21,7 +21,7 @@ import (
 
 // c6Golden is scripts/c6gold.py's golden: transformers' own class over twelve
 // fixed ids, and the family's real tokenizer over a few texts. The GGUF beside
-// it was written by llama.cpp's convert_hf_to_gguf.py from the same weights.
+// it was written by convert_hf_to_gguf.py from the same weights.
 type c6Golden struct {
 	IDs []int32 `json:"ids"`
 	Pos []struct {

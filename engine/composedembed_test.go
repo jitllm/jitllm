@@ -124,9 +124,9 @@ func worstCos(got, want [][]float32) float64 {
 	return w
 }
 
-// embedRef is the vectors g holds its model to and the bound: llama.cpp's
-// where the golden takes them on the same file -- at the reference gate's
-// 1e-4, or 0.999 where the file is quantized, llama.cpp itself short of the
+// embedRef is the vectors g holds its model to and the bound: the GGUF oracle's
+// where the golden takes them on the same file -- at the reference gate's 1e-4,
+// or 0.999 where the file is quantized, the GGUF oracle itself short of the
 // float32 model by more than that -- else sentence-transformers' at the
 // reference gate's bound.
 func embedRef(t *testing.T, g embedGolden) ([][]float32, float64, string) {
@@ -153,7 +153,7 @@ func embedRef(t *testing.T, g embedGolden) ([][]float32, float64, string) {
 				bound = 0.999
 			}
 		}
-		return vecs(g.Llamacpp), bound, "llama.cpp's"
+		return vecs(g.Llamacpp), bound, "the GGUF oracle's"
 	}
 	if len(g.ST) != len(g.Texts) {
 		t.Fatalf("%s: the golden holds no reference vectors for its %d texts", g.Model, len(g.Texts))

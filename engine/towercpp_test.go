@@ -13,22 +13,22 @@ import (
 )
 
 // TestSmolVLMTowerMatchesLlamaCpp checks SmolVLM-256M's stated tower against
-// llama.cpp, an oracle beside its reference (transformers' class, which
-// TestSmolVLMVideoMatchesTransformers holds the tower's rows to): llama.cpp's
-// own graph dump of its projector output on a checkerboard:
+// the GGUF oracle, beside its reference (transformers' class, which
+// TestSmolVLMVideoMatchesTransformers holds the tower's rows to): the GGUF
+// oracle's own graph dump of its projector output on a checkerboard:
 //
 //	llama-mtmd-debug -m SmolVLM-256M-Instruct-Q8_0.gguf \
 //	  --mmproj mmproj-SmolVLM-256M-Instruct-Q8_0.gguf --image cb -n 512 -p encode
 //
-// The debug tool builds the picture in memory as raw samples, 1 and 0 on
-// every channel, and normalises nothing, so the container is converted with
-// its normalisation restated to the identity (convert.WithPictureStep) and
-// given the checkerboard four squares a side, whose first tile -- a crop of
-// the picture every resize of the processor's leaves as it is -- is the
-// 64 rows llama.cpp encodes. The dump prints three leading and three trailing values of rows
-// 0, 1, 2, 61, 62 and 63 and the whole tensor's sum: the samples catch a
-// layout bug (the patch order, the shuffle's), the sum sees every element.
-// The bar is relative RMS: the int8 activations here against llama.cpp's
+// The debug tool builds the picture in memory as raw samples, 1 and 0 on every
+// channel, and normalises nothing, so the container is converted with its
+// normalisation restated to the identity (convert.WithPictureStep) and given
+// the checkerboard four squares a side, whose first tile -- a crop of the
+// picture every resize of the processor's leaves as it is -- is the 64 rows the
+// GGUF oracle encodes. The dump prints three leading and three trailing values
+// of rows 0, 1, 2, 61, 62 and 63 and the whole tensor's sum: the samples catch
+// a layout bug (the patch order, the shuffle's), the sum sees every element.
+// The bar is relative RMS: the int8 activations here against the GGUF oracle's
 // f32/f16 compound to ~1.5% over twelve blocks, a permutation to O(1). The
 // shipping normalisation, which the dump does not apply, is the violation.
 func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
@@ -69,11 +69,11 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		// Four squares a side: the processor's resizes of the whole picture
-		// are the identity there and its first tile is the checkerboard's
-		// corner as it is, the picture llama.cpp encodes. At the tower's own
-		// side the picture would be resized up and down again before its
-		// global view is cut.
+		// Four squares a side: the processor's resizes of the whole picture are
+		// the identity there and its first tile is the checkerboard's corner as
+		// it is, the picture the GGUF oracle encodes. At the tower's own side
+		// the picture would be resized up and down again before its global view
+		// is cut.
 		side := 4 * int(m.Container.Vision().ImageSize)
 		cb := image.NewNRGBA(image.Rect(0, 0, side, side))
 		for y := range side {
@@ -97,7 +97,7 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 			levels[v]++
 		}
 		if len(levels) != 2 || 2*levels[px[0]] != len(px) {
-			t.Fatalf("the first tile's samples take %d levels (%v): the picture was resized before it was cut, and is not llama.cpp's", len(levels), levels)
+			t.Fatalf("the first tile's samples take %d levels (%v): the picture was resized before it was cut, and is not the GGUF oracle's", len(levels), levels)
 		}
 		out, err := s.EncodePicture(cb)
 		if err != nil {
@@ -137,7 +137,7 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 	r, d := rel(raw)
 	t.Logf("against llama-mtmd-debug: relative RMS %.4f over 36 sampled values, the sum %.2f%% off", r, d*100)
 	if r > 0.05 || d > 0.05 {
-		t.Errorf("the projector output differs from llama.cpp's: relative RMS %.4f, the sum %.2f%% off (bound 5%%)", r, d*100)
+		t.Errorf("the projector output differs from the GGUF oracle's: relative RMS %.4f, the sum %.2f%% off (bound 5%%)", r, d*100)
 	}
 	vr, vd := rel(jlmOfPair(t, text, mm))
 	t.Logf("violation, SmolVLM's own normalisation: relative RMS %.4f, the sum %.2f%% off", vr, vd*100)
@@ -149,7 +149,7 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 // TestTinyOpenJevTowerMatchesLlamaCpp checks tinyopenjev-for-testing's tower
 // -- 144 wide, not a whole number of Q8 blocks, so each of its blocks reads
 // its rows widened with zeros by matrices stored 160 inputs wide -- against
-// llama.cpp's graph dump of its projector output on a checkerboard:
+// the GGUF oracle's graph dump of its projector output on a checkerboard:
 //
 //	llama-mtmd-debug -m tinyopenjev-for-testing-Q8_0.gguf \
 //	  --mmproj mmproj-tinyopenjev-for-testing-Q8_0.gguf --image cb -n 512 -p encode
@@ -220,7 +220,7 @@ func TestTinyOpenJevTowerMatchesLlamaCpp(t *testing.T) {
 			levels[p]++
 		}
 		if len(levels) != 2 || 2*levels[px[0]] != len(px) {
-			t.Fatalf("the picture's samples take %d levels (%v): it was resized, and is not llama.cpp's", len(levels), levels)
+			t.Fatalf("the picture's samples take %d levels (%v): it was resized, and is not the GGUF oracle's", len(levels), levels)
 		}
 		out, err := s.EncodePicture(cb)
 		if err != nil {
@@ -228,7 +228,7 @@ func TestTinyOpenJevTowerMatchesLlamaCpp(t *testing.T) {
 		}
 		pd := m.Cfg.NEmbd
 		if len(out) != 256*pd {
-			t.Fatalf("the picture is %d values, llama.cpp's 256 rows of %d", len(out), pd)
+			t.Fatalf("the picture is %d values, the GGUF oracle's 256 rows of %d", len(out), pd)
 		}
 		var sse, sy2, total float64
 		for i, row := range rows {
@@ -253,7 +253,7 @@ func TestTinyOpenJevTowerMatchesLlamaCpp(t *testing.T) {
 	r, d := rel(raw)
 	t.Logf("against llama-mtmd-debug: relative RMS %.4f over 36 sampled values, the sum %.2f%% off", r, d*100)
 	if r > 0.05 || d > 0.05 {
-		t.Errorf("the projector output differs from llama.cpp's: relative RMS %.4f, the sum %.2f%% off (bound 5%%)", r, d*100)
+		t.Errorf("the projector output differs from the GGUF oracle's: relative RMS %.4f, the sum %.2f%% off (bound 5%%)", r, d*100)
 	}
 	vr, vd := rel(jlmOfPair(t, text, mm))
 	t.Logf("violation, tinyopenjev's own normalisation: relative RMS %.4f, the sum %.2f%% off", vr, vd*100)

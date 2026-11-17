@@ -11,8 +11,9 @@ import (
 )
 
 // TestGemma3GlobalLayersAreLinearlyScaled: gemma-3-4b ships rope.scaling.type
-// linear with factor 8, and llama.cpp divides the global layers' rotary angles
-// by it while leaving the sliding ones alone (rope_freq_scale_train_swa = 1).
+// linear with factor 8, and the GGUF oracle divides the global layers' rotary
+// angles by it while leaving the sliding ones alone (rope_freq_scale_train_swa
+// = 1).
 //
 // The oracle is llama-eval-callback's rotated K for "The capital" (ids
 // 2 818 5279), summed over the three positions -- position 0 is an identity
@@ -23,10 +24,10 @@ import (
 // The rotated K is the history the blocks write. Its sum cancels to a few
 // units over 3072 elements, and the engines' quantization moves it by
 // percents at every layer (the local layer 4, which no scale touches, reads
-// 3.9% from llama.cpp), so the gate compares two runs, with the global
+// 3.9% from the GGUF oracle), so the gate compares two runs, with the global
 // layers' scale and without it: the local layer's history is the same bit
 // for bit, the global layer's moves, and the run with the scale is the one
-// nearer llama.cpp (the old engine read -18.774827 with it and -21.585079
+// nearer the GGUF oracle (the old engine read -18.774827 with it and -21.585079
 // without).
 func TestGemma3GlobalLayersAreLinearlyScaled(t *testing.T) {
 	path, ok := existingModel(testmodels.Path("gemma-3-4b-it-Q4_K_M.gguf"))
@@ -87,7 +88,7 @@ func TestGemma3GlobalLayersAreLinearlyScaled(t *testing.T) {
 	scaled, plain := keys(false), keys(true)
 	const want5, want4 = -18.902901, -45.731182
 	s5, p5 := sum(scaled[5]), sum(plain[5])
-	t.Logf("ids %v; global layer 5 %.6f, unscaled %.6f (llama.cpp %.6f); local layer 4 %.6f, unscaled %.6f (llama.cpp %.6f)",
+	t.Logf("ids %v; global layer 5 %.6f, unscaled %.6f (the GGUF oracle %.6f); local layer 4 %.6f, unscaled %.6f (the GGUF oracle %.6f)",
 		ids, s5, p5, want5, sum(scaled[4]), sum(plain[4]), want4)
 	switch {
 	case !slices.Equal(scaled[4], plain[4]):
@@ -95,7 +96,7 @@ func TestGemma3GlobalLayersAreLinearlyScaled(t *testing.T) {
 	case slices.Equal(scaled[5], plain[5]):
 		t.Errorf("the global layer 5's history is the same with the scale and without it: no scale was applied")
 	case !(math.Abs(s5-want5) < math.Abs(p5-want5)):
-		t.Errorf("the global layer 5's rotated K sums to %.6f, and %.6f unscaled: the unscaled run is nearer llama.cpp's %.6f",
+		t.Errorf("the global layer 5's rotated K sums to %.6f, and %.6f unscaled: the unscaled run is nearer the GGUF oracle's %.6f",
 			s5, p5, want5)
 	}
 }

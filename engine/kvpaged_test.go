@@ -1832,8 +1832,8 @@ func TestPrefixCacheHoldsAPromptShorterThanAPage(t *testing.T) {
 
 // TestPrefixCacheReusesASharedPrefix is the case a prefix cache is for: two
 // prompts sharing a prefix and then diverging. Reuse is addressed at kvChunk
-// positions, independent of the compute page (kvPageTarget), as vLLM, SGLang
-// and LMCache also keep them apart. The assertion is the tokens.
+// positions, independent of the compute page (kvPageTarget). The assertion
+// is the tokens.
 func TestPrefixCacheReusesASharedPrefix(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := model.Open(path)

@@ -5,8 +5,9 @@ import (
 	"runtime"
 )
 
-// lcppBin is a llama.cpp program in a build directory: name.exe on Windows,
-// where a shipped test binary runs these gates too, and name elsewhere.
+// lcppBin is one of the GGUF oracle's programs in a build directory: name.exe
+// on Windows, where a shipped test binary runs these gates too, and name
+// elsewhere.
 func lcppBin(dir, name string) string {
 	if runtime.GOOS == "windows" {
 		name += ".exe"

@@ -35,9 +35,9 @@ func models() map[string]string {
 }
 
 // tieMargin is how close the top two logits must be for a disagreement with
-// llama.cpp to be acceptable.
+// the GGUF oracle to be acceptable.
 //
-// jitllm and llama.cpp do not compute the same function (activation
+// jitllm and the GGUF oracle do not compute the same function (activation
 // quantization and reduction order differ), so they diverge wherever two tokens
 // are nearly tied. The gate is therefore: agree until a near-tie, and if you
 // disagree, the margin must be tiny. A disagreement with a wide margin fails.
@@ -118,7 +118,7 @@ func greedyMatchesLlamaCpp(t *testing.T, loadOpts ...Option) {
 				compared += matched
 			}
 			if compared == 0 {
-				t.Errorf("%s: no prompt compared a single token with llama.cpp -- this gate proved nothing", name)
+				t.Errorf("%s: no prompt compared a single token with the GGUF oracle -- this gate proved nothing", name)
 			}
 		})
 	}

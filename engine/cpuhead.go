@@ -80,8 +80,8 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 			return 0, s.sampleDeclined("the greedy token")
 		}
 		if smp != nil && !smp.penalties().Off() {
-			// llama.cpp's chain penalizes before its temperature sampler keeps
-			// the largest: the walk's one candidate of the penalized row.
+			// The chain penalizes before its temperature stage keeps the
+			// largest: the walk's one candidate of the penalized row.
 			if t, ok := s.penalizedGreedy(logits, smp); ok {
 				return t, nil
 			}
@@ -436,7 +436,7 @@ func (s *Instance) adaptive(logits []float32, a nn.DrawArgs, w [6]float32) bool 
 // transform of the distribution the draw a reads over logits, then the
 // row's draw over the transformed logits at temperature 1. The drawn token's
 // probability under the chain's distribution goes into the average at the
-// next draw, as llama.cpp's accept takes it in.
+// next draw, as the sampler's accept step takes it in.
 func (s *Instance) adaptiveDraw(logits []float32, a nn.DrawArgs, smp *Sampler, u float32) (int32, bool) {
 	smp.adDrew = smp.adaptiveWords()
 	if !s.adaptive(logits, a, smp.adDrew) {

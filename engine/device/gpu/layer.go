@@ -3080,8 +3080,8 @@ func (g *devTier) canRecord() bool {
 
 // scoreGrain rounds the score grid's position count up to a multiple of itself.
 //
-// The rounding keeps the sequence stable for a run of tokens, re-capturing when
-// it rolls over, as llama.cpp pads its KV length. It costs a little arithmetic
+// A captured graph has a fixed shape, so the rounding keeps the sequence stable
+// for a run of tokens and re-captures when it rolls over. It costs a little arithmetic
 // and no correctness: AttnScores clamps its thread index with n read from a
 // buffer, so surplus groups recompute and store the same last score. It rounds
 // on both arms of the graph A/B so they do the same device work.

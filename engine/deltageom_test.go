@@ -21,7 +21,7 @@ type deltaGeom struct {
 	Rep     int // value heads per key head
 	QkBytes int // q and k each occupy kHeads*kDim of the convolved channels
 	// tiled pairs value head vh with key head vh % kHeads instead of vh / rep:
-	// the order llama.cpp's qwen35 converter writes the value heads in. See
+	// the order a qwen35 GGUF holds the value heads in. See
 	// keyHead.
 	Tiled bool
 	// ssd is Mamba-2's selective update in place of the delta rule (see

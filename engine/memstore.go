@@ -20,8 +20,7 @@ import (
 // prefix cache: a prompt's first page is written first, so it would be the
 // first to go, and a restore stops at the first page it misses -- every page
 // after it would be held for nothing. Dropping the tail first shortens the
-// prefix a restore reaches by one page at a time instead (vLLM and SGLang
-// evict a radix tree's leaves first for the same reason). A pass is the run of
+// prefix a restore reaches by one page at a time instead. A pass is the run of
 // operations until a layer's first page is touched a second time: a prompt
 // touches each layer's first page once, whatever order it walks the layers
 // in. Dropping any

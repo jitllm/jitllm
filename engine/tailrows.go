@@ -6,8 +6,8 @@ package engine
 // a staged GEMM dequantizing all its weights for 2 live rows, the attention
 // over the padding. On a V100 with Llama-3.2-1B Q4_K_M the 2-row chunk ran
 // 6.7 ms of kernels where a decode token runs about 1.6, and a 514-token
-// prompt took 30% longer than a 512-token one. llama.cpp runs a batch that
-// small as a matvec.
+// prompt took 30% longer than a 512-token one: a batch that small is a
+// matvec's work.
 //
 // A ragged step of the chunk's rows (nn.RowsDevice, one sequence, the slot its
 // position) is that matvec: the tier's decode kernel carrying every live row

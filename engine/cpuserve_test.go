@@ -45,7 +45,7 @@ func cpuServedModels() []string {
 // composer forms them (its int8 form: activations quantized in windows of
 // 32, integer dots), teacher-forced on one token sequence, the history in the
 // session's KV pages, and holds them to the CPU's float reference by
-// llama.cpp's spread from it (cpuReference, the user's decision): at the
+// the GGUF oracle's spread from it (cpuReference, the user's decision): at the
 // median step no further than bandRatio times the band, at the worst no
 // further than bandWorst times its widest. Every block step must be served
 // (served = steps x blocks, nothing declined, each block composed once), and
@@ -250,18 +250,18 @@ func cpuReference(t *testing.T, path, src string, page int, toks []int32) ([][]f
 	return ref, lcppBand(t, src, fm.Cfg.NLayer, ref, lcppSeq{toks[:1], toks[1:], nil})
 }
 
-// lcppSeq is one sequence llama.cpp is teacher-forced over: ids, then toks
-// a step each; rows picks which of its rows -- the prompt's last, then each
-// step's -- an arm's logits are, nil for every one.
+// lcppSeq is one sequence the GGUF oracle is teacher-forced over: ids, then
+// toks a step each; rows picks which of its rows -- the prompt's last, then
+// each step's -- an arm's logits are, nil for every one.
 type lcppSeq struct {
 	ids, toks []int32
 	rows      []int
 }
 
-// lcppBand is each row's band around ref, the reference's logits for seqs'
-// rows in order: the wider of llama.cpp's CUDA and CPU arms' distances from
-// them (JITLLM_LCPP), no narrower than bandFloor of layers, or bandFloor
-// where llama.cpp does not read src (the user's decision).
+// lcppBand is each row's band around ref, the reference's logits for seqs' rows
+// in order: the wider of the GGUF oracle's CUDA and CPU arms' distances from
+// them (JITLLM_LCPP), no narrower than bandFloor of layers, or bandFloor where
+// the GGUF oracle does not read src (the user's decision).
 func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcppSeq) []float64 {
 	t.Helper()
 	floor := bandFloor(layers)
@@ -274,14 +274,14 @@ func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcp
 	}
 	dir := os.Getenv("JITLLM_LCPP")
 	if dir == "" {
-		t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of llama.cpp holding scripts/lcpplogits, the band's reference")
+		t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of the GGUF oracle holding scripts/lcpplogits, the band's reference")
 	}
 	for _, ngl := range []int{99, 0} {
 		at := 0
 		for _, sq := range seqs {
 			lg, ok := lcppSteps(t, dir, src, sq.ids, sq.toks, ngl)
 			if !ok {
-				t.Logf("llama.cpp does not read %s: the band is the floor, %.3g", src, floor)
+				t.Logf("the GGUF oracle does not read %s: the band is the floor, %.3g", src, floor)
 				for i := range band {
 					band[i] = floor
 				}
@@ -296,24 +296,24 @@ func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcp
 			}
 			for _, r := range rows {
 				if at >= len(ref) || r >= len(lg) || len(lg[r]) != len(ref[at]) {
-					t.Fatalf("llama.cpp's rows do not line up with the reference's: row %d of %d at %d of %d", r, len(lg), at, len(ref))
+					t.Fatalf("the GGUF oracle's rows do not line up with the reference's: row %d of %d at %d of %d", r, len(lg), at, len(ref))
 				}
 				band[at] = max(band[at], logitNMSE(lg[r], ref[at]))
 				at++
 			}
 		}
 		if at != len(ref) {
-			t.Fatalf("llama.cpp gave %d rows where the reference has %d", at, len(ref))
+			t.Fatalf("the GGUF oracle gave %d rows where the reference has %d", at, len(ref))
 		}
 	}
 	return band
 }
 
 // rowsGolden is the transformers golden holding the band's reference for a
-// fixture llama.cpp cannot run (scripts/rowsgold.py), "" for every other: the
-// user's decision for such fixtures is the model's own reference, not
-// llama.cpp and not jitllm's CPU path. llama.cpp asserts n_expert_groups <
-// n_expert on synth-deepseek-yarn-af.
+// fixture the GGUF oracle cannot run (scripts/rowsgold.py), "" for every other:
+// the user's decision for such fixtures is the model's own reference, not the
+// GGUF oracle and not jitllm's CPU path. The GGUF oracle asserts
+// n_expert_groups < n_expert on synth-deepseek-yarn-af.
 func rowsGolden(src string) string {
 	switch filepath.Base(src) {
 	case "synth-deepseek-yarn-af.gguf", "synth-glm4moe-hf", "synth-qwen2moe-hf", "synth-ernie45moe-hf", "synth-hunyuanmoe-hf",

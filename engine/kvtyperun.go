@@ -56,7 +56,7 @@ func (s *Instance) KVBytesPerToken() int {
 
 // kvConvOps is the ops that narrow rows of floats into history format f's
 // words and widen them back, and their attributes: binary16 or bfloat16
-// halves, q8 rows or llama.cpp's blocks.
+// halves, q8 rows or GGUF quant blocks.
 func kvConvOps(f nn.KVFmt) (narrow, widen graph.OpKind, at graph.Attrs) {
 	at = graph.Attrs{Block: f.Block(), BF16: f == nn.KVBF16}
 	switch {

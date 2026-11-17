@@ -13,7 +13,7 @@ import (
 )
 
 // TestGPTOSSMatchesLlamaCppIntermediates holds gpt-oss-20b's graph to
-// llama.cpp's running graph on one token, node by node. The numbers are
+// the GGUF oracle's running graph on one token, node by node. The numbers are
 // llama-eval-callback's (b10825, CPU) for the prompt "The", token 976, on
 // gpt-oss-20b-Q4_K_M.gguf:
 //
@@ -21,9 +21,9 @@ import (
 //
 // A sum is weak alone and strong in sequence: each node is the next one's
 // input, so a missing sink, bias, norm position, YaRN magnitude, gating or
-// activation moves every sum after it. The bounds are the engines'
-// quantization noise (llama.cpp quantizes a k-quant matvec's input per 256,
-// this engine per 32).
+// activation moves every sum after it. The bounds are the engines' quantization
+// noise (the GGUF oracle quantizes a k-quant matvec's input per 256, this
+// engine per 32).
 //
 // A composed block hands back its output alone, so each node is read where
 // it can be: one of the residual's width as block 0's output, the block
@@ -152,20 +152,20 @@ func gptossMatchesLlamaCppIntermediates(t *testing.T, opts ...Option) {
 		}
 		rel := math.Abs(got-c.want) / math.Abs(c.want)
 		if !(rel <= c.tol) {
-			t.Errorf("%s (llama.cpp %s): %.6f against %.6f, relative %.2e over %.0e",
+			t.Errorf("%s (the GGUF oracle %s): %.6f against %.6f, relative %.2e over %.0e",
 				c.ours, c.theirs, got, c.want, rel, c.tol)
 			continue
 		}
-		t.Logf("%-13s %-16s %14.6f  llama.cpp %14.6f  rel %.2e", c.ours, c.theirs, got, c.want, rel)
+		t.Logf("%-13s %-16s %14.6f  the GGUF oracle %14.6f  rel %.2e", c.ours, c.theirs, got, c.want, rel)
 	}
 	// The router's choice, in score order, is exact or it is a different FFN.
 	if want := []float32{13, 21, 17, 2}; fmt.Sprint(topk) != fmt.Sprint(want) {
-		t.Errorf("layer 0 selected experts %v, llama.cpp %v", topk, want)
+		t.Errorf("layer 0 selected experts %v, the GGUF oracle %v", topk, want)
 	}
 	for i, want := range []float32{-0.7553, 3.0155, -0.6948} {
 		if d := math.Abs(float64(logits[i] - want)); !(d < 0.1) {
-			t.Errorf("logit %d: %.4f against llama.cpp's %.4f", i, logits[i], want)
+			t.Errorf("logit %d: %.4f against the GGUF oracle's %.4f", i, logits[i], want)
 		}
 	}
-	t.Logf("layer 0 experts %v; logits[0:3] %v (llama.cpp -0.7553 3.0155 -0.6948)", topk, logits[:3])
+	t.Logf("layer 0 experts %v; logits[0:3] %v (the GGUF oracle -0.7553 3.0155 -0.6948)", topk, logits[:3])
 }

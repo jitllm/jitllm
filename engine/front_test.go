@@ -137,7 +137,7 @@ func TestFrontNamesNoFamily(t *testing.T) {
 			t.Fatal(err)
 		}
 		read++
-		// llama.cpp is the reference a comment cites, not a family.
+		// The GGUF oracle's name in a comment is not a family.
 		src = bytes.ReplaceAll(src, []byte("llama.cpp"), nil)
 		if loc := family.FindIndex(src); loc != nil {
 			t.Fatalf("%s names a model family or reads the architecture: %q", file, src[loc[0]:loc[1]])

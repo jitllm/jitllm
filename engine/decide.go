@@ -633,10 +633,10 @@ func (d *Decider) groups(q *DecisionQuestion, shown []DecisionOption) ([]string,
 	return texts, groups, nil
 }
 
-// render is the systemone template over one question, given the inputs
-// llama.cpp's server gives it: id, type, instructions, state and the
-// options, each with its key, description and label, and an empty image
-// list. Variant 1 shows the options reversed, the labels in their order.
+// render is the systemone template over one question, given id, type,
+// instructions, state and the options, each with its key, description and
+// label, and an empty image list. Variant 1 shows the options reversed, the
+// labels in their order.
 func (d *Decider) render(state jinja.Value, q *DecisionQuestion, opts []DecisionOption, labels []string, v int) (string, error) {
 	n := len(opts)
 	list := make([]jinja.Value, n)

@@ -21,7 +21,7 @@ type kvLayout struct {
 }
 
 // quantized is whether the layout's rows are quantized whole (q8 rows or
-// llama.cpp's blocks).
+// GGUF quant blocks).
 func (l kvLayout) quantized() bool { return l.fmt.Quantized() }
 
 // slots is how many float32 slots a run of n elements occupies. n is always a

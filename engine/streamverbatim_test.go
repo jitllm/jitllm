@@ -13,7 +13,7 @@ import (
 // TestStreamedVerbatimBankMatchesTheResidentOne is the streamed-bank gate
 // (TestStreamedExpertBankMatchesTheResidentOne) on a mixture whose routed
 // banks the container carries verbatim: synth-qwen2moe quantized to IQ4_NL by
-// llama.cpp's llama-quantize. Its sheets are the bank's own blocks, an
+// llama-quantize. Its sheets are the bank's own blocks, an
 // expert's rows a run of them, as a float bank's are its rows; gathered and
 // sent direct, each streamed arm is the resident bank's answer bit for bit,
 // under a page budget that evicts so the routed sheets are read.

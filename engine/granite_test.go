@@ -11,9 +11,9 @@ import (
 )
 
 // TestGraniteMatchesLlamaCppValues holds Granite's four scaling constants to
-// llama.cpp's own intermediates, because the greedy gate cannot see two of
-// them: logit_scale DIVIDES every logit by one positive number, which moves no
-// argmax, and a wrong residual scale is a fluent model on a short prompt.
+// the GGUF oracle's own intermediates, because the greedy gate cannot see two
+// of them: logit_scale DIVIDES every logit by one positive number, which moves
+// no argmax, and a wrong residual scale is a fluent model on a short prompt.
 //
 // The oracle is llama-eval-callback on the same GGUF, same prompt:
 //
@@ -72,7 +72,7 @@ func TestGraniteMatchesLlamaCppValues(t *testing.T) {
 			defer m.Close()
 			ids := m.Vocab.Encode("The capital", true)
 			if len(ids) != len(tc.ids) || ids[0] != tc.ids[0] || ids[1] != tc.ids[1] {
-				t.Fatalf("ids %v, llama.cpp's %v", ids, tc.ids)
+				t.Fatalf("ids %v, the GGUF oracle's %v", ids, tc.ids)
 			}
 			var lOut0 [][6]float32
 			trace := WithTrace(func(l int, name string, v []float32) {
@@ -93,7 +93,7 @@ func TestGraniteMatchesLlamaCppValues(t *testing.T) {
 				sum += float64(x)
 			}
 			got := ends(logits)
-			t.Logf("l_out-0 %v (llama.cpp %v), logits sum %.3f (llama.cpp %.3f), ends %v (llama.cpp %v)",
+			t.Logf("l_out-0 %v (the GGUF oracle %v), logits sum %.3f (the GGUF oracle %.3f), ends %v (the GGUF oracle %v)",
 				lOut0, tc.lOut0, sum, tc.logitsSum, got, tc.logits)
 			if len(lOut0) != 2 {
 				t.Fatalf("traced block 0 at %d positions, want 2", len(lOut0))
@@ -101,17 +101,17 @@ func TestGraniteMatchesLlamaCppValues(t *testing.T) {
 			for p := range lOut0 {
 				for i := range lOut0[p] {
 					if d := math.Abs(float64(lOut0[p][i] - tc.lOut0[p][i])); !(d < 0.02) {
-						t.Errorf("block 0 output, position %d value %d: %.4f against llama.cpp's %.4f",
+						t.Errorf("block 0 output, position %d value %d: %.4f against the GGUF oracle's %.4f",
 							p, i, lOut0[p][i], tc.lOut0[p][i])
 					}
 				}
 			}
 			if rel := math.Abs(sum-tc.logitsSum) / math.Abs(tc.logitsSum); !(rel < 0.05) {
-				t.Errorf("logits sum to %.3f against llama.cpp's %.3f (%.1f%%)", sum, tc.logitsSum, 100*rel)
+				t.Errorf("logits sum to %.3f against the GGUF oracle's %.3f (%.1f%%)", sum, tc.logitsSum, 100*rel)
 			}
 			for i := range got {
 				if d := math.Abs(float64(got[i] - tc.logits[i])); !(d < 0.25) {
-					t.Errorf("logit %d is %.4f against llama.cpp's %.4f", i, got[i], tc.logits[i])
+					t.Errorf("logit %d is %.4f against the GGUF oracle's %.4f", i, got[i], tc.logits[i])
 				}
 			}
 

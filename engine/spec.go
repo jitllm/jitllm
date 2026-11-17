@@ -23,7 +23,7 @@ import (
 // every emitted token is the trunk's argmax over exactly the tokens plain
 // decode would have fed.
 //
-// The graph, the round, and the row pairing chosen against vLLM's:
+// The graph, the round and the row pairing, and why:
 // docs/engineering-history/model-correctness.md, "engine/spec.go".
 
 // SpecRollback is how a rejected verification takes a hybrid's recurrent state
@@ -129,10 +129,9 @@ func WithSpecLogits() SpecOption { return func(o *specOpts) { o.logits = true } 
 func WithSpecDraft(k int) SpecOption { return func(o *specOpts) { o.draft = max(k, 0) } }
 
 // WithSpecMinP stops a round's drafting at the first draft the prediction
-// block gives less than p of its probability (Strata's spec_min_p): a draft it
-// is unsure of is likely rejected, and the rows it would add to the
-// verification cost more than they return. Zero, the default, drafts every
-// round to the chosen count.
+// block gives less than p of its probability: a draft it is unsure of is
+// likely rejected, and the rows it would add to the verification cost more
+// than they return. Zero, the default, drafts every round to the chosen count.
 func WithSpecMinP(p float64) SpecOption { return func(o *specOpts) { o.minP = p } }
 
 // WithSpecRollback chooses how a hybrid's recurrent state is taken back; see
@@ -316,8 +315,7 @@ type Speculator struct {
 	// prediction block still runs every row, and the gate exercises
 	// acceptance, partial acceptance and rejection at rates it chooses -- the
 	// only way a fixture with random weights, whose block never agrees with
-	// its trunk, reaches the accepting paths (Strata's spec_oracle and
-	// spec_corrupt).
+	// its trunk, reaches the accepting paths.
 	oracle  []int32
 	corrupt int
 	drafted int64 // proposals made, which corrupt counts

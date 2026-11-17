@@ -18,13 +18,13 @@ import (
 // The embedding gates. Each model's golden (scripts/embedgold.py) carries two
 // independent references for the same six texts:
 //
-//	llamacpp  llama.cpp b10825's llama-embedding on the CPU, from the same
-//	          GGUF (or, for EmbeddingGemma, the same weights in llama.cpp's
-//	          spelling -- see embedgold.py)
+//	llamacpp  the GGUF oracle's llama-embedding (build b10825) on the CPU,
+//	          from the same GGUF (or, for EmbeddingGemma, the same weights in
+//	          the oracle's spelling -- see embedgold.py)
 //	st        sentence-transformers in float32 on the model's own checkpoint:
 //	          the arithmetic the weights were trained against
 //
-// plus llama.cpp's token ids, which the tokenizer must reproduce exactly.
+// plus the GGUF oracle's token ids, which the tokenizer must reproduce exactly.
 //
 // The models live in $JITLLM_MODELS/embed/ and NOT beside the generators, on
 // purpose: every sweep over *.gguf in the model directory builds a decoder
@@ -75,7 +75,7 @@ func openEmbedModel(t *testing.T, g embedGolden, opts ...Option) (*model.Model, 
 	src, ok := existingModel(testmodels.Path(filepath.Join("embed", g.GGUF)))
 	if !ok {
 		testmodels.Missing(t, "MODEL MISSING: embed/%s (set JITLLM_MODELS to the model directory; "+
-			"scripts/embedgold.py names the Ollama registry blob) -- this gate proved nothing", g.GGUF)
+			"scripts/embedgold.py names the registry blob) -- this gate proved nothing", g.GGUF)
 	}
 	instOpts := opts
 	m, err := model.Open(jlmOf(t, src))
@@ -107,16 +107,16 @@ func l2(a []float32) float64 {
 	return math.Sqrt(s)
 }
 
-// quantSlack is how much further from the float32 reference than llama.cpp a
-// quantized file may land: with Q8_0 weights llama.cpp itself reaches only
-// ~0.999 of the float32 model, so the engine owes being as faithful as the
-// other engine reading the same bytes.
+// quantSlack is how much further from the float32 reference than the GGUF
+// oracle a quantized file may land: with Q8_0 weights the GGUF oracle itself
+// reaches only ~0.999 of the float32 model, so the engine owes being as
+// faithful as the other engine reading the same bytes.
 const quantSlack = 2e-4
 
-// crossArchSlack is how far llama.cpp's own per-text cosine to the float32
-// model moves between architectures on the same quantized file: the goldens'
-// floors were taken on amd64, and llama.cpp b10825 on the M4 moves
-// qwen3-embedding-0.6b's seven texts by -1.1e-04 to +2.0e-04 (text 5 by
+// crossArchSlack is how far the GGUF oracle's own per-text cosine to the
+// float32 model moves between architectures on the same quantized file: the
+// goldens' floors were taken on amd64, and the oracle's build b10825 on the M4
+// moves qwen3-embedding-0.6b's seven texts by -1.1e-04 to +2.0e-04 (text 5 by
 // -8.4e-05). A host of another architecture is held to the floor less this as
 // well; the measurement, not a margin, is the number.
 const crossArchSlack = 2e-4
@@ -154,14 +154,14 @@ func worst(xs []float64) float64 {
 // reference, per text (empty where the golden has none).
 //
 // The ids are checked against the model's OWN tokenizer where the golden has
-// it, and llama.cpp's otherwise. They differ in one known place: llama-tokenize
-// does not append qwen3-embedding's EOS, which its tokenizer (and llama.cpp's
-// llama-embedding) does and which is the position that model pools.
+// it, and the GGUF oracle's otherwise. They differ in one known place:
+// llama-tokenize does not append qwen3-embedding's EOS, which its tokenizer
+// (and llama-embedding) does and which is the position that model pools.
 func embedAll(t *testing.T, m *model.Model, e *Embedder, g embedGolden, checkIDs bool) (lc, st []float64) {
 	t.Helper()
 	for i, text := range g.Texts {
 		ids := m.EmbedIDs(text)
-		want, who := g.IDs[i], "llama.cpp"
+		want, who := g.IDs[i], "the GGUF oracle"
 		if len(g.STIDs) > i {
 			want, who = g.STIDs[i], g.STRepo
 		}
@@ -201,22 +201,23 @@ func TestEmbeddingsMatchReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer e.Close()
-			// The llama.cpp arm of a model llama.cpp cannot load from Ollama's
-			// file was taken on a conversion WITHOUT the dense heads, so it is
-			// compared before them.
+			// The oracle's arm of a model whose published GGUF the oracle
+			// cannot load was taken on a conversion WITHOUT the dense heads, so
+			// it is compared before them.
 			same := g.LGGUF == "" || g.LGGUF == g.GGUF
 			if !same {
 				e.skipDense = true
 				lc, _ := embedAll(t, m, e, g, true)
 				e.skipDense = false
-				t.Logf("%s: worst cosine vs llama.cpp (%s, before the dense heads) %.7f", g.Model, g.LGGUF, worst(lc))
+				t.Logf("%s: worst cosine vs the GGUF oracle (%s, before the dense heads) %.7f", g.Model, g.LGGUF, worst(lc))
 				if !(worst(lc) >= embedCosBound) {
-					t.Errorf("%s: cosine vs llama.cpp %.7f < %v", g.Model, worst(lc), embedCosBound)
+					t.Errorf("%s: cosine vs the GGUF oracle %.7f < %v", g.Model, worst(lc), embedCosBound)
 				}
 			}
 			lc, st := embedAll(t, m, e, g, true)
 			// How far the FILE is from the float32 model, measured by the other
-			// engine that reads it: llama.cpp against sentence-transformers.
+			// engine that reads it: the GGUF oracle, against
+			// sentence-transformers.
 			var floor []float64
 			quantized := false
 			if same && len(g.ST) == len(g.Llamacpp) {
@@ -230,9 +231,9 @@ func TestEmbeddingsMatchReference(t *testing.T) {
 				if quantized {
 					bound = 0.999
 				}
-				t.Logf("%s: worst cosine vs llama.cpp %.7f (bound %v)", g.Model, worst(lc), bound)
+				t.Logf("%s: worst cosine vs the GGUF oracle %.7f (bound %v)", g.Model, worst(lc), bound)
 				if !(worst(lc) >= bound) {
-					t.Errorf("%s: cosine vs llama.cpp %.7f < %v", g.Model, worst(lc), bound)
+					t.Errorf("%s: cosine vs the GGUF oracle %.7f < %v", g.Model, worst(lc), bound)
 				}
 			}
 			if len(g.ST) == 0 {
@@ -246,11 +247,11 @@ func TestEmbeddingsMatchReference(t *testing.T) {
 				}
 				return
 			}
-			t.Logf("%s: the file is quantized -- llama.cpp itself reaches only %.7f of the float32 model",
+			t.Logf("%s: the file is quantized -- the GGUF oracle itself reaches only %.7f of the float32 model",
 				g.Model, worst(floor))
 			for i := range st {
 				if !(st[i] >= floor[i]-floorSlack()) {
-					t.Errorf("%s text %d: cosine vs float32 %.7f, and llama.cpp on the same file reaches %.7f",
+					t.Errorf("%s text %d: cosine vs float32 %.7f, and the GGUF oracle on the same file reaches %.7f",
 						g.Model, i, st[i], floor[i])
 				}
 			}
@@ -325,7 +326,7 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 					t.Fatal(err)
 				}
 				// The reference that includes every stage: sentence-transformers
-				// where it exists, llama.cpp otherwise.
+				// where it exists, the GGUF oracle otherwise.
 				lcOK := g.LGGUF == "" || g.LGGUF == g.GGUF
 				lcs, sts := embedAll(t, m, e, g, false)
 				e.Close()
@@ -336,7 +337,7 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 					if !lcOK {
 						t.Fatalf("%s: no reference covers the whole pipeline", g.Model)
 					}
-					ref, which = lc, "llama.cpp"
+					ref, which = lc, "the GGUF oracle"
 				}
 				t.Logf("%s / %s: worst cosine vs %s %.5f", g.Model, v.name, which, ref)
 				if ref >= embedCosBound {

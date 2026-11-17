@@ -100,8 +100,8 @@ func syntaxCases() []syntaxCase {
 }
 
 // readSyntaxTemplate finds a template in tok/jinja's set or this package's:
-// testdata/tooltemplates holds, byte for byte, llama.cpp's models/templates
-// copies of the families tok/jinja's set does not carry.
+// testdata/tooltemplates holds, byte for byte, the GGUF oracle's
+// models/templates copies of the families tok/jinja's set does not carry.
 func readSyntaxTemplate(t *testing.T, file string) string {
 	for _, dir := range []string{filepath.Join("..", "tok", "jinja", "testdata", "templates"),
 		filepath.Join("testdata", "tooltemplates")} {

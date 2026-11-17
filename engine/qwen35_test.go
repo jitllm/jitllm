@@ -51,8 +51,9 @@ func TestHybridDecodeIsCaptured(t *testing.T) {
 // qwen3next's) must give DIFFERENT logits, and the tiled arm must be the
 // pairing the flag asked for. The fixture has two value heads per key head,
 // where the pairings differ (at one they coincide). Correctness against the
-// reference is Qwen3.5-4B (two value heads a key head) against llama.cpp in
-// TestGreedyMatchesLlamaCpp; this keeps a later change from dropping the flag.
+// reference is Qwen3.5-4B (two value heads a key head) against the GGUF oracle
+// in TestGreedyMatchesLlamaCpp; this keeps a later change from dropping the
+// flag.
 func TestDeltaKeyTiledIsTheDeltaRulesPairing(t *testing.T) {
 	grouped, openOpts := hybridModelOpt(t, hyOpt{})
 	tiled, openOpts2 := hybridModelOpt(t, hyOpt{tiled: true})

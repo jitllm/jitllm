@@ -678,7 +678,7 @@ func (s *Instance) chunkOn(r int) int {
 }
 
 // pipelineChunks is how many device chunks a pipelined prompt chunk holds:
-// llama.cpp's 2048-token batch over 512-token micro-batches. With d cards a
+// a 2048-token batch over 512-token micro-batches. With d cards a
 // chunk takes (pieces + d - 1) piece-times instead of d x pieces.
 // Deeper pipelines (more cards) gain from more pieces.
 const pipelineChunks = 4

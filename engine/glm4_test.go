@@ -8,7 +8,7 @@ import (
 // GLM-4-0414's text block (glm4), the text model of GLM-4.1V and
 // GLM-4.6V-Flash, is gated by the classic-transformer (C6) harness as the
 // dense llama family is (densearch_test.go): transformers' own Glm4ForCausalLM
-// written to GGUF by llama.cpp's converter (scripts/c6gold.py synth-glm4),
+// written to GGUF by convert_hf_to_gguf.py (scripts/c6gold.py synth-glm4),
 // on decode, prefill and the batch, against the host and every device, and
 // through the five principles' gates. Its image side is gated with the Qwen-VL
 // family (synth-glm4v, mrope_test.go).

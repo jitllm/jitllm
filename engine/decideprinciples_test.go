@@ -160,7 +160,7 @@ func decisionAllocs(t *testing.T, m *model.Model, g *gpu.GPU) {
 // readouts: one request's questions answered with every block moving
 // between the CPU and a card from one question to the next (all on the
 // card, the CPU again, the upper half on the card), each answer held to
-// llama.cpp's as the resident gate holds it.
+// the GGUF oracle's as the resident gate holds it.
 func TestDecisionRelocatesMidPrompt(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -209,14 +209,14 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 				t.Fatalf("no question ran with a block on %s: %s", spec, g.Err())
 			}
 			worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold+".support.llamacpp.json"), c.tol)
-			t.Logf("%d of %d questions with blocks on %s; worst difference from llama.cpp %.5f", moved, len(qs), spec, worst)
+			t.Logf("%d of %d questions with blocks on %s; worst difference from the GGUF oracle %.5f", moved, len(qs), spec, worst)
 		})
 	}
 }
 
 // TestDecisionMovesBetweenCards moves a label readout's every block from one
 // card to another between a request's questions, each answer held to
-// llama.cpp's.
+// the GGUF oracle's.
 func TestDecisionMovesBetweenCards(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -275,14 +275,14 @@ func TestDecisionMovesBetweenCards(t *testing.T) {
 				ans[i] = a[0]
 			}
 			worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold+".support.llamacpp.json"), c.tol)
-			t.Logf("%d moves between %s and %s; worst difference from llama.cpp %.5f", moves, a, b, worst)
+			t.Logf("%d moves between %s and %s; worst difference from the GGUF oracle %.5f", moves, a, b, worst)
 		})
 	}
 }
 
 // TestDecisionDistributes runs a label readout with its blocks split over two
 // cards, the first half on one and the rest and the head on the other, every
-// answer held to llama.cpp's.
+// answer held to the GGUF oracle's.
 func TestDecisionDistributes(t *testing.T) {
 	for _, c := range decisionCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -322,7 +322,7 @@ func TestDecisionDistributes(t *testing.T) {
 				t.Fatal(err)
 			}
 			worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold+".support.llamacpp.json"), c.tol)
-			t.Logf("%d blocks on %s, %d on %s; worst difference from llama.cpp %.5f", half, a, m.Cfg.NLayer-half, b, worst)
+			t.Logf("%d blocks on %s, %d on %s; worst difference from the GGUF oracle %.5f", half, a, m.Cfg.NLayer-half, b, worst)
 		})
 	}
 }

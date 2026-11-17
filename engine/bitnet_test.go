@@ -31,12 +31,14 @@ import (
 //	                         weight_scale), from safetensors: TQ2_0
 //	synth-bitnet-online-hf   the latent f32 weights, ternarized as the class
 //	                         does in f32: TQ2_F32
-//	synth-bitnet-i2s.gguf    bitnet.cpp's I2_S of the latent form, its f32
-//	                         scale carried: TQ2_F32 (its embedding F16, held
-//	                         to the class run on that embedding)
-//	synth-bitnet-f16.gguf    bitnet.cpp's F16 of the latent form, each
-//	                         magnitude an f16: TQ2_0, held to the class run on
-//	                         those rounded magnitudes (-online-f16)
+//	synth-bitnet-i2s.gguf    convert-hf-to-gguf-bitnet.py's I2_S of the
+//	                         latent form, its f32 scale carried: TQ2_F32
+//	                         (its embedding F16, held to the class run on
+//	                         that embedding)
+//	synth-bitnet-f16.gguf    convert-hf-to-gguf-bitnet.py's F16 of the
+//	                         latent form, each magnitude an f16: TQ2_0, held
+//	                         to the class run on those rounded magnitudes
+//	                         (-online-f16)
 func bitnetFixtures() []struct {
 	model, golden string
 	typ           quant.Type

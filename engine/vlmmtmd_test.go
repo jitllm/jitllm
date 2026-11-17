@@ -35,14 +35,14 @@ type mtmdOracle struct {
 // (int8 activations here, an f16 mmproj there), so the opening tokens must
 // agree up to a near tie (tieMargin) and most of the rest must agree.
 //
-// InternVL's class token goes first here, as the reference puts it, and
-// last in llama.cpp (docs/divergences.md), which moves every patch's
-// position: held to the reference, InternVL agrees with llama.cpp at 27 of
-// 32 positions where llama.cpp's layout agreed at 31, and parts from it at
-// the fifth (a "vintage" before "newspaper"), so it is held to its lower
-// share alone, no opening tokens. A grey picture of the same size is a
-// violation for both, and Gemma 3's rows causal, where llama.cpp decodes
-// them both ways, for it.
+// InternVL's class token goes first here, as the reference puts it, and last in
+// the GGUF oracle (docs/divergences.md), which moves every patch's position:
+// held to the reference, InternVL agrees with the GGUF oracle at 27 of 32
+// positions where the GGUF oracle's layout agreed at 31, and parts from it at
+// the fifth (a "vintage" before "newspaper"), so it is held to its lower share
+// alone, no opening tokens. A grey picture of the same size is a violation for
+// both, and Gemma 3's rows causal, where the GGUF oracle decodes them both
+// ways, for it.
 func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 	for _, c := range []struct {
 		name, text, mm string
@@ -100,7 +100,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 
 			ref := m.Vocab.Encode(o.Out, false)
 			if got := m.Vocab.Decode(ref); got != o.Out {
-				t.Fatalf("llama.cpp's answer does not survive re-tokenization:\n %q\n %q", o.Out, got)
+				t.Fatalf("the GGUF oracle's answer does not survive re-tokenization:\n %q\n %q", o.Out, got)
 			}
 			lead := c.lead
 			force := func(pic []float32, both bool, log bool) (agree int, worst, excess float32) {
@@ -117,7 +117,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 				}
 				n := model.SpanPositions(spans, e)
 				if o.Tokens > 0 && n != o.Tokens {
-					t.Fatalf("the prompt is %d positions here and %d in llama.cpp", n, o.Tokens)
+					t.Fatalf("the prompt is %d positions here and %d in the GGUF oracle", n, o.Tokens)
 				}
 				st := testInstance(t, m, n+len(ref)+1)
 				defer st.Close()
@@ -136,7 +136,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 							worst = max(worst, d)
 						}
 						if log {
-							t.Logf("  position %d: llama.cpp %q, here %q by %.3f", i,
+							t.Logf("  position %d: the GGUF oracle %q, here %q by %.3f", i,
 								m.Vocab.Decode([]int32{want}), m.Vocab.Decode([]int32{got}), d)
 						}
 					}
@@ -149,7 +149,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 				return agree, worst, excess
 			}
 			agree, worst, excess := force(rows, bidir, true)
-			t.Logf("%s: %d of %d positions agree with llama-mtmd-cli, the disagreements' margins sum to %.3f; llama.cpp said %q",
+			t.Logf("%s: %d of %d positions agree with llama-mtmd-cli, the disagreements' margins sum to %.3f; the GGUF oracle said %q",
 				o.Picture, agree, len(ref), excess, o.Out)
 			if worst > tieMargin {
 				t.Errorf("a disagreement in the first %d tokens by %.3f (tie bound %.1f)", lead, worst, tieMargin)
@@ -173,7 +173,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 				va, _, ve := force(v.pic, v.both, false)
 				t.Logf("violation, %s: %d of %d agree, margins sum to %.3f", v.name, va, len(ref), ve)
 				if ve <= excess {
-					t.Errorf("VIOLATION: %s disagrees with llama.cpp no more than the clean run (%.3f against %.3f)",
+					t.Errorf("VIOLATION: %s disagrees with the GGUF oracle no more than the clean run (%.3f against %.3f)",
 						v.name, ve, excess)
 				}
 			}

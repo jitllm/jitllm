@@ -611,10 +611,10 @@ func (h *Head) Stage(logits, p []float32, ids []uint32, cand []float32, a nn.Dra
 	return true
 }
 
-// Keep is llama.cpp's min_keep over one cut of a chain in an order of its
-// own (graph.SampleKeep): over logits, the survivors p names, cand put in
-// place at ids, with the first w[0] of the cut's order besides -- the
-// softmax's, or typical-p's where w[1] is 1 -- or, where w[1] is 2 (XTC),
+// Keep is min_keep, the floor on a cut's survivors, over one cut of a chain in
+// an order of its own (graph.SampleKeep): over logits, the survivors p names,
+// cand put in place at ids, with the first w[0] of the cut's order besides --
+// the softmax's, or typical-p's where w[1] is 1 -- or, where w[1] is 2 (XTC),
 // every finite one unless w[0] survive; 1 each into out, the rest 0; false
 // where the form declines.
 func (h *Head) Keep(logits, p []float32, ids []uint32, cand []float32, w [2]float32, out []float32) bool {

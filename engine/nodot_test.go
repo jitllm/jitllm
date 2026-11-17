@@ -34,7 +34,7 @@ func nodotFormed(t *testing.T, m *model.Model, want bool, io ...Option) {
 	}
 }
 
-// TestNoDotProdModelGates runs the generated-code audit and the llama.cpp
+// TestNoDotProdModelGates runs the generated-code audit and the GGUF oracle
 // golden gate on a CPU device without FEAT_DotProd.
 func TestNoDotProdModelGates(t *testing.T) {
 	instOpts := []Option{noDot()}

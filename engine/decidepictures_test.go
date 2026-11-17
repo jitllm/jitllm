@@ -58,9 +58,9 @@ func decisionPictures(t *testing.T, m *model.Model, name string) []model.Span {
 }
 
 // TestDecisionOverPicturesMatchesItsGoldens holds a decision readout asked
-// about pictures to its golden: the label readouts' answers to llama.cpp's
-// on the same GGUF and its projector, and Clef's joint head's to its own
-// code's on its VL fixture; on the CPU and with every block on each card.
+// about pictures to its golden: the label readouts' answers to the GGUF
+// oracle's on the same GGUF and its projector, and Clef's joint head's to its
+// own code's on its VL fixture; on the CPU and with every block on each card.
 // The pictures are spans of the prompt where the systemone template writes
 // them, through the model's tower.
 func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
@@ -86,7 +86,7 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 		// A marker head: the pictures a prefix that reads itself alone
 		// (jlm.Flag2MediaPrefix), the text after it, uncalibrated. 0.026
 		// with the CPU's int8 activations, 0.019 with its float forms (the
-		// per-family readout read 0.02); llama.cpp sits 0.0003 from the
+		// per-family readout read 0.02); the GGUF oracle sits 0.0003 from the
 		// model's own code here.
 		{"d1-omni", "d1-omni/d1-omni-600M-F16.gguf", "d1-omni-600M-F16.pictures.llamacpp.json", 0.03, ""},
 		// The pictures behind a long state (longpictures): each question's

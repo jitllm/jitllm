@@ -34,13 +34,13 @@ func selectingBlocks(m *model.Model) int {
 // block composed for it, teacher-forced over 24 steps against the CPU's float
 // forms over the same history (withCPUFloat): its blocks past the dense lead
 // select two of up to six blocks of four positions per kv group
-// (graph.OpSelect), within 1e-5 of the float forms' logits at every step
-// (float weights: the two part by their reduction order alone; llama.cpp's
-// spread is wider than a violation here), and each piece of the selection
-// taken out of the composed arm alone past 100 times its worst and past 1e-4.
-// DeepSeek V3.2's indexer
-// runs in latent blocks, which the CPU device declines by name (a latent
-// attention's history); TestDeepseek32OnEveryDevice serves it composed.
+// (graph.OpSelect), within 1e-5 of the float forms' logits at every step (float
+// weights: the two part by their reduction order alone; the GGUF oracle's
+// spread is wider than a violation here), and each piece of the selection taken
+// out of the composed arm alone past 100 times its worst and past 1e-4.
+// DeepSeek V3.2's indexer runs in latent blocks, which the CPU device declines
+// by name (a latent attention's history); TestDeepseek32OnEveryDevice serves it
+// composed.
 func TestComposedCPUSelectsKeys(t *testing.T) {
 	const steps, page, bound = 24, 32, 1e-5
 	path := jlmOf(t, testmodels.Path("synth-minimaxm3.gguf"))

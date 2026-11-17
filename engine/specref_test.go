@@ -16,7 +16,7 @@ import (
 
 // mtpGolden is scripts/mtpgold.py's record: the trunk's and the prediction
 // block's logits at every position of a fixed id sequence, from transformers'
-// own Qwen3_5DecoderLayer wired as vLLM and llama.cpp wire the block.
+// own Qwen3_5DecoderLayer wired as the GGUF oracle wires the block.
 type mtpGolden struct {
 	IDS         []int32     `json:"ids"`
 	NLogit      int         `json:"nlogit"`
@@ -45,7 +45,8 @@ func TestMTPMatchesReference(t *testing.T) {
 		{"synth-qwen35moe-hybrid-mtp", "synth-qwen35moe-hybrid-mtp.gguf", true},
 		{"synth-deepseek-mtp", "synth-deepseek-mtp", true},
 		// scripts/qwen4expgold.py: the hyper-connected block, held to
-		// transformers' modules wired as llama.cpp's graph_mtp.
+		// transformers' modules wired as the GGUF oracle wires its prediction
+		// block.
 		{"synth-qwen4exp-mtp", "synth-qwen4exp-mtp.gguf", true},
 		{"Qwen3.5-0.8B", "qwen35/Qwen3.5-0.8B-MTP-Q8_0.gguf", false},
 	} {

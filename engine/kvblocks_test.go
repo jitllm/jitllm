@@ -16,7 +16,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// blockKVTypes is every KV type held in llama.cpp's blocks, and bfloat16.
+// blockKVTypes is every KV type held in GGUF quant blocks, and bfloat16.
 func blockKVTypes() []model.KVType {
 	return []model.KVType{model.KVQ4_0, model.KVQ4_1, model.KVQ5_0, model.KVQ5_1, model.KVIQ4_NL, model.KVBF16}
 }
@@ -167,7 +167,7 @@ func TestPagingDoesNotChangeTheAnswerWithBlockHistories(t *testing.T) {
 // value row passes through the type's narrowing and widening before the
 // block appends it (historyReference), so each row holds the type's values
 // from the moment it is written -- a step's own attention reads its newest
-// row quantized, as llama.cpp's does -- and an f32 history's attention reads
+// row quantized, as the oracle's does -- and an f32 history's attention reads
 // them. Two numbers are kept apart.
 //
 // The implementation's error is a step's: before each scored step the
@@ -183,15 +183,15 @@ func TestPagingDoesNotChangeTheAnswerWithBlockHistories(t *testing.T) {
 // place up and down: KL is quadratic in a small difference, so four times
 // is two units in the last place.
 //
-// The quantization's loss, the free-running reference against the f32
-// history, is held as a ratio to what the type moves llama.cpp's CPU build
-// by under the same -ctk and -ctv (flash attention on): a cross-check, its
-// band the reference's own reading plus the 0.15 llama.cpp's CUDA build
-// spans against its CPU build (0.85-1.02); the typed instance and llama.cpp
-// may disagree on as many greedy picks as when that reading was taken plus
-// the f32 arms' (4 of 127). The reference's first attending block, whose
-// rows no attention feeds, is held to the oracle's quantizer bit for bit,
-// and two f32 arms of one process to each other bit for bit.
+// The quantization's loss, the free-running reference against the f32 history,
+// is held as a ratio to what the type moves the GGUF oracle's CPU build by
+// under the same -ctk and -ctv (flash attention on): a cross-check, its band
+// the reference's own reading plus the 0.15 the GGUF oracle's CUDA build spans
+// against its CPU build (0.85-1.02); the typed instance and the GGUF oracle may
+// disagree on as many greedy picks as when that reading was taken plus the f32
+// arms' (4 of 127). The reference's first attending block, whose rows no
+// attention feeds, is held to the oracle's quantizer bit for bit, and two f32
+// arms of one process to each other bit for bit.
 //
 // Two violations, each given the typed history before every step, must
 // fall outside the implementation's bound: an f32 history that attends its
@@ -210,7 +210,7 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 		dir = os.Getenv("JITLLM_LCPP")
 	}
 	if dir == "" {
-		t.Fatal("JITLLM_LLAMACPP_CPU and JITLLM_LCPP are unset: one names a llama.cpp build holding llama-perplexity, the cross-check")
+		t.Fatal("JITLLM_LLAMACPP_CPU and JITLLM_LCPP are unset: one names a GGUF oracle build holding llama-perplexity, the cross-check")
 	}
 	const nctx = 256
 	text, err := os.ReadFile("testdata/prompt-28k.txt")
@@ -468,16 +468,16 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 		t.Fatalf("two f32 arms of one process are %.3g apart: the engine is not deterministic here, and no bound below is", e)
 	}
 	baseFlips := flips(base, lcBase)
-	t.Logf("f32: jitllm against llama.cpp %.4f, %d of %d greedy picks differ; a second f32 arm against the first 0", gap(base, lcBase), baseFlips, len(base))
+	t.Logf("f32: jitllm against the GGUF oracle %.4f, %d of %d greedy picks differ; a second f32 arm against the first 0", gap(base, lcBase), baseFlips, len(base))
 	cardBase, seamBase := map[string][][]float32{}, map[string][][]float32{}
 	layers := func() int {
 		m, _ := open(t, model.KVF32, false)
 		defer m.Close()
 		return m.Cfg.NLayer
 	}()
-	// ratio and picks are each type's readings on this model: its
-	// reference's loss as a ratio to llama.cpp's move, and the greedy picks
-	// the typed instance and llama.cpp disagree on.
+	// ratio and picks are each type's readings on this model: its reference's
+	// loss as a ratio to the GGUF oracle's move, and the greedy picks the typed
+	// instance and the GGUF oracle disagree on.
 	const spread = 0.15
 	for _, c := range []struct {
 		kt    model.KVType
@@ -513,13 +513,13 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 			lcMove, loss := gap(lcT, lcBase), gap(ref, base)
 			typed, _, _ := decode(t, c.kt, false, "")
 			ratio, fl := loss/lcMove, flips(typed, lcT)
-			t.Logf("%v: the quantization's loss %.4f, %.3f of llama.cpp's move %.4f (band %.3f-%.3f); %d greedy picks differ from llama.cpp's (at most %d); each engine's own against f32: %d and %d",
+			t.Logf("%v: the quantization's loss %.4f, %.3f of the GGUF oracle's move %.4f (band %.3f-%.3f); %d greedy picks differ from the GGUF oracle's (at most %d); each engine's own against f32: %d and %d",
 				c.kt, loss, ratio, lcMove, c.ratio-spread, c.ratio+spread, fl, c.picks+baseFlips, flips(typed, base), flips(lcT, lcBase))
 			if !(math.Abs(ratio-c.ratio) <= spread) {
-				t.Errorf("%v costs jitllm's log-probabilities %.3f times what it costs llama.cpp's, outside %.3f-%.3f", c.kt, ratio, c.ratio-spread, c.ratio+spread)
+				t.Errorf("%v costs jitllm's log-probabilities %.3f times what it costs the GGUF oracle's, outside %.3f-%.3f", c.kt, ratio, c.ratio-spread, c.ratio+spread)
 			}
 			if fl > c.picks+baseFlips {
-				t.Errorf("%v: %d greedy picks differ from llama.cpp's, past %d and the f32 arms' %d", c.kt, fl, c.picks, baseFlips)
+				t.Errorf("%v: %d greedy picks differ from the GGUF oracle's, past %d and the f32 arms' %d", c.kt, fl, c.picks, baseFlips)
 			}
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
