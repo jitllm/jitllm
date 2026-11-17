@@ -116,10 +116,14 @@ func render(d lines) ([]byte, error) {
 		}
 		return g
 	}
+	graphOf, err := convert.GraphsOf(append(append([]string(nil), names...), classes...))
+	if err != nil {
+		return nil, err
+	}
 	var towers []string
 	textNames := 0
 	for _, n := range names {
-		a, ok := convert.GraphOf(n)
+		a, ok := graphOf[n]
 		if !ok {
 			towers = append(towers, n)
 			continue
@@ -128,7 +132,7 @@ func render(d lines) ([]byte, error) {
 		at(a).gguf = append(at(a).gguf, n)
 	}
 	for _, c := range classes {
-		a, _ := convert.GraphOf(c)
+		a := graphOf[c]
 		at(a).classes = append(at(a).classes, c)
 	}
 	order := make([]*graph, 0, len(graphs))
@@ -231,8 +235,7 @@ func render(d lines) ([]byte, error) {
 	p("classes; any other is refused, and `model_type` is not a fallback.\n\n")
 	p("| Class | Graph | Models |\n|---|---|---|\n")
 	for _, c := range classes {
-		a, _ := convert.GraphOf(c)
-		p("| %s | %s | %s |\n", code(c), code(a), d.hf[c])
+		p("| %s | %s | %s |\n", code(c), code(graphOf[c]), d.hf[c])
 	}
 
 	p("\n## Vision projectors\n\n")

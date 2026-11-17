@@ -85,6 +85,27 @@ func GraphOf(name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	return graphIn(files, name)
+}
+
+// GraphsOf is GraphOf for every name in names, the library read once: a name
+// the library states no graph for is absent.
+func GraphsOf(names []string) (map[string]string, error) {
+	files, err := libraryFiles()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(names))
+	for _, n := range names {
+		if g, ok := graphIn(files, n); ok {
+			out[n] = g
+		}
+	}
+	return out, nil
+}
+
+// graphIn is GraphOf over the library's files.
+func graphIn(files []*modelJSON, name string) (string, bool) {
 	arch := name
 	for _, mj := range files {
 		if slices.Contains(mj.Classes, name) {

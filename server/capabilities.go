@@ -120,7 +120,7 @@ func (e *Engine) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 		oaFail(w, http.StatusMethodNotAllowed, "GET only", "invalid_request_error")
 		return
 	}
-	m, err := capabilities.WithAPI(e.cfg.Version, API())
+	m, err := e.manifest()
 	if err != nil {
 		oaFail(w, http.StatusInternalServerError, err.Error(), "server_error")
 		return

@@ -251,16 +251,20 @@ func assemble(a API) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	classes := convert.HFClasses()
+	graphs, err := convert.GraphsOf(append(append([]string(nil), names...), classes...))
+	if err != nil {
+		return Manifest{}, err
+	}
 	for _, n := range names {
-		g, ok := convert.GraphOf(n)
+		g, ok := graphs[n]
 		if !ok {
 			g = n
 		}
 		m.Architectures = append(m.Architectures, Graph{Name: n, Graph: g})
 	}
-	for _, c := range convert.HFClasses() {
-		g, _ := convert.GraphOf(c)
-		m.SafetensorsClasses = append(m.SafetensorsClasses, Graph{Name: c, Graph: g})
+	for _, c := range classes {
+		m.SafetensorsClasses = append(m.SafetensorsClasses, Graph{Name: c, Graph: graphs[c]})
 	}
 	m.Projectors = convert.Projectors()
 	m.Quantization = quantization()

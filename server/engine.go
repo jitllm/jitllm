@@ -32,6 +32,7 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/capabilities"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/sched"
@@ -216,6 +217,10 @@ type Engine struct {
 
 	// details remembers each container's listing details; see detailsCache.
 	details detailsCache
+	// capsOnce builds the capability manifest once (manifest).
+	capsOnce sync.Once
+	caps     capabilities.Manifest
+	capsErr  error
 
 	mu       sync.RWMutex
 	models   map[string]*LoadedModel
@@ -268,6 +273,13 @@ type Engine struct {
 
 // New builds an Engine. It does not touch the hardware; the first ListDevices
 // or LoadModel does.
+// manifest is the engine's capability manifest, built once: it reads the
+// model library, which a health probe must not wait on per request.
+func (e *Engine) manifest() (capabilities.Manifest, error) {
+	e.capsOnce.Do(func() { e.caps, e.capsErr = capabilities.WithAPI(e.cfg.Version, API()) })
+	return e.caps, e.capsErr
+}
+
 func New(cfg Config) *Engine {
 	cfg.withDefaults()
 	// One fetch bound for the whole server, shared by every surface.
