@@ -200,8 +200,8 @@ func TestEveryFusedTableCutsItsRowsInOrder(t *testing.T) {
 }
 
 // TestFusedTablesAreTheirClassesWidths holds one table of each form to the
-// widths llama.cpp's class loads its fused attn_qkv at (create_tensor_qkv's,
-// or the class's own): keys whose heads disagree with the residual tell the
+// widths each class's fused attn_qkv holds (q, k and v by the heads, or the
+// class's own): keys whose heads disagree with the residual tell the
 // forms apart, so a table of the wrong form fails here.
 func TestFusedTablesAreTheirClassesWidths(t *testing.T) {
 	odd := map[string]any{"attention.key_length": 20.0, "attention.value_length": 12.0}

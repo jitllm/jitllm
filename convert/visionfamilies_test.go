@@ -192,7 +192,7 @@ func towerTable(t *testing.T, name string, in []jlm.Tensor, keys map[string]any)
 func TestGemma3ProjectionIsTransposed(t *testing.T) {
 	r := rand.New(rand.NewSource(3))
 	const tower, text = 32, 48
-	src := randVals(r, tower*text) // ggml [text, tower]: tower rows of text values
+	src := randVals(r, tower*text) // GGUF [text, tower]: tower rows of text values
 	in := f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, text, tower)
 	in.Name = "mm.input_projection.weight"
 	keys := map[string]any{"vision.embedding_length": float64(tower)}

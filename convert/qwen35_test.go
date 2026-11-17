@@ -159,8 +159,8 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 		}
 	}
 
-	// The same file under qwen3next's name is grouped: llama.cpp's qwen3next
-	// converter does not reorder, so the flag is about the qwen35 converter.
+	// The same file under qwen3next's name is grouped: a qwen3next GGUF is
+	// not reordered, so the flag is about the qwen35 file.
 	g, err := sourceOf(qwen35File("qwen3next"))
 	if err != nil {
 		t.Fatal(err)

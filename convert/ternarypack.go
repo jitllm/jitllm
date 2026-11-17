@@ -15,11 +15,11 @@ import (
 // 2-bit codes, with the scale an f16 (TypeTQ2) or, where no f16 holds it, an
 // f32 (TypeTQ2F) -- through one of the conversions here, each exact:
 //
-//	TQ2_0 (llama.cpp --outtype tq2_0)          carried
-//	TQ1_0 (llama.cpp --outtype tq1_0)          its base-3 digits re-packed as 2-bit codes
-//	I2_S (bitnet.cpp)                          its codes re-packed, its f32 scale carried
+//	TQ2_0                                      carried
+//	TQ1_0                                      its base-3 digits re-packed as 2-bit codes
+//	I2_S (BitNet's published GGUFs)            its codes re-packed, its f32 scale carried
 //	F32/F16/BF16 holding a ternary tensor      the codes and each block's magnitude
-//	(bitnet.cpp's converter dequantizes)       read off it
+//	(BitNet's F32/F16 GGUFs, dequantized)      read off it
 //	the HuggingFace release, uint8 codes       unpacked, weight_scale as the scale
 //	and a weight_scale (offline)
 //	the latent checkpoint (online)             BitNetForCausalLM's own absmean
@@ -121,8 +121,8 @@ func tq1ToTQ2(src []byte, n uint64) ([]byte, quant.Type, error) {
 		func(b int) float32 { return float32(quant.DecodeHalf(binary.LittleEndian.Uint16(src[b*54+52:]))) })
 }
 
-// i2sToTQ2 re-packs bitnet.cpp's I2_S, the layout its x86 quantizer writes
-// (ACT_PARALLEL, QK_I2_S 128, the layout of Microsoft's published GGUF):
+// i2sToTQ2 re-packs I2_S, the layout of Microsoft's published BitNet GGUF
+// (128-element groups):
 // n/4 code bytes over the whole tensor, element 128i+32g+p in bits 6-2g of
 // byte 32i+p, codes 0, 1, 2 for -1, 0, 1; then one f32 scale, every block's.
 func i2sToTQ2(src []byte, n uint64) ([]byte, quant.Type, error) {
@@ -140,8 +140,8 @@ func i2sToTQ2(src []byte, n uint64) ([]byte, quant.Type, error) {
 
 // ternaryFromFloats packs a tensor whose values are ternary -- every nonzero
 // value of a 256-block the same magnitude -- each block's magnitude its
-// scale. bitnet.cpp's converter writes BitNet's projections this way at F32
-// and F16 (the ternarized weight, dequantized). A value that is not one of
+// scale. BitNet's F32 and F16 GGUFs hold its projections this way (the
+// ternarized weight, dequantized). A value that is not one of
 // its block's three is refused: the tensor is not ternary.
 func ternaryFromFloats(vals []float32) ([]byte, quant.Type, error) {
 	if len(vals)%256 != 0 {
@@ -221,7 +221,7 @@ func ternaryPacked() []quant.Type { return []quant.Type{quant.TQ2_0, quant.TQ2_F
 
 // ternaryScaleOf reports a GGUF block tensor that is a ternary projection's
 // optional per-tensor scale, named by the statement's suffix in place of
-// .weight (llama.cpp's "blk.N.attn_q.scale"): the tensor name it scales.
+// .weight (a GGUF's "blk.N.attn_q.scale"): the tensor name it scales.
 func (s *Statement) ternaryScaleOf(name string) (string, bool) {
 	if s == nil || s.ternaryScale == "" || !strings.HasPrefix(name, "blk.") || !strings.HasSuffix(name, s.ternaryScale) {
 		return "", false

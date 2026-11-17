@@ -10,8 +10,8 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestSplitGGUFConvertsLikeTheWholeFile converts a model split by llama.cpp's
-// llama-gguf-split and the same model whole, and demands byte-identical
+// TestSplitGGUFConvertsLikeTheWholeFile converts a model split by
+// gguf-split and the same model whole, and demands byte-identical
 // containers. The parts are made once with
 //
 //	llama-gguf-split --split --split-max-tensors 60 tinyllama-1.1b-q3_K_M.gguf split-test/tl

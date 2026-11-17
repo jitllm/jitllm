@@ -18,7 +18,7 @@ import (
 // It is the only gate that can see a wrong name mapping: a q projection wired
 // to k, a norm applied in the wrong place, or an unpermuted q all load and run
 // fluently, and no oracle inside one format sees them. SmolLM2-360M-Instruct
-// is used as a bf16 HuggingFace directory and as llama.cpp's Q8_0 GGUF;
+// is used as a bf16 HuggingFace directory and as its published Q8_0 GGUF;
 // converting both and comparing tensor by tensor turns each into a number.
 //
 // The bound is Q8_0's own quantisation error, not a tolerance: an unpermuted q
@@ -114,8 +114,8 @@ func ggufConverted(t testing.TB, path string, built bool) *jlm.Source {
 // TestSafetensorsConfigMatchesItsGGUF compares the two converters' answers to
 // every hyperparameter question.
 //
-// config.json and a GGUF header are two independent witnesses (llama.cpp's
-// converter read the same config.json), so a disagreement is one of the two
+// config.json and a GGUF header are two independent witnesses (the GGUF's
+// writer read the same config.json), so a disagreement is one of the two
 // readers being wrong about what a key means.
 func TestSafetensorsConfigMatchesItsGGUF(t *testing.T) {
 	dir, gp := hfModelDir(t)

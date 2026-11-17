@@ -233,7 +233,7 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 
 	// A head narrower than embedding/heads is stated only by key_length; a
 	// file that states none where its q projection says otherwise is refused
-	// (llama.cpp refuses to load it too), and its safetensors input, which
+	// (its heads cannot be read off it), and its safetensors input, which
 	// reads head_dim, converts the model. A gated q projection carries the
 	// gate's rows beside the heads'.
 	if _, ok := f.Key("attention.key_length"); !ok && !c.Flags.Has(jlm.FlagAttnOutGate) {
@@ -356,8 +356,8 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 	}
 
 	// A whole-projection q/k norm is each projection's width: {n_embd} for q
-	// and {n_embd_gqa} for k, which is how llama.cpp creates OLMo 2's
-	// attn_k_norm. A tensor of another width is refused here, by name, rather
+	// and {n_embd_gqa} for k, which is OLMo 2's k_norm (transformers'
+	// Olmo2Attention). A tensor of another width is refused here, by name, rather
 	// than read past or left short at run time.
 	if c.Flags.Has(jlm.FlagQKNormWide) {
 		for _, nw := range [2]struct {
@@ -407,7 +407,7 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 			return nil, fmt.Errorf("convert: %s: expert_count=%d expert_used_count=%d "+
 				"expert_feed_forward_length=%d", name, c.NExpert, c.NExpertUsed, c.NFFNExp)
 		}
-		// DeepSeek carries no shared-expert width: llama.cpp writes
+		// DeepSeek carries no shared-expert width: its GGUF writes
 		// expert_shared_count, and the width is that times expert_feed_forward_length.
 		// A zero here is not refused downstream; it surfaces as a misleading kernel
 		// decline, since the shared expert is bound off the container's tensors.
@@ -438,9 +438,8 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 				c.Flags &^= jlm.FlagNoExpertNorm
 			}
 		}
-		// An absent expert_weights_norm is not one answer for every arch: llama.cpp's
-		// qwen3moe builder passes true as a literal, its deepseek2 builder reads the
-		// key with a default of false, and DeepSeek-V2-Lite's config.json says
+		// An absent expert_weights_norm is not one answer for every arch: Qwen3-MoE's
+		// config.json says norm_topk_prob: true and DeepSeek-V2-Lite's says
 		// norm_topk_prob: false, so latent.json states no_expert_norm where the
 		// key is absent. Renormalising it generates fluent nonsense from the first
 		// token. See docs/engineering-history/model-correctness.md.
@@ -465,9 +464,8 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 		// Grouped selection. Both keys or neither; one alone cannot be acted on.
 		c.NExpertGroup = uint32(f.UintKey("expert_group_count", 0))
 		c.NExpertGroupUsed = uint32(f.UintKey("expert_group_used_count", 0))
-		// One group, all of it used, is the ungrouped selection: llama.cpp's
-		// kimi-k3 converter writes topk_group (1) as the used count and no group
-		// count beside it.
+		// One group, all of it used, is the ungrouped selection: a Kimi-K3 GGUF
+		// writes topk_group (1) as the used count and no group count beside it.
 		if c.NExpertGroup == 0 && c.NExpertGroupUsed == 1 {
 			c.NExpertGroupUsed = 0
 		}
@@ -555,10 +553,10 @@ func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 //
 // An interleaved split (rope_layout "interleaved") is read as transformers
 // reads it: pair i turns by h when i%3 == 1 and i < 3*sections[1], by w when
-// i%3 == 2 and i < 3*sections[2], and by t otherwise. ggml's IMROPE sends a
-// pair with i%3 == 0 at or past 3*sections[0] to a fourth axis instead; no
+// i%3 == 2 and i < 3*sections[2], and by t otherwise. A reading that sends a
+// pair with i%3 == 0 at or past 3*sections[0] to a fourth axis disagrees; no
 // published split reaches one, and one that would is refused rather than
-// resolved, since the two references would then rotate it differently.
+// resolved, since the two readings would then rotate it differently.
 func ropeSectionsFit(name string, secs []int32, c *Config) error {
 	if len(secs) > len(c.RopeSections) {
 		return fmt.Errorf("convert: %s: %d rope sections, this format defines %d",
@@ -585,7 +583,7 @@ func ropeSectionsFit(name string, secs []int32, c *Config) error {
 		for i := uint32(0); i < sum; i += 3 {
 			if i >= 3*c.RopeSections[0] {
 				return fmt.Errorf("convert: %s: interleaved rope sections %v leave pair %d to "+
-					"a fourth axis in ggml and to t in transformers: %w", name, secs, i, ErrNotImplemented)
+					"a fourth axis or, in transformers, to t: %w", name, secs, i, ErrNotImplemented)
 			}
 		}
 	}
@@ -626,7 +624,7 @@ func visionOf(f *meta.File) (*jlm.Vision, *projStates, error) {
 	if err := p.state(name, f, v); err != nil {
 		return nil, nil, err
 	}
-	// Three activations, matching llama.cpp's clip loader: GELU for use_gelu,
+	// Three activations, as the GGUF's keys state them: GELU for use_gelu,
 	// SiLU for use_silu, and quick-GELU when neither is set (openai CLIP,
 	// llava-phi-3's mmproj). Defaulting to SiLU there would be fluent and wrong.
 	gelu, _ := f.KV["clip.use_gelu"].Uint()
@@ -692,7 +690,7 @@ func itoa(v int) string {
 
 // sparsityOf reads activation_sparsity_scale: the standard normal's quantile
 // at each layer's target sparsity, which transformers computes as
-// Normal(0,1).icdf(p) and llama.cpp's converter writes per layer, -inf where a
+// Normal(0,1).icdf(p) and a GGUF holds per layer, -inf where a
 // layer has none (icdf(0)). The published pattern is one value on a leading
 // run of layers, which is what the container holds; any other shape is
 // refused rather than approximated. It is read for any file stating the key.

@@ -51,7 +51,7 @@ const (
 // columns, which contribute exactly zero to a dot product.
 func reshapePatchEmbd(t *jlm.Tensor, patch, nembd int) error {
 	if t.NDim == 2 {
-		// Already 2-D (Llama 4's unfold is a linear, and llama.cpp writes it
+		// Already 2-D (Llama 4's unfold is a linear, and its GGUF holds it
 		// so): k only needs padding to a whole block.
 		return padPatchK(t, nembd)
 	}
@@ -153,8 +153,8 @@ func quantizeTower(ts []jlm.Tensor) error {
 
 // quantizeQ8Rows writes vals as Q8_0 source blocks.
 //
-// The recipe is ggml's (amax/127 stored as f16, codes rounded from the
-// unrounded d), because quant.Dequant32 and kernels.PackWeights already read
+// The recipe is Q8_0's reference quantizer (amax/127 stored as f16, codes
+// rounded from the unrounded d), because quant.Dequant32 and kernels.PackWeights already read
 // these bytes back as its inverse; another recipe would be a second
 // specification of one layout.
 func quantizeQ8Rows(vals []float32, k, rows int) []byte {
@@ -220,8 +220,8 @@ func f32ToF16(f float32) uint16 {
 // container stores, and it is exact for an image.
 //
 // The two planes are added, not concatenated. Qwen2-VL's ViT takes
-// temporal_patch_size=2 frames, and llama.cpp runs IM2COL+MUL_MAT once per
-// plane and adds the results:
+// temporal_patch_size=2 frames, and a 3-D convolution over two frames is one
+// 2-D convolution per plane with the results added:
 //
 //	node_3  = MUL_MAT(im2col(frame), v.patch_embd.weight)    {64, 1280}
 //	node_10 = MUL_MAT(im2col(frame), v.patch_embd.weight.1)  {64, 1280}

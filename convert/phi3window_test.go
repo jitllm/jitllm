@@ -10,8 +10,8 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// phi3 slides every layer, and a converted phi3 must say so (llama.cpp applies
-// phi3.attention.sliding_window to every layer). Phi-3.5's 262,144 window over
+// phi3 slides every layer, and a converted phi3 must say so (Phi-3's config
+// states one sliding_window for every layer). Phi-3.5's 262,144 window over
 // a 131,072 context cannot bite, but it is the file's statement and is carried.
 func TestPhi3SlidesEveryLayer(t *testing.T) {
 	p := testmodels.Path("Phi-3.5-mini-instruct-Q4_K_M.gguf")

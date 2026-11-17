@@ -25,7 +25,7 @@ func c6HFDir() string {
 }
 
 // TestDenseSafetensorsMatchesItsGGUF converts each dense llama-family fixture
-// twice -- the HuggingFace directory directly, and the GGUF llama.cpp's own
+// twice -- the HuggingFace directory directly, and the GGUF
 // convert_hf_to_gguf.py wrote from the same directory -- and demands the same
 // container: every Config field, and every tensor byte for byte (both are F32,
 // so a permutation, a role or a dropped tensor is an inequality, not a

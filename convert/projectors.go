@@ -87,10 +87,9 @@ type projTextRow struct {
 
 // textRows gives a tower each text row p states that its file does not
 // carry: the text table's own row of the token, the row the reference looks
-// up for it, at the precision the text file keeps it. llama.cpp's converter
-// copies such a row into the mmproj only from a file whose table it can see
-// (from a transformers checkpoint it skips every language_model tensor
-// first), and the container holds the text model too.
+// up for it, at the precision the text file keeps it. An mmproj carries such a row
+// only where its writer could see the text table, and the container holds the
+// text model too.
 func textRows(s *jlm.Source, p *projStates) error {
 	if p == nil {
 		return nil

@@ -76,7 +76,7 @@ func statedSizes(sizes map[string]string) (map[string]*exprNode, error) {
 }
 
 // keyValue is a GGUF key a table reads as a block's source: its value, by
-// its bare name (llama.cpp writes some without the architecture's) or past
+// its bare name (a GGUF writes some without the architecture's) or past
 // the architecture's prefix, for every block where it is a number, its
 // block's entry where it is a list of one a block.
 func keyValue(f *meta.File, k string, block, blocks int) (float32, error) {

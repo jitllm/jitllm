@@ -9,8 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// A decision model's GGUF states its readout as llama.cpp's converter writes
-// it (conversion/{lev,lfm2,bert}.py): <arch>.decision.type names the readout,
+// A decision model's GGUF states its readout: <arch>.decision.type names the readout,
 // <arch>.decision.temperature.<type>[.<band>] the fitted temperatures, and the
 // prompt is the template tokenizer.chat_template.systemone, which the vocab
 // reader already carries by name. What each readout reads is its statement
@@ -107,12 +106,11 @@ func decisionOf(f *meta.File, c *Config) error {
 	return nil
 }
 
-// stateHeadBlocks splits a decision head llama.cpp appends to an encoder as
-// trailing blocks off c (the head_blocks statement; conversion/bert.py,
-// ModernBertDecisionModel): block_count counts both, head the head, and
-// feed_forward_length may be per block because the head's MLP is wider.
-// From here on NLayer is the encoder; the head is blocks NLayer.. and
-// Config.DecisionBlocks says how many.
+// stateHeadBlocks splits a decision head a GGUF appends to an encoder as
+// trailing blocks off c (the head_blocks statement; ModernBertDecisionModel):
+// block_count counts both, head the head, and feed_forward_length may be per
+// block because the head's MLP is wider. From here on NLayer is the encoder;
+// the head is blocks NLayer.. and Config.DecisionBlocks says how many.
 func stateHeadBlocks(f *meta.File, c *Config, head uint32) error {
 	if head >= c.NLayer {
 		return fmt.Errorf("decision.block_count %d in a %d-block file", head, c.NLayer)

@@ -11,7 +11,7 @@ import (
 // docs/design/model-coverage.md section 9 is the survey they were chosen
 // from, with what each needs and what it costs.
 
-// Gemma 4 is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
+// Gemma 4 is transformers' Gemma4ForCausalLM,
 // text only: gemma3's block with two attention geometries (the global layers'
 // HeadDim, NKVHead and NRot, the sliding layers' their own, each block's
 // stated in jlm.Config.Geoms), the global layers' "proportional" rotary as
@@ -94,7 +94,7 @@ func stateKindGeoms(f *meta.File, c *Config) error {
 }
 
 // blockIndexerFits refuses an indexer selecting blocks of positions (IdxBlock;
-// MiniMax Sparse Attention, llama.cpp's minimax-m3.cpp) that the engine's
+// MiniMax Sparse Attention) that the engine's
 // selection cannot run: other than one indexer head per kv group, a key of
 // another width than the head (it is cached as one more kv head), and no
 // query's own block forced in inside the top-k. None for an indexer that

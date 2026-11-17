@@ -1377,9 +1377,8 @@ func (r *mjRouter) apply(f *meta.File, c *Config) error {
 	return nil
 }
 
-// kindsByKVHeads is each layer's kind off head_count_kv, which llama.cpp's
-// converter writes per layer with zero on a KDA layer (its loader's own rule,
-// is_recr = n_head_kv == 0): the layers_by_kv_heads statement. A file with no
+// kindsByKVHeads is each layer's kind off head_count_kv, which a GGUF
+// writes per layer with zero on a KDA layer: the layers_by_kv_heads statement. A file with no
 // such layer, or only such layers, is no hybrid and refused.
 func kindsByKVHeads(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 	kv, ok := f.Key("attention.head_count_kv")

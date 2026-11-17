@@ -733,8 +733,8 @@ func evalUniform(n *exprNode, env exprEnv) (any, error) {
 }
 
 // evalAt is at(x, i): a per-layer key's value at layer i -- a list's entry
-// i, or the one value a key that is not a list states for every layer, as
-// llama.cpp reads a key that may be either.
+// i, or the one value a key that is not a list states for every layer: a GGUF
+// key may be either.
 func evalAt(args []*exprNode, env exprEnv) (any, error) {
 	v, err := evalMJ(args[0], env)
 	if err != nil {

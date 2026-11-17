@@ -9,7 +9,7 @@ import (
 )
 
 // TestApertusFoldsItsActivation is the converter half of Apertus: the four
-// xielu.* keys (bare, as llama.cpp's writer stores them; one per layer)
+// xielu.* keys (bare, as the GGUF stores them; one per layer)
 // become each block's RoleXIELU vector with the softplus folded in, and a file
 // without them is refused rather than run with a default activation.
 func TestApertusFoldsItsActivation(t *testing.T) {

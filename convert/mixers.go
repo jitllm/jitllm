@@ -126,9 +126,8 @@ func mergeMixers(f *meta.File, c *Config) error {
 // per layer (NVIDIA's Puzzle models), which the container states as one, and
 // reads a router the library states ungrouped (router.ungrouped): one
 // routing group, which every published Nemotron 3 config states, is no
-// grouping; transformers' NemotronHTopkRouter groups and llama.cpp's builder
-// never does, so more is a divergence (RULE 7m) nobody has chosen, refused
-// until one is.
+// grouping; transformers' NemotronHTopkRouter groups, so more is a grouping
+// nobody has gated, refused until one is.
 func statedMixtureFits(f *meta.File, c *Config) error {
 	if c.NExpert == 0 {
 		return nil

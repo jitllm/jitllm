@@ -15,12 +15,12 @@ import (
 // rotary factors, the magnitude on cos and sin (AttnFactor) and the score's
 // scale with its correction folded in (AttnScale) -- equal between a
 // safetensors directory and the GGUF
-// llama.cpp's converter wrote from the same config.json. The fixtures are
+// written from the same config.json. The fixtures are
 // scripts/c6gold.py's, one per family and per way of stating the magnitude;
 // DeepSeek-V2-Lite (mscale == mscale_all_dim == 0.707, factor 40) is the real
 // checkpoint, run where it is present.
 //
-// The two readers are independent witnesses: the GGUF path takes llama.cpp's
+// The two readers are independent witnesses: the GGUF path takes the GGUF's
 // keys (rope.scaling.yarn_attn_factor, yarn_log_multiplier), the safetensors
 // path transformers' rope_parameters, and both must arrive at the reference's
 // arithmetic.

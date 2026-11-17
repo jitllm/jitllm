@@ -160,7 +160,7 @@ func WithStatedSource(edit func(*jlm.Source)) Option {
 
 // WithModelConfig reads what a GGUF dropped from the publisher's config.json
 // (path is the file or its model directory): a text model's LongRoPE
-// factors, which llama.cpp's converter writes for no llama-arch model --
+// factors, which no llama-arch GGUF carries --
 // MiniCPM-V 4's run from 1.0 to 31.0 across the rotary pairs, and its GGUF
 // turns q and k with plain rope without them. The publisher's statement is
 // the authority (RULE 7m), as WithChatTemplate's template is; a GGUF that
@@ -180,9 +180,9 @@ func WithHead(path string) Option { return func(o *options) { o.head = path } }
 func WithQ8() Option { return func(o *options) { o.q8 = true } }
 
 // quantizeMatrices rewrites every float matrix whose rows are whole Q8_0
-// blocks, at the point its bytes are read. Routers stay float, as llama.cpp
-// keeps them: a flipped top-k selection is a different model, not a noisier
-// one. Vectors, convolution taps and ragged k are carried as they are.
+// blocks, at the point its bytes are read. Routers stay float: a flipped top-k
+// selection is a different model, not a noisier one. Vectors, convolution taps
+// and ragged k are carried as they are.
 func quantizeMatrices(ts []jlm.Tensor) {
 	for i := range ts {
 		t := &ts[i]
@@ -1240,8 +1240,8 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 		return want(lat, uint64(hfHeadDimV(c)), heads)
 
 	case jlm.RoleExpProbsB, jlm.RoleRouterBias:
-		// ERNIE's class keeps its correction bias as [1, n], and llama.cpp's
-		// converter writes that shape unchanged: the same bytes either way.
+		// ERNIE's class keeps its correction bias as [1, n], and its GGUF
+		// holds that shape unchanged: the same bytes either way.
 		if e.NDim == 2 {
 			return want(exp, 1)
 		}

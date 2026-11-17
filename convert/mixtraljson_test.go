@@ -11,8 +11,8 @@ import (
 
 // TestMixtralThroughTheLibrary: mixtral.json's q and k recipes (a reshape, an
 // axis swap and a reshape back) move each head's rows from rotate_half's order
-// to the adjacent pairs llama's graph turns, the permutation
-// convert_hf_to_gguf.py applies (permuteHeadPairs); the router renormalises,
+// to the adjacent pairs llama's graph turns, the permutation a
+// GGUF's q and k carry (permuteHeadPairs); the router renormalises,
 // and a window masks every layer, as MixtralModel's does.
 func TestMixtralThroughTheLibrary(t *testing.T) {
 	mj := libraryFile(t, "MixtralForCausalLM")

@@ -108,7 +108,8 @@ func cardinal(n int) string {
 
 // erfGELU is the activation of a tower whose class's hidden_act is "gelu"
 // (ACT2FN's GELUActivation, the erf form): the file says only that the tower
-// runs GELU, which llama.cpp's graph runs in the tanh form.
+// runs GELU. The tower runs exact GELU; the GGUF oracle runs the tanh form, a
+// divergence.
 func erfGELU(v *jlm.Vision, family string) (jlm.Expr, error) {
 	if !v.Flags.Has(jlm.FlagGELU) || v.Flags.Has(jlm.FlagQuickGELU) {
 		return jlm.Expr{}, fmt.Errorf("convert: %s: the tower's activation is not GELU", family)
@@ -122,8 +123,7 @@ func erfGELU(v *jlm.Vision, family string) (jlm.Expr, error) {
 // towerFFNByShape names each tower block's two MLP matrices by what they do,
 // not what the file calls them: the one that expands NEmbd to the MLP's
 // width is RoleVFC1, the one that contracts it back RoleVFC2, their biases
-// with them. SmolVLM's mmproj names them the other way round (llama.cpp's
-// loader warns "ffn up/down are swapped"). A block whose MLP is as wide as
+// with them. SmolVLM's mmproj names them the other way round. A block whose MLP is as wide as
 // the tower cannot be told by shape and keeps the file's names; one whose
 // matrices fit neither arrangement is refused.
 func towerFFNByShape(s *jlm.Source) error {

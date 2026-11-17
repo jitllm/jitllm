@@ -12,8 +12,8 @@ import (
 // gate_up_proj into gate then up, by row ranges, as Phi3Attention and Phi3MLP
 // read them, each part in its source's place; a fused tensor of another row
 // count is refused, not cut. Every layer slides when the class states a
-// window, and a null one is none (not llama.cpp's defaults for a GGUF without
-// the key).
+// window, and a null one is none (not a default for a GGUF without the
+// key).
 func TestPhi3ThroughTheLibrary(t *testing.T) {
 	mj := libraryFile(t, "Phi3ForCausalLM")
 	a, err := mj.hfArch()

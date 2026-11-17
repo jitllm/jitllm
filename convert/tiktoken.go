@@ -74,8 +74,7 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 		v.Tokens[r], v.Kinds[r] = pretok.ByteLevel(t), jlm.TokenNormal
 	}
 
-	// The merges are recovered from the ranks, as llama.cpp's converter does
-	// (QwenModel.bpe): a token of rank r is the merge of the two parts that
+	// The merges are recovered from the ranks: a token of rank r is the merge of the two parts that
 	// BPE with every rank below r leaves it in, and only two can be left.
 	for r, t := range byRank {
 		if len(t) < 2 {

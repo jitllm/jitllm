@@ -21,7 +21,7 @@ func obtainableExempt() map[string]string {
 			"from transformers' own DbrxForCausalLM, and no published quant has been " +
 			"converted and verified here, which is what a catalogue entry promises",
 		"glm4moe": "GLM-4.5-Air is 106B, 73 GB at Q4_K_M in two GGUF parts, and a catalogue " +
-			"entry names one file; it is verified (20 of 20 teacher-forced against llama.cpp " +
+			"entry names one file; it is verified (20 of 20 teacher-forced by TestGreedyMatchesLlamaCpp " +
 			"on a V100 box) and converts from the first part",
 		"hunyuan-moe": "built and gated on a synthetic fixture from transformers' own " +
 			"HunYuanMoEV1ForCausalLM; Hunyuan-A13B (80B) is not yet verified here",
@@ -42,13 +42,13 @@ func obtainableExempt() map[string]string {
 			"published quantization but not a model to offer",
 		"gemma4": "built and gated on synthetic fixtures from transformers' own Gemma4ForCausalLM; " +
 			"the 31B is the only published size whose graph is complete here (E2B/E4B carry " +
-			"per-layer embeddings, the 26B a mixture), and it is not yet verified against llama.cpp",
+			"per-layer embeddings, the 26B a mixture), and it is not yet verified against the GGUF oracle",
 		"qwen4exp": "Qwen3.8-Flash-Next is 125B, 111 GB at UD-Q4_K_XL in four GGUF parts, and a " +
 			"catalogue entry names one file; built and gated on a synthetic fixture from " +
 			"transformers' own Qwen4ExpForCausalLM, and its UD-Q4_K_XL converts from the first part",
 		"dots1": "dots.llm1 is 142B, 96 GB at Q4_K_M in three GGUF parts, and a catalogue entry " +
 			"names one file; built and gated on a synthetic fixture from transformers' own " +
-			"Dots1ForCausalLM, and 18 of 20 teacher-forced against llama.cpp (V100 box)",
+			"Dots1ForCausalLM, and 18 of 20 teacher-forced by TestGreedyMatchesLlamaCpp (V100 box)",
 	}
 }
 

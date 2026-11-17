@@ -144,7 +144,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 		v.PreName = "default"
 	}
 	// A file naming no pre-tokenizer of its own ("default") splits with the
-	// one the library states for its architecture (Ollama's Llama 4 says
+	// one the library states for its architecture (a Llama 4 GGUF that says
 	// "default", where its tokenizer.json splits with the o200k pattern,
 	// RULE 7m); a real name is kept.
 	if v.PreName == "default" {
@@ -245,11 +245,10 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 }
 
 // preTokenizersJSON is each pre-tokenizer name's add_bos and ignore_merges
-// where they are not false: llama3's regex group (llama.cpp's list, name for
-// name) and Llama 4, whose own tokenizer.json says ignore_merges: true and
-// prepends <|begin_of_text|>, where llama.cpp's gpt-4o branch sets
-// ignore_merges false (RULE 7m). "default" is not in it: llama.cpp gives an
-// absent or "default" name its own pipeline with neither boolean
+// where they are not false: llama3's regex group (the pre names that share its
+// pattern) and Llama 4, whose own tokenizer.json says ignore_merges: true and
+// prepends <|begin_of_text|> (RULE 7m). "default" is not in it: an absent or
+// "default" name gets its own pipeline with neither boolean
 // (pretok.DefaultBPE()). It is resolved at conversion; nothing on the
 // load path consults it.
 //
@@ -321,8 +320,7 @@ func preTokenizers() (map[string]preTokenizer, error) {
 // A BERT file's [CLS] opens the sequence and [SEP] closes it. Files spell
 // them two ways (bos/eos_token_id, or only cls/seperator_token_id), and
 // reading one spelling leaves the other with no opener, which a CLS-pooled
-// model reads its embedding from. Both are added, as llama.cpp does for every
-// WPM vocabulary and as BertProcessing does.
+// model reads its embedding from. Both are added, as BertProcessing does.
 func wordPiece(f *meta.File, v *jlm.Vocab, pre string) *jlm.Vocab {
 	if n, ok := f.KV["tokenizer.ggml.cls_token_id"].Uint(); ok && v.BOS < 0 {
 		v.BOS = int32(n)
@@ -335,7 +333,7 @@ func wordPiece(f *meta.File, v *jlm.Vocab, pre string) *jlm.Vocab {
 	}
 	v.AddBOS, v.AddEOS, v.AddSpacePrefix = true, true, false
 	// BertNormalizer's two options. Absent keys mean an uncased model
-	// (llama.cpp's default), and strip_accents follows lowercase unless the
+	// (BertNormalizer's default), and strip_accents follows lowercase unless the
 	// file says otherwise, as in HuggingFace.
 	lower := true
 	if n, ok := f.KV["tokenizer.ggml.normalizer.lowercase"].Uint(); ok {

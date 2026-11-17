@@ -10,8 +10,8 @@ import "fmt"
 
 // partialRotary checks a rotary width that is not the whole head: it must be
 // even (the pairs) and fit inside the head. The rotated dimensions lead and
-// the tail passes through, which is what every C6 graph's ggml_rope_ext does
-// with n_rot < head_dim.
+// the tail passes through, which is what every C6 reference's rotary does
+// with a rotary width below head_dim.
 func partialRotary(c *Config) error {
 	if c.NRot == 0 || c.NRot%2 != 0 || c.NRot > c.HeadDim {
 		return fmt.Errorf("rotary width %d on a %d-wide head", c.NRot, c.HeadDim)
@@ -19,7 +19,7 @@ func partialRotary(c *Config) error {
 	return nil
 }
 
-// Microsoft's phi-2 (and phi-1.5), llama.cpp's phi2.cpp, whose container
+// Microsoft's phi-2 (and phi-1.5), transformers' PhiForCausalLM, whose container
 // classic.json states:
 //
 //	attn_norm (LayerNorm + bias) feeds both branches    -> Parallel, no ffn_norm
@@ -27,11 +27,11 @@ func partialRotary(c *Config) error {
 //	ffn_up (+bias), GELU, ffn_down (+bias), no gate    -> the absent gate
 //	output_norm (+bias), output (+bias)                -> the head's two biases
 //
-// llama.cpp scales q by 1/sqrt(head_dim) before the product "to avoid
-// precision issues" and runs the softmax at scale 1; that is the same function
-// as scaling the scores, which is what this engine does.
+// Scaling q by 1/sqrt(head_dim) before the product and running the softmax at
+// scale 1 is the same function as scaling the scores, which is what this
+// engine does.
 
-// Cohere's graph, llama.cpp's command-r.cpp and cohere2.cpp, whose containers
+// Cohere's graph, transformers' CohereForCausalLM and Cohere2ForCausalLM, whose containers
 // classic.json states:
 //
 //	attn_norm (LayerNorm, NO bias) feeds both branches  -> Parallel

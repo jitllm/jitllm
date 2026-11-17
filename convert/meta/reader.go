@@ -93,7 +93,7 @@ func (r *Reader) SkipValue(t ValueType, depth int) {
 	case String:
 		r.Str()
 	case Array:
-		if depth > 0 { // ggml has never nested arrays; refuse rather than recurse on hostile input.
+		if depth > 0 { // GGUF has never nested arrays; refuse rather than recurse on hostile input.
 			r.Fail("nested array")
 			return
 		}

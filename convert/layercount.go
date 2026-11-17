@@ -7,8 +7,8 @@ import (
 )
 
 // layerCount reads a count a file may write per layer: a number, or one per
-// layer whose zeros mark the layers it does not apply to (llama.cpp's is_recr
-// reads that zero on a hybrid's recurrent layers). An array whose other
+// layer whose zeros mark the layers it does not apply to (a hybrid's recurrent
+// layers state zero). An array whose other
 // entries agree is that number, and one of zeros is zero; one whose entries
 // differ comes back whole (per), with n zero.
 func layerCount(f *meta.File, key string, def uint32) (n uint32, per []int32, err error) {

@@ -10,8 +10,8 @@ import (
 )
 
 // TestPhimoeRefusesAHeadWidthTheFileDoesNotState is Phi-tiny-MoE's GGUF:
-// sixteen heads of 128 on a 4096-wide model, and llama.cpp's phimoe converter
-// writes no attention.key_length, so the file implies heads of 256 while its q
+// sixteen heads of 128 on a 4096-wide model, and its GGUF
+// holds no attention.key_length, so the file implies heads of 256 while its q
 // projection has 2048 rows. Converting it would run every head at the wrong
 // width (it panicked at the first token); the file is refused, naming the
 // safetensors input that reads head_dim. The control is the same file with q

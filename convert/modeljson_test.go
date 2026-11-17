@@ -593,7 +593,7 @@ func qwen35TestConfig(t *testing.T, edit ...string) *hfConfig {
 
 // TestQwen35ConfigThroughTheLibrary: Qwen3.5's config.json, read through
 // convert/models/qwen3_5.json, states what configOf states from
-// llama.cpp's GGUF of the same model, and each refusal fires.
+// the GGUF of the same model, and each refusal fires.
 func TestQwen35ConfigThroughTheLibrary(t *testing.T) {
 	lib, err := modelLibrary()
 	if err != nil {
@@ -877,8 +877,8 @@ func TestModelJSONPrimitives(t *testing.T) {
 }
 
 // TestLlama3RopeScalingStatesItsFactors: a llama3 rope scaling, read through a
-// library file, states rope_freqs.weight as convert_hf_to_gguf.py computes it
-// (llama3Freqs, ropescaling.go); default states no tensor.
+// library file, states rope_freqs.weight as a GGUF carries it (llama3Freqs,
+// ropescaling.go); default states no tensor.
 func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
 	lib, err := modelLibrary()
 	if err != nil {

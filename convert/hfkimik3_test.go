@@ -25,7 +25,7 @@ type k3Key struct {
 }
 
 // k3Sources converts one Kimi-K3 twice -- its HuggingFace directory through
-// the safetensors path, and the GGUF llama.cpp's converter wrote from the
+// the safetensors path, and the GGUF convert_hf_to_gguf.py wrote from the
 // same checkpoint -- and demands every Config field equal, the blocks' stated
 // graphs among them. It returns the two tensor sets by identity.
 func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
@@ -88,7 +88,7 @@ func k3Values(t *testing.T, e *jlm.Tensor) []float32 {
 }
 
 // TestK3SafetensorsMatchesItsGGUF converts Kimi-K3 from its HuggingFace
-// checkpoint and from the F32 GGUF llama.cpp's converter wrote from it, and
+// checkpoint and from the F32 GGUF convert_hf_to_gguf.py wrote from it, and
 // demands the same container: every Config field, and every tensor byte for
 // byte. Both are F32, so a role, a join order, a split, the residual scores'
 // product or a dropped tensor is an inequality, not a tolerance. The GGUF
@@ -98,7 +98,7 @@ func k3Values(t *testing.T, e *jlm.Tensor) []float32 {
 // checkpoint none.
 //
 // One exception, measured: the KDA decay rate is -exp(A_log), which
-// llama.cpp's converter takes in float32 torch and this converter in float64
+// the GGUF's writer takes in float32 torch and this converter in float64
 // rounded once; the two may part by one ulp, and no more.
 func TestK3SafetensorsMatchesItsGGUF(t *testing.T) {
 	for _, c := range []struct{ name, dir, gguf string }{
@@ -143,7 +143,7 @@ func TestK3SafetensorsMatchesItsGGUF(t *testing.T) {
 
 // TestK3MXFP4ExpertsMatchTheGGUF converts inference-optimization's
 // Kimi-K3-0.40B-MXFP4 (compressed-tensors mxfp4-pack-quantized, the release's
-// format) from the checkpoint and from the MXFP4 GGUF llama.cpp's converter
+// format) from the checkpoint and from the MXFP4 GGUF convert_hf_to_gguf.py
 // wrote from it (murillo2000/Kimi-K3-0.40B-GGUF), and demands every routed
 // expert bank byte for byte: the codes and scales are moved, never
 // requantized. The GGUF stores the rest at F16, so the rest is compared by
@@ -524,8 +524,8 @@ func TestPlanIsTheWrite(t *testing.T) {
 
 // TestALogPaddingIsTakenOnlyWhenZero: Kimi-K3's release stores A_log as 128
 // entries for 96 heads, the last 32 zero (read off the Hub). Each Moonshot
-// class's table takes the heads' entries, as llama.cpp's converter takes
-// them, as the per-channel rate -exp(A_log) repeated over a head; a tail that
+// class's table takes the heads' entries, as the GGUF holds them, as the
+// per-channel rate -exp(A_log) repeated over a head; a tail that
 // is not zero is another geometry and is refused.
 func TestALogPaddingIsTakenOnlyWhenZero(t *testing.T) {
 	files, err := libraryFiles()

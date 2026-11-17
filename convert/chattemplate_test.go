@@ -221,7 +221,7 @@ func TestConvertStoresTheChatTemplate(t *testing.T) {
 }
 
 // A GGUF's named templates are stored as the tokenizer_config list they came
-// from is: llama.cpp's converter writes the default to tokenizer.chat_template
+// from is: a GGUF holds the default in tokenizer.chat_template
 // and each other one to tokenizer.chat_template.<name>.
 func TestGGUFNamedTemplatesMatchTheList(t *testing.T) {
 	kv := map[string]meta.Value{
@@ -251,7 +251,7 @@ func TestGGUFNamedTemplatesMatchTheList(t *testing.T) {
 		t.Errorf("no template: %+v", got)
 	}
 
-	// A real GGUF written by llama.cpp's converter from a named list.
+	// A real GGUF written by convert_hf_to_gguf.py from a named list.
 	src := testmodels.Path("synth-commandr.gguf")
 	f, err := gguf.Open(src)
 	if err != nil {

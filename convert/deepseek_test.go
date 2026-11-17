@@ -113,8 +113,8 @@ func TestDeepseekConverts(t *testing.T) {
 	if c.Flags.Has(jlm.FlagNoExpertNorm) {
 		t.Error("norm_topk_prob is true and FlagNoExpertNorm is set")
 	}
-	// Not NEOX: llama.cpp gives deepseek2 LLAMA_ROPE_TYPE_NORM, transformers
-	// rotates adjacent pairs, and no row permutation happens on the way in.
+	// Not NEOX: transformers' DeepSeek-V2 rotates adjacent pairs, and no row
+	// permutation happens on the way in.
 	if c.Flags.Has(jlm.FlagRopeNeox) {
 		t.Error("FlagRopeNeox is set: deepseek2 rotates ADJACENT pairs")
 	}
@@ -147,7 +147,7 @@ func TestDeepseekLayerSets(t *testing.T) {
 	dense := []jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown}
 	// RoleExpProbsB, not RoleRouterBias: DeepSeek's e_score_correction_bias
 	// biases the selection only, where gpt-oss's ffn_gate_inp.bias biases the
-	// router logits and reaches the weights. llama.cpp keeps two tensors too.
+	// router logits and reaches the weights. A GGUF stores two tensors too.
 	moe := []jlm.Role{jlm.RoleRouter, jlm.RoleExpProbsB,
 		jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank,
 		jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown}
@@ -481,7 +481,7 @@ func TestSynthDeepseekAlreadySplitIsNotReSplit(t *testing.T) {
 		p := fmt.Sprintf("model.layers.%d.self_attn.", l)
 		fused := m.tensors[p+"kv_b_proj.weight"]
 		delete(m.tensors, p+"kv_b_proj.weight")
-		// The shapes llama.cpp already writes: wk_b is {qk_nope, kv_lora,
+		// The shapes a GGUF already holds: wk_b is {qk_nope, kv_lora,
 		// n_head} and wv_b is {kv_lora, v_head, n_head}, which safetensors
 		// lists slowest-first.
 		m.tensors[p+"k_b_proj.weight"] = &synthTensor{safetensors.F32,

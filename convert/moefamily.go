@@ -8,7 +8,7 @@ import (
 
 // sharedExpertWidth takes the shared expert's width off its tensor wherever
 // one ships, for every graph: a key or a count can disagree with the
-// weights (llama.cpp's ERNIE converter writes intermediate_size //
+// weights (an ERNIE GGUF holds intermediate_size //
 // num_key_value_heads where the class builds moe_intermediate_size *
 // moe_num_shared_experts; Hunyuan builds it at intermediate_size), and the
 // tensor is the fact. A file shipping none keeps the key's or the count's.

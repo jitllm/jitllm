@@ -31,7 +31,7 @@ func TestAStageTheTokenizerCannotBuildIsRefusedAtConversion(t *testing.T) {
 // pre-tokenizer of its own to the one its architecture's library file
 // states, with that name's booleans (pretokenizers.json): Llama 4's o200k
 // split, its BOS and its ignore_merges. A file that names one keeps it, and
-// an architecture the library states none for keeps llama.cpp's default,
+// an architecture the library states none for keeps the default pipeline,
 // with neither boolean.
 func TestDefaultPreTokenizerIsTheLibrarys(t *testing.T) {
 	file := func(arch, pre string) *meta.File {

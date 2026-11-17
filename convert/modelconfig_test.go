@@ -14,12 +14,11 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestModelConfigStatesWhatTheGGUFDropped converts synth-minicpmv's GGUF,
-// which llama.cpp's converter wrote naming LongRoPE with none of its
-// factors: refused alone, stated from the publisher's config.json with
-// WithModelConfig -- the short and long factors byte for byte as float32,
-// and the original context -- and refused again beside a config.json that
-// states no LongRoPE.
+// TestModelConfigStatesWhatTheGGUFDropped converts synth-minicpmv's GGUF, which
+// names LongRoPE with none of its factors: refused alone, stated from the
+// publisher's config.json with WithModelConfig -- the short and long factors
+// byte for byte as float32, and the original context -- and refused again
+// beside a config.json that states no LongRoPE.
 func TestModelConfigStatesWhatTheGGUFDropped(t *testing.T) {
 	src := testmodels.Path("synth-minicpmv.gguf")
 	cfg := testmodels.Path("vlmb/fixtures/synth-minicpmv/config.json")

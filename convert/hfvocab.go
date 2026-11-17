@@ -214,7 +214,7 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	// diverges a few tokens in.) tokenizer_config's explicit key still overrides
 	// -- for a class that reads it. The generic PreTrainedTokenizerFast does
 	// not: it runs tokenizer.json's post-processor as written, so Hunyuan's
-	// "add_bos_token": true adds no BOS under transformers (or llama.cpp), and
+	// "add_bos_token": true adds no BOS under transformers, and
 	// obeying the key put one in front of every prompt.
 	v.AddBOS, v.AddEOS = hfTemplateAdds(tj.PostProcessor)
 	generic := tc.TokenizerClass == "PreTrainedTokenizerFast"

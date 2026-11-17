@@ -14,7 +14,7 @@ import (
 //go:embed readouts.json
 var readoutsJSON []byte
 
-// readoutFile is readouts.json: the decision readouts by the name llama.cpp
+// readoutFile is readouts.json: the decision readouts by the name a GGUF
 // writes as <arch>.decision.type, and the option-count bands their
 // temperatures were fitted on, by the names the converter gives them.
 type readoutFile struct {

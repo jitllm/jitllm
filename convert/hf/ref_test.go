@@ -25,11 +25,11 @@ func TestParseAcceptsTheFormsItDocuments(t *testing.T) {
 			Ref{"bartowski/Qwen3-1.7B-GGUF", "v1.2", "Qwen3-1.7B-Q4_K_M.gguf"}},
 		{"hf://o/r@abc123", true, Ref{"o/r", "abc123", ""}},
 		// A repository, file unchosen: Resolve answers or refuses.
-		{"hf://ggml-org/models", true, Ref{"ggml-org/models", "main", ""}},
-		{"hf://ggml-org/models/", true, Ref{"ggml-org/models", "main", ""}},
+		{"hf://example-org/models", true, Ref{"example-org/models", "main", ""}},
+		{"hf://example-org/models/", true, Ref{"example-org/models", "main", ""}},
 		// A path inside the repo survives whole.
-		{"hf://ggml-org/models/tinyllamas/stories15M-q4_0.gguf", true,
-			Ref{"ggml-org/models", "main", "tinyllamas/stories15M-q4_0.gguf"}},
+		{"hf://example-org/models/tinyllamas/stories15M-q4_0.gguf", true,
+			Ref{"example-org/models", "main", "tinyllamas/stories15M-q4_0.gguf"}},
 		// The download button.
 		{"https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/" + file, true,
 			Ref{"TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", "main", file}},

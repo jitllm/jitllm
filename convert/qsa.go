@@ -7,8 +7,8 @@ import (
 )
 
 // stateQSA states QSA (query-sparse attention) on the attention blocks from
-// the ratio each block compresses by, rs (llama.cpp's qwen4exp.cpp and
-// transformers' Qwen4ExpForCausalLM, the qsa_ratios statement; none stated
+// the ratio each block compresses by, rs (transformers'
+// Qwen4ExpForCausalLM, the qsa_ratios statement; none stated
 // for nil): the ratio on every attention block, zero on every linear one,
 // one ratio throughout, and the indexer's heads, width and a budget of
 // whole compressed blocks. Any other pattern is refused.
@@ -28,12 +28,11 @@ func stateQSA(f *meta.File, c *Config, rs []uint64) error {
 		if uint64(len(rs)) < uint64(c.NLayer) {
 			return fmt.Errorf("%d compress ratios for %d blocks", len(rs), c.NLayer)
 		}
-		// A prediction block that carries the QSA indexer is a QSA block at
-		// the model's ratio. unsloth's published heads state 0 for it where
-		// llama.cpp's converter writes the ratio (conversion/qwen4exp.py:
-		// "the MTP block is a full-attention QSA layer too"), and the
-		// release's config makes it full attention, which this model runs
-		// as QSA; the tensors decide (RULE 7m).
+		// A prediction block that carries the QSA indexer is a QSA block at the
+		// model's ratio. unsloth's published heads state 0 for it where other
+		// GGUFs write the ratio, and the release's config makes it full
+		// attention, which this model runs as QSA; the tensors decide (RULE
+		// 7m).
 		trunk := int(c.NLayer) - int(f.UintKey("nextn_predict_layers", 0))
 		for i := trunk; i < int(c.NLayer) && i < len(rs) && c.QSARatio != 0; i++ {
 			if _, idx := f.Get("blk." + itoa(i) + ".indexer.k_proj.weight"); idx && rs[i] == 0 {
@@ -92,8 +91,8 @@ func ngramConfig(f *meta.File, c *Config) error {
 	}
 	e, _ := eos.Uint()
 	c.NGramEOS = uint32(e)
-	// llama.cpp's loader takes the end-of-sequence id when a file predates
-	// the key; the image id is what transformers hashes at a picture's rows.
+	// A file that predates the key takes the end-of-sequence id; the image id
+	// is what transformers hashes at a picture's rows.
 	c.NGramImage = uint32(f.UintKey("ple.image_token_id", e))
 	for _, k := range []struct {
 		key string
@@ -111,7 +110,7 @@ func ngramConfig(f *meta.File, c *Config) error {
 	if c.NGram < 2 || c.NGramHeadsPer == 0 {
 		return fmt.Errorf("%d-grams with %d heads each", c.NGram, c.NGramHeadsPer)
 	}
-	// llama.cpp reads the arrays at their stated length and requires at
+	// The arrays are read at their stated length and must hold at
 	// least the heads' worth; the container holds exactly that many.
 	heads := int(c.NGram-1) * int(c.NGramHeadsPer)
 	if len(c.NGramMul) < int(c.NGram) || len(c.NGramOff) < heads || len(c.NGramVoc) < heads {

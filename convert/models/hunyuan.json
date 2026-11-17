@@ -28,7 +28,7 @@
     "require": [
       {"that": "(use_cla ?? false) == false", "else": "use_cla (cross-layer attention) is not implemented"},
       {"that": "!((num_experts ?? 0) > 1) || uniform(moe_intermediate_size ?? 0) in [0, intermediate_size ?? 11008]",
-       "else": "moe_intermediate_size differs from intermediate_size: transformers builds the experts from the second and llama.cpp from the first"},
+       "else": "moe_intermediate_size differs from intermediate_size: transformers builds the experts from the second, and the file does not say which its weights follow"},
       {"that": "!((num_experts ?? 0) > 1) || uniform(num_shared_expert ?? 1) in [0, 1]",
        "else": "num_shared_expert is not 0 or 1, and the class builds one shared MLP"}
     ]

@@ -243,10 +243,11 @@ func TestAbsentKeyDefaults(t *testing.T) {
 	}
 }
 
-// TestDequantGoldens is T0: bit-exact against llama.cpp's own dequantizer, with
-// no tolerance at all. For quant.Q4_0 and quant.Q8_0 the arithmetic is a single product of
-// a <=4-bit integer and an f16 scale, which is exact in both float32 and
-// float64, so "close enough" would be hiding a bug rather than absorbing noise.
+// TestDequantGoldens is T0: bit-exact against the GGUF types' reference
+// dequantizer, with no tolerance at all. For quant.Q4_0 and quant.Q8_0 the
+// arithmetic is a single product of a <=4-bit integer and an f16 scale, which
+// is exact in both float32 and float64, so "close enough" would be hiding a bug
+// rather than absorbing noise.
 func TestDequantGoldens(t *testing.T) {
 	for _, tc := range []struct {
 		file string
@@ -322,7 +323,7 @@ func TestDequantRejects(t *testing.T) {
 		t.Error("quant.Dequant accepted a short source buffer")
 	}
 	if err := quant.Dequant(quant.Type(4), make([]byte, 1024), ok[:]); err == nil {
-		t.Error("quant.Dequant accepted a removed ggml type")
+		t.Error("quant.Dequant accepted a retired GGUF type")
 	}
 }
 

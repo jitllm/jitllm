@@ -14,8 +14,8 @@ import (
 )
 
 // TestHeadJoinsAsIfTheTrunkCarriedIt converts scripts/qwen4expgold.py's
-// synth-qwen4exp-mtp three ways, all written by llama.cpp's own converter
-// from one checkpoint: the model with its prediction block in one GGUF, and
+// synth-qwen4exp-mtp three ways, all written by convert_hf_to_gguf.py from
+// one checkpoint: the model with its prediction block in one GGUF, and
 // the trunk alone (--no-mtp) joined to the block alone (--mtp, the shape the
 // release's head is published in). The two containers must be the same bytes.
 //
@@ -88,7 +88,7 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 	}
 	defer hf.Close()
 	// unsloth's published head states a compress ratio of 0 for its block
-	// where llama.cpp's converter writes the model's: the block carries the
+	// where convert_hf_to_gguf.py writes the model's: the block carries the
 	// indexer, so it is the same QSA block and the same container.
 	cr := hf.Arch() + ".attention.compress_ratios"
 	zero := hf.KV[cr]

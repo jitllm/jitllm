@@ -687,7 +687,7 @@ func TestQwen3VLStatesItsTaps(t *testing.T) {
 
 // TestGELUTowersStateTheExactForm converts Janus-Pro's and HunyuanVL's
 // towers and reads back the erf GELU their classes run ("gelu", ACT2FN's
-// GELUActivation), where the file states only GELU and llama.cpp runs its
+// GELUActivation), where the file states only GELU, which could be read as its
 // tanh form; and a file whose tower is not GELU is refused, not read as
 // one.
 func TestGELUTowersStateTheExactForm(t *testing.T) {

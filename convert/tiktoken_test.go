@@ -14,9 +14,9 @@ import (
 )
 
 // TestTiktokenVocabMatchesLlamaCpp builds Kimi's vocabulary from tiktoken.model
-// and holds it to what llama.cpp's converter wrote for the same file: Moonlight
-// ships the identical tiktoken.model (sha256 b6c497a7...), and its GGUF carries
-// llama.cpp's token table and reconstructed merges. Every base token and every
+// and holds it to what a GGUF holds for the same file: Moonlight ships the
+// identical tiktoken.model (sha256 b6c497a7...), and its GGUF carries a token
+// table and merges reconstructed from it. Every base token and every
 // merge must agree, in order.
 func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 	dir := testmodels.Path("Kimi-Linear-48B-A3B-Instruct")
@@ -41,23 +41,23 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 	}
 	const base = 163584
 	if len(ref.Tokens) < base {
-		t.Fatalf("llama.cpp's table has %d tokens", len(ref.Tokens))
+		t.Fatalf("the GGUF's table has %d tokens", len(ref.Tokens))
 	}
 	bad := 0
 	for i := 0; i < base; i++ {
 		if ours.Tokens[i] != ref.Tokens[i] {
 			if bad++; bad <= 5 {
-				t.Errorf("token %d: ours %q, llama.cpp %q", i, ours.Tokens[i], ref.Tokens[i])
+				t.Errorf("token %d: ours %q, the GGUF's %q", i, ours.Tokens[i], ref.Tokens[i])
 			}
 		}
 	}
 	if len(ours.Merges) != len(ref.Merges) {
-		t.Errorf("%d merges, llama.cpp %d", len(ours.Merges), len(ref.Merges))
+		t.Errorf("%d merges, the GGUF's %d", len(ours.Merges), len(ref.Merges))
 	}
 	for i := 0; i < min(len(ours.Merges), len(ref.Merges)); i++ {
 		if ours.Merges[i] != ref.Merges[i] {
 			if bad++; bad <= 10 {
-				t.Errorf("merge %d: ours %v, llama.cpp %v", i, ours.Merges[i], ref.Merges[i])
+				t.Errorf("merge %d: ours %v, the GGUF's %v", i, ours.Merges[i], ref.Merges[i])
 			}
 		}
 	}
@@ -66,10 +66,10 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 			t.Fatalf("special %d is not one of the %d tokens past the %d base ones", id, len(ours.Tokens)-base, base)
 		}
 		if ours.Tokens[id] != ref.Tokens[id] || ours.Kinds[id] != jlm.TokenControl {
-			t.Errorf("special %d: ours %q, llama.cpp %q", id, ours.Tokens[id], ref.Tokens[id])
+			t.Errorf("special %d: ours %q, the GGUF's %q", id, ours.Tokens[id], ref.Tokens[id])
 		}
 	}
-	t.Logf("%d tokens and %d merges agree; BOS %d %q, EOS %d %q; llama.cpp pre %q ignore_merges %v",
+	t.Logf("%d tokens and %d merges agree; BOS %d %q, EOS %d %q; the GGUF's pre %q ignore_merges %v",
 		base, len(ours.Merges), ours.BOS, ours.Tokens[ours.BOS], ours.EOS, ours.Tokens[ours.EOS],
 		ref.PreName, ref.IgnoreMerges)
 }
@@ -77,7 +77,7 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 // TestTiktokenVocabEncodesLikeMoonshot runs the container's tokenizer, built
 // from tiktoken.model, over tok/testdata/kimi_tiktoken.json -- ids produced by
 // Moonshot's own TikTokenTokenizer (scripts/tiktokgold.py). The corpus reaches
-// camelCase (where llama.cpp's kimi-k2 splitter departs from the pat_str),
+// camelCase (where a splitter other than the pat_str's can depart from it),
 // Han against other scripts, digit groups, contractions, the long-s and Kelvin
 // case-fold, and specials written literally in the text: EncodeSpecial against
 // the reference's default encode, which matches them, and Encode against its

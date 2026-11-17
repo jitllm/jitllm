@@ -25,8 +25,8 @@ func FromGGUF(src, dst string, fp jlm.Fingerprint, opts ...Option) (*jlm.Header,
 
 // FromGGUFs writes one container from a text model and, optionally, its vision
 // tower. The mmproj's separate file is a property of the input format and ends
-// here; the text/tower width match that libmtmd checks at runtime is checked
-// at conversion, where there is a file in front of a person.
+// here; the text/tower width match is checked at conversion, where there is a
+// file in front of a person.
 func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jlm.Header, error) {
 	var o options
 	for _, fn := range opts {

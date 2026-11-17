@@ -43,8 +43,8 @@ func TestWholeTensorCRC(t *testing.T) {
 	if err := json.Unmarshal(raw, &want); err != nil {
 		t.Fatal(err)
 	}
-	// The goldens name a model by its content ("sha256:<hex>", the Ollama blob
-	// it was taken from), so each candidate is identified by its bytes: a
+	// The goldens name a model by its content ("sha256:<hex>", the content-addressed
+	// blob it was taken from), so each candidate is identified by its bytes: a
 	// symlink into the blob store by the blob's own name, a plain download by
 	// hashing it. Keying on the file NAME matched nothing on any host, and
 	// every subtest skipped while the gate read green.
@@ -112,7 +112,7 @@ func TestWholeTensorCRC(t *testing.T) {
 			t.Logf("%-22s %10d elems  crc %08x  %v", w.Tensor, w.Elems, w.CRC32, time.Since(start).Round(time.Millisecond))
 		})
 	}
-	t.Logf("total %d elements verified bit-exact against libggml", total)
+	t.Logf("total %d elements verified bit-exact against the reference dequantizer", total)
 }
 
 // contentID is "sha256:<hex>" of the file p names: read off the target's name

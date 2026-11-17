@@ -6,14 +6,14 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// GLM-4.xV's tower tensors (jlm.ProjGLM4V) as llama.cpp's converter writes
-// them: the patch embedding's RMSNorm, the 2x2 merging convolution and the
-// projector's gated MLP have names of their own, and the convolution is a
-// 4-D kernel the container stores as the matrix it is.
+// GLM-4.xV's tower tensors (jlm.ProjGLM4V) as its GGUF holds them: the patch
+// embedding's RMSNorm, the 2x2 merging convolution and the projector's gated
+// MLP have names of their own, and the convolution is a 4-D kernel the
+// container stores as the matrix it is.
 
 // reshapeMergeConv lays the merging convolution out as the matrix the
 // projector multiplies the shuffled row by. The GGUF kernel is
-// [kx, ky, channel, out] (ggml order: kx fastest), and the shuffled row the
+// [kx, ky, channel, out] (GGUF order: kx fastest), and the shuffled row the
 // engine builds is (dy, dx, channel) with the channel fastest, so element
 // (kx, ky, c) of output o moves to column (ky*S + kx)*NEmbd + c. A
 // convolution whose stride equals its kernel over a merge group is that

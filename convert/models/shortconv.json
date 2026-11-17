@@ -19,7 +19,7 @@
         ]
       }},
       "readouts": ["lfm2-d1-omni"], "retarget": [
-                 {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (llama.cpp's LLM_TENSOR_OUTPUT_NORM_LFM2) and is applied after the last block, not to the embeddings"}],
+                 {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (the GGUF's name for LFM2's output norm) and is applied after the last block, not to the embeddings"}],
       "flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]},
     "lfm2moe": {"tensors": {"sizes": {"q": "embedding_length", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
 "block": {"attn_qkv.weight": [
@@ -38,7 +38,7 @@
         ]
       }},
       "retarget": [
-                 {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (llama.cpp's LLM_TENSOR_OUTPUT_NORM_LFM2) and is applied after the last block, not to the embeddings"}],
+                 {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (the GGUF's name for LFM2's output norm) and is applied after the last block, not to the embeddings"}],
       "flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]}
   },
   "graph": {

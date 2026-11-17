@@ -10,7 +10,7 @@ import (
 )
 
 // nextnOf splits a GGUF's block_count into the trunk and the
-// multi-token-prediction blocks after it: llama.cpp writes both into
+// multi-token-prediction blocks after it: a GGUF writes both into
 // block_count and the second into nextn_predict_layers. They stay, as blocks
 // NLayer.. of the container (jlm.Config.NMTP), and from here on NLayer is the
 // trunk alone.

@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/convert/meta"
 )
 
-// splitName matches llama.cpp's gguf-split naming: NAME-00001-of-00003.gguf.
+// splitName matches a split GGUF's shard naming: NAME-00001-of-00003.gguf.
 func splitName() *regexp.Regexp {
 	return regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
 }

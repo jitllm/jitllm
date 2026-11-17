@@ -48,7 +48,7 @@ func statedFeaturesFit(f *meta.File, c *Config) error {
 	return nil
 }
 
-// swigluClamps reads each block's SwiGLU clamp: llama.cpp's converter writes the
+// swigluClamps reads each block's SwiGLU clamp: a GGUF holds the
 // routed and the shared limit per block from swiglu_limit (one value stands
 // for every block), and a file stating neither has transformers' default. A
 // block states one activation, so one whose routed and shared limits differ
@@ -107,11 +107,11 @@ func swigluClamps(f *meta.File, c *Config) error {
 }
 
 // compressionKinds reads each block's compression off compress_ratios and the
-// tensors: a block with the indexer is CSA (its compressor two heads wide,
-// the overlapping windows), one with a compressor alone is HCA, one with
-// neither a sliding window alone, and its ratio must say the same. llama.cpp
-// tells the two kinds apart by the ratio (4 against 128); transformers by the
-// layer type, each type at one rate -- which is what the container carries.
+// tensors: a block with the indexer is CSA (its compressor two heads wide, the
+// overlapping windows), one with a compressor alone is HCA, one with neither a
+// sliding window alone, and its ratio must say the same (4 against 128).
+// transformers tells the kinds apart by the layer type, each type at one rate
+// -- which is what the container carries.
 func compressionKinds(f *meta.File, c *Config) error {
 	kv, ok := f.Key("attention.compress_ratios")
 	if !ok {

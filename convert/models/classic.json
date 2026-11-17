@@ -81,7 +81,7 @@
                      {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
                      {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
       "retarget": [
-                 {"from": "attn_out_norm", "to": "ffn_norm", "why": "its attn_output_norm is the FFN's pre-norm (llama.cpp's dbrx.cpp), where BERT's is applied after the residual add"}],
+                 {"from": "attn_out_norm", "to": "ffn_norm", "why": "its attn_output_norm is the FFN's pre-norm (transformers' DbrxNormAttentionNorm norm_2), where BERT's is applied after the residual add"}],
       "flags": {"layer_norm": "true", "rope_neox": "true"}, "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
              "clamp_kqv": "src['attention.clamp_kqv']"},
     "phimoe": {"stop": ["<|endoftext|>", "<|assistant|>", "<|end|>"], "tensors": {"sizes": {"q": "embedding_length",
@@ -111,10 +111,10 @@
                      {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
                      {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
       "retarget": [
-                 {"from": "attn_norm", "to": "ffn_norm", "when": "blk.0.attn_norm_2.weight", "why": "gguf-py writes Falcon-40B's ln_mlp as attn_norm and its ln_attn as attn_norm_2, and llama.cpp's falcon.cpp feeds attention attn_norm_2 and the FFN attn_norm; with one norm (7B) the parallel block shares it"},
-                 {"from": "attn_norm.bias", "to": "ffn_norm.bias", "when": "blk.0.attn_norm_2.weight", "why": "gguf-py writes Falcon-40B's ln_mlp as attn_norm and its ln_attn as attn_norm_2, and llama.cpp's falcon.cpp feeds attention attn_norm_2 and the FFN attn_norm; with one norm (7B) the parallel block shares it"},
-                 {"from": "attn_norm_2", "to": "attn_norm", "when": "blk.0.attn_norm_2.weight", "why": "gguf-py writes Falcon-40B's ln_mlp as attn_norm and its ln_attn as attn_norm_2, and llama.cpp's falcon.cpp feeds attention attn_norm_2 and the FFN attn_norm; with one norm (7B) the parallel block shares it"},
-                 {"from": "attn_norm_2.bias", "to": "attn_norm.bias", "when": "blk.0.attn_norm_2.weight", "why": "gguf-py writes Falcon-40B's ln_mlp as attn_norm and its ln_attn as attn_norm_2, and llama.cpp's falcon.cpp feeds attention attn_norm_2 and the FFN attn_norm; with one norm (7B) the parallel block shares it"}],
+                 {"from": "attn_norm", "to": "ffn_norm", "when": "blk.0.attn_norm_2.weight", "why": "a Falcon-40B GGUF holds its ln_mlp as attn_norm and its ln_attn as attn_norm_2, and transformers' FalconDecoderLayer feeds attention ln_attn and the FFN ln_mlp; with one norm (7B) the parallel block shares it"},
+                 {"from": "attn_norm.bias", "to": "ffn_norm.bias", "when": "blk.0.attn_norm_2.weight", "why": "a Falcon-40B GGUF holds its ln_mlp as attn_norm and its ln_attn as attn_norm_2, and transformers' FalconDecoderLayer feeds attention ln_attn and the FFN ln_mlp; with one norm (7B) the parallel block shares it"},
+                 {"from": "attn_norm_2", "to": "attn_norm", "when": "blk.0.attn_norm_2.weight", "why": "a Falcon-40B GGUF holds its ln_mlp as attn_norm and its ln_attn as attn_norm_2, and transformers' FalconDecoderLayer feeds attention ln_attn and the FFN ln_mlp; with one norm (7B) the parallel block shares it"},
+                 {"from": "attn_norm_2.bias", "to": "attn_norm.bias", "when": "blk.0.attn_norm_2.weight", "why": "a Falcon-40B GGUF holds its ln_mlp as attn_norm and its ln_attn as attn_norm_2, and transformers' FalconDecoderLayer feeds attention ln_attn and the FFN ln_mlp; with one norm (7B) the parallel block shares it"}],
       "flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
                "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
     "starcoder": {"tensors": {"sizes": {"q": "embedding_length",
