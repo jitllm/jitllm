@@ -37,12 +37,19 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					ctl := stepControl(t, m, name, dev, instOpts...)
-					g := stepTier(t, m, dev, false, fixtureTier(name)...)
-					defer g.Close()
-					r := stepGate(t, m, g, false, instOpts...)
+					var r stepResult
+					var card string
+					func() {
+						g := stepTier(t, m, dev, false, fixtureTier(name)...)
+						defer g.Close()
+						r, card = stepGate(t, m, g, false, instOpts...), g.Name()
+					}()
+					if fixture(name) && !(r.worst < fixtureStepNMSE) {
+						ctl = orderControl(t, m, dev, instOpts...)
+					}
 					bound := stepBound(m, name, r, ctl)
-					t.Logf("STEP %s %s: worst logit NMSE %.3e (bound %.3e)", filepath.Base(name),
-						g.Name(), r.worst, bound)
+					t.Logf("STEP %s %s: worst logit NMSE %.3e (bound %.3e, order-only control %.3e)", filepath.Base(name),
+						card, r.worst, bound, ctl)
 					if !(r.worst < bound) {
 						t.Fatalf("%s's step across sessions disagrees with each session alone: NMSE %.3e at row %d",
 							filepath.Base(name), r.worst, r.at)
@@ -69,7 +76,7 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 func stepBound(m *model.Model, name string, r stepResult, ctl float64) float64 {
 	switch {
 	case fixture(name):
-		return fixtureStepNMSE
+		return max(fixtureStepNMSE, denseStepBand*ctl)
 	case m.Cfg.MoE():
 		return max(mixtureStepNMSE, denseStepBand*ctl)
 	}
@@ -78,7 +85,8 @@ func stepBound(m *model.Model, name string, r stepResult, ctl float64) float64 {
 
 // stepControl is the order-only control stepBound sizes a model's band from,
 // measured on dev before the gate opens its tier, or 0 for a synthetic
-// fixture, whose bound is a constant.
+// fixture, whose control is measured only where its step reads past
+// fixtureStepNMSE.
 func stepControl(t *testing.T, m *model.Model, name, dev string, io ...Option) float64 {
 	if fixture(name) {
 		return 0
@@ -96,6 +104,10 @@ func fixture(name string) bool { return strings.HasPrefix(filepath.Base(name), "
 // bound of the published models' width would pass a missing Llama 4
 // temperature, which reads 6.4e-04 on the fixture. It is float arithmetic's
 // bound, so a fixture's card forms nothing on its matrix unit (fixtureTier).
+// A fixture whose summation order alone moves it further is held to
+// denseStepBand times that order-only spread instead: synth-kimik3's, a
+// mixture over recurrent and latent-attention blocks, reads 2.1e-10 on CUDA
+// and 1.4e-09 on SPIR-V, and its step 1.0e-09.
 const fixtureStepNMSE = 1e-9
 
 // fixtureMatrixNMSE is a fixture's step bound with the matrix unit on: a step
