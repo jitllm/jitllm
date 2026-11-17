@@ -354,10 +354,11 @@ func (g *devTier) selBufs(bs *blockScratch, l *layer) error {
 // between two sweeps, and after the last, the codes that read the folds once
 // over the whole history. src is the block whose pools the form reads: its
 // rows' and each history it keeps past them, whose evicted pages a pass
-// uploads beside its rows'. Callers hold g.mu, inside the submission's
+// uploads beside its rows', as it does those of each other block's history
+// in more (layer.kvMore). Callers hold g.mu, inside the submission's
 // session.
 func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, bs *blockScratch,
-	src int, in, out []backend.Buf) error {
+	src int, more []graph.HistoryRead, in, out []backend.Buf) error {
 	f, pg := sv.f, bs.pkv
 	st, t := pg.st, sv.sl.tables
 	copy(sv.in[:sv.n], in)
@@ -447,6 +448,13 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 					}
 					if err := upload(l, q, u.p0, u.p1); err != nil {
 						return err
+					}
+				}
+				for _, r := range more {
+					if l := g.moreOf(r); l != nil {
+						if err := upload(l, q, u.p0, u.p1); err != nil {
+							return err
+						}
 					}
 				}
 				g.KVStreamPasses++

@@ -21,7 +21,7 @@ func principleFixtures() []string {
 		"synth-falconh1.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf",
 		"synth-gemma4-e.gguf", "synth-gemma4-wide.gguf", "synth-glm4.gguf", "synth-granitehybrid.gguf",
 		"synth-hunyuan.gguf", "synth-kimik3.gguf", "synth-lfm2.gguf", "synth-mamba2.gguf", "synth-minimaxm3.gguf",
-		"synth-nemotronh.gguf", "synth-nemotronhmoe.gguf", "synth-qwen4exp.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
+		"synth-nemotronh.gguf", "synth-nemotronhmoe.gguf", "synth-qwen4exp.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", readsTwoFixture}
 	for _, fx := range denseFixtures() {
 		names = append(names, fx.name+".gguf")
 	}

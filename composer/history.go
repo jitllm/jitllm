@@ -70,39 +70,63 @@ func (h History) slots(page int) int {
 // slots is a page's slots of the history the op being decomposed reads.
 func (c *Context) slots() int { return c.History.slots(c.Step.Page) }
 
-// values is the pool history n's values are read from, its operand and its
-// layout.
-func (h History) values(n uint8) (Operand, Pool) {
+// values is the pool the history at table instance n reads its values
+// from, its operand and its layout.
+func (h History) values(n int) (Operand, Pool) {
 	if h.ValuesInKeys {
-		return h.Keys.operand(TableKeys.of(int(n))), h.Keys
+		return h.Keys.operand(TableKeys.of(n)), h.Keys
 	}
-	return h.Values.operand(TableValues.of(int(n))), h.Values
+	return h.Values.operand(TableValues.of(n)), h.Values
 }
 
 // historyOf is the history an op reads or writes (its first, a block's ops
-// touch one history each) and that history's layout.
-func (c *Context) historyOf(o graph.Op) (uint8, History, error) {
-	var h uint8
+// touch one history each) as the table instance it is bound at (slotOf),
+// and that history's layout.
+func (c *Context) historyOf(o graph.Op) (int, History, error) {
+	var r graph.StateRef
 	switch {
 	case len(o.Reads) > 0:
-		h = o.Reads[0].Hist
+		r = o.Reads[0]
 	case len(o.Writes) > 0:
-		h = o.Writes[0].Hist
+		r = o.Writes[0]
+	}
+	h, err := c.slotOf(r)
+	if err != nil {
+		return 0, History{}, err
 	}
 	l, err := c.layoutOf(h)
 	return h, l, err
 }
 
-// layoutOf is the layout of the block's history h: the request's History
-// for 0, More[h-1] past it.
-func (c *Context) layoutOf(h uint8) (History, error) {
+// slotOf is the table instance history r is bound at: its index, for a
+// history of the block's own or of the block it reads in their place, and
+// 1+len(More)+j for read j of another block's (graph.Graph.ReadsMore).
+func (c *Context) slotOf(r graph.StateRef) (int, error) {
+	if c.Graph == nil {
+		return int(r.Hist), nil
+	}
+	j := c.Graph.MoreIndex(r)
+	switch {
+	case j < 0:
+		return int(r.Hist), nil
+	case j >= len(c.Bound):
+		return 0, fmt.Errorf("%v of block %d, read %d past its histories, of a request laying out %d", r, c.Graph.Block, j, len(c.Bound))
+	}
+	return 1 + len(c.More) + j, nil
+}
+
+// layoutOf is the layout of the history at table instance h: the
+// request's History for 0, More[h-1] past it, and Bound's past More.
+func (c *Context) layoutOf(h int) (History, error) {
 	switch {
 	case h == 0 && c.hist == 0:
 		return c.History, nil
 	case h == 0:
 		return c.base, nil
-	case int(h) > len(c.More):
-		return History{}, fmt.Errorf("history %d of a request laying out %d", h, 1+len(c.More))
+	case h > len(c.More)+len(c.Bound):
+		return History{}, fmt.Errorf("history %d of a request laying out %d", h, 1+len(c.More)+len(c.Bound))
+	case h > len(c.More):
+		return c.Bound[h-1-len(c.More)], nil
 	}
 	return c.More[h-1], nil
 }
@@ -192,7 +216,7 @@ func (c *Context) onHistory(o graph.Op) (undo func(), err error) {
 }
 
 // tab is table t of the history the op being decomposed reads.
-func (c *Context) tab(t Table) Operand { return t.of(int(c.hist)) }
+func (c *Context) tab(t Table) Operand { return t.of(c.hist) }
 
 // Slots is a page's slots of a history laid out as h, its pages of page
 // positions: a position each, or an entry each Period and one past them.

@@ -49,9 +49,11 @@ type composedPart struct {
 	vectors map[jlm.Role]backend.Buf
 	tables  map[composer.TableKey]backend.Buf
 	// history, keys and page are a block's history layout and its step's
-	// key bound and page; more its other histories' (its entries').
+	// key bound and page; more its other histories' (its entries'), and
+	// bound those of other blocks it reads past them (layer.kvMore).
 	history    composer.History
 	more       []composer.History
+	bound      []composer.History
 	keys, page int
 	// context is the positions the whole history holds, for a selecting form
 	// over passes (composer.Step.Context), 0 elsewhere.
@@ -292,6 +294,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 		Device:   dev,
 		History:  sl.history,
 		More:     sl.more,
+		Bound:    sl.bound,
 	}, nil
 }
 
@@ -3083,6 +3086,32 @@ func (g *devTier) bindHists(t map[composer.TableKey]backend.Buf, src int) {
 	}
 }
 
+// moreOf is the pool of the history r names, nil where the tier holds none.
+func (g *devTier) moreOf(r graph.HistoryRead) *kvLayerPool {
+	if g.kvp == nil {
+		return nil
+	}
+	return g.kvp.layers[histKey(r.Block, r.Hist)]
+}
+
+// bindMore binds into t every other block's history block l reads past
+// its history block's (layer.kvMore), read j's keys, values and pages as
+// the composer's tables of instance nh+j, nh the histories its history
+// block keeps (composer.Request.Bound). Callers hold g.mu.
+func (g *devTier) bindMore(t map[composer.TableKey]backend.Buf, l *layer, nh int) {
+	for j, r := range l.kvMore {
+		pe := g.moreOf(r)
+		if pe == nil {
+			continue
+		}
+		t[composer.TableKey{Table: composer.TableKeys, Instance: nh + j}] = pe.k
+		t[composer.TableKey{Table: composer.TablePages, Instance: nh + j}] = pe.tab
+		if !pe.geom.mla {
+			t[composer.TableKey{Table: composer.TableValues, Instance: nh + j}] = pe.v
+		}
+	}
+}
+
 // servedBlock is block li served whole at a step of R rows: its graph formed
 // as one unit on the block's weights and vectors by role, its rotary table
 // cs and its history in the tier's pool layer pl, through the rows'
@@ -3153,11 +3182,24 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			}
 			sl.more = append(sl.more, eh)
 		}
+		for _, r := range l.kvMore {
+			var eh composer.History
+			if pe := g.moreOf(r); pe != nil && r.Hist == 0 {
+				eh = poolHistory(pe.geom)
+			} else if pe != nil {
+				eh = entryHistory(pe.geom)
+			}
+			sl.bound = append(sl.bound, eh)
+		}
 		g.bindHists(sl.tables, l.kvSrc)
+		g.bindMore(sl.tables, l, nh)
 		if run != nil {
 			sl.history.Passes = true
 			for i := range sl.more {
 				sl.more[i].Passes = true
+			}
+			for i := range sl.bound {
+				sl.bound[i].Passes = true
 			}
 			sl.tables[tableKey(composer.TableRunIn)], sl.tables[tableKey(composer.TableRunOut)] = run[0], run[1]
 			if context > 0 {
@@ -3239,6 +3281,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	t[tableKey(composer.TableAngles)], t[tableKey(composer.TableKeys)], t[tableKey(composer.TableValues)], t[tableKey(composer.TablePages)], t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)], t[tableKey(composer.TableQOff)] = cs, kk, kv, tab, rows, rowsW, qOff
 	t[tableKey(composer.TableCall)] = calls
 	g.bindHists(t, l.kvSrc)
+	g.bindMore(t, l, nh)
 	if run != nil {
 		t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = run[0], run[1]
 		if context > 0 {

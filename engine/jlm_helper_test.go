@@ -184,6 +184,9 @@ func convertPair(path, mmproj string) (string, error) {
 		// beside it; one that opens passes straight through.
 		return path, fresh.Container(path)
 	}
+	if base, ok := strings.CutSuffix(path, readsTwoSuffix); ok && mmproj == "" {
+		return readingTwo(base)
+	}
 	// A HuggingFace directory converts through the safetensors path to a
 	// container beside its real files, named for the directory; named with
 	// q8Suffix, its matrices quantized to Q8_0 (convert.WithQ8).
@@ -485,6 +488,11 @@ func existingModel(path string) (string, bool) {
 	}
 	if src, ok := strings.CutSuffix(path, q8Suffix); ok {
 		if _, err := os.Stat(src); err == nil {
+			return path, true
+		}
+	}
+	if src, ok := strings.CutSuffix(path, readsTwoSuffix); ok {
+		if _, ok := existingModel(src); ok {
 			return path, true
 		}
 	}

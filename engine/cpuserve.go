@@ -254,6 +254,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	p.Page, p.Keys, p.ActWindow, p.Seqs = page, max(pg.arenaSlots(), 1)*page, s.m.ActWindow, 1
 	p.ValuesInKeys = pg.latent
 	p.Hists = s.m.Composing().BlockGraph(s.histSrc(li)).KeptHistories()
+	p.Bound = s.boundHistories(li)
 	// A block turns by the rotary its rope ops state, of the
 	// instance's (rotaries): each its own table, bound by instance.
 	p.Rotaries = s.rotaries()
@@ -326,7 +327,41 @@ func (s *Instance) blockErr(li int) (nn.Decline, error) {
 		// A paged history with no arena is one with no room for its pages.
 		return nn.DeclineNoRoom, nil
 	}
+	if li < len(s.histMore) {
+		for _, r := range s.histMore[li] {
+			if r.Hist != 0 {
+				continue
+			}
+			// A form reads every history of rows it binds at its own
+			// history's page and capacity.
+			if o := &s.kv.layers[r.Block]; o.p != pg.p || o.arenaSlots() != pg.arenaSlots() {
+				return nn.DeclineNotFormed, fmt.Errorf("block %d reads block %d's history of %d positions a page in %d, beside its history's %d in %d",
+					li, r.Block, o.p, o.arenaSlots(), pg.p, pg.arenaSlots())
+			}
+		}
+	}
 	return nn.DeclineServes, nil
+}
+
+// boundHistories is every other block's history block li reads past its
+// history block's (Instance.histMore), each as its block keeps it.
+func (s *Instance) boundHistories(li int) []graph.KeptHistory {
+	if li < 0 || li >= len(s.histMore) || len(s.histMore[li]) == 0 {
+		return nil
+	}
+	out := make([]graph.KeptHistory, 0, len(s.histMore[li]))
+	for _, r := range s.histMore[li] {
+		k := graph.KeptHistory{Hist: r.Hist}
+		if r.Hist > 0 {
+			for _, h := range s.m.Composing().BlockGraph(r.Block).KeptHistories() {
+				if h.Hist == r.Hist {
+					k = h
+				}
+			}
+		}
+		out = append(out, k)
+	}
+	return out
 }
 
 // keepsState says g keeps a recurrent state.

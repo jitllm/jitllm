@@ -93,7 +93,7 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 	if p, q := kvPagePositions(swa, 0, 0, 8192), kvPagePositions(swa, 0, 0, 0); p != q {
 		t.Errorf("a window as long as the context got a %d-position page, a layer with none %d", p, q)
 	}
-	kw := newKVCacheRange(swa, "geom", 1, kvLayout{}, nil, 0, 0, swa.NLayer, nil, nil, nil, nil, []blockWindow{{w: 512}, {}})
+	kw := newKVCacheRange(swa, "geom", 1, kvLayout{}, nil, 0, 0, swa.NLayer, nil, nil, nil, nil, nil, []blockWindow{{w: 512}, {}})
 	if kw.layers[0].p != 512 || kw.layers[0].win != 512 || kw.layers[1].win != 0 || kw.layers[1].p == 512 {
 		t.Errorf("windows {512, none}: pages %d and %d, windows %d and %d",
 			kw.layers[0].p, kw.layers[1].p, kw.layers[0].win, kw.layers[1].win)

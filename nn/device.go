@@ -528,7 +528,11 @@ type BlockSpec struct {
 	ValuesInKeys bool
 	// Hists are the histories past its rows' the block reads, as the block
 	// whose history it reads keeps them (graph.Graph.KeptHistories).
-	Hists    []graph.KeptHistory
+	Hists []graph.KeptHistory
+	// Bound are the other blocks' histories the block reads past those
+	// (graph.Graph.ReadsMore), each as its block keeps it: Hist 0 a block's
+	// rows', laid out as the block's own.
+	Bound    []graph.KeptHistory
 	Rotaries []graph.Rotary
 	Tables   []RowTable
 	F32      bool

@@ -25,6 +25,10 @@ type Request struct {
 	// More is the layout of the block's other histories, history h at
 	// More[h-1] (graph.StateRef.Hist).
 	More []History
+	// Bound is the layout of the histories of other blocks the block reads
+	// past those it binds at their indices (graph.Graph.ReadsMore): read j
+	// at Bound[j], its tables at instance 1+len(More)+j.
+	Bound []History
 	// Paged is each bank the call site holds in pages: the sheets it holds of
 	// it, reached through the step's table "experts", one word an expert
 	// naming the sheet that holds it. A bank it does not name is held whole.
@@ -177,7 +181,7 @@ func (r *Registry) formWith(req Request, prof Profile, untailed map[KernelAt]boo
 	var ks []*Kernel
 	for {
 		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
-		c.History, c.More, c.split, c.Paged, c.Strides, c.Tables = req.History, req.More, sp, req.Paged, req.Strides, req.Tables
+		c.History, c.More, c.Bound, c.split, c.Paged, c.Strides, c.Tables = req.History, req.More, req.Bound, sp, req.Paged, req.Strides, req.Tables
 		prims, err := r.decomposeOps(c, 0)
 		if err != nil {
 			return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)

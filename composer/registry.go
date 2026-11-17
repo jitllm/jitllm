@@ -143,10 +143,12 @@ type Context struct {
 	History History
 	// More is Request.More.
 	More []History
+	// Bound is Request.Bound.
+	Bound []History
 	// hist is the history the op being decomposed reads or writes
-	// (onHistory), whose tables are at instance hist; base is history 0's
-	// layout while another's is History.
-	hist uint8
+	// (onHistory), whose tables are at instance hist (slotOf); base is
+	// history 0's layout while another's is History.
+	hist int
 	base History
 	// Paged is Request.Paged: the sheets the call site holds of each bank
 	// it holds in pages.

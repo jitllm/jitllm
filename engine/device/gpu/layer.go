@@ -52,8 +52,11 @@ type layer struct {
 	sparse bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// the block its graph reads the history of (graph.Graph.ReadsHistoryOf),
-	// whose cache this block reads and never writes.
-	kvSrc int
+	// whose cache this block reads and never writes; kvMore the other
+	// blocks' histories it reads past those (graph.Graph.ReadsMore), bound
+	// after them (devTier.bindMore).
+	kvSrc  int
+	kvMore []graph.HistoryRead
 	// runs is the sessions that placed the block here. A block holding no
 	// history of its own -- a KV-sharing one, a tower's -- is still theirs.
 	runs map[uint64]struct{}
@@ -1844,10 +1847,13 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	var cache, vcache int
 	var kvp *kvPair
 	l.kvSrc = li
-	hsrc, herr := p.Graph.ReadsHistoryOf()
-	if herr != nil {
-		g.LastErr = herr.Error()
-		return false
+	hsrc := p.Graph.ReadsHistoryOf()
+	l.kvMore = p.Graph.ReadsMore()
+	for _, r := range l.kvMore {
+		if r.Block >= li || g.layers[r.Block] == nil || !g.layers[r.Block].ok {
+			g.LastErr = fmt.Sprintf("block %d attends to block %d's history %d, which is not on this device", li, r.Block, r.Hist)
+			return false
+		}
 	}
 	if hsrc >= 0 {
 		// No history of its own: it reads block n's, which must be on this
@@ -4015,7 +4021,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case sv.f.split > 0:
 					serr = sv.pagedRun(g, lc, s, inst, kind, l, g.hostFns[sid][li].uses, in, outs)
 				case len(sv.f.sweeps) > 0:
-					serr = sv.streamRun(g, lc, s, inst, kind, bs, l.kvSrc, in, outs)
+					serr = sv.streamRun(g, lc, s, inst, kind, bs, l.kvSrc, l.kvMore, in, outs)
 				default:
 					serr = sv.runAs(g, lc, inst, kind, in, outs)
 				}

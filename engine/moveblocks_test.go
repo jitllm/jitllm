@@ -103,7 +103,7 @@ func blocksMoveBetweenDevicesOf(t *testing.T, open func() (*model.Model, error),
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if arm == moveSplit && m.Cfg.NKVShared == 0 {
+	if arm == moveSplit && !readsAnother(m) {
 		t.Skip("no KV-sharing group: the split arm is the upper arm")
 	}
 
@@ -144,6 +144,9 @@ func blocksMoveBetweenDevicesOf(t *testing.T, open func() (*model.Model, error),
 		if arm != moveSplit {
 			lo, hi = wlo, whi
 		} else if wlo == lo && whi == hi {
+			if li := readsOutside(m, lo, hi); li >= 0 {
+				t.Fatalf("block %d reads a history of a block outside %d..%d, and the KV-sharing group the move takes is %d..%d", li, lo, hi-1, wlo, whi-1)
+			}
 			t.Skipf("blocks %d..%d hold every KV-sharing group they reach: nothing to split", lo, hi-1)
 		}
 		var out []int32

@@ -516,6 +516,7 @@ bug	composer/history.go	"a pool of %v blocks in rows of %d"
 bug	composer/history.go	"a quantized pool laid out by dimension or in halves: its rows are whole"
 bug	composer/history.go	"a quantized pool of rows of %d holding a width of %d"
 bug	composer/history.go	"history %d of a request laying out %d"
+bug	composer/history.go	"%v of block %d, read %d past its histories, of a request laying out %d"
 context	composer/ir/depsync.go	"ir: PersistDeps %s: %w"
 bug	composer/ir/depsync.go	"ir: PersistDeps: %d parts on a grid of %d at %d"
 bug	composer/ir/depsync.go	"ir: PersistDeps: %s binds %d of %d parameters"
@@ -799,6 +800,7 @@ context	engine/cpuhead.go	"the greedy token over the penalties"
 bug	engine/cpuserve.go	"block %d: a recurrent block whose state the instance keeps none of"
 bug	engine/cpuserve.go	"block %d: its expert banks have no view in the frames' expert pages"
 bug	engine/cpuserve.go	"block %d: its graph reads %d inputs and writes %d streams, the model %d streams and a side input %d wide"
+refusal	engine/cpuserve.go	"block %d reads block %d's history of %d positions a page in %d, beside its history's %d in %d"	a CPU form reads every history of rows it binds at one page geometry (composer.Step's Page and Keys, its history block's): another window's history, paged at its window, needs its own page in its layout (composer.History)
 input	engine/cpuserve.go	"block %d: the front end states no graph for it"	a block of a container the converter did not write: the census runs every one it writes
 bug	engine/cpuserve.go	"model: the composer does not serve the head on the CPU: %s"
 bug	engine/cputables.go	"model: the rotary tables have no device on this instance"
@@ -983,6 +985,7 @@ bug	engine/device/gpu/layer.go	"a submission that must run alone was prepared to
 bug	engine/device/gpu/layer.go	"an empty block range [%d,%d) with no head"
 bug	engine/device/gpu/layer.go	"batch n=%d width=%d head=%v"
 bug	engine/device/gpu/layer.go	"block %d attends to block %d's history, which is not on this device"
+bug	engine/device/gpu/layer.go	"block %d attends to block %d's history %d, which is not on this device"
 bug	engine/device/gpu/layer.go	"block %d is not on this device"
 bug	engine/device/gpu/layer.go	"block %d is paged out"
 limit	engine/device/gpu/layer.go	"block %d needs %d bytes and nothing can be paged out (%d of %d used)"
@@ -1322,6 +1325,7 @@ input	engine/kvpage.go	"model: RestorePrefix wants a fresh sequence, this one is
 input	engine/kvpage.go	"model: SetCacheKey wants a fresh sequence, this one is at position %d -- the tokens before it were never recorded and the pages after it would be named by a shifted window"
 input	engine/kvpage.go	"model: a KV budget needs a store to evict into -- call SetKVStore first, or the cap would drop history rather than spill it"	the caller names where a capped history spills (SetKVStore): a cap spilling to memory would hold every sealed page twice, written through and resident
 bug	engine/kvpage.go	"model: block %d's history page %d is not in its arena after its read"
+bug	engine/kvpage.go	"model: block %d reads block %d's history %d, which keeps no pages"
 bug	engine/kvpage.go	"model: block %d's pages are not its session's view's"
 input	engine/kvpage.go	"model: no such kv page"	a page the store does not hold: the caller's lookup
 bug	engine/kvshare.go	"model: %d block(s) of this session are on a device that does not name its kv pages (nn.KVShareDevice)"	every card names its pages (nn.KVShareDevice)
@@ -1863,8 +1867,6 @@ context	graph/streams.go	"stream %d's write: %w"
 context	graph/streams.go	"what the writes share: %w"
 input	graph/tail.go	"%d-grams %d wide over %d heads' ranges"
 bug	graph/tail.go	"op code %d keeps no tail"
-refusal	graph/graph.go	"block %d reads the histories of blocks %d and %d: a block reads one other block's"	a block reads its own histories or one other block's, any of them by index, in their place: both tiers bind a block's histories from one block (the instance's history source), and two blocks' need a binding by (block, index)
-refusal	graph/graph.go	"block %d appends history %d of its own and reads block %d's"	a block reads its own histories or one other block's, any of them by index, in their place: both tiers bind a block's histories from one block (the instance's history source), and two blocks' need a binding by (block, index)
 input	graph/verify.go	"%s: a row gather %v"
 input	graph/verify.go	"%s: %%%s is of %d rows, %%%s of %d"
 input	graph/verify.go	"%s: %d heads in %d groups of %d, blocks of %d, %d kept, %d local"

@@ -8,6 +8,7 @@ package graph
 import (
 	"fmt"
 	"math/bits"
+	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -859,40 +860,66 @@ func (r StateRef) String() string {
 	return s
 }
 
+// HistoryRead is block Block's history Hist, as a block other than Block
+// reads it.
+type HistoryRead struct{ Block, Hist int }
+
 // ReadsHistoryOf is the block whose histories g reads in place of its own (a
-// StateKV naming another block), any of them by index, -1 where it reads
-// only its own. A block either keeps its histories or reads one other
-// block's: an error names a graph reading two blocks', or reading another's
-// beside any history of its own.
-func (g *Graph) ReadsHistoryOf() (int, error) {
+// StateKV naming another block), any of them by index: the first it names
+// where it appends to no history of its own, -1 where it does or reads no
+// other block's. A binding holds that block's histories at their indices
+// (ReadsMore holds the rest).
+func (g *Graph) ReadsHistoryOf() int {
 	if g == nil {
-		return -1, nil
+		return -1
 	}
-	n, own := -1, -1
+	n := -1
 	for _, o := range g.Ops {
-		if o.Kind == OpKVAppend && own < 0 {
-			for _, w := range o.Writes {
-				if w.State == StateKV && w.From == 0 {
-					own = int(w.Hist)
-				}
+		for _, w := range o.Writes {
+			if o.Kind == OpKVAppend && w.State == StateKV && w.From == 0 {
+				return -1
 			}
 		}
 		for _, r := range o.Reads {
-			if r.State != StateKV || r.From == 0 {
-				continue
-			}
-			switch b := int(r.From) - 1; {
-			case n >= 0 && n != b:
-				return -1, fmt.Errorf("block %d reads the histories of blocks %d and %d: a block reads one other block's", g.Block, n, b)
-			default:
-				n = b
+			if r.State == StateKV && r.From != 0 && n < 0 {
+				n = int(r.From) - 1
 			}
 		}
 	}
-	if n >= 0 && own >= 0 {
-		return -1, fmt.Errorf("block %d appends history %d of its own and reads block %d's", g.Block, own, n)
+	return n
+}
+
+// ReadsMore is every history g reads of a block other than the one whose
+// histories it binds at their indices (its own, or ReadsHistoryOf's), each
+// once, in the order its ops first name them: a binding holds read j after
+// that block's histories, at the table instance 1+kept+j, kept the
+// histories past its rows' that block keeps.
+func (g *Graph) ReadsMore() []HistoryRead {
+	if g == nil {
+		return nil
 	}
-	return n, nil
+	src := g.ReadsHistoryOf()
+	var out []HistoryRead
+	for _, o := range g.Ops {
+		for _, r := range o.Reads {
+			if r.State != StateKV || r.From == 0 || int(r.From)-1 == src {
+				continue
+			}
+			if h := (HistoryRead{Block: int(r.From) - 1, Hist: int(r.Hist)}); !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+// MoreIndex is the index in ReadsMore of the history r names, -1 where r
+// is one of the histories g binds at their indices.
+func (g *Graph) MoreIndex(r StateRef) int {
+	if r.State != StateKV || r.From == 0 || int(r.From)-1 == g.ReadsHistoryOf() {
+		return -1
+	}
+	return slices.Index(g.ReadsMore(), HistoryRead{Block: int(r.From) - 1, Hist: int(r.Hist)})
 }
 
 // KeptHistory is a history a block keeps past its rows' (history 0), as

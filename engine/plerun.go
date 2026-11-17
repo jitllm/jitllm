@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -46,23 +47,53 @@ func (s *Instance) growPLE() {
 	s.ple = make([]float32, c.SideWidth())
 }
 
-// historySources is, for each block below hi, the block whose history it
-// attends to as its graph reads it: its own, or the block its attention
-// names (graph.Graph.ReadsHistoryOf).
-func historySources(m *model.Model, hi int) ([]int, error) {
-	src := make([]int, max(hi, 0))
+// historySources is, for each block below hi, the block whose histories it
+// binds at their indices as its graph reads them: its own, or the block its
+// attention names (graph.Graph.ReadsHistoryOf); and the other blocks'
+// histories it reads past them (graph.Graph.ReadsMore).
+func historySources(m *model.Model, hi int) ([]int, [][]graph.HistoryRead) {
+	src, more := make([]int, max(hi, 0)), make([][]graph.HistoryRead, max(hi, 0))
 	for li := range src {
 		g := m.Composing().BlockGraph(li)
-		n, err := g.ReadsHistoryOf()
-		if err != nil {
-			return nil, err
-		}
-		src[li] = li
-		if n >= 0 {
+		src[li], more[li] = li, g.ReadsMore()
+		if n := g.ReadsHistoryOf(); n >= 0 {
 			src[li] = n
 		}
 	}
-	return src, nil
+	return src, more
+}
+
+// historyGroups is each block's group of blocks whose histories are read
+// together, as its least member: a block, every block whose history it
+// reads, and every block reading one of theirs, placed on one side.
+func historyGroups(src []int, more [][]graph.HistoryRead) []int {
+	g := make([]int, len(src))
+	for li := range g {
+		g[li] = li
+	}
+	root := func(b int) int {
+		for g[b] != b {
+			b = g[b]
+		}
+		return b
+	}
+	join := func(a, b int) {
+		if b < 0 || b >= len(g) {
+			return
+		}
+		ra, rb := root(a), root(b)
+		g[max(ra, rb)] = min(ra, rb)
+	}
+	for li := range src {
+		join(li, src[li])
+		for _, r := range more[li] {
+			join(li, r.Block)
+		}
+	}
+	for li := range g {
+		g[li] = root(li)
+	}
+	return g
 }
 
 // blockWindow is a block's attention window as its graph states it
@@ -109,33 +140,53 @@ func (s *Instance) histSrc(li int) int {
 // to another block's.
 func (s *Instance) readsOther(li int) bool { return s.histSrc(li) != li }
 
-// historyGroup reports whether block b reads, or is, src's history.
-func (s *Instance) historyGroup(b, src int) bool { return b == src || s.histSrc(b) == src }
+// historyGroup reports whether block b is in block src's history group
+// (historyGroups): it reads, or is, a history a member reads.
+func (s *Instance) historyGroup(b, src int) bool {
+	if b < 0 || src < 0 || b >= len(s.kvGroup) || src >= len(s.kvGroup) {
+		return b == src
+	}
+	return s.kvGroup[b] == s.kvGroup[src]
+}
 
 // kvGroupOffered reports whether block li may be offered by offerRange(lo,
-// hi): every block that reads its history's block's history, and that block,
-// is on a device already or offered by the same call.
+// hi): every block of its history group is on a device already or offered
+// by the same call.
 func (s *Instance) kvGroupOffered(li, lo, hi int) bool {
-	src := s.histSrc(li)
 	for b := range s.histOf {
-		if s.historyGroup(b, src) && !s.devAt(b) && (b < lo || b >= hi) {
+		if s.historyGroup(b, li) && !s.devAt(b) && (b < lo || b >= hi) {
 			return false
 		}
 	}
 	return true
 }
 
-// kvSpan is the blocks that must be offered with block li: the span of
-// every block reading the history li reads, and that history's block.
+// kvSpan is the blocks that must be offered with block li: the span of its
+// history group.
 func (s *Instance) kvSpan(li int) (lo, hi int) {
 	lo, hi = li, li+1
-	src := s.histSrc(li)
 	for b := range s.histOf {
-		if s.historyGroup(b, src) {
+		if s.historyGroup(b, li) {
 			lo, hi = min(lo, b), max(hi, b+1)
 		}
 	}
 	return lo, hi
+}
+
+// splitFromItsHistory reports that block li reads a history of a block on
+// the other side of the seam.
+func (s *Instance) splitFromItsHistory(li int) bool {
+	if src := s.histSrc(li); src != li && s.devAt(li) != s.devAt(src) {
+		return true
+	}
+	if li < len(s.histMore) {
+		for _, r := range s.histMore[li] {
+			if s.devAt(li) != s.devAt(r.Block) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // fixKVGroups keeps every block that attends to another block's history on
@@ -143,22 +194,22 @@ func (s *Instance) kvSpan(li int) (lo, hi int) {
 // and every block reading it must be placed together. A group split by the
 // placement -- a device that took the source and declined a reader, or a
 // relocation that took one member to the CPU -- moves to the CPU whole,
-// with the source's history. The device declines a reader whose source it
-// does not hold (tier) and offerRange offers a group only whole, so this is
-// the third half.
+// with every history its members keep. The device declines a reader whose
+// sources it does not hold (tier) and offerRange offers a group only whole,
+// so this is the third half.
 func (s *Instance) fixKVGroups() {
 	if s.ld == nil {
 		return
 	}
-	for li, src := range s.histOf {
-		if src == li || s.devAt(li) == s.devAt(src) {
+	for li := range s.histOf {
+		if !s.splitFromItsHistory(li) {
 			continue
 		}
 		for b := range s.histOf {
-			if !s.historyGroup(b, src) || !s.devAt(b) {
+			if !s.historyGroup(b, li) || !s.devAt(b) {
 				continue
 			}
-			if b == src && !s.migrateKV(b, s.pos, false) {
+			if s.histSrc(b) == b && !s.migrateKV(b, s.pos, false) {
 				continue // the history cannot move; the device keeps the block
 			}
 			s.ld.ReleaseLayers(b, b+1)

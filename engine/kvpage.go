@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn/history"
 
 	"github.com/jitllm/jitllm/model"
@@ -438,6 +439,11 @@ type kvCache struct {
 	src     []int
 	noTable []uint32
 	err     atomic.Pointer[error]
+	// more is the other blocks' histories each block reads past its history
+	// block's (Instance.histMore), and xb a reading block's tables of both,
+	// its history block's first (cpudev.HistoryBinding.Hists).
+	more [][]graph.HistoryRead
+	xb   [][]nn.HistTable
 	// recAt asks whether a hybrid's every summary is stored for a position
 	// (Instance.recPointAt), and mark is the instance's recMark for the restore in
 	// flight.
@@ -544,7 +550,7 @@ func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.K
 }
 
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
-	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil, nil)
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil, nil, nil)
 }
 
 // newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
@@ -555,7 +561,7 @@ func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore,
 // A block keeping a history past its rows' (planes) keeps it in a slot past
 // the blocks, hi+i for planes[i], its pages the block's positions
 // (kvCache.hs). wins are the blocks' windows (attendWindows), nil for none.
-func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, planes []histPlane, wins []blockWindow) *kvCache {
+func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, more [][]graph.HistoryRead, planes []histPlane, wins []blockWindow) *kvCache {
 	if store == nil {
 		store = NoStore{}
 	}
@@ -621,6 +627,13 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 	for li := range kc.hs {
 		if len(kc.hs[li]) > 0 {
 			kc.hb[li] = make([]nn.HistTable, len(kc.hs[li]))
+		}
+	}
+	kc.more, kc.xb = make([][]graph.HistoryRead, hi), make([][]nn.HistTable, hi)
+	for li := kc.lo; li < hi && li < len(more); li++ {
+		if len(more[li]) > 0 {
+			kc.more[li] = more[li]
+			kc.xb[li] = make([]nn.HistTable, kc.nHist(kc.src[li])+len(more[li]))
 		}
 	}
 	for li := range kc.layers {
@@ -2955,7 +2968,62 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 			return cpudev.HistoryBinding{}, nn.DeclineServes, err
 		}
 	}
+	if err := kv.bindMore(&b, li, pos, pos, nseq); err != nil {
+		return cpudev.HistoryBinding{}, nn.DeclineServes, err
+	}
 	return b, nn.DeclineServes, nil
+}
+
+// moreSlot is the slot in layers of the history r names, -1 where it keeps
+// no pages.
+func (kv *kvCache) moreSlot(r graph.HistoryRead) int {
+	if r.Hist == 0 {
+		if r.Block >= 0 && r.Block < len(kv.layers) && kv.layers[r.Block].p > 0 {
+			return r.Block
+		}
+		return -1
+	}
+	if e := kv.histSlot(r.Block, r.Hist); e > 0 {
+		return e
+	}
+	return -1
+}
+
+// bindMore binds into b, after block li's history block's, every other
+// block's history li reads (graph.Graph.ReadsMore), its pages for the rows
+// from lo to pos resident where pos is not negative: b's tables become li's
+// own (kvCache.xb).
+func (kv *kvCache) bindMore(b *cpudev.HistoryBinding, li, lo, pos, nseq int) error {
+	if li < 0 || li >= len(kv.more) || len(kv.more[li]) == 0 {
+		return nil
+	}
+	t := kv.xb[li]
+	n := kv.nHist(kv.src[li])
+	clear(t[:n])
+	copy(t[:n], b.Hists)
+	for j, r := range kv.more[li] {
+		e := kv.moreSlot(r)
+		if e < 0 {
+			return fmt.Errorf("model: block %d reads block %d's history %d, which keeps no pages", li, r.Block, r.Hist)
+		}
+		if pos >= 0 {
+			start := 0
+			if r.Hist == 0 {
+				start = kv.layers[e].keyStart(lo)
+			}
+			if err := kv.readable(e, start, pos); err != nil {
+				return err
+			}
+		}
+		pages, err := kv.table(e, nseq)
+		if err != nil {
+			return err
+		}
+		t[n+j].Pages = pages
+		t[n+j].Keys, t[n+j].Values = kvAddrs(&kv.layers[e])
+	}
+	b.Hists = t
+	return nil
 }
 
 // unread is why a block's history could not be read for a step: the page
@@ -3045,6 +3113,19 @@ func (kv *kvCache) PrepareRows(li int, pos []int, keys int) (nn.Decline, error) 
 			}
 		}
 	}
+	if li < len(kv.more) {
+		for _, r := range kv.more[li] {
+			if e := kv.moreSlot(r); e >= 0 {
+				from := 0
+				if r.Hist == 0 {
+					from = kv.layers[e].keyStart(start)
+				}
+				if err := kv.readable(e, from, end-1); err != nil {
+					return nn.DeclineServes, err
+				}
+			}
+		}
+	}
 	return nn.DeclineServes, kv.readable(hl, start, end-1)
 }
 
@@ -3064,6 +3145,9 @@ func (kv *kvCache) Rows(li, nseq int) (cpudev.HistoryBinding, error) {
 				return cpudev.HistoryBinding{}, err
 			}
 		}
+	}
+	if err := kv.bindMore(&b, li, 0, -1, nseq); err != nil {
+		return cpudev.HistoryBinding{}, err
 	}
 	return b, nil
 }

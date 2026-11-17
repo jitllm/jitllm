@@ -73,21 +73,25 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 // attendGeomOf is an attention's geometry over the history r, an entry each
 // period positions, its rows kw wide.
 func (c *Context) attendGeomOf(r graph.StateRef, period, kw int, a graph.Attrs) (attendGeom, error) {
-	l, err := c.layoutOf(r.Hist)
+	h, err := c.slotOf(r)
+	if err != nil {
+		return attendGeom{}, err
+	}
+	l, err := c.layoutOf(h)
 	if err != nil {
 		return attendGeom{}, err
 	}
 	if max(1, l.Period) != max(1, period) {
 		return attendGeom{}, fmt.Errorf("an attention over an entry each %d positions of a history of one each %d", period, l.Period)
 	}
-	values, vl := l.values(r.Hist)
+	values, vl := l.values(h)
 	for _, p := range []Pool{l.Keys, vl} {
 		if err := p.check(kw); err != nil {
 			return attendGeom{}, err
 		}
 	}
-	g := attendGeom{D: a.HeadDim, KW: kw, Keys: l.Keys.operand(TableKeys.of(int(r.Hist))), Values: values, ValuePool: vl,
-		KeyPool: l.Keys, Slots: l.slots(c.Step.Page), Pages: TablePages.of(int(r.Hist)), Period: period}
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: l.Keys.operand(TableKeys.of(h)), Values: values, ValuePool: vl,
+		KeyPool: l.Keys, Slots: l.slots(c.Step.Page), Pages: TablePages.of(h), Period: period}
 	// A block sharing another's history (graph.SharedHistory) reads that
 	// block's pools as it left them.
 	if r.From > 0 {

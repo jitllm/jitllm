@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"testing"
 
@@ -82,13 +81,13 @@ func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModel
 // (-hca) -- both sent home and read in each pass.
 func evictModels() []string {
 	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf", "synth-minimaxm3.gguf",
-		"synth-cohere2.gguf", "synth-exaone4.gguf", "synth-deepseek4.gguf", "synth-deepseek4-hca.gguf"}
+		"synth-cohere2.gguf", "synth-exaone4.gguf", "synth-deepseek4.gguf", "synth-deepseek4-hca.gguf", readsTwoFixture}
 }
 
 func newEvictGateOf(t *testing.T, name string) *evictGate {
 	p := testmodels.Path(name)
-	if _, err := os.Stat(p); err != nil {
-		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	if _, ok := existingModel(p); !ok {
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", p)
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

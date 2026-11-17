@@ -203,6 +203,13 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 			Keys:   composer.Pool{Row: p.KVRow, Block: p.KVBlock, Half: p.KVBF16, BF16: p.KVBF16},
 			Values: composer.Pool{Row: p.KVRow, Block: p.KVBlock, Half: p.KVBF16, BF16: p.KVBF16}},
 		Rotaries: p.Rotaries, More: composer.MoreOfKept(p.Hists), Tables: nn.RowTableRoles(p.Tables)}
+	for _, k := range p.Bound {
+		h := req.History
+		if k.Hist > 0 {
+			h = composer.History{ValuesInKeys: k.ValuesInKeys, Period: k.Period}
+		}
+		req.Bound = append(req.Bound, h)
+	}
 	req.Graph, req.Step.Rows, req.Device = &gr, rows, e.comp.Device()
 	return e.comp.Form(req, &gr, rows, p.Cut > 0, false, p.F32)
 }

@@ -320,7 +320,7 @@ func ropesAt(m *model.Model, li int) bool {
 // kvSourceOf is the block whose history block li's graph reads: li where it
 // reads its own.
 func kvSourceOf(m *model.Model, li int) int {
-	if n, err := m.Composing().BlockGraph(li).ReadsHistoryOf(); err == nil && n >= 0 {
+	if n := m.Composing().BlockGraph(li).ReadsHistoryOf(); n >= 0 {
 		return n
 	}
 	return li

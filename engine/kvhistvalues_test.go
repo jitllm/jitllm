@@ -239,9 +239,7 @@ func keptValues(t *testing.T, mv *model.Model, c valuesCase) {
 			}
 			kept++
 		}
-		if n, err := g.ReadsHistoryOf(); err != nil {
-			t.Fatal(err)
-		} else if n >= 0 {
+		if g.ReadsHistoryOf() >= 0 {
 			read++
 		}
 	}
