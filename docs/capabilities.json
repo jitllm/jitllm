@@ -253,6 +253,10 @@
       "graph": "classic"
     },
     {
+      "name": "olmo",
+      "graph": "olmo"
+    },
+    {
       "name": "olmo2",
       "graph": "olmo2"
     },
@@ -375,6 +379,10 @@
       "graph": "exaone4"
     },
     {
+      "name": "GPTJForCausalLM",
+      "graph": "gptj"
+    },
+    {
       "name": "GPTNeoXForCausalLM",
       "graph": "gptneox"
     },
@@ -429,6 +437,10 @@
     {
       "name": "Olmo3ForCausalLM",
       "graph": "olmo2"
+    },
+    {
+      "name": "OlmoForCausalLM",
+      "graph": "olmo"
     },
     {
       "name": "OlmoeForCausalLM",

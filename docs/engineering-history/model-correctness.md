@@ -11336,6 +11336,86 @@ generic, neither naming a model:
 The description of each class's models is still a line of Go
 (internal/modelsdoc/describe.go) until that table moves into the library.
 
+## OLMo and GPT-J from their library files
+
+The second test of "a model is data", and the proof the user asked for: two
+architectures the converter had never taken, chosen so that one comes in by
+each path -- OLMo (the first; OLMo 2 was already a library file) from a GGUF
+and from safetensors, GPT-J from safetensors alone (its file states no GGUF
+names). Each is a library file (convert/models/olmo.json, gptj.json) and
+nothing else that names it, held to transformers' own class: a fixture with
+every parameter random (scripts/hfgold.py synth-hf-olmo, synth-hf-gptj;
+scripts/c6gold.py writes synth-olmo's GGUF) and a real checkpoint
+(OLMo-1B-hf, gpt-j-6b).
+
+What the files state. OLMo: llama's gated block, its LayerNorms
+non-parametric -- no weight and no bias in either file -- so the statement
+gathers each as a norm of ones, the final one the model's; q's and k's rows
+permuted at conversion so the class's rotation of half against half turns
+adjacent pairs (the NORM rotary), the order the GGUF's rows already hold, so
+one statement of the block serves both inputs; and `clip_qkv` as the
+container's bound on q, k and v, run by the stated q/k/v function as dbrx's
+file states it (the class's keys map `clip_qkv` to the GGUF's key, so either
+input states it). GPT-J: a parallel block whose MLP reads the attention's
+LayerNorm, the rotary over `rotary_dim` of each head on adjacent pairs, the
+tanh GELU as an expr op of the block's graph, and a biased head. What they
+refuse: GPT-J's other activations, and `rotary` false.
+
+What the files could not do alone, and what changed in code to let them --
+two generic changes, naming no model. A GGUF's statement could gather only
+every block's tensors, while the safetensors path already gathered the
+model's; OLMo's GGUF carries no final norm, so its ones could not be stated,
+and a GGUF gather may now be the model's (convert/mjstates.go). A checkpoint
+stored in f16 kept its vectors in f16, and a bias a matvec adds is read in
+f32 by every kernel, so GPT-J-6B formed no block; a 1-D f16 tensor is now
+stored as f32, widened exactly (convert/safetensors.go).
+
+Two gate changes the real checkpoints asked for. OLMo-1B's tokenizer.json
+appends <|endoftext|> to every sequence, and GPTNeoXTokenizer rebuilds its
+template from add_eos_token (false) and appends nothing; the converter
+follows the class, as it does for every class that reads the key, and the
+golden now records the class's specials where they depart from the
+post-processor's (docs/divergences.md). And a golden states its
+checkpoint's bytes, so a checkpoint over 2 GiB is swept under JITLLM_SLOW=1
+like the GGUF sweeps' and named in the log elsewhere.
+
+A fixture's 1-D parameters are drawn around 1 so a norm's wiring shows; a
+head's bias drawn that way outweighed GPT-J's logits and every position's
+argmax was the bias's largest entry -- a golden that sees no wiring. The
+head's bias is drawn around 0 now.
+
+Both GGUFs state the class's add_eos_token. The GGUF converter takes the
+flag from tokenizer.json's template, and the GGUF oracle's completion tool
+refuses a GGUF that would end every prompt, so neither ran against it as
+converted: scripts/c6gold.py clears the flag where the class appends no EOS
+(synth-olmo), as it was cleared in OLMo-1B-hf's Q8_0 GGUF. One byte moves;
+the transformers golden does not.
+
+The numbers, on the tree that lands them. synth-olmo's GGUF against
+transformers (`TestC6MatchesTransformers`: decode, prefill at every length
+and the batch) at a worst NMSE of 7.04e-13, and against the GGUF oracle
+teacher-forced at 20 of 20 positions; its features removed
+(`TestC6FeaturesAreLoadBearing`) read no clip_qkv 2.76 and clip_qkv at
+twice its value 0.654. Every block and the head on CUDA (decode 6.28e-13,
+prefill 1.28e-08) and on Vulkan (9.10e-13, 6.47e-13), where RMSNorm for
+the LayerNorms (0.539) and no clip_qkv (2.66) each fail. From safetensors
+(`TestSafetensorsMatchTransformers`, 8 positions): synth-hf-olmo 9.39e-13,
+synth-hf-gptj 7.22e-14, OLMo-1B-hf 5.78e-12, gpt-j-6b 1.55e-11; OLMo-1B-hf
+at Q8_0 agrees with the GGUF oracle at 20 of 20 teacher-forced positions.
+GPT-J's features, each removed (`TestGPTJFeaturesAreLoadBearing`): the MLP
+reading the block's input unnormed 0.148, the rotary over the whole head
+3.04e-3, NEOX rotary for adjacent pairs 5.80e-3, no head bias 6.41e-3, the
+erf GELU for the tanh 9.95e-5. synth-olmo moves between the CPU and two
+cards and back with the same answer, pages with the same answer, and
+decodes without an engine allocation on the host, CUDA and Vulkan; GPT-J,
+a principle fixture by its directory (the test helper converts a
+checkpoint's directory as it converts a GGUF), passes the same gates.
+
+The first OLMo is exempt from the download catalogue
+(`convert/library`'s obtainableExempt): it is superseded by OLMo 2, which
+is listed, and its GGUF as the GGUF converter writes it ends every prompt
+with <|endoftext|>.
+
 ## Rotary scaling, stated per pair
 
 The engine computed a scaled rotary's per-pair divisors at open, in Go:

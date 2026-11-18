@@ -17,6 +17,7 @@ is in its evidence file (MC is `docs/engineering-history/model-correctness.md`).
 | starcoder2's config sliding window | not applied | llama.cpp (the GGUF carries no window) | MC "The classic-transformer kit (C6)" |
 | falcon's GELU | tanh approximation | llama.cpp (the model trains with erf) | same |
 | EXAONE 4's window | slides only at 64 layers | the file's key, fixture held to transformers | MC "The dense llama family" |
+| a class's specials against tokenizer.json's post-processor (OLMo-1B) | the GGUF's add_eos_token, which the GGUF converter takes from tokenizer.json's template: every sequence ends in <\|endoftext\|> | from safetensors, the class: GPTNeoXTokenizer rebuilds its template from tokenizer_config's add_eos_token (false), so a prompt ends where it ends (`convert.hfVocabOf`); a GGUF's stated flag is honoured | MC "OLMo and GPT-J from their library files" |
 | the SSM gated norm and dt | grouped norm, dt unclamped | llama.cpp and mamba_ssm (transformers clamps dt on a prompt) | MC "The state-space hybrids" |
 | FalconMamba's dt/B/C norm epsilon | the layer norm's | the file, i.e. llama.cpp | MC "mamba and jamba" |
 | phimoe's norms and router | phi3's graph: an RMSNorm plus a bias, a renormalised softmax top-2 | transformers' PhimoeForCausalLM: LayerNorm, sparsemixer not renormalised; the real checkpoints held to it on their own weights | MC "Phi-3.5-MoE (phimoe)" |

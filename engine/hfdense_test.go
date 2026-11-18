@@ -39,6 +39,13 @@ func hfDenseSelected() map[string]func(m *model.Model) bool {
 				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && windowOf(m) == 0
 		},
+		// OLMo: LayerNorms of no weight (the converter's ones), q, k and v
+		// clamped at 0.1.
+		"synth-hf-olmo": func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.LayerNorm && !c.RopeNeox && clipped(m, 0.1) && ones(l.Vector(jlm.RoleAttnNorm)) &&
+				ones(l.Vector(jlm.RoleFFNNorm)) && !c.TiedEmbd
+		},
 		// OLMo 3: OLMo 2's block with a window on three layers in four, every
 		// layer rotating, the sliding ones on a plain rotary of their own.
 		"synth-hf-olmo3": func(m *model.Model) bool {

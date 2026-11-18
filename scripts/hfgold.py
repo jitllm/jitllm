@@ -279,6 +279,10 @@ SYNTH = {
     # OLMo 3: OLMo 2's block with a window of 4 on three layers in four.
     "synth-hf-olmo3": ("olmo3", dict(**SPM_IDS, num_hidden_layers=4, num_key_value_heads=4, sliding_window=4),
                        "tiny-random-MixtralForCausalLM"),
+    # OLMo: LayerNorms of no weight and no bias, and q, k, v clamped at 0.1, a
+    # value the projections' outputs pass at this width.
+    "synth-hf-olmo": ("olmo", dict(**SPM_IDS, num_hidden_layers=3, num_key_value_heads=4, clip_qkv=0.1),
+                      "tiny-random-MixtralForCausalLM"),
     # EXAONE 4: post-norms, a per-head q/k norm, a window of 4 on three layers
     # in four and no rotary on the fourth.
     "synth-hf-exaone4": ("exaone4", dict(**SPM_IDS, num_hidden_layers=4, sliding_window=4, sliding_window_pattern=4),
@@ -303,6 +307,12 @@ SYNTH = {
     "synth-hf-opt": ("opt", dict(**SPM_IDS, num_hidden_layers=3, ffn_dim=96, word_embed_proj_dim=64,
                                  activation_function="relu", do_layer_norm_before=True),
                      "tiny-random-MixtralForCausalLM"),
+    # GPT-J, by convert/models/gptj.json alone: the attention and the MLP in
+    # parallel off one LayerNorm, the rotary over 8 of each head's 16 on
+    # adjacent pairs, the tanh GELU, and the head's bias.
+    "synth-hf-gptj": ("gptj", dict(**SPM_IDS, n_embd=64, n_layer=3, n_head=4, n_inner=96, n_positions=512,
+                                   rotary_dim=8, activation_function="gelu_new"),
+                      "tiny-random-MixtralForCausalLM"),
     "synth-hf-ministral3": ("ministral3", dict(**SPM_IDS, 
         num_hidden_layers=3,
         rope_parameters={"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 16.0,
@@ -331,6 +341,10 @@ def synth(name):
         for n, p in m.named_parameters():
             if p.dim() == 1:  # norms (and biases): random, so their wiring shows
                 p.copy_(torch.randn_like(p) * 0.5 + (0 if mt == "gemma" else 1))
+            # A head's bias is a logit offset: around 1 it outweighs the
+            # logits and every position's argmax is its largest entry.
+            if n == "lm_head.bias":
+                p.copy_(torch.randn_like(p) * 0.1)
         # ★ AND THE SELECTION BIAS BY NAME, BECAUSE IT IS A BUFFER AND NOT A
         # PARAMETER. DeepseekV3TopkRouter declares
         # `self.e_score_correction_bias = nn.Buffer(torch.zeros(num_experts))`,

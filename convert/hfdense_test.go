@@ -35,7 +35,7 @@ func c6HFDir() string {
 func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 	compared := 0
 	for _, name := range []string{"synth-smollm3", "synth-arcee", "synth-seedoss", "synth-olmo2",
-		"synth-exaone4", "synth-mistral3", "synth-olmo2-gqa", "synth-olmo3", "synth-apertus"} {
+		"synth-exaone4", "synth-mistral3", "synth-olmo2-gqa", "synth-olmo3", "synth-apertus", "synth-olmo"} {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(c6HFDir(), name)
 			gp := testmodels.Path(name + ".gguf")

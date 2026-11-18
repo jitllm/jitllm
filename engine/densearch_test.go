@@ -56,6 +56,11 @@ func denseFixtures() []struct {
 				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && !c.TiedEmbd
 		}},
+		{"synth-olmo", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.LayerNorm && !c.RopeNeox && clipped(m, 0.1) && ones(l.Vector(jlm.RoleAttnNorm)) &&
+				ones(l.Vector(jlm.RoleFFNNorm)) && l.Gate.E != nil && !c.TiedEmbd
+		}},
 		{"synth-exaone4", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.QKNorm && !c.QKNormWide &&
@@ -124,6 +129,23 @@ func windowBy(d int) func(m *model.Model) func() {
 	}
 }
 
+// clipped says the container bounds q, k and v at bound (clip_qkv) and the
+// model runs the bound.
+func clipped(m *model.Model, bound float32) bool {
+	return m.Container.Config().ClampKQV == bound && m.Cfg.QKVAct != nil
+}
+
+// ones says v is a vector of ones: a norm of no weight, as OLMo's are.
+func ones(v []float32) bool {
+	return len(v) > 0 && !slices.ContainsFunc(v, func(x float32) bool { return x != 1 })
+}
+
+// rmsForLayer normalises each block's LayerNorms by the root mean square,
+// the mean left in.
+func rmsForLayer(m *model.Model) func() {
+	return restated(m, editing(opsOfKind(graph.OpLayerNorm), func(o *graph.Op) { o.Kind = graph.OpNorm }))
+}
+
 func localScaled(m *model.Model) func() {
 	was := m.Ropes[0].Scale
 	m.Ropes[0].Scale = m.Rope.Scale
@@ -164,6 +186,11 @@ func denseViolations() map[string][]c6Violation {
 			{"no post-FFN norm", noPostFFNNorm},
 			{"the post-norms as pre-norms", postAsPre},
 			{"NORM rotary for NEOX", neoxOff},
+		},
+		"synth-olmo": {
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = nil }) }},
+			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = clampTwice(m) }) }},
+			{"RMSNorm for the LayerNorms", rmsForLayer},
 		},
 		"synth-exaone4": {
 			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
@@ -323,6 +350,10 @@ func denseDevViolations() map[string][]c6Violation {
 			{"a per-head q/k norm", perHeadQK},
 			{"the post-norms as pre-norms", postAsPre},
 			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+		},
+		"synth-olmo": {
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = nil }) }},
+			{"RMSNorm for the LayerNorms", rmsForLayer},
 		},
 		"synth-exaone4": {
 			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},

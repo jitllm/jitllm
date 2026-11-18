@@ -308,6 +308,20 @@ def olmo3():
     return Olmo3ForCausalLM, cfg, "olmo2"
 
 
+def olmo():
+    from transformers import OlmoConfig, OlmoForCausalLM
+    # The first OLMo: LayerNorms with no weight and no bias, q, k and v each
+    # clamped to [-clip_qkv, clip_qkv] before the rotary (the 7B's 0424
+    # revision clamps at 8), a SwiGLU MLP, untied. A clamp of 0.1 bites at
+    # this width: the projections' outputs run to several tenths.
+    cfg = OlmoConfig(vocab_size=50304, hidden_size=64, intermediate_size=128,
+                     num_hidden_layers=3, num_attention_heads=4, num_key_value_heads=4,
+                     max_position_embeddings=2048, clip_qkv=0.1,
+                     rope_parameters={"rope_type": "default", "rope_theta": 10000.0},
+                     tie_word_embeddings=False, pad_token_id=1, eos_token_id=50279)
+    return OlmoForCausalLM, cfg, "olmo"
+
+
 def exaone4():
     from transformers import Exaone4Config, Exaone4ForCausalLM
     # The 32B's form at toy size: a window of 4 on three layers in four and
@@ -414,6 +428,7 @@ SPECS = {
     "synth-olmo2": olmo2,
     "synth-olmo2-gqa": olmo2_gqa,
     "synth-olmo3": olmo3,
+    "synth-olmo": olmo,
     "synth-exaone4": exaone4,
     "synth-mistral3": mistral3,
     "synth-phi2": phi2,
@@ -455,6 +470,27 @@ def perturb(m):
                 p.copy_(torch.randn_like(p) * 0.2)
 
 
+def stateClassEOS(d, dst):
+    """The GGUF converter takes add_eos_token from tokenizer.json's template;
+    a class may rebuild its own from tokenizer_config's flag and append
+    nothing (OLMo's GPTNeoXTokenizer). The GGUF states the class's, which the
+    golden is read from; the GGUF oracle's completion tool refuses a GGUF
+    that would end every prompt."""
+    from gguf import GGUFReader
+    r = GGUFReader(dst, "r+")
+    f = r.fields.get("tokenizer.ggml.add_eos_token")
+    if f is None or not f.parts[f.data[0]][0]:
+        return
+    from transformers import AutoTokenizer
+    tk = AutoTokenizer.from_pretrained(d)
+    ids = tk("a")["input_ids"]
+    if tk.eos_token_id is not None and ids and ids[-1] == tk.eos_token_id:
+        return
+    f.parts[f.data[0]][0] = 0
+    r.data.flush()
+    print("%s: add_eos_token cleared, as %s appends no EOS" % (dst, type(tk).__name__))
+
+
 def build(name):
     cls, cfg, tokfam = SPECS[name]()
     cfg._attn_implementation = "eager"
@@ -484,6 +520,7 @@ def build(name):
     dst = os.path.join(MODELS, name + ".gguf")
     subprocess.run([PY, os.path.join(LCPP, "convert_hf_to_gguf.py"), d,
                     "--outtype", "f32", "--outfile", dst], check=True)
+    stateClassEOS(d, dst)
     ids = [(i * 7919 + 13) % min(cfg.vocab_size, 50000) for i in range(NPOS)]
     with torch.no_grad():
         lg = m(torch.tensor([ids])).logits[0]

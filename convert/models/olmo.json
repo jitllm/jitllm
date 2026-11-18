@@ -1,0 +1,84 @@
+{
+  "describe": {"olmo": "OLMo (the first; OLMo 2 is olmo2)", "OlmoForCausalLM": "OLMo"},
+  "classes": ["OlmoForCausalLM"],
+  "gguf": ["olmo"],
+  "container": {
+    "olmo": {"tensors": {"gather": [
+               {"role": "attn_norm.weight", "every": true, "from": [{"fill": 1, "shape": ["embedding_length"]}]},
+               {"role": "ffn_norm.weight", "every": true, "from": [{"fill": 1, "shape": ["embedding_length"]}]},
+               {"role": "output_norm.weight", "model": true, "from": [{"fill": 1, "shape": ["embedding_length"]}]}]},
+             "flags": {"layer_norm": "true"},
+             "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"}
+  },
+  "config": {
+    "arch": "olmo",
+    "keys": {
+      "block_count":                  {"uint": "num_hidden_layers ?? 32"},
+      "context_length":               {"uint": "max_position_embeddings ?? 2048"},
+      "embedding_length":             {"uint": "hidden_size ?? 4096"},
+      "feed_forward_length":          {"uint": "intermediate_size ?? 11008"},
+      "attention.head_count":         {"uint": "num_attention_heads ?? 32"},
+      "attention.head_count_kv":      {"uint": "num_key_value_heads ?? (num_attention_heads ?? 32)"},
+      "attention.layer_norm_epsilon": {"float": "1e-5"},
+      "attention.clamp_kqv":          {"float": "clip_qkv", "if": "clip_qkv != null"},
+      "rope.freq_base":               {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"}
+    },
+    "vocab": "vocab_size ?? 50304",
+    "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
+    "activation": "hidden_act ?? 'silu'",
+    "rope_scaling": "rope_parameters ?? rope_scaling"
+  },
+  "tensors": {
+    "block_prefix": "model.layers.",
+    "model": {
+      "model.embed_tokens.weight": "token_embd.weight",
+      "lm_head.weight":            "output.weight"
+    },
+    "block": {
+      "self_attn.q_proj.weight": {"role": "attn_q.weight", "do": [
+        {"reshape": ["num_attention_heads ?? 32", 2, -1, "hidden_size ?? 4096"]},
+        {"transpose": [0, 2, 1, 3]},
+        {"reshape": [-1, "hidden_size ?? 4096"]}]},
+      "self_attn.k_proj.weight": {"role": "attn_k.weight", "do": [
+        {"reshape": ["num_key_value_heads ?? (num_attention_heads ?? 32)", 2, -1, "hidden_size ?? 4096"]},
+        {"transpose": [0, 2, 1, 3]},
+        {"reshape": [-1, "hidden_size ?? 4096"]}]},
+      "self_attn.v_proj.weight": "attn_v.weight",
+      "self_attn.o_proj.weight": "attn_output.weight",
+      "mlp.gate_proj.weight":    "ffn_gate.weight",
+      "mlp.up_proj.weight":      "ffn_up.weight",
+      "mlp.down_proj.weight":    "ffn_down.weight"
+    },
+    "ignore": ["model.rotary_emb.inv_freq", "self_attn.rotary_emb.inv_freq"],
+    "gather": [
+      {"role": "attn_norm.weight", "every": true, "from": [{"fill": 1, "shape": ["hidden_size ?? 4096"]}]},
+      {"role": "ffn_norm.weight", "every": true, "from": [{"fill": 1, "shape": ["hidden_size ?? 4096"]}]},
+      {"role": "output_norm.weight", "model": true, "from": [{"fill": 1, "shape": ["hidden_size ?? 4096"]}]}
+    ]
+  },
+  "graph": {
+    "block": [
+      {"op": "in",         "out": "x", "width": "embd"},
+      {"op": "layer_norm", "in": "x", "w": ["attn_norm"], "out": "n"},
+      {"op": "matvec",     "in": "n", "w": "attn_q", "rows": "heads * head_dim", "out": "q"},
+      {"op": "matvec",     "in": "n", "w": "attn_k", "rows": "kv_heads * head_dim", "out": "k"},
+      {"op": "matvec",     "in": "n", "w": "attn_v", "rows": "kv_heads * head_dim", "out": "v"},
+      {"op": "stated",     "if": "qkv_act", "of": "qkv_act", "name": "q.act", "in": "q", "out": "q"},
+      {"op": "stated",     "if": "qkv_act", "of": "qkv_act", "name": "k.act", "in": "k", "out": "k"},
+      {"op": "stated",     "if": "qkv_act", "of": "qkv_act", "name": "v.act", "in": "v", "out": "v"},
+      {"op": "rope",       "if": "rope_at", "in": "q", "name": "q.rope", "out": "q"},
+      {"op": "rope",       "if": "rope_at", "in": "k", "name": "k.rope", "out": "k"},
+      {"op": "kv_append",  "in": ["k", "v"], "out": "kv"},
+      {"op": "attend",     "in": "q", "hist": "kv", "out": "att"},
+      {"op": "matvec",     "in": "att", "w": "attn_output", "rows": "embd", "out": "o"},
+      {"op": "add",        "in": ["x", "o"], "out": "h"},
+      {"op": "layer_norm", "in": "h", "w": ["ffn_norm"], "out": "m"},
+      {"op": "matvec",     "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
+      {"op": "matvec",     "in": "m", "w": "ffn_up", "rows": "ffn", "out": "u"},
+      {"op": "act",        "in": ["g", "u"], "width": "ffn", "out": "a"},
+      {"op": "matvec",     "in": "a", "w": "ffn_down", "rows": "embd", "out": "d"},
+      {"op": "add",        "in": ["h", "d"], "out": "y"},
+      {"op": "out",        "in": "y"}
+    ]
+  }
+}

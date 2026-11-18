@@ -174,7 +174,7 @@ func stepArchModels() []string {
 		"synth-deepseek", "synth-deepseek-dense", "synth-kimilinear", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
 		"synth-ernie45moe.gguf", "synth-ernie45.gguf", "synth-hunyuanmoe.gguf", "synth-hunyuan.gguf",
 		"synth-smollm3.gguf", "synth-arcee.gguf", "synth-seedoss.gguf", "synth-olmo2.gguf",
-		"synth-exaone4.gguf", "synth-mistral3.gguf", "synth-olmo2-gqa.gguf", "synth-olmo3.gguf",
+		"synth-exaone4.gguf", "synth-mistral3.gguf", "synth-olmo2-gqa.gguf", "synth-olmo3.gguf", "synth-olmo.gguf",
 		"synth-minimaxm2.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf", "synth-gemma4-e.gguf",
 		"synth-deepseek32.gguf", "synth-gemma3n.gguf", "synth-minimaxm3.gguf",
 		"synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-phimoe.gguf", "synth-apertus.gguf",

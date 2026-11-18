@@ -557,6 +557,7 @@ func llamaCppCoverage() map[string]int {
 		"synth-olmo2.gguf":                         20,
 		"synth-olmo2-gqa.gguf":                     20,
 		"synth-olmo3.gguf":                         20,
+		"synth-olmo.gguf":                          20,
 		"synth-mistral3.gguf":                      20,
 		"OLMo-2-0425-1B-Instruct-Q4_K_M.gguf":      20,
 		"SmolLM3-3B-Q4_K_M.gguf":                   20,
