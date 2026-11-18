@@ -12,7 +12,7 @@ import (
 // the streamed pass's upload skipped, so each pass reads whatever the free ids
 // held, and demands the comparison fail.
 func TestKVEvictionGateDiscriminates(t *testing.T) {
-	for _, name := range []string{evictModels()[0], "synth-cohere2.gguf", "synth-exaone4.gguf"} {
+	for _, name := range []string{evictModels()[0], "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-cohere2.gguf", "synth-exaone4.gguf"} {
 		t.Run(name, func(t *testing.T) {
 			eg := newEvictGateOf(t, name)
 			free := eg.run(t, nil, nil)
@@ -22,10 +22,11 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 			if got.st.KVStreamPasses == 0 {
 				t.Fatal("no streamed pass ran: the violation was never exercised")
 			}
-			dev, at := worstStep(got.logits, free.logits)
-			t.Logf("violation: worst logit NMSE %.3e at step %d", dev, at)
-			if dev < evictNMSE {
-				t.Fatalf("the gate passed a stream that uploaded nothing (NMSE %.3e)", dev)
+			p90, dev, at := stepSpread(got.logits, free.logits, eg.mid())
+			t.Logf("violation: worst logit NMSE %.3e at step %d, %.3e at the 90th percentile", dev, at, p90)
+			ctl, _ := worstStep(free.logits, append(append([][]float32(nil), eg.host...), eg.hostTurn...))
+			if evictHeld(eg.m, p90, dev, max(evictNMSE, ctl)) {
+				t.Fatalf("the gate passed a stream that uploaded nothing (NMSE %.3e, %.3e at the 90th percentile, against %.3e)", dev, p90, max(evictNMSE, ctl))
 			}
 		})
 	}

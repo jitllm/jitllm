@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,6 +241,33 @@ func (eg *evictGate) run(t *testing.T, sq *evictSqueeze, cfg func(*gpu.Config), 
 	return r
 }
 
+// stepSpread is the 90th percentile and the largest of got's per-step logit
+// NMSE against want from step from on, and the largest's step.
+func stepSpread(got, want [][]float32, from int) (p90, worst float64, at int) {
+	var per []float64
+	for i := from; i < len(want); i++ {
+		e := logitNMSE(got[i], want[i])
+		if !(e <= worst) {
+			worst, at = e, i
+		}
+		per = append(per, e)
+	}
+	slices.Sort(per)
+	return per[len(per)*9/10], worst, at
+}
+
+// evictHeld is whether per-step distances whose bulk is p90 and largest worst
+// keep to bound: on a mixture the largest may reach bandWorst of it. Its
+// routing turns an order's rounding into a large move at a lone step, as it
+// turns the card's own order into one against the host; a stale or missing
+// page moves every step after it.
+func evictHeld(m *model.Model, p90, worst, bound float64) bool {
+	if m.Cfg.NExpert == 0 {
+		return worst < bound
+	}
+	return p90 < bound && worst < bandWorst*bound
+}
+
 // worstStep is the largest per-step logit NMSE of got against want.
 func worstStep(got, want [][]float32) (float64, int) {
 	w, at := 0.0, 0
@@ -324,9 +352,9 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	// host (a mixture's routing turns the order's differences into larger
 	// moves), that distance, measured in this run (the user's decision).
 	bound := max(evictNMSE, ctl)
-	if !(dev < bound) {
-		t.Fatalf("worst logit NMSE %.3e against the unconstrained card at step %d, past %.3e (%d composed passes, %d streamed)",
-			dev, at, bound, got.st.ComposedStreamPasses, got.st.KVStreamPasses)
+	if p90, _, _ := stepSpread(got.logits, free.logits, eg.mid()); !evictHeld(eg.m, p90, dev, bound) {
+		t.Fatalf("logit NMSE %.3e at the 90th percentile of the squeezed steps and %.3e at worst (step %d) against the unconstrained card, past %.3e (%d composed passes, %d streamed)",
+			p90, dev, at, bound, got.st.ComposedStreamPasses, got.st.KVStreamPasses)
 	}
 	// The shipping arms' int8 activations move a mixture's routing, so the
 	// evicting arm's distance from the host is bounded by the two it is
@@ -344,10 +372,10 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 		t.Fatalf("on the float forms the squeezed card parts from the unconstrained one by %.3e at step %d, past %.0e: the evicted history is not the one it sent home",
 			fw, fat, evictFloatNMSE)
 	}
-	rw, rat := worstStep(got.logits, ref.logits)
-	t.Logf("composed passes: %d, against the float reference squeezed %.3e (step %d)", got.st.ComposedStreamPasses, rw, rat)
-	if !(rw < bound) {
-		t.Fatalf("worst logit NMSE %.3e against the float reference squeezed at step %d, past %.3e", rw, rat, bound)
+	rp, rw, rat := stepSpread(got.logits, ref.logits, 0)
+	t.Logf("composed passes: %d, against the float reference squeezed %.3e (step %d), %.3e at the 90th percentile", got.st.ComposedStreamPasses, rw, rat, rp)
+	if !evictHeld(eg.m, rp, rw, bound) {
+		t.Fatalf("logit NMSE %.3e against the float reference squeezed at step %d, %.3e at the 90th percentile, past %.3e", rw, rat, rp, bound)
 	}
 }
 

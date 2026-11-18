@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -38,6 +39,7 @@ func evictedHistoryComesHome(t *testing.T, eg *evictGate, sq *evictSqueeze, free
 		}
 	}
 	moved, worst, at := 0, 0.0, 0
+	var after []float64
 	for i, id := range eg.ids[eg.mid():] {
 		step := eg.mid() + i
 		if moved == 0 && (sq == nil || g.Stats().KVEvictions > 0) {
@@ -56,8 +58,11 @@ func evictedHistoryComesHome(t *testing.T, eg *evictGate, sq *evictSqueeze, free
 			if free != nil {
 				dev = max(dev, logitNMSE(lg, free[step]))
 			}
-		} else if !(e <= worst) {
-			worst, at = e, step
+		} else {
+			after = append(after, e)
+			if !(e <= worst) {
+				worst, at = e, step
+			}
 		}
 	}
 	if moved == 0 {
@@ -78,8 +83,9 @@ func evictedHistoryComesHome(t *testing.T, eg *evictGate, sq *evictSqueeze, free
 		}
 		bound = max(bound, math.Pow(math.Sqrt(ctl)+math.Sqrt(dev), 2))
 	}
-	if !(worst < bound) {
-		t.Fatalf("worst logit NMSE %.3e against the host at step %d after every block came home at step %d, past %.3e",
-			worst, at, moved, bound)
+	slices.Sort(after)
+	if p90 := after[len(after)*9/10]; !evictHeld(eg.m, p90, worst, bound) {
+		t.Fatalf("logit NMSE %.3e against the host at step %d after every block came home at step %d, %.3e at the 90th percentile, past %.3e",
+			worst, at, moved, p90, bound)
 	}
 }
