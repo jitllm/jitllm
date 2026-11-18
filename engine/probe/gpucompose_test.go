@@ -14,8 +14,11 @@ import (
 // the probe built from IR by hand, the two run in turn in one process: each
 // number a composed form measures within a band of its median ratio over
 // the rounds, twice the built probe's own spread over them and never under
-// 10%. The numbers both arms still measure with built kernels are logged
-// beside them, the harness's own control.
+// 10%. A number the built measures wrong is held by bounds that say why:
+// its median ratio not past one plus the band, and in every round over
+// another number of the composed probe's by the band. The numbers both arms
+// still measure with built kernels are logged beside them, the harness's
+// own control.
 func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	defer func() {
@@ -53,22 +56,28 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				// apart, where set, is why a composed number is not held to
 				// the built one: the two measure different things.
 				apart string
+				// bound, where set, is why a composed number is held under
+				// the built one and over floor's number of its own round.
+				bound string
+				floor func(cost.Device) float64
 			}
 			walked := ""
 			if !clocked {
 				walked = "the built arm times one launch's wall, its submission with it, which the composed arm's two walks cancel"
 			}
 			fields := []field{
-				{"bandwidth", func(d cost.Device) float64 { return d.Bandwidth }, true, ""},
-				{"floor", func(d cost.Device) float64 { return d.Floor }, true, ""},
-				{"launch", func(d cost.Device) float64 { return d.Launch }, true, ""},
-				{"L1 rate", func(d cost.Device) float64 { return d.Caches[0].Rate.Total }, false, ""},
-				{"L2 rate", func(d cost.Device) float64 { return d.Caches[1].Rate.Total }, false, ""},
-				{"overlap", func(d cost.Device) float64 { return d.Overlap }, false, ""},
-				{"latency", func(d cost.Device) float64 { return d.Latency }, true, walked},
-				{"L1 latency", func(d cost.Device) float64 { return d.Caches[0].Latency }, true, walked},
-				{"L1 bytes", func(d cost.Device) float64 { return float64(d.Caches[0].Bytes) }, true, ""},
-				{"L2 latency", func(d cost.Device) float64 { return d.Caches[1].Latency }, true, walked},
+				{"bandwidth", func(d cost.Device) float64 { return d.Bandwidth }, true, "", "", nil},
+				{"floor", func(d cost.Device) float64 { return d.Floor }, true, "", "", nil},
+				{"launch", func(d cost.Device) float64 { return d.Launch }, true, "", "", nil},
+				{"L1 rate", func(d cost.Device) float64 { return d.Caches[0].Rate.Total }, true, "", "", nil},
+				{"L2 rate", func(d cost.Device) float64 { return d.Caches[1].Rate.Total }, true, "",
+					"the built arm's workgroups each read the whole set from the same offsets, so a multiprocessor's workgroups read each other's lines from its own cache and the built counts those hits (on a V100 past the last cache's own rate); the composed arm's warps each stream the set from a phase of their own, so a multiprocessor reads more than its cache holds: under the built's rate, over the memory's bandwidth",
+					func(d cost.Device) float64 { return d.Bandwidth }},
+				{"overlap", func(d cost.Device) float64 { return d.Overlap }, true, "", "", nil},
+				{"latency", func(d cost.Device) float64 { return d.Latency }, true, walked, "", nil},
+				{"L1 latency", func(d cost.Device) float64 { return d.Caches[0].Latency }, true, walked, "", nil},
+				{"L1 bytes", func(d cost.Device) float64 { return float64(d.Caches[0].Bytes) }, true, "", "", nil},
+				{"L2 latency", func(d cost.Device) float64 { return d.Caches[1].Latency }, true, walked, "", nil},
 			}
 			for cl := range cost.ClassMem {
 				_, _, composed := gpuStep(cl)
@@ -86,9 +95,9 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 					looped = "the built arm times one launch's wall, its submission with it, which the composed arm's two trip counts cancel"
 				}
 				fields = append(fields,
-					field{names[cl] + " all", func(d cost.Device) float64 { return d.Rates[cl].Total }, composed, apart},
-					field{names[cl] + " a thread", func(d cost.Device) float64 { return d.Rates[cl].Thread }, composed, looped},
-					field{names[cl] + " delay", func(d cost.Device) float64 { return d.Delay[cl] }, composed, looped})
+					field{names[cl] + " all", func(d cost.Device) float64 { return d.Rates[cl].Total }, composed, apart, "", nil},
+					field{names[cl] + " a thread", func(d cost.Device) float64 { return d.Rates[cl].Thread }, composed, looped, "", nil},
+					field{names[cl] + " delay", func(d cost.Device) float64 { return d.Delay[cl] }, composed, looped, "", nil})
 			}
 			checked := 0
 			for _, f := range fields {
@@ -114,6 +123,8 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				switch {
 				case f.apart != "":
 					arm = "composed apart"
+				case f.bound != "":
+					arm = "composed bound"
 				case f.composed:
 					arm = "composed"
 				}
@@ -122,6 +133,19 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 					t.Logf("%-16s not held to the built: %s", f.name, f.apart)
 				}
 				if !f.composed || f.apart != "" {
+					continue
+				}
+				if f.bound != "" {
+					t.Logf("%-16s held by bounds: %s", f.name, f.bound)
+					if r > 1+band {
+						t.Errorf("%s: composed/built %.3f past 1 plus the band %.3f", f.name, r, band)
+					}
+					for i, c := range composed {
+						if y, fl := f.of(c), f.floor(c); !(y > (1+band)*fl) {
+							t.Errorf("%s: round %d's composed %.4g not over %.4g by the band %.3f", f.name, i, y, fl, band)
+						}
+					}
+					checked++
 					continue
 				}
 				if math.Abs(math.Log(r)) > math.Log1p(band) {

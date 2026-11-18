@@ -429,7 +429,13 @@ func oldReadKernel(name string, threads, per, mask, width int, whole bool) (*ir.
 	b.SetPhi(j, b.And(ir.U32, b.Add(ir.U32, j, b.Const(ir.U32, int64(stride))), b.Const(ir.U32, int64(mask))))
 	b.EndLoop()
 	b.Store(out, t, acc, 0)
-	return b.Done()
+	k, err := b.Done()
+	if err == nil && threads == 1 {
+		// A thread alone states its launch bounds as a composed kernel
+		// does: the CUDA JIT keeps more of its loads in flight under them.
+		k.Resident = 1
+	}
+	return k, err
 }
 
 // oldOp is instructions of a class a probe chains, ones the device's

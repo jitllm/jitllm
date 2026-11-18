@@ -121,6 +121,52 @@ func iterateGraph(cl cost.Class, n, chains, deep, trips int) (*graph.Graph, bool
 	return b.G, true
 }
 
+// wrapGraph is threads columns, each summing per floats of a table of
+// words floats: column c from the float its row element at names, stride
+// floats apart, wrapped at mask. One row's iteration carrying a word, the
+// index, beside a float, the sum, each to an output of its own.
+func wrapGraph(words, threads, per, stride, mask int) (*graph.Graph, graph.ValueID, graph.ValueID) {
+	in := graph.Arg{Kind: graph.ArgIn}
+	k := func(v int) graph.Arg { return graph.Arg{Kind: graph.ArgConst, Const: float64(v)} }
+	st := func(j int) graph.Arg { return graph.Arg{Kind: graph.ArgState, Index: j} }
+	term := func(j int) graph.Arg { return graph.Arg{Kind: graph.ArgTerm, Index: j} }
+	terms := []graph.Term{
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{in, k(0)}},
+		{Fn: graph.MapMul, Args: [3]graph.Arg{in, k(0)}},
+		{Fn: graph.MapTake, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 1}, st(0)}},
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{st(1), term(2)}},
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{st(0), k(stride)}},
+		{Fn: graph.MapAnd, Args: [3]graph.Arg{term(4), k(mask)}},
+	}
+	b := graph.New()
+	at := b.In("at", threads)
+	b.G.Values[at].Elem = graph.ElemU32
+	tab := b.In("table", words)
+	ys := b.Emit(graph.OpIterate, []graph.ValueID{at, tab}, []graph.Result{{Name: "reached", Width: threads}, {Name: "read", Width: threads}}, nil,
+		graph.Attrs{Taps: 2, Span: per, Words: []uint64{5, 3}, Expr: terms}, nil, nil)
+	b.G.Values[ys[0]].Elem = graph.ElemU32
+	b.Out(ys[0])
+	b.Out(ys[1])
+	return b.G, tab, at
+}
+
+// streamStarts is threads columns' first words of a set of words, a power
+// of two, each warp's 32 columns a line, streamed through the set from a
+// phase of its own: warp w's line w*g of the set's lines, g the nearest odd
+// number to the lines over the golden ratio. Warps near each other in
+// number, a workgroup's, start far apart, and so do any few of them,
+// whatever workgroups a multiprocessor holds.
+func streamStarts(threads, words int) []uint32 {
+	const line = 32
+	lines := max(1, words/line)
+	g := int(float64(lines)*0.6180339887498949) | 1
+	at := make([]uint32, threads)
+	for c := range at {
+		at[c] = uint32((c/line*g%lines)*line + c%line)
+	}
+	return at
+}
+
 // chaseGraph is a walk of trips steps through a table of words, one row's
 // iteration: each trip takes the word the one before named, the first
 // named by the row at.

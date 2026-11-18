@@ -31,8 +31,9 @@ import (
 // its latency and the memory's; its latency is the median over the sets
 // past twice the nearest and within the TLB's reach. Read rates cannot find them: the
 // multiprocessors' nearest caches together can hold more than the last.
-// The last's rate is every workgroup reading one set of half its size, so
-// each multiprocessor reads more than its own cache holds. Reads of the
+// The last's rate is every warp streaming one set of half its size from a
+// phase of its own, so each multiprocessor reads more than its own cache
+// holds. Reads of the
 // whole memory warm the device first, and on a device with its own clock a
 // read of the whole memory goes before each timed launch of an instruction
 // class, so a measurement of one thread runs at the clock a loaded device
@@ -45,9 +46,13 @@ import (
 // cancels. A thread's rate, a chain's delay and the chase are one row's
 // iteration, a loop the code keeps, timed between two trip counts: a
 // thread alone running straight code long enough to time stalls on
-// fetching its instructions. The reads a cache serves and the lanes' and
-// the workgroup's exchanges are still kernels built from IR. Each is timed
-// on the device's clock where the backend has one.
+// fetching its instructions. A read of a set smaller than its traffic is an
+// iteration too, each column's index wrapped at the set and its sum a
+// float's. The last cache's rate is every warp streaming the set from a
+// phase of its own, so a multiprocessor's warps together read more than its
+// nearest cache holds. The lanes' and the workgroup's exchanges are still
+// kernels built from IR. Each is timed on the device's clock where the
+// backend has one.
 func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
 	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API())}}
@@ -316,6 +321,15 @@ func (p *gpuProbe) close() {
 	}
 }
 
+// words is a buffer of its own holding ws.
+func (p *gpuProbe) words(ws []uint32) (backend.Buf, error) {
+	b, err := p.alloc(max(4*len(ws), 4))
+	if err != nil {
+		return nil, err
+	}
+	return b, b.Write(unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(ws))), 4*len(ws)))
+}
+
 func (p *gpuProbe) alloc(n int) (backend.Buf, error) {
 	b, err := p.d.Alloc(n)
 	if err != nil {
@@ -353,13 +367,6 @@ func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gp
 		return nil, err
 	}
 	own := map[composer.Operand]backend.Buf{}
-	words := func(ws []uint32) (backend.Buf, error) {
-		b, err := p.alloc(max(4*len(ws), 4))
-		if err != nil {
-			return nil, err
-		}
-		return b, b.Write(unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(ws))), 4*len(ws)))
-	}
 	f := &gpuForm{}
 	for i, c := range codes {
 		n := cost.Issued(ks[i], req.Step, cost.Device{Device: p.dev})
@@ -384,9 +391,9 @@ func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gp
 			case o.Kind == composer.OperandValue:
 				b, err = p.alloc(4 * max(g.Values[o.Value].Width, 1))
 			case bd.Words != nil:
-				b, err = words(bd.Words)
+				b, err = p.words(bd.Words)
 			case o.Kind == composer.OperandTable && o.Name == "rows.n":
-				b, err = words([]uint32{1})
+				b, err = p.words([]uint32{1})
 			case o.Kind == composer.OperandScratch:
 				b, err = p.alloc(int(max(bd.Bytes, 4)))
 			default:
@@ -463,27 +470,34 @@ func (p *gpuProbe) empty() (*gpuForm, error) {
 
 // read is a column reduction of set bytes of buf, as threads columns of at
 // least traffic bytes in all, and the words it reads: column j sums the
-// set's words j, j+threads, ... wrapped at the set, so a set smaller than
-// the reads is read over and over. Where whole is set each workgroup's
-// columns read the whole set. A set read once is the composer's reduction;
-// a set the reads wrap is still a built kernel, since the composer forms a
-// reduction over a tile with the tile a kernel of its own, which reads the
-// set once and writes every period of it.
+// set's floats j, j+threads, ... wrapped at the set, so a set smaller than
+// the reads is read over and over. Where whole is set each warp's columns
+// stream the whole set from a phase of their own (streamStarts). A set read
+// once is the composer's reduction; a set the reads wrap is an iteration per
+// column carrying its index and its sum, since a reduction over a tile is a
+// kernel of its own, which reads the set once and writes every period of
+// it.
 func (p *gpuProbe) read(name string, buf backend.Buf, set, traffic int64, threads int, whole bool) (*gpuForm, int, error) {
-	const width = 256
 	words := int(set / 4)
 	per := max(1, int(traffic/4)/threads)
 	n := per * threads
 	if whole || n > words {
-		sums, err := p.alloc(4 * threads)
+		stride, wrap, at := threads, words, make([]uint32, threads)
+		for c := range at {
+			at[c] = uint32(c)
+		}
+		if whole {
+			// The stream wraps at the set's largest power of two.
+			for wrap = 1; 2*wrap <= words; wrap *= 2 {
+			}
+			stride, at = 32, streamStarts(threads, wrap)
+		}
+		starts, err := p.words(at)
 		if err != nil {
 			return nil, 0, err
 		}
-		k, err := gpuReadKernel(name, threads, per, words-1, width, whole)
-		if err != nil {
-			return nil, 0, err
-		}
-		f, err := p.kernel(k, max(1, threads/width), min(width, threads), buf, sums)
+		g, tab, first := wrapGraph(words, threads, per, stride, wrap-1)
+		f, err := p.form(g, map[graph.ValueID]backend.Buf{tab: buf, first: starts})
 		return f, n, err
 	}
 	b := graph.New()
@@ -492,29 +506,6 @@ func (p *gpuProbe) read(name string, buf backend.Buf, set, traffic int64, thread
 		graph.Attrs{Fn: graph.MapAdd, HeadDim: threads, Span: per, Order: graph.OrderSeq}, nil, nil)[0])
 	f, err := p.form(b.G, map[graph.ValueID]backend.Buf{x: buf})
 	return f, n, err
-}
-
-// gpuReadKernel sums, in each of threads threads, per words of the first
-// buffer strided by threads and wrapped by mask, a power of two less one;
-// and stores each sum. Where whole is set each workgroup reads the whole
-// set, strided by its width.
-func gpuReadKernel(name string, threads, per, mask, width int, whole bool) (*ir.Kernel, error) {
-	b := ir.New(name, [3]int{min(width, threads), 1, 1})
-	in, out := b.Param("in", ir.F32), b.Param("out", ir.F32)
-	t := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
-	first, stride := t, threads
-	if whole {
-		first, stride = b.TID(), min(width, threads)
-	}
-	zero := b.ConstF32(0)
-	b.Loop(int64(per))
-	j := b.Phi(ir.U32, first)
-	acc := b.Phi(ir.F32, zero)
-	b.SetPhi(acc, b.Add(ir.F32, acc, b.Load(ir.F32, in, j, 0)))
-	b.SetPhi(j, b.And(ir.U32, b.Add(ir.U32, j, b.Const(ir.U32, int64(stride))), b.Const(ir.U32, int64(mask))))
-	b.EndLoop()
-	b.Store(out, t, acc, 0)
-	return b.Done()
 }
 
 // count is the instructions of class cl one launch of f issues.
