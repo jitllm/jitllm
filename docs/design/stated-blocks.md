@@ -4,7 +4,11 @@ A vision tower is a program the converter writes (`jlm.Tower`), lowered by
 `model` with no switch on the family, and so is every text block: the
 converter states each block's graph (`jlm.Config.Blocks`) from its library
 file, and the front end (`model/front.go`) lowers the stated graph and builds
-none from config fields. Where a family adds a feature -- a bank of residual
+none from config fields. The parts outside the blocks -- the input rows, the
+head, a readout, a prediction block's entry and head, the output norm -- are
+stated the same way (`jlm.Config.Front`, from `convert/front.json`) and
+decoded, never built; a container written before them is restated by
+`jitllm upgrade`. Where a family adds a feature -- a bank of residual
 checkpoints, gated hyper-connections, a block selection -- it is a statement
 in the family's library file, not code named for it. A feature with one
 family behind it is that family's code whatever it is named (AGENTS.md, the

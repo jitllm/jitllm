@@ -88,35 +88,11 @@ func (c *Config) Stream(x []float32, k, rows, r int) []float32 {
 	return x[o : o+d]
 }
 
-// streamCopy is a row of v as a value of its own.
-func streamCopy(b *graph.Builder, v graph.ValueID) graph.ValueID {
-	w := b.G.Values[v].Width
-	return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: "stream", Width: w}}, nil, graph.Attrs{Width: w}, nil, nil)[0]
-}
-
 // ExpandsStreams says the input rows' streams past the first are made from
 // the first: the converter states their expansion.
 func (m *Model) ExpandsStreams() bool {
 	c := m.Cfg
 	return c.stated != nil && len(c.stated.Expand) != 0
-}
-
-// streamExpand is the input rows' streams 1 and up from stream 0, x, as the
-// converter states them: each its program over x, or a copy of x.
-func (m *Model) streamExpand(b *graph.Builder, f graph.Facts, x graph.ValueID) ([]graph.ValueID, error) {
-	var out []graph.ValueID
-	for k, p := range m.Cfg.stated.Expand {
-		if p == nil {
-			out = append(out, streamCopy(b, x))
-			continue
-		}
-		v, err := graph.LowerStated(b, p, []graph.ValueID{x}, f)
-		if err != nil {
-			return nil, fmt.Errorf("stream %d's expansion: %w", k+1, err)
-		}
-		out = append(out, v)
-	}
-	return out, nil
 }
 
 // streamMix is the head's read of every stream in b, an input of b a

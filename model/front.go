@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 	"sync"
 
@@ -37,6 +36,7 @@ const (
 	UncoveredUnbound
 	UncoveredUnverified
 	UncoveredUnstated
+	UncoveredUnstatedPart
 	numUncovered
 )
 
@@ -62,6 +62,9 @@ func (u Uncovered) String() string {
 	case UncoveredUnstated:
 		return "a block the container states no graph for: it was converted before the converter stated its blocks, " +
 			"and runs once its source is converted again (jitllm convert)"
+	case UncoveredUnstatedPart:
+		return "a part outside the blocks the container states no graph for: it was written before the converter " +
+			"stated them, and runs once jitllm upgrade states them over what it holds"
 	}
 	return fmt.Sprintf("uncovered(%d)", uint8(u))
 }
@@ -120,6 +123,9 @@ type frontSet struct {
 	// input a stream, on a model of several; the same graphs on a model of
 	// one.
 	CpuHead, CpuHidden *graph.Graph
+	// cpuHeadWhy and cpuHeadErr are why cpuHead is nil.
+	cpuHeadWhy Uncovered
+	cpuHeadErr error
 	// cpuSample and cpuWalk are sample and a top-k draw's walk over
 	// cpuHead's logits; cpuRow and cpuCut the draw with no top-k, with no cut
 	// and with one; cpuWalkProb and cpuCutProb the distributions the walk and
@@ -366,8 +372,8 @@ func (m *Model) Unstated() error {
 		}
 	}
 	switch {
-	case f.CpuHead == nil && f.HeadWhy != UncoveredPooling:
-		return refuse("the head", f.HeadWhy, f.headErr)
+	case f.CpuHead == nil && f.cpuHeadWhy != UncoveredPooling:
+		return refuse("the head", f.cpuHeadWhy, f.cpuHeadErr)
 	case f.CpuEmbed == nil:
 		return refuse("the input rows", f.EmbedWhy, f.CpuInErr)
 	case f.Pool == nil && f.poolWhy != Covered:
@@ -432,8 +438,9 @@ func (m *Model) FrontGraphs() *frontSet {
 		s.headHidden, _, _ = m.headGraph(true)
 	}
 	s.CpuHead, s.CpuHidden = s.Head, s.headHidden
+	s.cpuHeadWhy, s.cpuHeadErr = s.HeadWhy, s.headErr
 	if m.Cfg.Streams() > 1 {
-		s.CpuHead, _, _ = m.headGraphOf(false, true)
+		s.CpuHead, s.cpuHeadWhy, s.cpuHeadErr = m.headGraphOf(false, true)
 		if s.CpuHead != nil {
 			s.CpuHidden, _, _ = m.headGraphOf(true, true)
 		}
@@ -592,17 +599,18 @@ func (m *Model) shortVector(li int, g *graph.Graph) error {
 }
 
 // statedPart is the graph the container states for the part named name,
-// decoded as block li's over f, and whether it states one.
-func (m *Model) statedPart(name string, li int, f graph.Facts) (*graph.Graph, bool, error) {
+// decoded as block li's over f, and why it has none: a part a container
+// written before v34 lacks until jitllm upgrade states it.
+func (m *Model) statedPart(name string, li int, f graph.Facts) (*graph.Graph, Uncovered, error) {
 	s := m.Container.Config().Front.Graph(name)
 	if s == "" {
-		return nil, false, nil
+		return nil, UncoveredUnstatedPart, fmt.Errorf("model: the container states no %s: jitllm upgrade states it", name)
 	}
 	g, err := graph.Decode([]byte(s), li, f)
 	if err != nil {
-		return nil, true, fmt.Errorf("model: the stated %s: %w", name, err)
+		return nil, UncoveredUnverified, fmt.Errorf("model: the stated %s: %w", name, err)
 	}
-	return g, true, nil
+	return g, Covered, nil
 }
 
 // headPart is the name of the head's part: with hidden the norm's rows
@@ -701,38 +709,9 @@ func (m *Model) statedBlockGraph(li int, s string) (*graph.Graph, Uncovered, err
 	return g, Covered, nil
 }
 
-// verified is b's graph where it verifies against f and binds every tensor
-// f stores.
-func verified(b *graph.Builder, f graph.Facts) (*graph.Graph, Uncovered, error) {
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, UncoveredUnverified, fmt.Errorf("the block's graph does not verify: %w", err)
-	}
-	if u := graph.Unbound(b.G, f); len(u) != 0 {
-		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for the block, which its graph does not bind", u)
-	}
-	return b.G, Covered, nil
-}
-
-// latentAttention is the attention of a block that projects its history
-// through a latent (the container stores RoleAttnKVA): the latent row, its
-// first KVLoraRank normed and the rest a key turned by the rotary, cached
-// once a position for every head, an indexer's key after them where the
-// block stores one (its heads' queries from qIn, the query's input, and
-// their weights selecting the positions the heads attend); each head's query its head's first
-// HeadDim-NRot through its sheet of RoleAttnKB, joined with the rest turned
-// by the rotary, so a query row is the cached row's width; attention over
-// the cached rows, each value the whole row, with the block's scale, window,
-// softcap and sinks; each head's first KVLoraRank of the result through its
-// sheet of RoleAttnVB, gated where the block stores a gate over the output.
-
-// mapRow is one OpMap of in by a into a row of width, binding w.
-func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, width int, in ...graph.ValueID) graph.ValueID {
-	return b.Map(name, a, w, width, in...)
-}
-
 // statedHead fills marker head h's attention and norms from its first
 // block's stated graph: the attention's heads, their width and scale, and the
-// LayerNorms' epsilon, which the scorer's norm shares (markGraph).
+// LayerNorms' epsilon, which the scorer's norm shares.
 func (m *Model) statedHead(h *Config) error {
 	c, b := m.Container.Config(), h.Trunk
 	if b >= len(c.Blocks.Of) || int(c.Blocks.Of[b]) >= len(c.Blocks.Graphs) {
@@ -760,19 +739,15 @@ func (m *Model) statedHead(h *Config) error {
 	return nil
 }
 
-// headGraph is the head (graph.Head) of what the container stores: a
-// LayerNorm with its stored bias where the model's norms are LayerNorms, an
-// RMSNorm otherwise, the projection to the vocabulary (the embedding's where
-// the model ties them) with its stored bias, then the final softcap and the
-// logit scale, main's order over the logits. With hidden it writes the
-// norm's rows too (graph.Head.Hidden).
+// headGraph is the head the container states: the row's norm, its
+// projection to the vocabulary and what the logits take after it. With
+// hidden it writes the norm's rows too.
 func (m *Model) headGraph(hidden bool) (*graph.Graph, Uncovered, error) {
 	return m.headGraphOf(hidden, false)
 }
 
-// headGraphOf is headGraph, with collapsed over the row a model of several
-// streams collapses them to, which the head's graph does not read
-// otherwise.
+// headGraphOf is headGraph, with collapsed over the collapse of a model's
+// several streams, which the head of one does not read.
 func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	switch {
@@ -782,63 +757,12 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 		return nil, UncoveredStreams, nil
 	}
 	f, _ := m.Inventory(jlm.DenseBlock)
-	if g, ok, err := m.statedPart(headPart(hidden, collapsed), -1, f); ok {
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	stored := func(r jlm.Role) bool {
-		_, ok := f.Inventory[r]
-		return ok
-	}
-	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
-		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput, Bias: stored(jlm.RoleOutputBias),
-		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Hidden: hidden,
-		// A collapse of the streams stands in for a norm the model does not store.
-		NoNorm: collapsed && !stored(jlm.RoleOutputNorm)}
-	if !stored(h.Output) {
-		h.Output = jlm.RoleTokenEmbd
-	}
-	g := h.Build()
-	if collapsed && c.StatesStreams() {
-		var err error
-		if g, err = m.streamHeadGraph(&h, -1); err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	if err := graph.Verify(g, f); err != nil {
-		return nil, UncoveredUnverified, fmt.Errorf("the head's graph does not verify: %w", err)
-	}
-	return g, Covered, nil
+	return m.statedPart(headPart(hidden, collapsed), -1, f)
 }
 
-// streamHeadGraph is head h over the mix of every residual stream the
-// converter states as the head's read: one input a stream, block li's head
-// roles where li is a prediction block's (its own mix), the model's for -1.
-func (m *Model) streamHeadGraph(h *graph.Head, li int) (*graph.Graph, error) {
-	f, _ := m.Inventory(jlm.DenseBlock)
-	if li >= 0 {
-		fb, _ := m.Inventory(int32(li))
-		inv := maps.Clone(f.Inventory)
-		maps.Copy(inv, fb.Inventory)
-		f.Inventory = inv
-	}
-	b := graph.NewBlock(li)
-	y, err := m.streamMix(b, f)
-	if err != nil {
-		return nil, err
-	}
-	h.Over(b, y)
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, fmt.Errorf("the head's graph over the streams does not verify: %w", err)
-	}
-	return b.G, nil
-}
-
-// mtpHeadGraph is the head (hidden, the norm's rows too) over prediction
-// block li's own mix of the streams, nil where it stores none.
+// mtpHeadGraph is the head the container states over prediction block li's
+// own mix of the streams (with hidden, the norm's rows too), nil where it
+// stores none.
 func (m *Model) mtpHeadGraph(hidden bool, li int) (*graph.Graph, error) {
 	c := m.Cfg
 	if !c.StatesStreams() || !m.storesHeadMix(li) {
@@ -852,425 +776,34 @@ func (m *Model) mtpHeadGraph(hidden bool, li int) (*graph.Graph, error) {
 	fb, _ := m.Inventory(int32(li))
 	inv := maps.Clone(f.Inventory)
 	maps.Copy(inv, fb.Inventory)
-	if g, ok, err := m.statedPart(part, li, graph.Facts{Inventory: inv}); ok {
-		return g, err
-	}
-	stored := func(r jlm.Role) bool {
-		_, ok := f.Inventory[r]
-		return ok
-	}
-	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
-		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput, Bias: stored(jlm.RoleOutputBias),
-		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Hidden: hidden, NoNorm: !stored(jlm.RoleOutputNorm)}
-	if !stored(h.Output) {
-		h.Output = jlm.RoleTokenEmbd
-	}
-	g, err := m.streamHeadGraph(&h, li)
-	if err != nil {
-		return nil, fmt.Errorf("prediction block %d's own head: %w", li, err)
-	}
-	return g, nil
+	g, _, err := m.statedPart(part, li, graph.Facts{Inventory: inv})
+	return g, err
 }
 
-// markGraph is a marker head's readout as ops (jlm.Flag2HeadBlocks): each
-// row's request-named row of the last residual (OpTakeRows: the question's
-// option markers, in their order, the rows past them repeating the last),
-// through the scorer -- a LayerNorm, a d-wide projection, the erf GELU and a
-// projection to one score -- into the row's score.
-// jointGraph is a joint head's readout (jlm.JointHead; Clef's
-// JointSchemaHead) as ops over the prompt's rows and the request's slots
-// (nn.Joint*): the final rows normed, a memory of them, each question's and
-// option's span averaged and each option's tokens' output embeddings too,
-// the options routed over the memory, a summary of each question's options,
-// the questions through the joint blocks, then each option's logit -- a
-// prior from its tokens against its question, and a gated joint score from
-// the cosine and a residual scorer of its question's field and its own row.
-// Row i of its output is option i's logit.
-func (m *Model) jointGraph() (*graph.Graph, error) {
-	c := m.Cfg
-	cfg := m.Container.Config()
-	all, _ := m.Inventory(jlm.DenseBlock)
-	shape := func(r jlm.Role) (graph.Shape, error) {
-		s, ok := all.Inventory[r]
-		if !ok {
-			return s, fmt.Errorf("model: a joint head that stores no %v", r)
-		}
-		return s, nil
-	}
-	mem, err := shape(jlm.RoleDecProjMemory)
-	if err != nil {
-		return nil, err
-	}
-	out, err := shape(jlm.RoleOutput)
-	if err != nil {
-		out, err = shape(jlm.RoleTokenEmbd)
-		if err != nil {
-			return nil, err
-		}
-	}
-	lexRole := jlm.RoleOutput
-	if _, ok := all.Inventory[jlm.RoleOutput]; !ok {
-		lexRole = jlm.RoleTokenEmbd
-	}
-	d, w, H := c.NEmbd, mem.Rows, int(cfg.DecisionHeads)
-	R, J := int(cfg.DecisionRouting), int(cfg.DecisionBlocks)
-	if H < 1 || w%H != 0 || J < 1 {
-		return nil, fmt.Errorf("model: a joint head %d wide in %d heads with %d joint blocks", w, H, J)
-	}
-	eps := float64(cfg.DecisionEps)
-	b := graph.NewBlock(int(jlm.DenseBlock))
-	emit := func(k graph.OpKind, in []graph.ValueID, name string, width int, wb []graph.Binding, a graph.Attrs) graph.ValueID {
-		return b.Emit(k, in, []graph.Result{{Name: name, Width: width}}, wb, a, nil, nil)[0]
-	}
-	fn := func(name string, width int, f graph.MapFn, k float64, in ...graph.ValueID) graph.ValueID {
-		return emit(graph.OpMap, in, name, width, nil, graph.Attrs{Fn: f, Const: k})
-	}
-	sum := func(name string, v graph.ValueID) graph.ValueID {
-		return emit(graph.OpReduce, []graph.ValueID{v}, name, 1, nil, graph.Attrs{Fn: graph.MapAdd})
-	}
-	ln := func(v graph.ValueID, role jlm.Role) graph.ValueID { return b.LayerNorm(v, role, eps, role+1) }
-	gelu := func(name string, v graph.ValueID, width int) (graph.ValueID, error) {
-		var e jlm.ExprBuilder
-		e.GELUErf(jlm.Operand(0))
-		act := jlm.Expr{Terms: e.T}
-		return b.Stated(name, &act, []graph.ValueID{v}, width, all)
-	}
-	slots := func(k graph.OpKind, v graph.ValueID, name string, width, slot int) graph.ValueID {
-		return emit(k, []graph.ValueID{v}, name, width, nil, graph.Attrs{Offset: slot})
-	}
-	// scale is v times the head's learned scalar i (decision.scales: the
-	// prior's, the joint score's and the gate's, as used at inference).
-	scale := func(name string, v graph.ValueID, i int) graph.ValueID {
-		return emit(graph.OpMap, []graph.ValueID{v}, name, 1, []graph.Binding{{Role: jlm.RoleDecScales, K: 3}},
-			graph.Attrs{Fn: graph.MapMul, Width: 1, Offset: i})
-	}
-	// norm2 is v over its length, the length floored at eps (F.normalize).
-	length := func(name string, v graph.ValueID, width int) graph.ValueID {
-		return fn(name+".len", 1, graph.MapSqrt, 0, sum(name+".sq", fn(name+".mul", width, graph.MapMul, 0, v, v)))
-	}
-	normalize := func(name string, v graph.ValueID, width int) graph.ValueID {
-		return fn(name, width, graph.MapDiv, 0, v, fn(name+".floor", 1, graph.MapMax, 1e-12, length(name, v, width)))
-	}
-	attend := func(name string, q, k, v graph.ValueID, heads, width, slot int) graph.ValueID {
-		hd := width / heads
-		return emit(graph.OpRowsAttend, []graph.ValueID{q, k, v}, name, width, nil,
-			graph.Attrs{NHead: heads, NKVHead: heads, HeadDim: hd, Scale: 1 / math.Sqrt(float64(hd)), Offset: slot})
-	}
-	// mha is torch's MultiheadAttention of block k: q from x, k and v from
-	// kv, through the block's projections of kind q (self or cross).
-	mha := func(k int, q0 jlm.Role, x, kv graph.ValueID, slot int) graph.ValueID {
-		role := func(r jlm.Role) jlm.Role { return jlm.RoleDecBlock(k, r) }
-		qr, kr, vr, or := q0, q0+1, q0+2, q0+3
-		bias := func(r jlm.Role) jlm.Role { return r + 4 }
-		q := b.MatVec(x, role(qr), w, role(bias(qr)))
-		kk := b.MatVec(kv, role(kr), w, role(bias(kr)))
-		v := b.MatVec(kv, role(vr), w, role(bias(vr)))
-		a := attend("attn", q, kk, v, H, w, slot)
-		return b.MatVec(a, role(or), w, role(bias(or)))
-	}
-	ffn := func(k int, x graph.ValueID) (graph.ValueID, error) {
-		role := func(r jlm.Role) jlm.Role { return jlm.RoleDecBlock(k, r) }
-		up, err := shape(role(jlm.RoleDecFFNUp))
-		if err != nil {
-			return 0, err
-		}
-		h := b.MatVec(ln(x, role(jlm.RoleDecFFNNorm)), role(jlm.RoleDecFFNUp), up.Rows, role(jlm.RoleDecFFNUpBias))
-		g, err := gelu("ffn.act", h, up.Rows)
-		if err != nil {
-			return 0, err
-		}
-		return b.Add(x, b.MatVec(g, role(jlm.RoleDecFFNDown), w, role(jlm.RoleDecFFNDownBias))), nil
-	}
-
-	x := b.In("x", d)
-	if _, ok := all.Inventory[jlm.RoleOutputNorm]; ok {
-		x = b.Norm(x, jlm.RoleOutputNorm, c.RMSEps)
-	}
-	hn := ln(x, jlm.RoleDecHiddenNorm)
-	memory := b.MatVec(hn, jlm.RoleDecProjMemory, w)
-	qv := slots(graph.OpSpanPool, hn, "question", d, nn.JointQuestionSpans)
-	ctx := slots(graph.OpSpanPool, hn, "option", d, nn.JointOptionSpans)
-	tokens := emit(graph.OpEmbed, nil, "tokens", d, []graph.Binding{{Role: lexRole, K: d, Rows: out.Rows}},
-		graph.Attrs{Request: true, Offset: nn.JointTokens})
-	lex := slots(graph.OpSpanPool, tokens, "lexical", d, nn.JointOptionSpans)
-	global := emit(graph.OpPool, []graph.ValueID{hn}, "global", d, nil, graph.Attrs{Pooling: uint8(jlm.PoolLast)})
-	qOf := slots(graph.OpTakeRows, qv, "option.question", d, nn.JointOptionQuestion)
-	opts := b.Add(b.Add(b.MatVec(ctx, jlm.RoleDecProjOptCtx, w), b.MatVec(lex, jlm.RoleDecProjOptLex, w)),
-		b.MatVec(qOf, jlm.RoleDecProjOptQ, w))
-	for k := range R {
-		mn := ln(memory, jlm.RoleDecBlock(k, jlm.RoleDecCrossKVNorm))
-		opts = b.Add(opts, mha(k, jlm.RoleDecCrossQ, ln(opts, jlm.RoleDecBlock(k, jlm.RoleDecCrossNorm)), mn, 0))
-		if opts, err = ffn(k, opts); err != nil {
-			return nil, err
-		}
-	}
-	base := b.MatVec(qv, jlm.RoleDecProjQuestion, w)
-	summary := attend("summary", base, opts, opts, 1, w, nn.JointQuestionOptions)
-	types, err := shape(jlm.RoleTokenTypes)
-	if err != nil {
-		return nil, err
-	}
-	typed := emit(graph.OpEmbed, nil, "type", w, []graph.Binding{{Role: jlm.RoleTokenTypes, K: w, Rows: types.Rows}},
-		graph.Attrs{Request: true, Offset: nn.JointQuestionTypes})
-	fields := b.Add(b.Add(b.Add(base, ln(summary, jlm.RoleDecOptSumNorm)), b.MatVec(global, jlm.RoleDecProjGlobal, w)), typed)
-	for k := R; k < R+J; k++ {
-		fields = b.Add(fields, mha(k, jlm.RoleDecSelfQ, ln(fields, jlm.RoleDecBlock(k, jlm.RoleDecSelfNorm)),
-			ln(fields, jlm.RoleDecBlock(k, jlm.RoleDecSelfNorm)), nn.JointFields))
-		fields = b.Add(fields, mha(k, jlm.RoleDecCrossQ, ln(fields, jlm.RoleDecBlock(k, jlm.RoleDecCrossNorm)), memory, 0))
-		if fields, err = ffn(k, fields); err != nil {
-			return nil, err
-		}
-	}
-	fields = ln(fields, jlm.RoleDecFieldNorm)
-	field := slots(graph.OpTakeRows, fields, "option.field", w, nn.JointOptionQuestion)
-	option := ln(opts, jlm.RoleDecOptNorm)
-	// torch's cosine_similarity: x.y over the product of the lengths, the
-	// product floored at 1e-8.
-	dot := sum("cos.dot", fn("cos.mul", w, graph.MapMul, 0, field, option))
-	lens := fn("cos.lens", 1, graph.MapMax, 1e-8, fn("cos.prod", 1, graph.MapMul, 0, length("cos.f", field, w), length("cos.o", option, w)))
-	cosine := fn("cos", 1, graph.MapDiv, 0, dot, lens)
-	features := emit(graph.OpConcat, []graph.ValueID{field, option, fn("feat.mul", w, graph.MapMul, 0, field, option),
-		fn("feat.abs", w, graph.MapAbs, 0, fn("feat.sub", w, graph.MapSub, 0, field, option))}, "features", 4*w, nil, graph.Attrs{})
-	hidden, err := gelu("scorer.act", b.MatVec(features, jlm.RoleScorer, w, jlm.RoleScorerBias), w)
-	if err != nil {
-		return nil, err
-	}
-	// The scorer's last projection is one row: stored as a matrix of one
-	// row, or as the vector it is.
-	so, err := shape(jlm.RoleScorerOut)
-	if err != nil {
-		return nil, err
-	}
-	var residual graph.ValueID
-	if so.Rows < 1 {
-		prod := emit(graph.OpMap, []graph.ValueID{hidden}, "scorer.mul", w, []graph.Binding{{Role: jlm.RoleScorerOut, K: w}},
-			graph.Attrs{Fn: graph.MapMul})
-		residual = emit(graph.OpMap, []graph.ValueID{sum("scorer.dot", prod)}, "scorer.out", 1,
-			[]graph.Binding{{Role: jlm.RoleScorerOutBias, K: 1}}, graph.Attrs{Fn: graph.MapAdd, Width: 1})
-	} else {
-		residual = b.MatVec(hidden, jlm.RoleScorerOut, 1, jlm.RoleScorerOutBias)
-	}
-	joint := b.Add(scale("joint.scaled", cosine, 1), residual)
-	anchor := normalize("anchor", b.Add(qOf, global), d)
-	prior := scale("prior", sum("prior.dot", fn("prior.mul", d, graph.MapMul, 0, normalize("lexical.unit", lex, d), anchor)), 0)
-	b.Out(b.Add(prior, scale("joint.gated", joint, 2)))
-	return b.G, graph.Verify(b.G, all)
-}
-
-// pointerGraph is a pointer readout (jlm.Flag2MarkerPointer) as ops: the
-// prompt's last row (graph.OpPool's) and the rows its request names, each
-// through the output norm and RoleScorerOut's projection, an option's score
-// the last row's first half dotted with its row's second half over the root
-// of their width.
-func (m *Model) pointerGraph() (*graph.Graph, error) {
-	c := m.Cfg
-	all, _ := m.Inventory(jlm.DenseBlock)
-	out, ok := all.Inventory[jlm.RoleScorerOut]
-	if !ok || out.Rows < 2 || out.Rows%2 != 0 {
-		return nil, fmt.Errorf("model: a pointer readout whose %v is %d wide", jlm.RoleScorerOut, out.Rows)
-	}
-	if _, ok := all.Inventory[jlm.RoleOutputNorm]; !ok {
-		return nil, fmt.Errorf("model: a pointer readout that stores no %v", jlm.RoleOutputNorm)
-	}
-	var bias []jlm.Role
-	if _, ok := all.Inventory[jlm.RoleScorerOutBias]; ok {
-		bias = []jlm.Role{jlm.RoleScorerOutBias}
-	}
-	d, w := c.NEmbd, out.Rows
-	b := graph.NewBlock(int(jlm.DenseBlock))
-	x := b.In("x", d)
-	project := func(v graph.ValueID) graph.ValueID {
-		return b.MatVec(b.Norm(v, jlm.RoleOutputNorm, c.RMSEps), jlm.RoleScorerOut, w, bias...)
-	}
-	last := b.Emit(graph.OpPool, []graph.ValueID{x}, []graph.Result{{Name: "last", Width: d}}, nil,
-		graph.Attrs{Pooling: uint8(jlm.PoolLast)}, nil, nil)[0]
-	marks := b.Emit(graph.OpTakeRows, []graph.ValueID{x}, []graph.Result{{Name: "marks", Width: d}}, nil, graph.Attrs{}, nil, nil)[0]
-	q := b.Emit(graph.OpSlice, []graph.ValueID{project(last)}, []graph.Result{{Name: "query", Width: w / 2}}, nil,
-		graph.Attrs{Width: w / 2}, nil, nil)[0]
-	k := b.Emit(graph.OpSlice, []graph.ValueID{project(marks)}, []graph.Result{{Name: "key", Width: w / 2}}, nil,
-		graph.Attrs{Offset: w / 2, Width: w / 2}, nil, nil)[0]
-	qk := b.Emit(graph.OpMap, []graph.ValueID{q, k}, []graph.Result{{Name: "qk", Width: w / 2}}, nil, graph.Attrs{Fn: graph.MapMul}, nil, nil)[0]
-	dot := b.Emit(graph.OpReduce, []graph.ValueID{qk}, []graph.Result{{Name: "dot", Width: 1}}, nil, graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0]
-	b.Out(b.Emit(graph.OpMap, []graph.ValueID{dot}, []graph.Result{{Name: "score", Width: 1}}, nil,
-		graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w/2))}, nil, nil)[0])
-	return b.G, graph.Verify(b.G, all)
-}
-
-func (m *Model) markGraph() (*graph.Graph, error) {
-	c := m.Cfg
-	all, _ := m.Inventory(jlm.DenseBlock)
-	opt := func(r jlm.Role) []jlm.Role {
-		if _, ok := all.Inventory[r]; ok {
-			return []jlm.Role{r}
-		}
-		return nil
-	}
-	for _, r := range []jlm.Role{jlm.RoleScorerNorm, jlm.RoleScorer, jlm.RoleScorerOut} {
-		if opt(r) == nil {
-			return nil, fmt.Errorf("model: a marker head that stores no %v", r)
-		}
-	}
-	d := c.NEmbd
-	b := graph.NewBlock(int(jlm.DenseBlock))
-	x := b.In("x", d)
-	r := b.Emit(graph.OpTakeRows, []graph.ValueID{x}, []graph.Result{{Name: "marks", Width: d}}, nil, graph.Attrs{}, nil, nil)[0]
-	n := b.LayerNorm(r, jlm.RoleScorerNorm, c.Head.RMSEps, opt(jlm.RoleScorerNormBias)...)
-	h := b.MatVec(n, jlm.RoleScorer, d, opt(jlm.RoleScorerBias)...)
-	var e jlm.ExprBuilder
-	e.GELUErf(jlm.Operand(0))
-	act := jlm.Expr{Terms: e.T}
-	g, err := b.Stated("scorer.act", &act, []graph.ValueID{h}, d, all)
-	if err != nil {
-		return nil, fmt.Errorf("model: the scorer's activation: %w", err)
-	}
-	b.Out(b.MatVec(g, jlm.RoleScorerOut, 1, opt(jlm.RoleScorerOutBias)...))
-	return b.G, graph.Verify(b.G, all)
-}
-
-// poolGraph is an embedding model's readout as ops: its last residual's
-// rows through the output norm where the model stores one (a decoder's),
-// the live rows pooled as the container says (graph.OpPool: the first row,
-// the last, or their mean), projected by the dense heads where it stores
-// them, then normalised as the input embed.norm asks (norm): at 2 scaled to
-// unit length -- an RMS norm of no weight over the row and 1/sqrt(width),
-// sentence-transformers' 1e-12 floor on the norm taken per element as
-// main's (Embedder.normalize).
+// poolGraph is the readout the container states in place of a head: an
+// embedding model's pool, a pointer's, a marker head's or a joint head's;
+// nil for a model that reads none out.
 func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
-	if c.Joint {
-		g, err := m.jointGraph()
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	if c.MarkPointer {
-		g, err := m.pointerGraph()
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	if c.Head != nil {
-		g, err := m.markGraph()
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	if c.Pooling == jlm.PoolNone {
+	if c.Pooling == jlm.PoolNone && !c.Joint && !c.MarkPointer && c.Head == nil {
 		return nil, Covered, nil
 	}
 	all, _ := m.Inventory(jlm.DenseBlock)
-	if g, ok, err := m.statedPart(jlm.FrontPool, int(jlm.DenseBlock), all); ok {
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	inv := map[jlm.Role]graph.Shape{}
-	has := func(r jlm.Role) bool {
-		s, ok := all.Inventory[r]
-		if ok {
-			inv[r] = s
-		}
-		return ok
-	}
-	d := c.NEmbd
-	b := graph.NewBlock(int(jlm.DenseBlock))
-	x := b.In("x", d)
-	if has(jlm.RoleOutputNorm) {
-		if c.LayerNorm {
-			var bias []jlm.Role
-			if has(jlm.RoleOutputNormBias) {
-				bias = append(bias, jlm.RoleOutputNormBias)
-			}
-			x = b.LayerNorm(x, jlm.RoleOutputNorm, c.RMSEps, bias...)
-		} else {
-			x = b.Norm(x, jlm.RoleOutputNorm, c.RMSEps)
-		}
-	}
-	p := b.Emit(graph.OpPool, []graph.ValueID{x}, []graph.Result{{Name: "pooled", Width: d}}, nil,
-		graph.Attrs{Pooling: uint8(c.Pooling)}, nil, nil)[0]
-	// unit is v at unit length: an RMSNorm of no weight is v/sqrt(mean(v^2)),
-	// and 1/sqrt(w) turns the mean into the sum. The eps is
-	// sentence-transformers' 1e-12 floor on the norm, squared and taken per
-	// element.
-	unit := func(v graph.ValueID, w int, name string) graph.ValueID {
-		n := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: name + ".rms", Width: w}}, nil,
-			graph.Attrs{Eps: 1e-24 / float64(w), HeadDim: w}, nil, nil)[0]
-		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w))}, nil, w, n)
-	}
-	// norm is v normalised as a request's embd_normalize k asks: unit at 2, v
-	// as it is below 0, scaled into int16's range by its largest magnitude at
-	// 0, else divided by its k-norm, |v|^k as exp(k log|v|) and the sum's k-th
-	// root as exp(log(sum)/k). A divisor of 0 leaves zeros.
-	k := b.In("embed.norm", 1)
-	norm := func(v graph.ValueID, w int, name string) graph.ValueID {
-		m := func(n string, fn graph.MapFn, c float64, width int, in ...graph.ValueID) graph.ValueID {
-			return mapRow(b, name+"."+n, graph.Attrs{Fn: fn, Const: c}, nil, width, in...)
-		}
-		over := func(n string, fn graph.MapFn, x graph.ValueID) graph.ValueID {
-			return b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: name + "." + n, Width: 1}}, nil,
-				graph.Attrs{Fn: fn}, nil, nil)[0]
-		}
-		where := func(n string, width int, c, x, y graph.ValueID) graph.ValueID {
-			return b.Expr(name+"."+n, width, []graph.Term{{Fn: graph.MapWhere, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0},
-				{Kind: graph.ArgIn, Index: 1}, {Kind: graph.ArgIn, Index: 2}}}}, nil, c, x, y)
-		}
-		a := m("abs", graph.MapAbs, 0, w, v)
-		pk := m("pow", graph.MapExp, 0, w, m("klog", graph.MapMul, 0, w, m("log", graph.MapLog, 0, w, a), k))
-		root := m("root", graph.MapExp, 0, 1, m("lroot", graph.MapDiv, 0, 1, m("lsum", graph.MapLog, 0, 1, over("sum", graph.MapAdd, pk)), k))
-		big := m("big", graph.MapMul, 1.0/32760, 1, over("max", graph.MapMax, a))
-		div := where("div", 1, k, root, m("div0", graph.MapWhere, 1, 1, m("k0", graph.MapEqual, 0, 1, k), big))
-		scale := m("scale", graph.MapWhere, 0, 1, div, m("recip", graph.MapRecip, 0, 1, div))
-		return where("out", w, m("k2", graph.MapEqual, 2, 1, k), unit(v, w, name), m("scaled", graph.MapMul, 0, w, v, scale))
-	}
-	raw, w := p, d
-	for _, r := range [...]jlm.Role{jlm.RoleEmbdDense1, jlm.RoleEmbdDense2} {
-		if has(r) {
-			w = inv[r].Rows
-			p = b.MatVec(p, r, w)
-		}
-	}
-	if p == raw {
-		b.Out(norm(p, w, "unit"))
-	} else {
-		b.Out(norm(p, w, "unit"), norm(raw, d, "unit.raw"))
-	}
-	return verified(b, graph.Facts{Inventory: inv})
+	return m.statedPart(jlm.FrontPool, int(jlm.DenseBlock), all)
 }
 
-// pickHeadGraph is the head projecting the rows of nn.PickMax ids alone,
-// nil for a head with a bias or one the front end states no graph for.
+// pickHeadGraph is the stated head projecting the rows of nn.PickMax ids
+// alone (pickOf), nil for a head the container states none of.
 func (m *Model) pickHeadGraph() (*graph.Graph, error) {
 	g, why, err := m.headGraph(false)
 	if g == nil || why != Covered || err != nil {
 		return nil, err
 	}
-	c := m.Cfg
 	f, _ := m.Inventory(jlm.DenseBlock)
-	if m.Container.Config().Front.Graph(jlm.FrontHead) != "" {
-		pg, err := pickOf(g, c.NVocab, nn.PickMax)
-		if err != nil {
-			return nil, err
-		}
-		if err := graph.Verify(pg, f); err != nil {
-			return nil, fmt.Errorf("the head's pick graph does not verify: %w", err)
-		}
-		return pg, nil
+	pg, err := pickOf(g, m.Cfg.NVocab, nn.PickMax)
+	if err != nil {
+		return nil, err
 	}
-	stored := func(r jlm.Role) bool {
-		_, ok := f.Inventory[r]
-		return ok
-	}
-	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
-		NormBias: stored(jlm.RoleOutputNormBias), Bias: stored(jlm.RoleOutputBias), Output: jlm.RoleOutput,
-		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Pick: nn.PickMax}
-	if !stored(h.Output) {
-		h.Output = jlm.RoleTokenEmbd
-	}
-	pg := h.Build()
 	if err := graph.Verify(pg, f); err != nil {
 		return nil, fmt.Errorf("the head's pick graph does not verify: %w", err)
 	}
@@ -1314,185 +847,42 @@ func pickOf(h *graph.Graph, nVocab, pick int) (*graph.Graph, error) {
 	return g, nil
 }
 
-// perLayerInputs is a row's every layer's per-layer input from its token and
-// its scaled row x: the token's row of the per-layer table times sqrt of a
-// layer's width, plus x's projection over sqrt of the row's width, normed
-// over each layer's slice, the sum over sqrt 2.
-func (m *Model) perLayerInputs(b *graph.Builder, f graph.Facts, x graph.ValueID) graph.ValueID {
-	c := m.Cfg
-	p, w := c.PLEDim, c.PleWidth()
-	scale := func(name string, v graph.ValueID, k float64) graph.ValueID {
-		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul, Const: k}, nil, w, v)
-	}
-	t := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "ple.tok", Width: w}},
-		[]graph.Binding{{Role: jlm.RolePLETokEmbd, K: w, Rows: f.Inventory[jlm.RolePLETokEmbd].Rows}}, graph.Attrs{}, nil, nil)[0]
-	t = scale("ple.tok.scaled", t, math.Sqrt(float64(p)))
-	pr := scale("ple.proj.scaled", b.MatVec(x, jlm.RolePLEModelProj, w), 1/math.Sqrt(float64(c.NEmbd)))
-	pr = b.HeadNorm(pr, jlm.RolePLEProjNorm, p, c.RMSEps)
-	pl := scale("ple.in", b.Add(pr, t), 1/math.Sqrt2)
-	if c.TapsWidth() == 0 {
-		return pl
-	}
-	// A row's tap rows lead its side input, zeros until a picture's are
-	// written over them.
-	zeros := mapRow(b, "taps.zero", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, c.TapsWidth(), x)
-	return b.Emit(graph.OpConcat, []graph.ValueID{zeros, pl}, []graph.Result{{Name: "side", Width: c.SideWidth()}}, nil,
-		graph.Attrs{}, nil, nil)[0]
-}
-
-// embedGraph is the step's input rows: each row's token's row of the
-// embedding, times the stored scale, plus its position's row where the
-// container stores a position table; with streams, for a model of several
-// streams the front end expands, every stream past the first from it
-// (streamExpand); then, for a model of per-layer embeddings, each row's
-// per-layer inputs, the blocks' last input. A bank of checkpoints writes
-// the running residual's rows alone: a block writes each checkpoint before
-// any block reads it.
+// embedGraph is the step's input rows as the container states them: each
+// row's token's row and what the model adds to it, with streams the streams
+// the input rows expand into, then the per-layer inputs.
 func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
-	f, _ := m.Inventory(jlm.DenseBlock)
-	// Token types the input rows add are a table of n_embd-wide rows; a
-	// vector of them is a head's (clef's fields), which the rows never read.
-	tt, types := f.Inventory[jlm.RoleTokenTypes]
-	types = types && tt.K == c.NEmbd && tt.Rows > 0
 	if streams && c.Streams() > 1 && !c.StatesStreams() && !m.ExpandsStreams() {
 		return nil, UncoveredStreams, nil
 	}
-	if g, ok, err := m.statedPart(jlm.FrontEmbed, -1, f); ok {
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	b := graph.NewBlock(-1)
-	x := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "embd", Width: c.NEmbd}},
-		[]graph.Binding{{Role: jlm.RoleTokenEmbd, K: c.NEmbd, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]
-	if s := c.EmbdScale; s != 0 && s != 1 {
-		x = b.Emit(graph.OpMap, []graph.ValueID{x}, []graph.Result{{Name: "scaled", Width: c.NEmbd}}, nil,
-			graph.Attrs{Fn: graph.MapMul, Const: s}, nil, nil)[0]
-	}
-	if p, ok := f.Inventory[jlm.RolePosEmbd]; ok {
-		pos := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: c.NEmbd}},
-			[]graph.Binding{{Role: jlm.RolePosEmbd, K: p.K, Rows: p.Rows}}, graph.Attrs{Positional: true}, nil, nil)[0]
-		x = b.Add(x, pos)
-	}
-	// A text is one segment: every row adds the token-type table's row 0, a
-	// positional row at a span of one.
-	if types {
-		t0 := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "types", Width: c.NEmbd}},
-			[]graph.Binding{{Role: jlm.RoleTokenTypes, K: tt.K, Rows: tt.Rows}}, graph.Attrs{Positional: true, Span: 1}, nil, nil)[0]
-		x = b.Add(x, t0)
-	}
-	if _, ok := f.Inventory[jlm.RoleTokenEmbdNorm]; ok {
-		if c.LayerNorm {
-			var bias []jlm.Role
-			if _, ok := f.Inventory[jlm.RoleTokenEmbdNormBias]; ok {
-				bias = append(bias, jlm.RoleTokenEmbdNormBias)
-			}
-			x = b.LayerNorm(x, jlm.RoleTokenEmbdNorm, c.RMSEps, bias...)
-		} else {
-			x = b.Norm(x, jlm.RoleTokenEmbdNorm, c.RMSEps)
-		}
-	}
-	b.Out(x)
-	if streams && m.ExpandsStreams() {
-		xs, err := m.streamExpand(b, f, x)
-		if err != nil {
-			return nil, UncoveredStreams, err
-		}
-		b.Out(xs...)
-	}
-	if c.PLEDim != 0 {
-		b.Out(m.perLayerInputs(b, f, x))
-	}
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, UncoveredUnverified, fmt.Errorf("the input rows' graph does not verify: %w", err)
-	}
-	return b.G, Covered, nil
+	f, _ := m.Inventory(jlm.DenseBlock)
+	return m.statedPart(jlm.FrontEmbed, -1, f)
 }
 
-// outNormGraph is the output norm alone over a row: the trunk's hidden
-// state a prediction block reads of a speculation's prompt rows. nil for a
-// model that stores no output norm, whose hidden state is the row itself.
+// outNormGraph is the output norm alone over a row as the container states
+// it: the trunk's hidden state a prediction block reads of a speculation's
+// prompt rows. nil for a model that stores no output norm, whose hidden
+// state is the row itself.
 func (m *Model) outNormGraph() (*graph.Graph, error) {
-	c := m.Cfg
 	all, _ := m.Inventory(jlm.DenseBlock)
-	if g, ok, err := m.statedPart(jlm.FrontOutNorm, int(jlm.DenseBlock), all); ok {
-		return g, err
-	}
-	inv := map[jlm.Role]graph.Shape{}
-	has := func(r jlm.Role) bool {
-		s, ok := all.Inventory[r]
-		if ok {
-			inv[r] = s
-		}
-		return ok
-	}
-	if !has(jlm.RoleOutputNorm) {
+	if _, ok := all.Inventory[jlm.RoleOutputNorm]; !ok {
 		return nil, nil
 	}
-	b := graph.NewBlock(int(jlm.DenseBlock))
-	x := b.In("x", c.NEmbd)
-	if c.LayerNorm {
-		var bias []jlm.Role
-		if has(jlm.RoleOutputNormBias) {
-			bias = append(bias, jlm.RoleOutputNormBias)
-		}
-		x = b.LayerNorm(x, jlm.RoleOutputNorm, c.RMSEps, bias...)
-	} else {
-		x = b.Norm(x, jlm.RoleOutputNorm, c.RMSEps)
-	}
-	b.Out(x)
-	g, _, err := verified(b, graph.Facts{Inventory: inv})
+	g, _, err := m.statedPart(jlm.FrontOutNorm, int(jlm.DenseBlock), all)
 	return g, err
 }
 
-// givenGraph is an embedding span's rows' input, the rows the caller gives
-// in place of a token's: each row plus its position's row where the
-// container stores a position table, then, for a model of per-layer
-// embeddings, each row's per-layer inputs from the row and the token it
-// names (token 0's where it names none). Its outputs are the row where a
-// position table moves it or the input rows expand it into streams, then
-// those streams, then the per-layer inputs; nil for a model that
-// adds nothing to a given row.
+// givenGraph is an embedding span's rows' input as the container states it:
+// what a position table, the streams the input rows expand into and the
+// per-layer inputs add to a row the caller gives; nil for a model that adds
+// nothing to a given row.
 func (m *Model) givenGraph() (*graph.Graph, error) {
-	c := m.Cfg
 	f, _ := m.Inventory(jlm.DenseBlock)
-	if g, ok, err := m.statedPart(jlm.FrontGiven, -1, f); ok {
-		return g, err
-	}
-	p, pos := f.Inventory[jlm.RolePosEmbd]
-	expands := m.ExpandsStreams()
-	if !pos && c.PLEDim == 0 && !expands {
+	if _, pos := f.Inventory[jlm.RolePosEmbd]; !pos && m.Cfg.PLEDim == 0 && !m.ExpandsStreams() {
 		return nil, nil
 	}
-	b := graph.NewBlock(-1)
-	x := b.In("x", c.NEmbd)
-	if pos {
-		pe := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: c.NEmbd}},
-			[]graph.Binding{{Role: jlm.RolePosEmbd, K: p.K, Rows: p.Rows}}, graph.Attrs{Positional: true}, nil, nil)[0]
-		x = b.Add(x, pe)
-		b.Out(x)
-	}
-	// The streams the input rows expand into follow the row, which the
-	// graph then writes too.
-	if expands {
-		if !pos {
-			b.Out(streamCopy(b, x))
-		}
-		xs, err := m.streamExpand(b, f, x)
-		if err != nil {
-			return nil, err
-		}
-		b.Out(xs...)
-	}
-	if c.PLEDim != 0 {
-		b.Out(m.perLayerInputs(b, f, x))
-	}
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, fmt.Errorf("the given rows' graph does not verify: %w", err)
-	}
-	return b.G, nil
+	g, _, err := m.statedPart(jlm.FrontGiven, -1, f)
+	return g, err
 }
 
 // MaxTopLogprobs is the alternatives the log-softmax's own selection orders

@@ -11392,3 +11392,58 @@ safetensors goldens' among them, dumps identically through the statements
 and through the readers. A container still carrying method fields is told
 to convert again from its source: an upgrade restates the config, not the
 factor tensors the method would scale.
+
+## The parts outside the blocks, stated (v34)
+
+After the block builder went, model/front.go still built in Go every part
+around the blocks: the input rows with the streams they expand into and the
+per-layer inputs, a given row's input, the head over one stream or the
+collapse of several (with and without the norm's rows), the output norm, a
+prediction block's entry and its head over its own mix of the streams, and
+the readouts -- an embedding model's pool, a pointer, a marker head's
+scorer, Clef's joint head. The converter states them now from
+convert/front.json, a library file in the class files' recipe language (one
+recipe a part: head, embed, given, outnorm, pool, pointer, mark, joint,
+predict_entry), into the config's thirty-first tail (jlm.Config.Front, by
+part name), each held to what the container stores (graph.Verify). The pick
+head is not stated: it is the stated head projecting the drawn ids' rows
+alone (pickOf).
+
+While the builders stood they were the spec. TestStatedFrontIsTheBuiltOne
+held every stated part to the built graph byte for byte (graph.Encode after
+a canonical numbering of values) over every audited model of 2 GiB or less:
+1145 parts (embed 235, given 21, head and head.hidden 201 each, the
+collapsed head and its hidden form 19 each, outnorm 220, the derived pick
+head 201, pool 15, a prediction block's entry 11 and head 1 and hidden 1).
+Its violation -- the prediction entry's halves swapped, the per-layer sum's
+scale moved, the joint readout's floor moved -- failed 15 subtests, on the
+entry (10), the input rows (4) and a given row's (4). Two of the edits saw
+nothing, for reasons of their own: the marker head's GELU constant moved
+from 0.7071067690849304 to 0.7071067811865476, the same binary32, so the
+edit was no violation; and no audited model under the size bound carries a
+joint head, so the joint readout's statement was never compared with its
+builder. It is held instead by TestJointDecisionMatchesTheReference
+(Clef's own code), which passes with the statement as the only joint
+readout there is.
+
+The builders went once the statements matched them. A part a container
+needs and does not state is refused at Open naming jitllm upgrade, which
+states it over what the container holds (convert.StateStored: the
+activations, as before, and the front); upgrading restates, nothing is
+converted again (the user's pick). On a model of several streams the
+refusal names the head the CPU composes, the streams' collapse; it first
+named the plain head, which no such model has, "several residual streams",
+and TestAContainerStatingNoFrontIsUpgraded caught it on Gemma 3n. That gate
+takes a fresh conversion's front away, requires the refusal, restates, and
+holds the result to the fresh conversion byte for byte and, for a model
+that draws, to its greedy tokens: stories15M, MiniLM's pool, laya's
+readout, Gemma 3n's streams and per-layer inputs, Qwen3.5's prediction
+block. Its violation, an upgrade that states the activations alone, fails
+every model.
+
+A stated part outranks the Go config, so a test that moves a field the head
+or a readout reads (the pooling, the final softcap, the logit scale) moves
+it through cfgMut, which states the parts again over the field as set.
+Written into m.Cfg alone it reached nothing: TestComposedEmbeddingDecoderOnCPU's
+pooling violation read 0.9999998 against its golden on every embedding
+model until it did.

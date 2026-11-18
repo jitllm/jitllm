@@ -21,13 +21,11 @@ func predictRole(r jlm.Role) bool {
 	return false
 }
 
-// mtpEntryGraph is prediction block li's entry: each row's token's row of
-// the block's table (its own, or the trunk's where it carries none; no
-// scale) and the trunk's hidden row x, each RMS-normed by its own vector,
-// side by side through its projection into the row the block's body reads.
-// Over a trunk of several streams x is every stream, each normed by its own
-// row of the hidden norm and through the projection beside the embedding's:
-// the rows the block's streams start from, side by side.
+// mtpEntryGraph is prediction block li's entry as the container states it:
+// each row's token's row and the trunk's hidden row, each normed, side by
+// side through the block's projection into the row its body reads; over a
+// trunk of several streams every stream so, side by side. It reads the
+// block's own entry tensors and the trunk's table where it carries none.
 func (m *Model) mtpEntryGraph(li int) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	roles := [...]jlm.Role{jlm.RolePredictTokenNorm, jlm.RolePredictHiddenNorm, jlm.RolePredictProj, jlm.RolePredictEmbd}
@@ -53,39 +51,9 @@ func (m *Model) mtpEntryGraph(li int) (*graph.Graph, Uncovered, error) {
 			return nil, UncoveredUnverified, fmt.Errorf("prediction block %d stores no %v", li, r)
 		}
 	}
-	d, ns := c.NEmbd, c.Streams()
 	if _, ok := f.Inventory[jlm.RolePredictEmbd]; !ok {
 		// The trunk's table, which the block reads in place of its own.
-		f.Inventory[jlm.RolePredictEmbd] = graph.Shape{K: d, Rows: c.NVocab}
+		f.Inventory[jlm.RolePredictEmbd] = graph.Shape{K: c.NEmbd, Rows: c.NVocab}
 	}
-	if g, ok, err := m.statedPart(jlm.FrontPredict(jlm.FrontPredictEntry, li-c.NLayer), li, f); ok {
-		if err != nil {
-			return nil, UncoveredUnverified, err
-		}
-		return g, Covered, nil
-	}
-	b := graph.NewBlock(li)
-	tok := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "e", Width: d}},
-		[]graph.Binding{{Role: jlm.RolePredictEmbd, K: d, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]
-	e := b.Norm(tok, jlm.RolePredictTokenNorm, c.RMSEps)
-	x := b.In("x", ns*d)
-	concat := func(name string, w int, vs ...graph.ValueID) graph.ValueID {
-		return b.Emit(graph.OpConcat, vs, []graph.Result{{Name: name, Width: w}}, nil, graph.Attrs{}, nil, nil)[0]
-	}
-	if ns == 1 {
-		x = b.Norm(x, jlm.RolePredictHiddenNorm, c.RMSEps)
-		b.Out(b.MatVec(concat("eh", 2*d, e, x), jlm.RolePredictProj, d))
-		return verified(b, f)
-	}
-	xn := b.Emit(graph.OpHeadNorm, []graph.ValueID{x}, []graph.Result{{Name: "h.normed", Width: ns * d}}, nil,
-		graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
-	xn = mapRow(b, "h.norm", graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: jlm.RolePredictHiddenNorm, K: ns * d}}, ns*d, xn)
-	zs := make([]graph.ValueID, ns)
-	for k := range zs {
-		xk := b.Emit(graph.OpSlice, []graph.ValueID{xn}, []graph.Result{{Name: "h.stream", Width: d}}, nil,
-			graph.Attrs{Offset: k * d, Width: d}, nil, nil)[0]
-		zs[k] = b.MatVec(concat("eh", 2*d, e, xk), jlm.RolePredictProj, d)
-	}
-	b.Out(concat("z", ns*d, zs...))
-	return verified(b, f)
+	return m.statedPart(jlm.FrontPredict(jlm.FrontPredictEntry, li-c.NLayer), li, f)
 }
