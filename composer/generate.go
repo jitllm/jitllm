@@ -122,27 +122,39 @@ func generate(p Prim) (*Kernel, error) {
 
 // generateIterate is an iteration's naive IR: an element of its input's
 // space each, its values the folds of one serial loop of its trips, each
-// stored after the loop at its place in the element's row of values.
+// of its first node's type, stored after the loop at its place in the
+// element's row of values, or at the element in its own output where the
+// primitive stores each.
 func generateIterate(p Prim) (*Kernel, error) {
 	it := p.Iterate
-	if it == nil || it.Trips < 1 || len(it.Init) == 0 || len(it.Init) != len(it.Next) || len(p.Shape) != 2 {
+	if it == nil || it.Trips < 1 || len(it.Init) == 0 || len(it.Init) != len(it.Next) || len(p.Shape) != 2 ||
+		len(p.Stores) != 0 && len(p.Stores) != len(it.Init) {
 		return nil, fmt.Errorf("jit: an iteration with no loop")
 	}
-	t, n := elemOf(p.Type), len(it.Init)
+	n := len(it.Init)
 	k := &Kernel{Name: "iterate", Kind: PrimIterate, Space: append([]int(nil), p.Shape...)}
 	coords := []int{k.add(Node{Op: OpCoord, A: 0, Type: ir.U32}), k.add(Node{Op: OpCoord, A: 1, Type: ir.U32})}
 	c := k.loop(it.Trips, -1)
 	k.Loops[c].Serial = true
 	g := &generator{k: k, p: &p, flat: map[Operand]int{}, shaped: map[Operand]int{}, state: make([]int, n)}
 	for j := range g.state {
-		g.state[j] = k.add(Node{Op: OpFold, At: c, Type: t})
+		g.state[j] = k.add(Node{Op: OpFold, At: c, Type: elemOf(p.Expr[it.Init[j]].Type)})
 	}
 	vals := g.values(p.Expr, coords)
-	b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Shape: []int{p.Shape[0], p.Shape[1] * n}})
+	if len(p.Stores) == 0 {
+		b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Shape: []int{p.Shape[0], p.Shape[1] * n}})
+		for j, f := range g.state {
+			k.Nodes[f].B, k.Nodes[f].A = vals[it.Init[j]], vals[it.Next[j]]
+			col := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, coords[1], k.u32(n)), k.u32(j))
+			k.Stores = append(k.Stores, Store{Buf: b, Val: f, At: -1, Ax: []int{coords[0], col}})
+		}
+		return k, nil
+	}
 	for j, f := range g.state {
 		k.Nodes[f].B, k.Nodes[f].A = vals[it.Init[j]], vals[it.Next[j]]
-		col := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, coords[1], k.u32(n)), k.u32(j))
-		k.Stores = append(k.Stores, Store{Buf: b, Val: f, At: -1, Ax: []int{coords[0], col}})
+		s := p.Stores[j]
+		b := k.buf(Buf{Kind: BufOut, Elem: elemOf(s.Out.Elem), Operand: s.Out, Shape: append([]int(nil), p.Shape...)})
+		k.Stores = append(k.Stores, Store{Buf: b, Val: f, At: -1, Ax: []int{coords[0], coords[1]}})
 	}
 	return k, nil
 }

@@ -12,8 +12,9 @@ import (
 
 // TestComposedGPUIterate holds an iteration on every card to its trips
 // taken in order, as TestComposedCPUIterate holds the CPU device: the
-// shift-and-xor chain exact, the counter's multiply-add within 1e-6, at
-// every row width and trip count, each output word poisoned first.
+// shift-and-xor chain exact, the counter's multiply-add within 1e-6, a
+// word carried beside a float each to its own type, at every row width and
+// trip count, each output word poisoned first.
 func TestComposedGPUIterate(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
@@ -53,8 +54,10 @@ func TestComposedGPUIterate(t *testing.T) {
 						return b
 					}
 					in := composer.IterateInputs(c)
-					n := c.N * c.Taps()
-					vals := map[graph.ValueID]backend.Buf{g.Out[0]: alloc(poisoned(n))}
+					vals := map[graph.ValueID]backend.Buf{}
+					for _, v := range g.Out {
+						vals[v] = alloc(poisoned(g.Values[v].Width))
+					}
 					for id, v := range g.Values {
 						if w, ok := in[v.Name]; ok {
 							vals[graph.ValueID(id)] = alloc(w)
@@ -92,14 +95,19 @@ func TestComposedGPUIterate(t *testing.T) {
 							t.Fatalf("launching %s: %v", cd.Name, err)
 						}
 					}
-					raw := make([]byte, 4*n)
-					if err := vals[g.Out[0]].Read(raw); err != nil {
-						t.Fatal(err)
+					var outs [][]uint32
+					for _, v := range g.Out {
+						raw := make([]byte, 4*g.Values[v].Width)
+						if err := vals[v].Read(raw); err != nil {
+							t.Fatal(err)
+						}
+						o := make([]uint32, g.Values[v].Width)
+						for i := range o {
+							o[i] = binary.LittleEndian.Uint32(raw[4*i:])
+						}
+						outs = append(outs, o)
 					}
-					got := make([]uint32, n)
-					for i := range got {
-						got[i] = binary.LittleEndian.Uint32(raw[4*i:])
-					}
+					got := composer.IterateGot(c, outs)
 					if bad := composer.IterateMismatch(c, got, composer.IterateWant(c, in)); bad != "" {
 						t.Fatalf("%d code(s): %s", len(codes), bad)
 					}

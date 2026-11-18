@@ -43,7 +43,7 @@ const (
 	FnXor                     // a ^ b, over words
 	FnShl                     // a << b, over words
 	FnShr                     // a >> b, over words, zeros shifted in
-	FnTake                    // operand a's word at the index b: a table read whole, over words
+	FnTake                    // operand a's element at the word index b: a table read whole
 	numFns
 )
 

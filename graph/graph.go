@@ -406,11 +406,14 @@ const (
 	// first trip, read at the element as OpExpr's are; the terms after them
 	// are a trip's, ArgState term Index the value it carries into the trip,
 	// and the values it carries out the terms Words names, value j term
-	// Words[j], or the last Taps terms where Words is empty. Out[0]'s element
-	// i*Taps+j is value j of element i after the last trip. A trip follows
-	// the one before it: no trips are taken apart or regrouped. Its operands
-	// past In[0] are tables, read whole and only by a MapTake term's first
-	// operand. A primitive.
+	// Words[j], or the last Taps terms where Words is empty. Value j of
+	// element i after the last trip is Out[j]'s element i where the op has
+	// an output per value, each of its own type, else Out[0]'s element
+	// i*Taps+j, every value of Out[0]'s type. A term's type follows from
+	// what it reads (IterateElems). A trip follows the one before it: no
+	// trips are taken apart or regrouped. Its operands past In[0] are
+	// tables, read whole and only by a MapTake term's first operand. A
+	// primitive.
 	OpIterate
 	numOps
 )
@@ -800,7 +803,7 @@ const (
 	MapXor       = jlm.FnXor       // a ^ b, over words
 	MapShl       = jlm.FnShl       // a << b, over words
 	MapShr       = jlm.FnShr       // a >> b, over words
-	MapTake      = jlm.FnTake      // operand a's word at the index b: a table read whole (OpIterate)
+	MapTake      = jlm.FnTake      // operand a's element at the word index b: a table read whole (OpIterate)
 )
 
 // Order is an OpReduce's: the order its additions run in is part of its

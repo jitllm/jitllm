@@ -313,39 +313,18 @@ func Verify(g *Graph, f Facts) error {
 		case OpIterate:
 			n := o.Attr.Taps
 			named := len(o.Attr.Words) == n && !slices.ContainsFunc(o.Attr.Words, func(w uint64) bool { return w < uint64(n) || w >= uint64(len(o.Attr.Expr)) })
-			if len(o.In) < 1 || len(o.Out) != 1 || len(o.Weight) != 0 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n ||
-				len(o.Attr.Words) != 0 && !named ||
-				width(o.Out[0]) != n*width(o.In[0]) || g.Values[o.Out[0]].Elem != g.Values[o.In[0]].Elem {
-				bad("%s: %d values carried through %d trips by %d terms from a row of %d into %d", at, n, o.Attr.Span,
-					len(o.Attr.Expr), width(o.In[0]), width(o.Out[0]))
+			shaped := len(o.In) >= 1 && len(o.Out) == 1 && width(o.Out[0]) == n*width(o.In[0])
+			if len(o.In) >= 1 && len(o.Out) == n && n > 1 {
+				shaped = !slices.ContainsFunc(o.Out, func(v ValueID) bool { return width(v) != width(o.In[0]) })
+			}
+			if !shaped || len(o.Weight) != 0 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n ||
+				len(o.Attr.Words) != 0 && !named {
+				bad("%s: %d values carried through %d trips by %d terms from %d operands into %d outputs", at, n, o.Attr.Span,
+					len(o.Attr.Expr), len(o.In), len(o.Out))
 				break
 			}
-			for k, tm := range o.Attr.Expr {
-				ar := tm.Fn.Arity()
-				if ar == 0 {
-					bad("%s: term %d has no function", at, k)
-				}
-				for j, a := range tm.Args {
-					ok := true
-					table := tm.Fn == MapTake && j == 0
-					switch {
-					case j >= ar:
-						ok = a.Kind == ArgNone
-					case table:
-						ok = a.Kind == ArgIn && a.Index >= 1 && a.Index < len(o.In) && g.Values[o.In[a.Index]].Elem == ElemU32
-					case a.Kind == ArgIn:
-						ok = a.Index == 0
-					case a.Kind == ArgTerm:
-						ok = a.Index >= 0 && a.Index < k
-					case a.Kind == ArgState:
-						ok = k >= n && a.Index >= 0 && a.Index < n
-					default:
-						ok = a.Kind == ArgConst
-					}
-					if !ok {
-						bad("%s: term %d's operand %d does not name one the op has", at, k, j)
-					}
-				}
+			if _, err := IterateElems(g, o); err != nil {
+				bad("%s: %v", at, err)
 			}
 		case OpMeanRows:
 			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || len(o.Attr.Expr) == 0 || rows(o.Out[0]) != 1 ||

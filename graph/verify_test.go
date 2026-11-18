@@ -313,3 +313,57 @@ func TestVerifierHoldsAGathersBound(t *testing.T) {
 		t.Errorf("Verify said %v, want an error naming the unwritten row", err)
 	}
 }
+
+// TestVerifierHoldsAnIterationsTypes verifies an iteration carrying a word
+// index beside a float sum of a float table's elements, then each way the
+// types can disagree, every one of which must be refused naming its fault.
+func TestVerifierHoldsAnIterationsTypes(t *testing.T) {
+	in := Arg{Kind: ArgIn}
+	k := func(v float64) Arg { return Arg{Kind: ArgConst, Const: v} }
+	st := func(j int) Arg { return Arg{Kind: ArgState, Index: j} }
+	tm := func(j int) Arg { return Arg{Kind: ArgTerm, Index: j} }
+	build := func(edit func(g *Graph, o *Op)) error {
+		b := New()
+		x := b.In("x", 8)
+		b.G.Values[x].Elem = ElemU32
+		tab := b.In("table", 64)
+		terms := []Term{
+			{Fn: MapAdd, Args: [3]Arg{in, k(0)}},
+			{Fn: MapMul, Args: [3]Arg{in, k(0.25)}},
+			{Fn: MapTake, Args: [3]Arg{{Kind: ArgIn, Index: 1}, st(0)}},
+			{Fn: MapAdd, Args: [3]Arg{st(1), tm(2)}},
+			{Fn: MapAdd, Args: [3]Arg{st(0), k(5)}},
+			{Fn: MapAnd, Args: [3]Arg{tm(4), k(63)}},
+		}
+		ys := b.Emit(OpIterate, []ValueID{x, tab}, []Result{{Name: "at", Width: 8}, {Name: "sum", Width: 8}}, nil,
+			Attrs{Taps: 2, Span: 4, Words: []uint64{5, 3}, Expr: terms}, nil, nil)
+		b.G.Values[ys[0]].Elem = ElemU32
+		b.Out(ys[0])
+		b.Out(ys[1])
+		if edit != nil {
+			edit(b.G, &b.G.Ops[len(b.G.Ops)-1])
+		}
+		return Verify(b.G, Facts{})
+	}
+	if err := build(nil); err != nil {
+		t.Fatalf("a word carried beside a float is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name, want string
+		edit       func(g *Graph, o *Op)
+	}{
+		{"a float carried out by a word", "carried out by term", func(g *Graph, o *Op) { o.Attr.Words = []uint64{5, 4} }},
+		{"a float's output of words", "no word", func(g *Graph, o *Op) { g.Values[o.Out[1]].Elem = ElemU32 }},
+		{"a float read into a word", "a float into a word", func(g *Graph, o *Op) { g.Values[o.In[0]].Elem = ElemF32 }},
+		{"a take at a float", "no word", func(g *Graph, o *Op) { o.Attr.Expr[2].Args[1] = st(1) }},
+		{"a word of a fraction", "which is no word", func(g *Graph, o *Op) { o.Attr.Expr[4].Args[1] = k(5.5) }},
+		{"a term of constants alone", "constants alone", func(g *Graph, o *Op) { o.Attr.Expr[4].Args[0] = k(1) }},
+		{"a table of codes", "neither a word nor a float", func(g *Graph, o *Op) { g.Values[o.In[1]].Elem = ElemI8 }},
+		{"an output of another width", "values carried", func(g *Graph, o *Op) { g.Values[o.Out[1]].Width = 16 }},
+		{"a table read outside a take", "outside a take", func(g *Graph, o *Op) { o.Attr.Expr[3].Args[1] = Arg{Kind: ArgIn, Index: 1} }},
+	} {
+		if err := build(c.edit); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}

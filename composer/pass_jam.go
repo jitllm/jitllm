@@ -364,7 +364,7 @@ func (k *Kernel) jam(o, i int, p Jam, runtime bool, n int) *Kernel {
 		cp := m.jamCopier(it, sub, row)
 		for _, f := range folds {
 			g := of[j][f]
-			m.Nodes[g].A = cp(m.Nodes[f].A)
+			m.Nodes[g].A, m.Nodes[g].B = cp(m.Nodes[f].A), cp(m.Nodes[f].B)
 			if st := &m.Nodes[m.Nodes[g].A]; st.Op == OpFma && m.Nodes[st.A].Op == OpBroadcast {
 				st.A, st.B = st.B, st.A
 			}

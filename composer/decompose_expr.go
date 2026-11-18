@@ -301,22 +301,24 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 
 // decomposeIterate is an iteration over its input's elements: its terms
 // one primitive, the first Taps the values before the first trip, the last
-// Taps the values after a trip, a carried value ExprState.
+// Taps the values after a trip, a carried value ExprState, each term of
+// its own type. Where each value has an output of its own, they are the
+// primitive's Stores.
 func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 	n := o.Attr.Taps
-	if len(o.In) < 1 || len(o.Out) != 1 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n {
+	if len(o.In) < 1 || len(o.Out) != 1 && len(o.Out) != n || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n {
 		return nil, fmt.Errorf("%d values carried through %d trips by %d terms", n, o.Attr.Span, len(o.Attr.Expr))
 	}
-	t := ir.F32
-	if c.Graph.Values[o.Out[0]].Elem == graph.ElemU32 {
-		t = ir.U32
+	elems, err := graph.IterateElems(c.Graph, o)
+	if err != nil {
+		return nil, err
 	}
 	ks := make([]int, len(o.Attr.Expr))
 	for k := range ks {
 		ks[k] = k
 	}
 	sh := c.rows(o.In[0])
-	e, in, vals, err := exprTerms(o, c, ks, nil, sh, func(x *exprs, j int) int { return x.add(Expr{Op: ExprState, In: j, Type: t}) })
+	e, in, vals, err := exprTerms(o, c, ks, nil, sh, elems)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +334,12 @@ func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 		it.Init = append(it.Init, vals[j])
 		it.Next = append(it.Next, vals[next])
 	}
-	p := Prim{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: t, Iterate: it}
+	p := Prim{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: e[it.Init[0]].Type, Iterate: it}
+	if len(o.Out) == n && n > 1 {
+		for j, v := range o.Out {
+			p.Stores = append(p.Stores, PrimStore{Out: c.value(v), Value: it.Next[j]})
+		}
+	}
 	// A table's loads reach its whole width.
 	for j, v := range o.In[1:] {
 		for s, op := range in {
@@ -349,12 +356,15 @@ func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 
 // exprTerms is terms ks of o's expression as a primitive's nodes over a
 // space of shape sh, its rows by its elements: the nodes, the operands
-// they read and each term's node. state, where set, is the node of a value
-// an iteration carries; where nil, a term reading one is refused.
-func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state func(x *exprs, j int) int) ([]Expr, []Operand, map[int]int, error) {
+// they read and each term's node. elems, where set, is an iteration's
+// type of each term, a carried value's its first term's; where nil, every
+// term is of o's output's type and a term reading a carried value is
+// refused. A word read by a float term is its integer's float.
+func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, elems []graph.Elem) ([]Expr, []Operand, map[int]int, error) {
 	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
 	R, W := sh[0], sh[1]
 	var x exprs
+	asFloat := func(a int) int { return x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, a)) }
 	r, i := x.coord(0), x.coord(1)
 	var in []Operand
 	slot := map[string]int{}
@@ -377,7 +387,7 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state
 		}
 		a := x.at(use(c.value(v)), []int{R, n}, r, e)
 		if c.Graph.Values[v].Elem == graph.ElemU32 && !words {
-			a = x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, a))
+			a = asFloat(a)
 		}
 		return a
 	}
@@ -385,10 +395,25 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state
 	for _, k := range ks {
 		t := o.Attr.Expr[k]
 		args := make([]int, t.Fn.Arity())
+		if elems != nil {
+			words = elems[k] == graph.ElemU32
+		}
 		take := t.Fn == graph.MapTake
+		// A word an iteration's float term reads is its float; a take's
+		// index is a word whatever the table holds.
+		typed := func(v int) int {
+			if elems != nil && !words && !take && x.e[v].Type == ir.U32 {
+				return asFloat(v)
+			}
+			return v
+		}
 		if take {
-			if a := t.Args[0]; !words || a.Kind != graph.ArgIn || a.Index < 1 || a.Index >= len(o.In) {
+			a := t.Args[0]
+			if a.Kind != graph.ArgIn || a.Index < 1 || a.Index >= len(o.In) {
 				return nil, nil, nil, fmt.Errorf("term %d takes from %v, which is no table", k, a.Kind)
+			}
+			if el := c.Graph.Values[o.In[a.Index]].Elem; el != graph.ElemU32 && el != graph.ElemF32 || words != (el == graph.ElemU32) {
+				return nil, nil, nil, fmt.Errorf("term %d takes from a table of type %d", k, el)
 			}
 		}
 		for j := range args {
@@ -430,12 +455,13 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state
 				case !ok:
 					v = x.at(use(rows[a.Index]), []int{R, W}, r, i)
 				}
-				args[j] = v
+				args[j] = typed(v)
 			case graph.ArgState:
-				if state == nil {
+				v, ok := vals[a.Index]
+				if elems == nil || !ok {
 					return nil, nil, nil, fmt.Errorf("term %d reads a carried value, which only an iteration carries", k)
 				}
-				args[j] = state(&x, a.Index)
+				args[j] = typed(x.add(Expr{Op: ExprState, In: a.Index, Type: x.e[v].Type}))
 			default:
 				return nil, nil, nil, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
 			}
@@ -444,9 +470,14 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state
 		var err error
 		switch {
 		case take:
-			table := c.value(o.In[t.Args[0].Index])
-			table.Elem = ir.U32
-			v = x.add(Expr{Op: ExprLoad, Type: ir.U32, In: use(table), A: args[1]})
+			if x.e[args[1]].Type != ir.U32 {
+				return nil, nil, nil, fmt.Errorf("term %d takes at an index that is no word", k)
+			}
+			table, et := c.value(o.In[t.Args[0].Index]), ir.F32
+			if words {
+				table.Elem, et = ir.U32, ir.U32
+			}
+			v = x.add(Expr{Op: ExprLoad, Type: et, In: use(table), A: args[1]})
 		case words:
 			v, err = x.wordFn(t.Fn, args)
 		default:
