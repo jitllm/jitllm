@@ -5253,9 +5253,23 @@ What set the banks apart from the dense form is Unroll: an expert's rows
 are a fixed count, so its rows loop ran four vectors a trip, four copies'
 products and sums beside the sub-block's broadcast words, past sixteen
 vector registers; a dense rows loop is counted and runs one. A kernel
-refused with its vector loops run several vectors a trip is now formed
-again with half as many before anything else of its form is given up, and
-the gate and up banks bind streamed. UNR_DOC_NUMBERS
+refused with a vector loop that carries no sums running several vectors a
+trip is now formed again with half as many there, down to one, before
+anything else of its form is given up, and the gate and up banks bind
+streamed (61bfe9845). A loop that carries sums keeps its vectors: they are
+its partial sums, and a first cut that halved those too took Qwen3-0.6B's
+513-row prompt out of the composed CPU's band (1.517 of it at the median
+against 0.982). The streamed banks did not move the rate. Box 49's second
+socket, twelve cores, tg64 after pp128, 20 ABBA rounds a process a sample,
+both arms built on one HEAD, each A/B after its A/A:
+
+| model | A/A (IQR/median) | A/B (IQR/median) | tok/s |
+|---|---|---|---|
+| olmoe-1b-7b Q4_K_M | 1.0010 (0.0078) | 0.9969 (0.0096) | 14.71 -> 14.68 |
+| Qwen3-30B-A3B Q4_K_M | 1.0019 (0.0058) | 1.0000 (0.0033) | 5.19 -> 5.18 |
+| Llama-3.2-1B Q4_K_M (dense) | 0.9977 (0.0284) | 1.0168 (0.0626) | 57.36 -> 58.34 |
+
+Whether the last-level misses moved with the walk was not counted then.
 
 **The cold spill, tried.** The expert kernels' bindings spill copies a
 loop walks every trip (gate Q4_K 104 stack references, down Q6_K 185, down
