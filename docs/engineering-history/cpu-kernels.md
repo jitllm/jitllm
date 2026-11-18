@@ -5602,3 +5602,40 @@ dense and indexer cases and SelectPooled (a product of the index compared
 with a count, selected, masked, stored). Their shapes keep the compare
 constant across a vector, or the value is cancelled: a gate there needs a
 shape whose bound falls inside a vector's lanes.
+
+## A sum's own scratch is not the caller's
+
+InPlace gives a graph's output only a caller's input's storage, and it
+told the caller's by callerHeld: the first kernel touching the value reads
+it. A CPU contraction zeroes its output in one loop and adds into it in the
+next, so it reads its output too, and callerHeld took its scratch for the
+caller's. Nothing reached that until the CPU took the {Map, Map} pair
+(9db5e4a08): a parallel residual, x + (attention + mixer), became one map
+reading the attention projection's output first, the residual's sum took
+that storage (it is no graph output, which is allowed), and the block's
+output, reading it, took it too where it had to take x. The block's answer
+went to a scratch no caller binds.
+
+The measurements, Falcon-H1-0.5B-Instruct-Q4_K_M teacher-forced against the
+GGUF oracle's CPU arm (TestSSMRealModelsTeacherForced, box 50): 92 of 96
+positions without the pair, 4 of 96 with it, 92 of 96 with it and the
+fix. Taking the pair's joins one name at a time, only the residual's
+(sum.27 + x) moved the text; with InPlace off it read 92. On two cards
+the composed CPU control read 6.4 NMSE from a card that never moved
+(TestBlocksMoveToTheCPUAndBack, box 43, the tree before the pair was
+dropped), where the card reads 3.1e-4 from a correct control. GPT-NeoX's
+and OPT's Q8 containers (opt-125m, pythia-160m, synth-hf-gptneox,
+synth-hf-opt) fail TestSafetensorsQ8MatchTransformers with the pair and
+pass with the pair and the fix. callerHeld now asks whether the kernel
+stores the value in a loop before every loop it reads it in
+(Kernel.writesFirst); TestInPlaceGivesAnOutputOnlyTheCallersStorage is the
+unit gate and fails without it.
+
+Qwen4Exp's composed CPU prompt is the pair's other wrong answer, and the
+fix does not move it (0.13 from transformers, bound 1e-9, with the pair
+and the fix). Of its joins only one matters: its first block's causal
+convolution over the prompt's 64 rows into the activation reading it.
+That join alone fails; every other join taken passes; with Vectorize off
+it passes. Exp, RowJam, Unroll, Chains, Periods, Induction and RunLengths
+off each leave it failing or refused.
+

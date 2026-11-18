@@ -161,11 +161,11 @@ func readLater(ks []*Kernel, o Operand) bool {
 }
 
 // callerHeld reports whether operand o is the caller's: the first kernel of
-// ks to touch it reads it, so no kernel made it.
+// ks to touch it reads it before writing it, so no kernel made it.
 func callerHeld(ks []*Kernel, o Operand) bool {
 	for _, k := range ks {
 		one := []*Kernel{k}
-		if readLater(one, o) {
+		if readLater(one, o) && !k.writesFirst(o) {
 			return true
 		}
 		if writtenBy(one, o) {
@@ -173,6 +173,34 @@ func callerHeld(ks []*Kernel, o Operand) bool {
 		}
 	}
 	return false
+}
+
+// writesFirst reports whether k stores o in a loop before every loop it
+// reads o in: a sum zeroed over its output and added into it reads only
+// what it wrote.
+func (k *Kernel) writesFirst(o Operand) bool {
+	outer := func(l int) int {
+		for l >= 0 && k.Loops[l].Parent >= 0 {
+			l = k.Loops[l].Parent
+		}
+		return l
+	}
+	first := -1
+	for _, s := range k.Stores {
+		if !s.Barrier && !s.Run && s.At >= 0 && k.Bufs[s.Buf].Operand == o && (first < 0 || outer(s.At) < first) {
+			first = outer(s.At)
+		}
+	}
+	if first < 0 {
+		return false
+	}
+	hs := k.Homes()
+	for i, nd := range k.Nodes {
+		if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o && (hs[i] < 0 || outer(hs[i]) <= first) {
+			return false
+		}
+	}
+	return true
 }
 
 // writtenBy reports whether a kernel of ks stores operand o, any head's
