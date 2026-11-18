@@ -671,17 +671,19 @@ func (s *Instance) chunkOn(r int) int {
 	if l := s.chunks[r]; l != nil && l.ChunkRows() > 0 {
 		return l.ChunkRows()
 	}
-	if p, ok := s.places[r].(nn.Pipeliner); ok && s.allOnDevice() && p.PipelineDepth() > 1 {
-		return nn.MaxDevicePrefillChunk * pipelineChunks
+	if p, ok := s.places[r].(nn.Pipeliner); ok && s.allOnDevice() {
+		if d := p.PipelineDepth(); d > 1 {
+			return nn.MaxDevicePrefillChunk * pipelinePieces(d)
+		}
 	}
 	return nn.MaxDevicePrefillChunk
 }
 
-// pipelineChunks is how many device chunks a pipelined prompt chunk holds:
-// a 2048-token batch over 512-token micro-batches. With d cards a
-// chunk takes (pieces + d - 1) piece-times instead of d x pieces.
-// Deeper pipelines (more cards) gain from more pieces.
-const pipelineChunks = 4
+// pipelinePieces is how many device chunks a pipelined prompt chunk holds
+// over d cards. A chunk takes (pieces + d - 1) piece-times, d - 1 of them
+// the pipeline filling and draining, so 8(d-1) pieces keep that to an
+// eighth of it.
+func pipelinePieces(d int) int { return 8 * (d - 1) }
 
 // growRows sizes the rows a chunk of chunk rows reads: its residual rows and
 // rotary tables, from the model's spare prompt buffers where they are big

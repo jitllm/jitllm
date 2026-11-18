@@ -462,9 +462,11 @@ Four changes, each measured against the binary before it in the same pass,
 alternated, warm medians of 5.
 
 **A prompt is pipelined across the cards.** A device that crosses several
-cards takes a 2048-row chunk and runs it in 512-row pieces, card r taking
-piece k once card r-1 has finished it, so the cards work at once where they
-worked in turn (`GPU.pipeline`). It is llama.cpp's batch over micro-batches.
+cards takes a chunk of 512-row pieces, card r taking piece k once card r-1
+has finished it, so the cards work at once where they worked in turn
+(`GPU.pipeline`). The rows below were taken with four pieces a chunk (2048
+rows, llama.cpp's batch over micro-batches); a chunk now holds 8(d-1) pieces
+over d cards (`pipelinePieces`), measured below the table.
 
 | model | cards | prompt | before | after | llama.cpp | |
 |---|---|---|---|---|---|---|
@@ -480,6 +482,27 @@ worked in turn (`GPU.pipeline`). It is llama.cpp's batch over micro-batches.
 llama.cpp's column is the table above, same cards, same prompts. A 530-token
 prompt is two pieces and gains 6-10%; a 2048-token one is four and gains
 1.6-2.2x. A vision block is never cut: its patches attend to one another.
+
+**The pieces a chunk holds, re-derived.** A chunk over d cards takes (pieces
++ d - 1) piece-times, d - 1 of them the pipeline filling and draining, so
+four pieces over four cards spent three of seven piece-times filling and
+draining. Mistral-7B Q4_K_M on four V100s (cards 4-7 of the 8x box, each
+capped at 2 GiB), jitllm built at each count, one process a sample, the arms
+rotated over five rounds, the box's CPUs running a census beside it (a
+direction, not a board row):
+
+| prompt | 2 | 4 (was) | 8 | 16 | 24 = 8(d-1) | 32 |
+|---|---|---|---|---|---|---|
+| 4096 | 1964-1994 | 2671-2831 | 3476-3553 | 3490-3583 | | |
+| 8192 | | | 505-521 | 981-1033 | 1015-1055 | 994-1044 |
+
+tok/s, the five rounds' range. At 8192 tokens the caps make the cards stream
+blocks (decode reads 3.8 tok/s), so each piece pays a page-in and filling the
+pipeline costs more; 16 pieces and more doubled 8, and 16, 24 and 32 are
+alike. A prompt shorter than one chunk is one chunk whatever the count. At
+16384 tokens every count failed, the four-piece build too: a placement that
+spilled blocks past full cards left one card holding two runs, which the
+pipeline drove from two goroutines.
 
 **Cold start: the host stops holding what the card holds.** Qwen3-30B-A3B on
 two cards, `speed -ttft` cold phases:
