@@ -323,6 +323,14 @@ func Verify(g *Graph, f Facts) error {
 					len(o.Attr.Expr), len(o.In), len(o.Out))
 				break
 			}
+			if w := o.Attr.Width; w != 0 && (w < 1 || w&(w-1) != 0) {
+				bad("%s: runs of %d, no power of two", at, w)
+				break
+			}
+			if w := o.Attr.Width; w != 0 && width(o.In[0])%w != 0 {
+				bad("%s: runs of %d in a row of %d", at, w, width(o.In[0]))
+				break
+			}
 			if _, err := IterateElems(g, o); err != nil {
 				bad("%s: %v", at, err)
 			}

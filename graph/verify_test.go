@@ -314,6 +314,51 @@ func TestVerifierHoldsAGathersBound(t *testing.T) {
 	}
 }
 
+// TestVerifierHoldsAnIterationsRuns verifies an iteration summing a float
+// term over runs of four elements of a row of twelve, then each way a sum
+// can be wrong, every one of which must be refused naming its fault.
+func TestVerifierHoldsAnIterationsRuns(t *testing.T) {
+	in := Arg{Kind: ArgIn}
+	k := func(v float64) Arg { return Arg{Kind: ArgConst, Const: v} }
+	st := Arg{Kind: ArgState}
+	sum := func(j int) Arg { return Arg{Kind: ArgSum, Index: j} }
+	build := func(edit func(o *Op)) error {
+		b := New()
+		x := b.In("x", 12)
+		b.G.Values[x].Elem = ElemU32
+		terms := []Term{
+			{Fn: MapMul, Args: [3]Arg{in, k(0.5)}},
+			{Fn: MapAdd, Args: [3]Arg{in, k(1)}},
+			{Fn: MapMul, Args: [3]Arg{st, k(0.5)}},
+			{Fn: MapAdd, Args: [3]Arg{sum(2), st}},
+		}
+		b.Out(b.Emit(OpIterate, []ValueID{x}, []Result{{Name: "y", Width: 12}}, nil,
+			Attrs{Taps: 1, Span: 3, Width: 4, Expr: terms}, nil, nil)[0])
+		if edit != nil {
+			edit(&b.G.Ops[len(b.G.Ops)-1])
+		}
+		return Verify(b.G, Facts{})
+	}
+	if err := build(nil); err != nil {
+		t.Fatalf("a sum over runs of four is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name, want string
+		edit       func(o *Op)
+	}{
+		{"a sum with no runs", "over runs of 0", func(o *Op) { o.Attr.Width = 0 }},
+		{"runs of three", "no power of two", func(o *Op) { o.Attr.Width = 3 }},
+		{"runs past the row", "in a row of 12", func(o *Op) { o.Attr.Width = 8 }},
+		{"a sum of a word", "no float", func(o *Op) { o.Attr.Expr[3].Args[0] = sum(1) }},
+		{"a sum before the first trip", "sums term", func(o *Op) { o.Attr.Expr[0].Args[1] = sum(0) }},
+		{"a sum of a later term", "sums term", func(o *Op) { o.Attr.Expr[2].Args[0] = sum(3) }},
+	} {
+		if err := build(c.edit); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}
+
 // TestVerifierHoldsAnIterationsTypes verifies an iteration carrying a word
 // index beside a float sum of a float table's elements, then each way the
 // types can disagree, every one of which must be refused naming its fault.

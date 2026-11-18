@@ -411,9 +411,12 @@ const (
 	// an output per value, each of its own type, else Out[0]'s element
 	// i*Taps+j, every value of Out[0]'s type. A term's type follows from
 	// what it reads (IterateElems). A trip follows the one before it: no
-	// trips are taken apart or regrouped. Its operands past In[0] are
-	// tables, read whole and only by a MapTake term's first operand. A
-	// primitive.
+	// trips are taken apart or regrouped. Where Width is set, a trip's term
+	// may read ArgSum term Index, a float, summed over the run of Width
+	// elements of In[0]'s row the element is in (elements i-i%Width
+	// onward): the run's elements take each trip together. Width is a power
+	// of two dividing In[0]'s width. Its operands past In[0] are tables, read
+	// whole and only by a MapTake term's first operand. A primitive.
 	OpIterate
 	numOps
 )
@@ -692,7 +695,8 @@ const (
 	ArgTerm
 	// ArgState is an OpStateScan's state element before the row.
 	ArgState
-	// ArgSum is an OpStateScan's term Index summed over the state's row.
+	// ArgSum is an OpStateScan's term Index summed over the state's row,
+	// an OpIterate's over a run of its row (Attrs.Width).
 	ArgSum
 )
 

@@ -12,7 +12,8 @@ import (
 // any other term's is a float where one of its operands is, else a word. A
 // word read by a float term is its integer's float. A float is never read
 // as a word, a take's index is a word, a term of constants alone has no
-// type, and a value is carried out by a term of its own type.
+// type, a sum over a run is a trip's read of a float term before it, and a
+// value is carried out by a term of its own type.
 func IterateElems(g *Graph, o Op) ([]Elem, error) {
 	n := o.Attr.Taps
 	if n < 1 || len(o.In) < 1 || len(o.Out) != 1 && len(o.Out) != n || len(o.Attr.Expr) < 2*n {
@@ -61,6 +62,14 @@ func IterateElems(g *Graph, o Op) ([]Elem, error) {
 					return nil, fmt.Errorf("term %d reads carried value %d", k, a.Index)
 				}
 				ops = append(ops, val(a.Index))
+			case ArgSum:
+				if k < n || o.Attr.Width < 1 || a.Index < 0 || a.Index >= k {
+					return nil, fmt.Errorf("term %d sums term %d over runs of %d", k, a.Index, o.Attr.Width)
+				}
+				if es[a.Index] != ElemF32 {
+					return nil, fmt.Errorf("term %d sums term %d, which is no float", k, a.Index)
+				}
+				ops = append(ops, ElemF32)
 			case ArgConst:
 				consts = append(consts, a.Const)
 			default:
