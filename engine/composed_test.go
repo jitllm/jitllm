@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -349,7 +350,8 @@ func declinesOf(st gpu.Stats) string {
 // times the widest the reference comes. The serving gate's reference is the
 // GGUF oracle: each step the wider of its CUDA and CPU arms, teacher-forced on
 // the panel; main's tier where the GGUF oracle does not read the model (the
-// user's decision). Both gates that hold an arm to a reference take them from
+// user's decision); the class's numerical reference where it runs the file as
+// another model (serveGolden). Both gates that hold an arm to a reference take them from
 // here.
 const bandRatio, bandWorst = 1.5, 4.0
 
@@ -361,6 +363,19 @@ const bandRatio, bandWorst = 1.5, 4.0
 // layers*4*u^2/3, times the attention gate's tail factor of 6
 // (jit's flashTail).
 func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 22) }
+
+// serveGolden is the serving gate's numerical reference for a q8 fixture the
+// GGUF oracle runs as another model, "" for any other: its transformers class
+// run as the container's Q8_0 runs over the gate's panel (scripts/rowsgold.py
+// serve q8, the class from the GGUF by scripts/llama4hf.py). The oracle
+// hardcodes Llama 4's attention chunk at 8192, and synth-llama4-q8's is 4.
+func serveGolden(file string) string {
+	switch file {
+	case "synth-llama4-q8.gguf":
+		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.q8.json")
+	}
+	return ""
+}
 
 // ssmServed are the state-space models served (servedModels), their
 // prompts a chunk's rows the scan's. A selective update
@@ -612,13 +627,36 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			// The band's reference first: the GGUF oracle's cuda arm against
 			// the float reference on every device, or the tier's where the GGUF
-			// oracle does not read the model (the user's decision).
+			// oracle does not read the model (the user's decision), or the
+			// class's numerical reference where the oracle runs another model,
+			// over the logits its golden keeps.
 			lcppDir := os.Getenv("JITLLM_LCPP")
 			if lcppDir == "" {
 				t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of the GGUF oracle holding scripts/lcpplogits, the worst-step bound's oracle")
 			}
 			var lcpp [][][]float32
-			for _, ngl := range []int{99, 0} {
+			stride, golden, ngls := 1, serveGolden(file), []int{99, 0}
+			if golden != "" {
+				ngls = nil
+				for _, p := range panel {
+					var rows [][]float32
+					rows, stride = goldenRows(t, golden, lcppSeq{p.ids, p.toks, nil})
+					for i := range rows {
+						rows[i] = rows[i][:min(len(rows[i]), m.Cfg.NVocab)]
+					}
+					lcpp = append(lcpp, rows)
+				}
+			}
+			nmse := func(a, b []float32) float64 {
+				var num, den float64
+				for j := 0; j < len(b); j += stride {
+					d := float64(a[j] - b[j])
+					num += d * d
+					den += float64(b[j]) * float64(b[j])
+				}
+				return num / den
+			}
+			for _, ngl := range ngls {
 				for _, p := range panel {
 					lg, ok := lcppSteps(t, lcppDir, fixtureSource(path), p.ids, p.toks, ngl)
 					if !ok {
@@ -634,9 +672,9 @@ func TestComposedBlocksServe(t *testing.T) {
 			}
 			type tierRun struct{ want, cpu, ref [][]float32 }
 			refDist := func(r tierRun, i int) float64 {
-				e := logitNMSE(r.want[i], r.ref[i])
+				e := nmse(r.want[i], r.ref[i])
 				if r.cpu != nil {
-					e = max(e, logitNMSE(r.cpu[i], r.ref[i]))
+					e = max(e, nmse(r.cpu[i], r.ref[i]))
 				}
 				return e
 			}
@@ -667,9 +705,13 @@ func TestComposedBlocksServe(t *testing.T) {
 								if len(lcpp[li][0]) != len(tr.ref[0]) {
 									t.Fatalf("the GGUF oracle's logits are %d wide where the model's are %d", len(lcpp[li][0]), len(tr.ref[0]))
 								}
+								arm := [2]string{"cuda", "cpu"}[li/len(panel)]
+								if golden != "" {
+									arm = "golden"
+								}
 								for i := 1; i < len(tr.ref); i++ {
-									if e := logitNMSE(lcpp[li][i], tr.ref[i]); e > widestLcpp[g] {
-										widestLcpp[g], lcppAt[g] = e, fmt.Sprintf("%s, prompt %d step %d", [2]string{"cuda", "cpu"}[li/len(panel)], pi, i)
+									if e := nmse(lcpp[li][i], tr.ref[i]); e > widestLcpp[g] {
+										widestLcpp[g], lcppAt[g] = e, fmt.Sprintf("%s, prompt %d step %d", arm, pi, i)
 									}
 								}
 							}
@@ -688,7 +730,9 @@ func TestComposedBlocksServe(t *testing.T) {
 					for g, noGraph := range []bool{false, true} {
 						floor := bandFloor(m.Cfg.NLayer)
 						wide := max(widest[g], floor)
-						if lcpp != nil {
+						if golden != "" {
+							t.Logf("graph %v: the band's reference is the class's numerical reference over every %dth logit (%s), which reaches %.3g at its worst step (%s)", !noGraph, stride, golden, widestLcpp[g], lcppAt[g])
+						} else if lcpp != nil {
 							t.Logf("graph %v: the band's reference is the wider of the GGUF oracle's cuda and cpu arms, which reach %.3g at their worst step (%s)", !noGraph, widestLcpp[g], lcppAt[g])
 						} else {
 							t.Logf("graph %v: the GGUF oracle does not read this model: the band is the floor, %.3g", !noGraph, floor)
@@ -826,7 +870,7 @@ func TestComposedBlocksServe(t *testing.T) {
 											np, dp, m.Cfg.NLayer, st.LastErr)
 									}
 									for i := range want {
-										if math.IsNaN(logitNMSE(got[i], want[i])) {
+										if math.IsNaN(nmse(got[i], want[i])) {
 											t.Errorf("prompt %d step %d: with the composed %s the logits are not finite", pi, i, a.name)
 										}
 									}
@@ -836,7 +880,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									var ratios []float64
 									worstGot := 0.0
 									for i := range ref {
-										et, eg := refDist(runs[dev][g][pi], i), logitNMSE(got[i], ref[i])
+										et, eg := refDist(runs[dev][g][pi], i), nmse(got[i], ref[i])
 										// Without the GGUF oracle the reference is its own
 										// want, 0 from it by construction.
 										if math.IsNaN(et) || math.IsNaN(eg) || lcpp != nil && !(et > 0) {
@@ -848,7 +892,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									band.add(ratios, worstGot)
 									ratios, worstOff := nil, 0.0
 									for i := 1; i < len(ref); i++ {
-										eg := logitNMSE(got[i-1], ref[i])
+										eg := nmse(got[i-1], ref[i])
 										ratios = append(ratios, eg/max(refDist(runs[dev][g][pi], i), floor))
 										worstOff = max(worstOff, eg)
 									}
@@ -881,7 +925,7 @@ func TestComposedBlocksServe(t *testing.T) {
 										var ratios []float64
 										worstBad := 0.0
 										for i := range ref {
-											eg := logitNMSE(out[i], ref[i])
+											eg := nmse(out[i], ref[i])
 											ratios = append(ratios, eg/max(refDist(runs[dev][g][pi], i), floor))
 											worstBad = max(worstBad, eg)
 										}

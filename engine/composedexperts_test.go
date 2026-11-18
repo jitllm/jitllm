@@ -322,12 +322,14 @@ func q8Golden(t *testing.T, file, src string) string {
 // goldenApart is each row's NMSE between two goldens' rows for seq.
 func goldenApart(t *testing.T, a, b string, seq lcppSeq) []float64 {
 	t.Helper()
-	return hfBand(t, a, 0, goldenRows(t, b, seq), seq)
+	rows, _ := goldenRows(t, b, seq)
+	return hfBand(t, a, 0, rows, seq)
 }
 
 // goldenRows is a golden's rows for seq, spread back to full rows at their
-// stride (the logits between are zero, and hfBand reads only the stride's).
-func goldenRows(t *testing.T, path string, seq lcppSeq) [][]float32 {
+// stride (the logits between are zero, and hfBand reads only the stride's),
+// and the stride.
+func goldenRows(t *testing.T, path string, seq lcppSeq) ([][]float32, int) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -359,10 +361,10 @@ func goldenRows(t *testing.T, path string, seq lcppSeq) [][]float32 {
 				out[i][k*g.Stride] = math.Float32frombits(binary.LittleEndian.Uint32(b[4*k:]))
 			}
 		}
-		return out
+		return out, g.Stride
 	}
 	t.Fatalf("%s holds no sequence the gate asks for", path)
-	return nil
+	return nil, 0
 }
 
 // cpuExpertPromptModels are the mixtures whose prompts and batched steps

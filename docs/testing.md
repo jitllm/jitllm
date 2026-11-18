@@ -139,6 +139,9 @@ Made rather than fetched -- the script's header has the commands:
   header describes (`hfgold.py` starts several from the downloaded tiny-random
   directories);
 - `tiny-qwen3moe-f32.gguf`: `scripts/tiny-moe-gguf.py`, from `tiny-qwen3moe-hf/`;
+- `synth-llama4-q8-hf/`: `scripts/llama4hf.py`, `synth-llama4-q8.gguf` read back
+  into its transformers class, the directory `scripts/rowsgold.py` takes the
+  serving gate's numerical reference from;
 - `split-test/`: `convert.TestSplitGGUFConvertsLikeTheWholeFile` needs
   tinyllama split by llama.cpp's own tool, in the model directory:
 
@@ -346,7 +349,7 @@ variable it needs and did not find.
 | `JITLLM_LLAMACPP_CPU` | a CPU-only llama.cpp build directory (`llama-mtmd-cli`, `llama-perplexity`) | `vlmgold.py`, `qwenvlmtmd.py`, and the post-norm gate above |
 | `CV_TOK`, `CV_HF` | the family tokenizers the fixtures copy, and where their HuggingFace directories are written | default `$JITLLM_MODELS/tok` and `$JITLLM_MODELS/hf` |
 | `BAILING_PY`, `BAILING_REF` | the python of a second venv with transformers 4.52.3, and inclusionAI's Ling 2.0 remote code | `moegold.py`'s `synth-bailingmoe2` only |
-| `L4_TOK` | the directory holding Llama 4's `tokenizer.json` | `llama4gold.py`, `llama4visiongold.py` |
+| `L4_TOK` | the directory holding Llama 4's `tokenizer.json` | `llama4gold.py`, `llama4visiongold.py`, `llama4hf.py` |
 
 The decision models' goldens: `scripts/decisiongold.sh` (llama-server's
 `/v1/systemone` under `JITLLM_LCPP` on `$JITLLM_MODELS/{d1,lev,laya/gguf,clef}`; a
