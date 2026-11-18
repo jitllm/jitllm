@@ -34,10 +34,8 @@ import (
 // The last's rate is every warp streaming one set of half its size from a
 // phase of its own, so each multiprocessor reads more than its own cache
 // holds. Reads of the
-// whole memory warm the device first, and on a device with its own clock a
-// read of the whole memory goes before each timed launch of an instruction
-// class, so a measurement of one thread runs at the clock a loaded device
-// runs at. A launch is the composer's smallest form and a read of the
+// whole memory warm the device first; nothing is launched before a timed
+// launch but the form itself, untimed. A launch is the composer's smallest form and a read of the
 // whole memory its column reduction, each formed for the device in front
 // of it as a model's part is. The device's rate of a class an expression
 // issues (gpuStep) is the composer's form of rows through chains of the
@@ -97,10 +95,6 @@ func GPU(d backend.Device) (cost.Device, error) {
 		}
 	}
 	if out.Bandwidth, err = read(big, threads); err != nil {
-		return out, err
-	}
-	loaded, _, err := p.read("probe_warm", in, big, big, threads, false)
-	if err != nil {
 		return out, err
 	}
 	empty, err := p.empty()
@@ -191,8 +185,6 @@ func GPU(d backend.Device) (cost.Device, error) {
 	if err != nil {
 		return out, err
 	}
-	p.warm = loaded
-	defer func() { p.warm = nil }()
 	for cl, op := range gpuOps() {
 		rate := func(chains, deep, threads int) (float64, error) {
 			trips := 1 << 12
@@ -268,15 +260,13 @@ const defaultSlots = 16384
 const tlbReach = 4 << 20
 
 // gpuProbe holds the device the probe measures, what it allocated, the
-// composer it forms its kernels with and the device it forms them for, and
-// the launch that keeps the device loaded between timed ones.
+// composer it forms its kernels with and the device it forms them for.
 type gpuProbe struct {
 	d    backend.Device
 	reg  *composer.Registry
 	dev  composer.Device
 	bufs []backend.Buf
 	ks   []backend.Kernel
-	warm *gpuForm
 	// walks are the chase's two forms, over walked words of walkOn, its
 	// first word read from start.
 	walks  [2]*gpuForm
@@ -424,9 +414,6 @@ func (p *gpuProbe) slope(cl cost.Class, n, chains, short, long int) (float64, er
 // slopeOf is the instructions of class cl a second between the forms of
 // graphAt at two sizes, short and long, as slope takes them.
 func (p *gpuProbe) slopeOf(cl cost.Class, graphAt func(int) (*graph.Graph, bool), short, long int) (float64, error) {
-	warm := p.warm
-	p.warm = nil
-	defer func() { p.warm = warm }()
 	_, clocked := Timer(p.d)
 	var count, secs [2]float64
 	for i, size := range [2]int{short, long} {
@@ -596,26 +583,17 @@ func Timer(d backend.Device) (KernelTimer, bool) {
 }
 
 // timed is the mean device seconds of n launches of f in one session, on
-// clock t: each of its kernels' mean, summed.
+// clock t: each of its kernels' mean, summed. Nothing goes between them: on
+// the M4 a composed read of the whole memory before each launch left a
+// subgroup's shuffles at 0.29 of their rate waited for and 0.16 not, every
+// thread's at 0.76 and 0.14.
 func (p *gpuProbe) timed(t KernelTimer, f *gpuForm, n int) (float64, error) {
-	if w := p.warm; w != nil {
-		for _, name := range f.names {
-			if slices.Contains(w.names, name) {
-				return 0, fmt.Errorf("probe: %s is a kernel of the warm launch too", name)
-			}
-		}
-	}
 	t.Arm(true)
 	defer t.Arm(false)
 	t.Times()
 	var errs error
 	p.d.Session(func(s backend.Session) {
 		for range n {
-			if w := p.warm; w != nil {
-				if errs = w.run(s); errs != nil {
-					return
-				}
-			}
 			if errs = f.run(s); errs != nil {
 				return
 			}

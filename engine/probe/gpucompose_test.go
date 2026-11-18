@@ -17,8 +17,9 @@ import (
 // 10%. A number the built measures wrong is held by bounds that say why:
 // its median ratio not past one plus the band, and in every round over
 // another number of the composed probe's by the band. The numbers both arms
-// still measure with built kernels are logged beside them, the harness's
-// own control.
+// still measure with one built kernel are the harness's own control, held
+// to the band too: the two arms timing one kernel apart is the harness's
+// fault, whatever the composed numbers read.
 func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	defer func() {
@@ -132,7 +133,13 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				if f.apart != "" {
 					t.Logf("%-16s not held to the built: %s", f.name, f.apart)
 				}
-				if !f.composed || f.apart != "" {
+				if f.apart != "" {
+					continue
+				}
+				if !f.composed {
+					if math.Abs(math.Log(r)) > math.Log1p(band) {
+						t.Errorf("%s: the arms time one built kernel %.3f apart, past the band %.3f: the harness's control", f.name, r, band)
+					}
 					continue
 				}
 				if f.bound != "" {
