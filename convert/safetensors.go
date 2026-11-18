@@ -466,10 +466,19 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 			if ty, widen, err = hfTypeOf(t.DType); err != nil {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)
 			}
+			// A vector is read in f32 by every kernel that takes it.
+			half := ty == jlm.TypeF16 && len(shape) == 1
+			if half {
+				ty = jlm.TypeF32
+			}
 			read = func() ([]byte, error) {
 				data, err := loc.f.ReadTensor(t)
-				if err == nil && widen {
+				switch {
+				case err != nil:
+				case widen:
 					data = widenBF16(data)
+				case half:
+					data, err = widenF16(data)
 				}
 				return data, err
 			}
@@ -848,6 +857,16 @@ func widenBF16(src []byte) []byte {
 		dst[i*4+3] = src[i*2+1]
 	}
 	return dst
+}
+
+// widenF16 turns little-endian f16 into little-endian f32. Exact: every
+// binary16 is a binary32.
+func widenF16(src []byte) ([]byte, error) {
+	vals := make([]float32, len(src)/2)
+	if err := quant.Dequant32(quant.F16, src, vals); err != nil {
+		return nil, err
+	}
+	return f32AsBytes(vals), nil
 }
 
 // ---------------------------------------------------------------------------

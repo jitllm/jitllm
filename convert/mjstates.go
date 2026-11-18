@@ -738,11 +738,11 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		for _, g := range t.Gather {
 			r, ok := names.roleOf(g.Role)
-			if !ok || !g.Every || g.Model || g.Count != "" || g.Name != "" {
-				return fmt.Errorf("convert: %s: %s: tensors: the gather of %s: a GGUF's gathers are every block's, "+
-					"of a role the container knows", by, arch, g.Role)
+			if !ok || g.Every == g.Model || g.Count != "" || g.Name != "" {
+				return fmt.Errorf("convert: %s: %s: tensors: the gather of %s: a GGUF's gathers are every block's or "+
+					"the model's, of a role the container knows", by, arch, g.Role)
 			}
-			step := hfGatherStep{role: r, from: g.From, do: g.Do, every: true}
+			step := hfGatherStep{role: r, from: g.From, do: g.Do, every: g.Every, model: g.Model}
 			if step.f64, err = g.wide(); err != nil {
 				return fmt.Errorf("convert: %s: %s: tensors: %w", by, arch, err)
 			}
