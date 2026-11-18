@@ -88,6 +88,12 @@ func (a *A64) LDRsIdx(vt VReg, rn, rm XReg) {
 	a.w(0xBC607800 | uint32(rm)<<16 | uint32(rn)<<5 | uint32(vt))
 }
 
+// LDRwIdx is ldr wt, [xn, xm, lsl #2]: the word at index xm of a table,
+// the address formed by the load itself.
+func (a *A64) LDRwIdx(rt, rn, rm XReg) {
+	a.w(0xB8607800 | uint32(rm)<<16 | uint32(rn)<<5 | uint32(rt))
+}
+
 // LD1b and ST1b load or store one byte lane of vt: ld1 {vt.b}[lane], [xn].
 func (a *A64) LD1b(vt VReg, lane uint8, rn XReg) {
 	a.w(0x0D400000 | a.ld1bLane(lane) | uint32(rn)<<5 | uint32(vt))

@@ -12,12 +12,17 @@ import (
 // trips: Words its shift-and-xor chain of three values over words, Take a
 // walk of a table (each trip the word the one before named), Mixed a word
 // and a float that reads it, Sum a word index and a float sum of the
-// float table's elements it takes, else its counter and the multiply-add
-// that reads it, over floats.
+// float table's elements it takes, Chain one float through iterateSteps
+// multiply-adds of itself by the row's element plus the element a trip,
+// else its counter and the multiply-add that reads it, over floats.
 type IterateCase struct {
-	Words, Take, Mixed, Sum bool
-	N, Trips                int
+	Words, Take, Mixed, Sum, Chain bool
+	N, Trips                       int
 }
+
+// iterateSteps is a chain's steps a trip: several, so a step's register
+// is not the carried value's unless the binding puts it there.
+const iterateSteps = 4
 
 // iterateTable is the walked table's words: one cycle through them all.
 const iterateTable = 1024
@@ -33,6 +38,8 @@ func (c IterateCase) String() string {
 		kind = "take"
 	case c.Words:
 		kind = "words"
+	case c.Chain:
+		kind = "chain"
 	}
 	return fmt.Sprintf("%s_%dx%d", kind, c.N, c.Trips)
 }
@@ -41,7 +48,7 @@ func (c IterateCase) String() string {
 // a thousand.
 func IterateCases() []IterateCase {
 	var cs []IterateCase
-	for _, kind := range []IterateCase{{Words: true}, {}, {Take: true}, {Mixed: true}, {Sum: true}} {
+	for _, kind := range []IterateCase{{Words: true}, {}, {Take: true}, {Mixed: true}, {Sum: true}, {Chain: true}} {
 		for _, n := range []int{1, 7, 8, 33, 256} {
 			for _, trips := range []int{1, 3, 64, 1000} {
 				c := kind
@@ -56,7 +63,7 @@ func IterateCases() []IterateCase {
 // Taps is how many values c carries.
 func (c IterateCase) Taps() int {
 	switch {
-	case c.Take:
+	case c.Take, c.Chain:
 		return 1
 	case c.Words:
 		return 3
@@ -72,7 +79,8 @@ func (c IterateCase) Typed() bool { return c.Mixed || c.Sum }
 // (<<13, >>17, <<5), value 1 adds value 0 after the trip, value 2 takes the
 // exclusive or of value 1 before it shifted right by 3: no trip commutes
 // with the next. Over floats, value 0 counts the trips and value 1 is
-// 0.75 of itself plus value 0 before the trip.
+// 0.75 of itself plus value 0 before the trip; a chain starts at its
+// element and steps iterateSteps times a trip.
 func IterateGraph(c IterateCase) *graph.Graph {
 	in := graph.Arg{Kind: graph.ArgIn}
 	k := func(v float64) graph.Arg { return graph.Arg{Kind: graph.ArgConst, Const: v} }
@@ -120,6 +128,14 @@ func IterateGraph(c IterateCase) *graph.Graph {
 		b.Out(ys[1])
 		return b.G
 	}
+	if c.Chain {
+		terms = []graph.Term{{Fn: graph.MapAdd, Args: [3]graph.Arg{in, k(0)}}}
+		last := st(0)
+		for range iterateSteps {
+			terms = append(terms, graph.Term{Fn: graph.MapFma, Args: [3]graph.Arg{last, in, in}})
+			last = tm(len(terms) - 1)
+		}
+	}
 	if c.Take {
 		b := graph.New()
 		x := b.In("x", c.N)
@@ -152,7 +168,7 @@ func IterateGraph(c IterateCase) *graph.Graph {
 			{Fn: graph.MapAdd, Args: [3]graph.Arg{st(1), tm(9)}},
 			{Fn: graph.MapXor, Args: [3]graph.Arg{st(2), tm(8)}},
 		}
-	} else {
+	} else if !c.Chain {
 		terms = []graph.Term{
 			{Fn: graph.MapAdd, Args: [3]graph.Arg{in, k(0)}},
 			{Fn: graph.MapMul, Args: [3]graph.Arg{in, k(0.5)}},
@@ -182,6 +198,9 @@ func IterateInputs(c IterateCase) map[string][]uint32 {
 			x[i] = uint32(i*37 + 5)
 		case c.Words:
 			x[i] = uint32(i)*2654435761 + 12345
+		case c.Chain:
+			// Below 1, so the chain converges on x/(1-x).
+			x[i] = math.Float32bits(0.25 + 0.05*float32(i%11))
 		default:
 			x[i] = math.Float32bits(float32(i%11)*0.25 - 1)
 		}
@@ -267,6 +286,14 @@ func IterateWant(c IterateCase, in map[string][]uint32) []uint32 {
 			continue
 		}
 		f := math.Float32frombits(w)
+		if c.Chain {
+			s := f
+			for range c.Trips * iterateSteps {
+				s = float32(math.FMA(float64(s), float64(f), float64(f)))
+			}
+			want[i] = math.Float32bits(s)
+			continue
+		}
 		s0, s1 := f, f*0.5
 		for range c.Trips {
 			s0, s1 = s0+1, float32(math.FMA(float64(s1), 0.75, float64(s0)))

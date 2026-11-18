@@ -113,6 +113,10 @@ type x86Lowerer struct {
 	// halves is each byte dot's place in a run that sums its pairs in
 	// sixteen bits (Kernel.halfRuns), made at the first byte dot.
 	halves map[int]halfRun
+	// idle is, by vector register, whether no value is bound to it, made
+	// at the first borrow; lent is which of the borrowed registers were
+	// saved to be put back.
+	idle, lent []bool
 }
 
 // shiftCount is the red-zone word a vector shift by a general register's

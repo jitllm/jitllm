@@ -224,6 +224,8 @@ func a64Encodings() []struct {
 		{"ldrb w20, [x9, #4095]", "34fd7f39", func(a *A64) { a.LDRBw(X20, X9, 4095) }},
 		{"ldr s1, [x2, x3, lsl #2]", "417863bc", func(a *A64) { a.LDRsIdx(V1, X2, X3) }},
 		{"ldr s30, [x19, x20, lsl #2]", "7e7a74bc", func(a *A64) { a.LDRsIdx(V30, X19, X20) }},
+		{"ldr w1, [x2, x3, lsl #2]", "417863b8", func(a *A64) { a.LDRwIdx(X1, X2, X3) }},
+		{"ldr w30, [x19, x20, lsl #2]", "7e7a74b8", func(a *A64) { a.LDRwIdx(X30, X19, X20) }},
 		{"ld1 { v1.b }[2], [x2]", "4108400d", func(a *A64) { a.LD1b(V1, 2, X2) }},
 		{"ld1 { v30.b }[13], [x9]", "3e15404d", func(a *A64) { a.LD1b(V30, 13, X9) }},
 		{"st1 { v1.b }[2], [x2]", "4108000d", func(a *A64) { a.ST1b(V1, 2, X2) }},

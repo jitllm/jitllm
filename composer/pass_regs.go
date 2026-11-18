@@ -2124,7 +2124,12 @@ func (b *binder86) vectors() error {
 			if nd.Share > 0 && shared[nd.Share] > 0 {
 				want = shared[nd.Share] - 1
 			}
-			if want < 0 || busy[want] {
+			if f, ok := stepOf[i]; ok && k.Nodes[f].Reg > 0 {
+				// A carried value's step ends the trip in the value's
+				// register, whatever it was hinted: nothing moves it there
+				// after.
+				want = k.Nodes[f].Reg - 1
+			} else if want < 0 || busy[want] {
 				want = lowest(chain[i], hs[i])
 			}
 			if depth[pos] == 0 && nd.Op == OpLoad && inner[want] && k.readInLoop(i) {

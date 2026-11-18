@@ -63,6 +63,14 @@ func (e *a64Lowerer) node(i int) {
 			return
 		}
 		home := x.home[i]
+		if ix := k.Nodes[nd.A]; x.gpr(i) && !k.Bufs[nd.Buf].Half && ElemBytes(k.Bufs[nd.Buf]) == 4 && k.Bufs[nd.Buf].Word == 0 &&
+			ix.Op != OpConst && !x.words[nd.A] && ix.Type != ir.F32 {
+			// A word at a computed index: the load scales and adds the
+			// index itself, so a walk of a table waits for one load a step
+			// rather than an add and a load.
+			e.a.LDRwIdx(e.xr(i), e.ptrReg(nd.Buf, nd.Ptr), e.xr(nd.A))
+			return
+		}
 		m := e.addr(nd.Buf, nd.A, nd.Ptr)
 		if x.gpr(i) && !k.Bufs[nd.Buf].Half {
 			e.access(a64.A64LdrW, uint8(e.xr(i)), m)

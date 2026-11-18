@@ -1,6 +1,8 @@
 package composer
 
 import (
+	"slices"
+
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/x86"
 )
@@ -25,17 +27,22 @@ func sseSlot(j int) x86.Mem { return x86.At(x86.RSP, int32(-160-16*j)) }
 func sseNarrow(isa x86.ISA) bool { return isa != 0 && isa&x86.ISATierAVX2 != x86.ISATierAVX2 }
 
 // borrow is n vector registers none of avoid is, their values kept until
-// giveBack.
+// giveBack: first those no value of the kernel is bound to, which hold
+// nothing to keep, then others, saved to the stack.
 func (e *x86Lowerer) borrow(n int, avoid ...x86.Reg) []x86.Reg {
+	idle := e.idleVectors()
 	var out []x86.Reg
-	for r := x86.Reg(0); r < 16 && len(out) < n; r++ {
-		taken := false
-		for _, x := range avoid {
-			taken = taken || x == r
-		}
-		if !taken {
-			e.a.MOVUPSStore(sseSlot(len(out)), r)
+	e.lent = e.lent[:0]
+	for _, free := range [2]bool{true, false} {
+		for r := x86.Reg(0); r < 16 && len(out) < n; r++ {
+			if idle[r] != free || slices.Contains(avoid, r) || slices.Contains(out, r) {
+				continue
+			}
+			if !free {
+				e.a.MOVUPSStore(sseSlot(len(out)), r)
+			}
 			out = append(out, r)
+			e.lent = append(e.lent, !free)
 		}
 	}
 	return out
@@ -43,8 +50,37 @@ func (e *x86Lowerer) borrow(n int, avoid ...x86.Reg) []x86.Reg {
 
 func (e *x86Lowerer) giveBack(rs []x86.Reg) {
 	for j, r := range rs {
-		e.a.MOVUPSLoad(r, sseSlot(j))
+		if e.lent[j] {
+			e.a.MOVUPSLoad(r, sseSlot(j))
+		}
 	}
+}
+
+// idleVectors is, by vector register, whether no value of the kernel is
+// bound to it: no vector node's register or temporaries, nor the byte
+// dots' ones.
+func (e *x86Lowerer) idleVectors() []bool {
+	if e.idle != nil {
+		return e.idle
+	}
+	e.idle = make([]bool, 16)
+	for r := range e.idle {
+		e.idle[r] = true
+	}
+	held := func(r int) {
+		if r > 0 && r <= len(e.idle) {
+			e.idle[r-1] = false
+		}
+	}
+	for i, nd := range e.k.Nodes {
+		if !e.gpr(i) {
+			held(nd.Reg)
+		}
+		held(nd.Tmp)
+		held(nd.Tmp2)
+	}
+	held(e.k.Ones)
+	return e.idle
 }
 
 // bin is dst = x op y in the two-operand form: where dst is y's register and
