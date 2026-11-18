@@ -38,6 +38,7 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 				if withTaps {
 					m.Cfg.DeepTaps = taps
 					defer restated(m, tapsFirst(taps*m.Cfg.NEmbd))()
+				defer rowsTapsFirst(m, taps*m.Cfg.NEmbd)()
 					if w := m.Cfg.SideWidth(); w != taps*m.Cfg.NEmbd+m.Cfg.PleWidth() {
 						t.Fatalf("a side row of %d, want the taps' %d and the per-layer inputs' %d", w,
 							taps*m.Cfg.NEmbd, m.Cfg.PleWidth())
@@ -126,4 +127,46 @@ func tapsFirst(n int) func(*graph.Graph) *graph.Graph {
 		}
 		return out
 	}
+}
+
+// rowsTapsFirst states the input rows' side row, and a given row's, with n
+// zeros before the per-layer inputs, until the returned undo: front.json's
+// taps.zero and side, which the converter states for a model whose tower
+// taps its blocks. Without it the rows write the per-layer inputs where the
+// taps are.
+func rowsTapsFirst(m *model.Model, n int) func() {
+	s := m.FrontGraphs()
+	set := *s
+	for _, g := range []**graph.Graph{&set.CpuEmbed, &set.Embed, &set.Given} {
+		if *g != nil {
+			*g = sideTapsFirst(*g, n)
+		}
+	}
+	m.Front.Mu.Lock()
+	was := m.Front.Set
+	m.Front.Set = &set
+	m.Front.Mu.Unlock()
+	return func() {
+		m.Front.Mu.Lock()
+		m.Front.Set = was
+		m.Front.Mu.Unlock()
+	}
+}
+
+// sideTapsFirst is g with its side output, the per-layer inputs, after n
+// zeros of the row's own.
+func sideTapsFirst(g *graph.Graph, n int) *graph.Graph {
+	last := len(g.Out) - 1
+	if last < 1 || !isNamed(g, g.Out[last], "ple.in") {
+		return g
+	}
+	out := cloned(g)
+	pl := out.Out[last]
+	tz, side := graph.ValueID(len(out.Values)), graph.ValueID(len(out.Values)+1)
+	out.Values = append(out.Values, graph.Value{Name: "taps.zero", Width: n}, graph.Value{Name: "side", Width: n + out.Values[pl].Width})
+	out.Ops = append(out.Ops,
+		graph.Op{Kind: graph.OpMap, In: []graph.ValueID{out.Out[0]}, Out: []graph.ValueID{tz}, Attr: graph.Attrs{Fn: graph.MapMul}},
+		graph.Op{Kind: graph.OpConcat, In: []graph.ValueID{tz, pl}, Out: []graph.ValueID{side}})
+	out.Out[last] = side
+	return out
 }
