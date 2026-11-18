@@ -4857,3 +4857,99 @@ embedding promise of the device's own session, so a second instance's
 another. On the calling session's rows (sideOf, sideAtOf, realEmbedOf), as
 GPU.phased takes them, the same prompt runs in 15 pieces at NMSE 8.3e-7,
 one card's 8.1e-7 (TestSplitPiecesReadTheirSessionsRows, Stats.SplitPieces).
+
+## A history read across cards: the reader's card holds a copy
+
+The open question as it stood: a block reading another block's history
+(Gemma 3n's and Gemma 4's shared-KV layers) ran beside it. A strict placement
+of synth-gemma4-e's blocks [0,4) on one card and [4,6) on another was refused,
+"block 2 is on cpu, not cuda:0": block 4 reads block 3's history and block 5
+block 2's, the card declined a reader whose source it did not hold, and
+fixKVGroups took the whole group to the CPU. synth-gemma3n split at [0,8) and
+[8,10) was refused the same way ("block 4 is on cpu").
+
+The user's decision: the reader's card holds a copy of the source's history,
+appended as the source appends. KV stays held once per device: a device holds
+a block's history for a session once, the block's own pages where it runs
+there for the session, or the copy.
+
+What existed and was taken: the pool keys a block's histories by (block,
+index) (histKey), and a reader binds its source's pool layers at those keys
+(layer.kvSrc, kvMore; 2e1d7a104), so a copy is the source's pool layers on the
+reader's card at the same keys and the reader binds them unchanged. The pages
+go card to card as a move's history does (16f: copyPages, cuMemcpyPeer
+between CUDA cards, staged between two backends); a copy pages as any history
+on its card (allocPages, rewind, cowPages, windowPages, eviction home and
+the passes over it), because a session holding one counts it among the layers
+it holds (heldLayers).
+
+How it runs (engine/device/gpu/histcopy.go):
+
+- A copy is registered per block and session on the device
+  (devShared.histCopies). The tier makes it when a reader is placed on a card
+  its source does not run on for the session (copiesFor, before the card's
+  prepLayer), from the source's whole history; and every placement that
+  changes a session's routes ends with settleCopies: a copy no reader there
+  reads goes, one whose block now runs on its card is the block's own pages
+  from then on, and a card the source leaves keeps the pages a reader there
+  reads as the copy (releaseBlock keeps them).
+- Appends: before a run whose blocks read a copy, the pages its rows are in
+  are copied from the device the source runs on (appendCopies for a call,
+  appendRows for a step's rows, each row's own session and sequence). The
+  source ran those rows first: a block reads only blocks below it, and the
+  runs go in order. A history migrated in, or a page the prefix cache maps in,
+  reaches every copy (refreshCopies); a page named on the source's card is
+  named on the copy's card too, so another session's copy there maps it
+  (shareCopies).
+- A copy is the pages as they are: both pools page alike or the copy is
+  refused when it would be made. The copy's card starts its pool at the
+  reader's plan and at the source's page: made first on a card that held no
+  history, it had started at 64 positions where the source's held 256, and
+  the reader was refused.
+
+Two things the gate found on the way:
+
+- synth-gemma3n's 600-row prompt over the two cards stood at NMSE 1.99 from
+  the CPU's on every pair. It was not the copies: the same prompt with no
+  group split, at the commit before this one, read 1.99 with the projection
+  on the second card and 1.67 on the first. A chunk wider than a submission
+  over two cards was pipelined (GPU.pipeline), which cuts the residual as
+  rows of one stream and stages no per-layer inputs, and Gemma 3n carries
+  four streams (AltUp) and per-layer inputs; and the projection's own
+  submission after it (headOfLast) took the last row of one stream. Such a
+  chunk now goes in pieces (GPU.carriesRows, GPU.pieces), and the projection
+  takes the last row of every stream: 6.95e-7 against one card's 6.74e-7
+  (TestAWidePromptOfStreamsGoesInPieces). A call whose runs read a copy goes
+  in pieces too: pipelined, the writer's next piece may release the pages
+  behind its window before the reader's piece has copied them.
+- The projection named on the first card, beside the source, was refused
+  as well ("the head is on cpu, not cuda:0"): a card holding no block's last
+  run takes the tail card's home set's plan (prepHeadOn), and the tail held
+  none. It takes any card's home set's plan now.
+- A card holding only blocks of a set of another geometry (geomsets.go) has
+  no home set, and the projection named there is refused with no reason
+  (PrepHead on a nil scratch): synth-gemma4-e's [4,6) hold none of the home
+  set, so "the head is on cpu, not cuda:1". Building the home set there from
+  another card's plan (headScratch, as prepHeadOn does for a card holding no
+  block) placed it, and a 40-row prompt then failed on the card: "the
+  composed copy at 512 rows was not formed at placement", the head riding
+  the last run's set and folded into a home set with no prompt width. The
+  change was taken back and the gates name the projection on the first card;
+  the refusal is open (open-questions.md).
+
+Across the CPU and a card no copy is kept: a group a move to the CPU splits
+comes home whole, and comes back to a card whole (open-questions.md).
+
+Gates: engine.TestAHistoryReadAcrossCards (synth-gemma4-e and synth-gemma3n
+split at the first source a block above reads, each pair of cards of one
+backend and a CUDA card with a Vulkan card of another; the prompt and 14
+teacher-forced tokens against the CPU, inside three times one card's band,
+with the CPU's greedy pick; the source moved beside its readers, back, to the
+CPU and back, and the readers moved to the second card alone; the copies held
+equal to the cross-card reads after every move; and two synth-gemma3n
+instances split so on one tier, their rows stepped together and alone,
+against the CPU's alone), TestAHistoryReadAcrossCardsDiscriminates (the
+copies not appended, gpu.Faults "copystale": the logits leave the band on
+every pair),
+TestDecodeDoesNotAllocate's two-card-history arms, and
+TestAWidePromptOfStreamsGoesInPieces.

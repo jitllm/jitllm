@@ -70,8 +70,10 @@ const (
 	moveWhole = iota
 	moveHost
 	moveUpper
-	// moveSplit names the upper half as placed, a KV-sharing group it reaches
-	// left for the move to take whole.
+	// moveSplit moves the upper half as placed, a KV-sharing group it reaches
+	// split over the two cards: the rest of the group stays where it was, and
+	// the card reading a history the other card's block writes holds a copy
+	// of it.
 	moveSplit
 	// moveCPU prepares the move to the CPU and the one back to the card.
 	moveCPU
@@ -191,9 +193,16 @@ func blocksMoveBetweenDevicesOf(t *testing.T, open func() (*model.Model, error),
 					want = ""
 				}
 				for li := wlo; li < whi; li++ {
-					if at, _ := st.DeviceOf(li); at != want {
+					w := want
+					if arm == moveSplit && (li < lo || li >= hi) {
+						w = a
+					}
+					if at, _ := st.DeviceOf(li); at != w {
 						t.Fatalf("block %d is on %q after a move of %d..%d to %s (declined %v)", li, at, lo, hi-1, to, mv.Declined)
 					}
+				}
+				if held := g.Stats().HistoryCopiesHeld; arm == moveSplit && (held > 0) != (want == b) {
+					t.Fatalf("after a move of %d..%d to %s the cards hold %d history copies", lo, hi-1, to, held)
 				}
 				moves = append(moves, mv)
 			}

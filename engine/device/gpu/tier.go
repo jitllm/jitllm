@@ -645,6 +645,11 @@ type Stats struct {
 	// KVPositionsMigrated counts the positions of history a migration moved
 	// between the host and this device (pagedMigrate), each layer's apart.
 	KVPositionsMigrated int
+	// HistoryCopies counts the copies of another device's block's history
+	// made here for a block reading it (histcopy.go), HistoryCopyPages the
+	// pages copied into them, made and appended, each layer's apart, and
+	// HistoryCopiesHeld the copies held now, one a block and session.
+	HistoryCopies, HistoryCopyPages, HistoryCopiesHeld int
 	// RecPointsKept and RecPointsLoaded count a linear block's restore
 	// points copied into a snapshot on the card and back (recshare.go).
 	RecPointsKept, RecPointsLoaded int
@@ -960,6 +965,9 @@ func (s *Stats) add(o Stats) {
 	s.HeadChunks += o.HeadChunks
 	s.KVPagesCopied += o.KVPagesCopied
 	s.KVPositionsMigrated += o.KVPositionsMigrated
+	s.HistoryCopies += o.HistoryCopies
+	s.HistoryCopyPages += o.HistoryCopyPages
+	s.HistoryCopiesHeld += o.HistoryCopiesHeld
 	s.RecPointsKept += o.RecPointsKept
 	s.RecPointsLoaded += o.RecPointsLoaded
 	s.KVStreamPasses += o.KVStreamPasses
@@ -1192,6 +1200,14 @@ type devShared struct {
 	arenaBytes uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
+	// histCopies is, per block, the sessions whose history of it this device
+	// holds as a copy -- the block runs on another device for them, and a
+	// block placed here reads it -- and copyN how many (histcopy.go).
+	histCopies map[int]map[uint64]bool
+	copyN      atomic.Int32
+	// copyHost is the host buffer a copy's append goes through between two
+	// backends (copyRun).
+	copyHost []byte
 	// autoStream holds the blocks placed with their routed experts off the
 	// card, and where those experts run: GPU.AutoStream's mark (expAuto) or a
 	// placement's (GPU.PlaceExperts). Such a block is placed streamed whatever
@@ -1919,6 +1935,7 @@ func (d *devTier) stats() Stats {
 		}
 	}
 	s.BudgetUsed, s.Slack = d.used, d.slack()
+	s.HistoryCopiesHeld = d.copiesHeld()
 	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
 	for _, r := range d.res {
 		if r.shared && r.ok {

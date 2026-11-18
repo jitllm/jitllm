@@ -95,8 +95,9 @@ type cudaDev struct {
 	peerMu sync.Mutex
 	peers  map[*cudaDev]bool
 	// writes, copies and copyLists keep the requests Write, Copy and CopyList
-	// post, each with its function built once.
-	writes, copies, copyLists sync.Pool
+	// post, each with its function built once, peerCopies CopyPeer's and
+	// reads Read's.
+	writes, copies, copyLists, peerCopies, reads sync.Pool
 }
 
 // CopyPeer is backend.PeerCopier: cuMemcpyPeer from another CUDA device's
@@ -121,24 +122,52 @@ func (c *cudaDev) CopyPeer(dst Buf, dstOff int, from Device, src Buf, srcOff, n 
 	if !c.drv.PeerCopyAvailable() {
 		return false, fmt.Errorf("backend: cuda: this driver has no cuMemcpyPeer")
 	}
-	var err error = errCUDAClosed
-	f.do(func() { err = f.syncAll() })
-	if err != nil {
-		return false, err
+	r := c.peerCopies.Get().(*cudaPeerCopy)
+	*r = cudaPeerCopy{c: c, f: f, db: db, sb: sb, dOff: dstOff, sOff: srcOff, n: n, err: errCUDAClosed, syncFn: r.syncFn, copyFn: r.copyFn}
+	f.do(r.syncFn)
+	err, direct := r.err, false
+	if err == nil {
+		direct = c.peerTo(f)
+		r.err = errCUDAClosed
+		c.do(r.copyFn)
+		err = r.err
 	}
-	direct := c.peerTo(f)
-	err = errCUDAClosed
-	c.do(func() {
-		if c.hasQueues() {
-			if err = c.syncAll(); err != nil {
-				return
-			}
-		}
-		if err = c.drv.CopyPeer(db.b, c.d, dstOff, sb.b, f.d, srcOff, n); err == nil {
-			err = c.syncAll()
-		}
-	})
+	*r = cudaPeerCopy{syncFn: r.syncFn, copyFn: r.copyFn}
+	c.peerCopies.Put(r)
 	return direct, err
+}
+
+// cudaPeerCopy is one CopyPeer's arguments with the functions the two owner
+// goroutines run for it, made once a request and the requests kept, as
+// cudaCopy's are: a history read on another card than its block's copies a
+// page or two every token (the tier's history copies).
+type cudaPeerCopy struct {
+	c, f           *cudaDev
+	db, sb         *cudaBuf
+	dOff, sOff, n  int
+	err            error
+	syncFn, copyFn func()
+}
+
+func newCudaPeerCopy() any {
+	r := &cudaPeerCopy{}
+	r.syncFn, r.copyFn = r.sync, r.copy
+	return r
+}
+
+// sync lands the source's work: the copy reads what it wrote.
+func (r *cudaPeerCopy) sync() { r.err = r.f.syncAll() }
+
+func (r *cudaPeerCopy) copy() {
+	c := r.c
+	if c.hasQueues() {
+		if r.err = c.syncAll(); r.err != nil {
+			return
+		}
+	}
+	if r.err = c.drv.CopyPeer(r.db.b, c.d, r.dOff, r.sb.b, r.f.d, r.sOff, r.n); r.err == nil {
+		r.err = c.syncAll()
+	}
 }
 
 // PeerAccess is backend.PeerCopier's: peerTo for a CUDA device of the same
@@ -294,6 +323,7 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	c := &cudaDev{ctr: ctr, d: o.d, drv: o.d.Driver(), reqs: reqs, owner: o.tid, posted: opts.CUDAPosted,
 		maxRegs: opts.CUDAMaxRegs, lower: ptxOptions(opts)}
 	c.writes.New, c.copies.New, c.copyLists.New = newCudaWrite, newCudaCopy, newCudaCopyList
+	c.peerCopies.New, c.reads.New = newCudaPeerCopy, newCudaRead
 	return c, nil
 }
 
@@ -1172,16 +1202,38 @@ func (b *cudaBuf) Read(p []byte) error {
 	if q := b.dev.curQueue(); q != nil {
 		return q.read(b.b, p)
 	}
-	var err error = errCUDAClosed
-	b.dev.do(func() {
-		if b.dev.hasQueues() {
-			if err = b.dev.syncAll(); err != nil {
-				return
-			}
-		}
-		err = b.b.Read(unsafe.Pointer(&p[0]), len(p))
-	})
+	r := b.dev.reads.Get().(*cudaRead)
+	*r = cudaRead{b: b, p: p, err: errCUDAClosed, fn: r.fn}
+	b.dev.do(r.fn)
+	err := r.err
+	*r = cudaRead{fn: r.fn}
+	b.dev.reads.Put(r)
 	return err
+}
+
+// cudaRead is one Read outside a queue, kept as cudaWrite is: a closure over
+// Read's locals was two heap objects per read.
+type cudaRead struct {
+	b   *cudaBuf
+	p   []byte
+	err error
+	fn  func()
+}
+
+func newCudaRead() any {
+	r := &cudaRead{}
+	r.fn = r.run
+	return r
+}
+
+func (r *cudaRead) run() {
+	d := r.b.dev
+	if d.hasQueues() {
+		if r.err = d.syncAll(); r.err != nil {
+			return
+		}
+	}
+	r.err = r.b.b.Read(unsafe.Pointer(&r.p[0]), len(r.p))
 }
 
 func (b *cudaBuf) Free() {

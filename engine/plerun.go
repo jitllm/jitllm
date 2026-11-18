@@ -161,6 +161,17 @@ func (s *Instance) kvGroupOffered(li, lo, hi int) bool {
 	return true
 }
 
+// groupOffCards reports that a block of block li's history group is on the
+// CPU.
+func (s *Instance) groupOffCards(li int) bool {
+	for b := range s.histOf {
+		if s.historyGroup(b, li) && !s.devAt(b) {
+			return true
+		}
+	}
+	return false
+}
+
 // kvSpan is the blocks that must be offered with block li: the span of its
 // history group.
 func (s *Instance) kvSpan(li int) (lo, hi int) {
@@ -190,13 +201,14 @@ func (s *Instance) splitFromItsHistory(li int) bool {
 }
 
 // fixKVGroups keeps every block that attends to another block's history on
-// that block's device: the history lives on exactly one side, so its block
-// and every block reading it must be placed together. A group split by the
-// placement -- a device that took the source and declined a reader, or a
-// relocation that took one member to the CPU -- moves to the CPU whole,
-// with every history its members keep. The device declines a reader whose
-// sources it does not hold (tier) and offerRange offers a group only whole,
-// so this is the third half.
+// the same side as that block, the CPU or the devices: between two cards a
+// reader reads a copy of the history its card holds (the tier's history
+// copies), and across the CPU and a card no copy is kept. A group split by
+// the placement -- a device that took the source and declined a reader, or a
+// relocation that took one member to the CPU -- moves to the CPU whole, with
+// every history its members keep. The device declines a reader whose
+// sources no card holds (tier) and offerRange offers a group only whole, so
+// this is the third half.
 func (s *Instance) fixKVGroups() {
 	if s.ld == nil {
 		return

@@ -214,6 +214,13 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		if !ok {
 			return out, nil
 		}
+		// A block reading a history that stays where it is takes a copy
+		// of it on the target, made from the whole of it here at the commit.
+		made, err := g.copiesFor(sid, d, li, p)
+		if err != nil {
+			done()
+			return out, err
+		}
 		took := false
 		for _, mayPage := range [2]bool{false, true} {
 			if took = d.prepLayer(sid, li, p, w, mayPage); took {
@@ -222,6 +229,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		}
 		done()
 		if !took {
+			g.dropCopies(sid, d, made)
 			return out, nil
 		}
 	}
@@ -234,6 +242,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		g.mu.Lock()
 		delete(g.staged, li)
 		g.mu.Unlock()
+		g.noteCopies(sid)
 		return out, nn.ErrNotDirect
 	}
 	path, n, err := copyHistory(sid, li, src, d, pos)
@@ -244,6 +253,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		g.mu.Lock()
 		delete(g.staged, li)
 		g.mu.Unlock()
+		g.noteCopies(sid)
 		return out, err
 	}
 	g.mu.Lock()
@@ -257,6 +267,11 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		g.retire = append(g.retire, retiree{src, li})
 	}
 	g.mu.Unlock()
+	// Before the source's pages go: a block there reading this one's history
+	// keeps them as its copy, and a copy the target held is its own now.
+	if err := g.settleCopies(sid); err != nil {
+		return out, err
+	}
 	if shared {
 		g.leaveCopy(sid, li, src)
 	}

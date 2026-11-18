@@ -334,7 +334,15 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 			d.mu.Lock()
 			before := d.used
 			d.mu.Unlock()
+			made, err := g.copiesFor(sid, d, li, p)
+			if err != nil {
+				d.mu.Lock()
+				d.LastErr = err.Error()
+				d.mu.Unlock()
+				continue
+			}
 			if !d.prepLayer(sid, li, p, w, mayPage) {
+				g.dropCopies(sid, d, made)
 				continue
 			}
 			g.mu.Lock()
@@ -359,6 +367,7 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 				d.mu.Unlock()
 			}
 			g.mu.Unlock()
+			g.noteCopies(sid)
 			if old != nil {
 				old.ReleaseLayers(li, li+1)
 			}
@@ -1121,21 +1130,33 @@ func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *n
 		old.mu.Unlock()
 	}
 	for _, mayPage := range [2]bool{false, true} {
-		if d.prepLayer(sid, li, p, w, mayPage) {
-			g.mu.Lock()
-			g.routeTo(sid, li, old, d, !shared)
-			g.geo[li] = geoOf(p)
-			g.split = g.split || p.MixedGeom
-			g.mu.Unlock()
-			switch {
-			case old == nil || old == d:
-			case shared:
-				g.leaveCopy(sid, li, old)
-			default:
-				old.ReleaseLayers(li, li+1)
-			}
-			return true, nil
+		made, err := g.copiesFor(sid, d, li, p)
+		if err != nil {
+			d.mu.Lock()
+			d.LastErr = err.Error()
+			d.mu.Unlock()
+			return false, nil
 		}
+		if !d.prepLayer(sid, li, p, w, mayPage) {
+			g.dropCopies(sid, d, made)
+			continue
+		}
+		g.mu.Lock()
+		g.routeTo(sid, li, old, d, !shared)
+		g.geo[li] = geoOf(p)
+		g.split = g.split || p.MixedGeom
+		g.mu.Unlock()
+		// A block the old device keeps reading takes the pages it held
+		// there as its copy before they go.
+		g.noteCopies(sid)
+		switch {
+		case old == nil || old == d:
+		case shared:
+			g.leaveCopy(sid, li, old)
+		default:
+			old.ReleaseLayers(li, li+1)
+		}
+		return true, nil
 	}
 	return false, nil
 }
@@ -1161,15 +1182,24 @@ func (g *GPU) prepHeadOn(sid uint64, name string, h *nn.Head) (bool, error) {
 	defer done()
 	g.mu.Lock()
 	t := g.tail()
+	devs := slices.Clone(g.devs)
 	g.mu.Unlock()
 	if d != t && t != nil {
-		t.mu.Lock()
+		// The scratch the projection runs in is a home set's (geomsets.go):
+		// the tail's, or, where the tail holds only blocks of another
+		// geometry's set, any device's.
 		var plan *nn.LayerPlan
-		if t.bs != nil {
-			p := t.bs.p
-			plan = &p
+		for _, o := range append([]*devTier{t}, devs...) {
+			o.mu.Lock()
+			if o.bs != nil {
+				p := o.bs.p
+				plan = &p
+			}
+			o.mu.Unlock()
+			if plan != nil {
+				break
+			}
 		}
-		t.mu.Unlock()
 		if plan == nil || !d.headScratch(plan) {
 			return false, nil
 		}
@@ -1536,7 +1566,8 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x []float32, cs nn.Rope
 					if i == len(rs)-1 && k == pieces-1 {
 						h = tail
 					}
-					ok = rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], rn.tables(cs.Rows(lo, lo+cnt, n)), h)
+					ok = g.appendCopies(sid, rn.dev, rn.lo, rn.hi, pos+lo, cnt) &&
+						rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], rn.tables(cs.Rows(lo, lo+cnt, n)), h)
 					if ok {
 						rn.dev.mu.Lock()
 						rn.dev.Stats.PipelinePieces++
@@ -1577,7 +1608,8 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTa
 			}
 			xs := rn.dev.streamCut(x, ns, e, lo, cnt, n)
 			rn.dev.sideAtOf(sid, sides[i], lo, n)
-			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, xs, rn.tables(cs.Rows(lo, lo+cnt, n)), h) {
+			if !g.appendCopies(sid, rn.dev, rn.lo, rn.hi, pos+lo, cnt) ||
+				!rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, xs, rn.tables(cs.Rows(lo, lo+cnt, n)), h) {
 				return false
 			}
 			rn.dev.mu.Lock()
@@ -1706,7 +1738,7 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTa
 	var stash []float32
 	for _, rn := range rs {
 		side := rn.dev.sideOf(sid)
-		if !rn.dev.realEmbedOf(sid) {
+		if !rn.dev.realEmbedOf(sid) || !g.appendCopies(sid, rn.dev, rn.lo, rn.hi, pos, n) {
 			return false
 		}
 		ok := func() bool {
@@ -1866,12 +1898,15 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 		}
 		return true
 	}
-	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs) || g.carriesRows(sid, rs)) {
+	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs) || g.carriesRows(sid, rs) || g.readsCopies(sid, rs)) {
 		// The pieces go one after another: two runs of one device -- at two
 		// geometries, or either side of another device's after a block
 		// spilled past a full card -- share that device's tier, which the
 		// pipeline would drive from two goroutines at once. So does a chunk
-		// carrying rows the pipeline does not cut per piece (carriesRows).
+		// carrying rows the pipeline does not cut per piece (carriesRows),
+		// and a run reading a copy of a history another run writes:
+		// pipelined, the writer's next piece may release the pages behind
+		// its window before the reader's copy has taken them (histcopy.go).
 		if !g.pieces(sid, rs, pos, n, x, cs, tail) {
 			return false
 		}
@@ -1897,7 +1932,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 		if i == len(rs)-1 {
 			h = ride
 		}
-		if !r.dev.layersFor(sid, r.lo, r.hi, pos, n, x, r.tables(cs), h) {
+		if !g.appendCopies(sid, r.dev, r.lo, r.hi, pos, n) || !r.dev.layersFor(sid, r.lo, r.hi, pos, n, x, r.tables(cs), h) {
 			return false
 		}
 	}
@@ -2187,7 +2222,13 @@ func (g *GPU) snapRecs(sid uint64, lis []int32, key string) bool {
 
 func (g *GPU) publishKVsBatch(sid uint64, lis, pages []int32, keys []string) bool {
 	if d := g.ownerOf(sid, lis); d != nil {
-		return d.publishKVsBatch(sid, lis, pages, keys)
+		if !d.publishKVsBatch(sid, lis, pages, keys) {
+			return false
+		}
+		for i := range lis {
+			g.shareCopies(sid, int(lis[i]), int(pages[i]), keys[i], -1)
+		}
+		return true
 	}
 	ok := true
 	for i := range lis {
@@ -2209,7 +2250,11 @@ func (g *GPU) publishKV(sid uint64, li, page int, key string) bool {
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	return d != nil && d.publishKVs(sid, li, page, key)
+	if d == nil || !d.publishKVs(sid, li, page, key) {
+		return false
+	}
+	g.shareCopies(sid, li, page, key, -1)
+	return true
 }
 
 // SharePage is the zero session's page of block li on the device holding it
@@ -2230,7 +2275,7 @@ func (g *GPU) mapKV(sid uint64, li, page int, key string, end int) bool {
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	return d != nil && d.mapKVs(sid, li, page, key, end)
+	return d != nil && d.mapKVs(sid, li, page, key, end) && g.shareCopies(sid, li, page, key, end)
 }
 
 // MigrateKV is migrateKV for the zero session: a caller that never attached.
@@ -2247,7 +2292,28 @@ func (g *GPU) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bo
 	if d == nil {
 		return false // the block is on the CPU; there is nothing to move
 	}
-	return d.migrateKV(sid, li, k, v, pos, toDevice)
+	if !d.migrateKV(sid, li, k, v, pos, toDevice) {
+		return false
+	}
+	return !toDevice || g.refreshTo(sid, li, 0, pos)
+}
+
+// refreshTo brings session sid's copies of block li's history to the pos
+// positions of sequence base a migration wrote on the block's device.
+func (g *GPU) refreshTo(sid uint64, li, base, pos int) bool {
+	g.mu.Lock()
+	d := g.at(sid, li)
+	g.mu.Unlock()
+	d.mu.Lock()
+	P := 0
+	if d.kvp != nil {
+		P = d.kvp.p
+	}
+	d.mu.Unlock()
+	if P == 0 || pos <= 0 {
+		return true
+	}
+	return g.refreshCopies(sid, li, seqID{sid, base}, 0, (pos+P-1)/P, pos)
 }
 
 // MigrateHistory is migrateHistory for the zero session.
@@ -2261,7 +2327,10 @@ func (g *GPU) migrateHistory(sid uint64, li, h int, e []float32, pos int, toDevi
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	return d != nil && d.migrateHistory(sid, li, h, e, pos, toDevice)
+	if d == nil || !d.migrateHistory(sid, li, h, e, pos, toDevice) {
+		return false
+	}
+	return !toDevice || g.refreshTo(sid, li, 0, pos)
 }
 
 // PerSequenceKV reports that every device holding a block pages its history
@@ -2290,10 +2359,10 @@ func (g *GPU) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, to
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	if d == nil {
+	if d == nil || !d.migrateKVSeq(sid, li, base, k, v, pos, toDevice) {
 		return false
 	}
-	return d.migrateKVSeq(sid, li, base, k, v, pos, toDevice)
+	return !toDevice || g.refreshTo(sid, li, base, pos)
 }
 
 // owners appends to buf every distinct device session sid runs a block on.
@@ -2492,6 +2561,7 @@ func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 		}
 	}
 	g.mu.Unlock()
+	g.noteCopies(sid)
 }
 
 // Placed reports how many blocks each device holds, fastest device first.

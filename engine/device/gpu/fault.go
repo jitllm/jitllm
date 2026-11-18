@@ -330,6 +330,9 @@ func (c *Config) formFaultedAsDevice() bool {
 //	          block the host pager has since put in that frame
 //	"passfold" a staged decode over passes folds none after the first:
 //	          the finish reads a partial nothing wrote
+//	"copystale" a copy of a history read on another device than its block's
+//	          takes none of the rows the block writes after it was made
+//	          (histcopy.go): the reader attends over what it was copied with
 //
 // SetPagedFault arms one violation for the calls after it; "" disarms.
 func (f *Faults) SetPagedFault(v string) { f.paged = v }

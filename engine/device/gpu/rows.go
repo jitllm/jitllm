@@ -611,6 +611,16 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 		if i == len(rs)-1 {
 			h = head
 		}
+		// The copies of histories this run reads on another device take the
+		// rows the runs before it wrote (histcopy.go).
+		if !g.appendRows(self, r.dev, r.lo, r.hi, pos, slot, sid) {
+			g.startRest(self, rs, i)
+			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.stats().LastErr)
+			g.mu.Lock()
+			c.err = why
+			g.mu.Unlock()
+			return false
+		}
 		// A step of its own on each device: its rows' grouping is the
 		// device's. The ragStep is the session's on that device, its slices
 		// reused.

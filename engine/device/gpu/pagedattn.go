@@ -184,17 +184,22 @@ func seqEnds(dst []seqEnd, rows []pagedRow) []seqEnd {
 }
 
 // heldLayers calls f for every pool layer session sid holds history
-// on: a session takes pages only where it runs.
+// on: a session takes pages only where it runs, and where a block reads a
+// copy of its history (histcopy.go).
 func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) error {
 	if g.kvp == nil {
 		return nil
 	}
 	for li, l := range g.kvp.layers {
-		if bl := g.layers[keyBlock(li)]; bl != nil {
+		held := g.histCopies[keyBlock(li)][sid]
+		if bl := g.layers[keyBlock(li)]; bl != nil && !held {
 			if kvp := bl.kv[sid]; kvp != nil && kvp.paged {
-				if err := f(li, l); err != nil {
-					return err
-				}
+				held = true
+			}
+		}
+		if held {
+			if err := f(li, l); err != nil {
+				return err
 			}
 		}
 	}
@@ -579,11 +584,12 @@ func contextPages(kp *kvPool, maxSeq, seats int) int {
 func (g *devTier) pagedSeat(kp *kvPool, li int, bl *layer) error {
 	l := kp.layers[li]
 	seats := 0
-	for _, kvp := range bl.kv {
-		if kvp.paged {
+	for sid, kvp := range bl.kv {
+		if kvp.paged && !g.histCopies[keyBlock(li)][sid] {
 			seats++
 		}
 	}
+	seats += len(g.histCopies[keyBlock(li)])
 	l.floor = 1 + seats*max(l.ctx, 1)
 	if l.n < l.floor {
 		return g.growKVLayer(kp, l, l.floor)

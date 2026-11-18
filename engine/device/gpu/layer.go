@@ -1859,15 +1859,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	hsrc := p.Graph.ReadsHistoryOf()
 	l.kvMore = p.Graph.ReadsMore()
 	for _, r := range l.kvMore {
-		if r.Block >= li || g.layers[r.Block] == nil || !g.layers[r.Block].ok {
+		if r.Block >= li || !g.holdsHistoryOf(sid, r.Block) {
 			g.LastErr = fmt.Sprintf("block %d attends to block %d's history %d, which is not on this device", li, r.Block, r.Hist)
 			return false
 		}
 	}
 	if hsrc >= 0 {
 		// No history of its own: it reads block n's, which must be on this
-		// device already (blocks are offered in order).
-		if hsrc >= li || g.layers[hsrc] == nil || !g.layers[hsrc].ok {
+		// device already (blocks are offered in order), or copied here
+		// from the device it runs on (histcopy.go).
+		if hsrc >= li || !g.holdsHistoryOf(sid, hsrc) {
 			g.LastErr = fmt.Sprintf("block %d attends to block %d's history, which is not on this device", li, hsrc)
 			return false
 		}
@@ -4659,9 +4660,14 @@ func (g *devTier) releaseBlock(li int) {
 	g.freeKV(l)
 	freeRec(l)
 	// The block's layer leaves the pool, and with it every session's pages
-	// there.
+	// there -- but a session's that a block here reads as a copy, the block
+	// running on another device for it now (histcopy.go).
 	if g.kvp != nil {
 		for h := g.kvp.blockHists(li) - 1; h >= 0; h-- {
+			if len(g.histCopies[li]) > 0 {
+				g.keepCopies(histKey(li, h), li)
+				continue
+			}
 			g.dropKVLayer(g.kvp, histKey(li, h))
 		}
 	}
@@ -4800,6 +4806,10 @@ func (g *devTier) dropSession(sid uint64) {
 	for li, l := range g.layers {
 		freed = g.dropHistory(li, l, sid) || freed
 	}
+	if g.copyN.Load() > 0 {
+		g.dropCopiesOf(sid)
+		freed = true
+	}
 	if freed {
 		// A captured launch sequence names the buffers just freed.
 		g.dropGraph()
@@ -4834,8 +4844,12 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 		if g.kvp != nil {
 			n = g.kvp.blockHists(li)
 		}
+		// Pages a block here reads as the session's copy stay, with the
+		// copy (histcopy.go).
 		for h := range n {
-			g.pagedLeave(histKey(li, h), sid, l)
+			if !g.histCopies[li][sid] {
+				g.pagedLeave(histKey(li, h), sid, l)
+			}
 		}
 		freed = true
 	} else if kvp != nil && kvp.shared {

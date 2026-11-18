@@ -108,6 +108,36 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Logf("%d rows gathered on %s and read back for blocks on %s", backs, d[0], d[1])
 				})
 			}
+			// A history read across two cards: the blocks reading another
+			// block's history on one card, it on the other, whose history
+			// the readers' card holds a copy of, appended every token.
+			if name == "synth-gemma4-e.gguf" || name == "synth-gemma3n.gguf" {
+				t.Run("two-card-history", func(t *testing.T) {
+					d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, d[0]+","+d[1], err)
+					}
+					defer g.Close()
+					distinctCards(t, g)
+					m2, err := model.Open(jlmOf(t, p))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer m2.Close()
+					_, cut := historyCut(t, m2)
+					up := map[int]Place{}
+					for li := cut; li < m2.Cfg.NLayer; li++ {
+						up[li] = Place{On: d[1]}
+					}
+					r0 := g.Stats()
+					decodeAllocs(t, m2, g, WithStreamTrial(false), resident,
+						WithPlacement(Placement{Blocks: up, Rest: &Place{On: d[0]}, Head: &Place{On: d[0]}, Strict: true}))
+					if n := g.Stats().HistoryCopyPages - r0.HistoryCopyPages; n == 0 {
+						t.Fatalf("no page reached a history copy: the arm read no history across the cards")
+					}
+				})
+			}
 			// The server's decode groups: a dense model, a mixture and a
 			// hybrid split over two devices, two groups stepping at once.
 			switch name {

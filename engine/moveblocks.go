@@ -81,11 +81,12 @@ type PendingMove struct {
 // Instance is left on the device holding the output projection, the projection
 // follows them; a move to the CPU brings it to the CPU with them.
 //
-// A pinned block refuses the call before anything moves. A KV-sharing group
-// the range reaches moves whole, since the group's readers attend to its
-// source's history wherever it is: between two cards the range is widened to
-// it (groupWhole), and a group the move to or from the CPU splits ends where
-// its source is (fixKVGroups).
+// A pinned block refuses the call before anything moves. Between two cards a
+// block of a KV-sharing group moves alone: a block reading a history on
+// another card reads the copy of it that card holds (the tier's history
+// copies). A group on the CPU comes to a card whole (groupWhole), and a group
+// a move to the CPU splits comes home whole (fixKVGroups): a history read
+// across the CPU and a card is not built.
 func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	defer s.settleHist()
 	if lo < s.lo || hi > s.hi || lo >= hi {
@@ -149,11 +150,16 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 }
 
 // groupWhole is [lo, hi) widened to every KV-sharing group a block of it
-// holds, and every group those reach (kvSpan).
+// holds on the CPU, and every group those reach (kvSpan): a group comes to
+// the cards whole, as it left them. A group on the cards is not widened to:
+// a block reading a history on another card reads a copy of it there.
 func (s *Instance) groupWhole(lo, hi int) (int, int) {
 	for {
 		l, h := lo, hi
 		for li := lo; li < hi; li++ {
+			if !s.groupOffCards(li) {
+				continue
+			}
 			glo, ghi := s.kvSpan(li)
 			l, h = min(l, glo), max(h, ghi)
 		}
