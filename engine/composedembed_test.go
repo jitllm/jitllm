@@ -52,11 +52,11 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 				t.Errorf("cosine to %s %.9f < %v", refName, c, bound)
 			}
 
-			was := m.Cfg.Pooling
-			m.Cfg.Pooling = jlm.PoolMean
+			was, other := m.Cfg.Pooling, jlm.PoolMean
 			if was == jlm.PoolMean {
-				m.Cfg.Pooling = jlm.PoolLast
+				other = jlm.PoolLast
 			}
+			undoPool := cfgMut(m, func(c *model.Config) { c.Pooling = other })
 			ve, err := NewEmbedder(m, openOpts...)
 			if err != nil {
 				t.Fatal(err)
@@ -64,7 +64,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			vbad := embedTexts(t, m, ve, g)
 			vs, _ := ve.st.Account(nn.CPU).Steps.Of(nn.ComposedPool)
 			ve.Close()
-			m.Cfg.Pooling = was
+			undoPool()
 			cb := worstCos(vbad, want)
 			t.Logf("%s: violation (pooled other than %v): worst cosine to %s %.6f, %d readouts served", g.Model, was, refName, cb, vs)
 			if vs != len(g.Texts) || cb >= bound {

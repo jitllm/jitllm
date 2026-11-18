@@ -524,7 +524,11 @@ func dropStoredDense(m *model.Model, roles ...jlm.Role) func() {
 	}
 	fr.Restated++
 	fr.Mu.Unlock()
+	// The parts outside the blocks bind the model-wide tensors: they are
+	// stated again without the roles.
+	undoS := statedAgain(m)
 	return func() {
+		undoS()
 		fr.Mu.Lock()
 		fr.Restate = was
 		fr.Restated++

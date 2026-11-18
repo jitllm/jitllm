@@ -49,10 +49,12 @@ func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 			ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 			// Where one side states no block graphs (its class or
 			// architecture states none yet), the other's are held by its
-			// own gates against its reference.
+			// own gates against its reference, and so are the parts it
+			// states beside them.
 			oneStates := len(a.Config.Blocks.Of) == 0 || len(b.Config.Blocks.Of) == 0
 			for i := 0; i < ca.NumField(); i++ {
-				if !ca.Type().Field(i).IsExported() || ca.Type().Field(i).Name == "Blocks" && oneStates {
+				n := ca.Type().Field(i).Name
+				if !ca.Type().Field(i).IsExported() || (n == "Blocks" || n == "Front") && oneStates {
 					continue
 				}
 				x, y := ca.Field(i).Interface(), cb.Field(i).Interface()

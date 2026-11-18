@@ -591,6 +591,34 @@ func (m *Model) shortVector(li int, g *graph.Graph) error {
 	return nil
 }
 
+// statedPart is the graph the container states for the part named name,
+// decoded as block li's over f, and whether it states one.
+func (m *Model) statedPart(name string, li int, f graph.Facts) (*graph.Graph, bool, error) {
+	s := m.Container.Config().Front.Graph(name)
+	if s == "" {
+		return nil, false, nil
+	}
+	g, err := graph.Decode([]byte(s), li, f)
+	if err != nil {
+		return nil, true, fmt.Errorf("model: the stated %s: %w", name, err)
+	}
+	return g, true, nil
+}
+
+// headPart is the name of the head's part: with hidden the norm's rows
+// written too, collapsed over the mix of a model's streams.
+func headPart(hidden, collapsed bool) string {
+	switch {
+	case collapsed && hidden:
+		return jlm.FrontCollapsedHidden
+	case collapsed:
+		return jlm.FrontCollapsed
+	case hidden:
+		return jlm.FrontHeadHidden
+	}
+	return jlm.FrontHead
+}
+
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	s := m.Container.Config().Blocks.Graph(li)
 	if s == "" {
@@ -754,6 +782,12 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 		return nil, UncoveredStreams, nil
 	}
 	f, _ := m.Inventory(jlm.DenseBlock)
+	if g, ok, err := m.statedPart(headPart(hidden, collapsed), -1, f); ok {
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
+	}
 	stored := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
 		return ok
@@ -811,6 +845,16 @@ func (m *Model) mtpHeadGraph(hidden bool, li int) (*graph.Graph, error) {
 		return nil, nil
 	}
 	f, _ := m.Inventory(jlm.DenseBlock)
+	part := jlm.FrontPredict(jlm.FrontPredictHead, li-c.NLayer)
+	if hidden {
+		part = jlm.FrontPredict(jlm.FrontPredictHidden, li-c.NLayer)
+	}
+	fb, _ := m.Inventory(int32(li))
+	inv := maps.Clone(f.Inventory)
+	maps.Copy(inv, fb.Inventory)
+	if g, ok, err := m.statedPart(part, li, graph.Facts{Inventory: inv}); ok {
+		return g, err
+	}
 	stored := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
 		return ok
@@ -1118,6 +1162,12 @@ func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 		return nil, Covered, nil
 	}
 	all, _ := m.Inventory(jlm.DenseBlock)
+	if g, ok, err := m.statedPart(jlm.FrontPool, int(jlm.DenseBlock), all); ok {
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
+	}
 	inv := map[jlm.Role]graph.Shape{}
 	has := func(r jlm.Role) bool {
 		s, ok := all.Inventory[r]
@@ -1200,6 +1250,16 @@ func (m *Model) pickHeadGraph() (*graph.Graph, error) {
 	}
 	c := m.Cfg
 	f, _ := m.Inventory(jlm.DenseBlock)
+	if m.Container.Config().Front.Graph(jlm.FrontHead) != "" {
+		pg, err := pickOf(g, c.NVocab, nn.PickMax)
+		if err != nil {
+			return nil, err
+		}
+		if err := graph.Verify(pg, f); err != nil {
+			return nil, fmt.Errorf("the head's pick graph does not verify: %w", err)
+		}
+		return pg, nil
+	}
 	stored := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
 		return ok
@@ -1215,6 +1275,43 @@ func (m *Model) pickHeadGraph() (*graph.Graph, error) {
 		return nil, fmt.Errorf("the head's pick graph does not verify: %w", err)
 	}
 	return pg, nil
+}
+
+// pickOf is head h projecting the rows of pick ids alone, the ids its second
+// input: its one projection to the vocabulary reads the ids beside its row,
+// and the logits and every row made from them are pick wide.
+func pickOf(h *graph.Graph, nVocab, pick int) (*graph.Graph, error) {
+	g := &graph.Graph{Version: h.Version, Block: h.Block, Values: slices.Clone(h.Values), Ops: slices.Clone(h.Ops),
+		In: slices.Clone(h.In), Out: slices.Clone(h.Out), Routed: h.Routed}
+	proj := -1
+	for i, o := range g.Ops {
+		if o.Kind == graph.OpMatVec && len(o.Out) == 1 && g.Values[o.Out[0]].Width == nVocab {
+			if proj >= 0 {
+				return nil, fmt.Errorf("model: the head projects to its vocabulary twice")
+			}
+			proj = i
+		}
+	}
+	if proj < 0 || len(g.Out) != 1 {
+		return nil, fmt.Errorf("model: a head of %d outputs with no one projection to its vocabulary", len(g.Out))
+	}
+	ids := graph.ValueID(len(g.Values))
+	g.Values = append(g.Values, graph.Value{Name: "pick.ids", Width: pick, Elem: graph.ElemU32})
+	g.In = append(g.In, ids)
+	g.Ops[proj].In = append(slices.Clone(g.Ops[proj].In), ids)
+	picked := map[graph.ValueID]bool{g.Ops[proj].Out[0]: true}
+	g.Values[g.Ops[proj].Out[0]].Width = pick
+	for _, o := range g.Ops[proj+1:] {
+		if !slices.ContainsFunc(o.In, func(v graph.ValueID) bool { return picked[v] }) {
+			continue
+		}
+		for _, v := range o.Out {
+			if g.Values[v].Width == nVocab {
+				g.Values[v].Width, picked[v] = pick, true
+			}
+		}
+	}
+	return g, nil
 }
 
 // perLayerInputs is a row's every layer's per-layer input from its token and
@@ -1260,6 +1357,12 @@ func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 	types = types && tt.K == c.NEmbd && tt.Rows > 0
 	if streams && c.Streams() > 1 && !c.StatesStreams() && !m.ExpandsStreams() {
 		return nil, UncoveredStreams, nil
+	}
+	if g, ok, err := m.statedPart(jlm.FrontEmbed, -1, f); ok {
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
 	}
 	b := graph.NewBlock(-1)
 	x := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "embd", Width: c.NEmbd}},
@@ -1314,6 +1417,9 @@ func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 func (m *Model) outNormGraph() (*graph.Graph, error) {
 	c := m.Cfg
 	all, _ := m.Inventory(jlm.DenseBlock)
+	if g, ok, err := m.statedPart(jlm.FrontOutNorm, int(jlm.DenseBlock), all); ok {
+		return g, err
+	}
 	inv := map[jlm.Role]graph.Shape{}
 	has := func(r jlm.Role) bool {
 		s, ok := all.Inventory[r]
@@ -1352,6 +1458,9 @@ func (m *Model) outNormGraph() (*graph.Graph, error) {
 func (m *Model) givenGraph() (*graph.Graph, error) {
 	c := m.Cfg
 	f, _ := m.Inventory(jlm.DenseBlock)
+	if g, ok, err := m.statedPart(jlm.FrontGiven, -1, f); ok {
+		return g, err
+	}
 	p, pos := f.Inventory[jlm.RolePosEmbd]
 	expands := m.ExpandsStreams()
 	if !pos && c.PLEDim == 0 && !expands {

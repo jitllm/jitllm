@@ -268,23 +268,19 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 		name  string
 		apply func(m *model.Model) (undo func())
 	}
-	set := func(p *jlm.Pooling, v jlm.Pooling) func() {
-		old := *p
-		*p = v
-		return func() { *p = old }
-	}
+	pool := func(m *model.Model, v jlm.Pooling) func() { return cfgMut(m, func(c *model.Config) { c.Pooling = v }) }
 	cases := map[string][]violation{
 		"all-minilm-l6": {
-			{"cls pooling on a mean model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolCLS) }},
+			{"cls pooling on a mean model", func(m *model.Model) func() { return pool(m, jlm.PoolCLS) }},
 		},
 		"mxbai-embed-large": {
-			{"mean pooling on a CLS model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolMean) }},
+			{"mean pooling on a CLS model", func(m *model.Model) func() { return pool(m, jlm.PoolMean) }},
 		},
 		"embeddinggemma-300m": {
 			{"causal attention on a bidirectional model", func(m *model.Model) func() {
 				return cfgMut(m, func(c *model.Config) { c.NonCausal = false })
 			}},
-			{"last-token pooling on a mean model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolLast) }},
+			{"last-token pooling on a mean model", func(m *model.Model) func() { return pool(m, jlm.PoolLast) }},
 			// Only the golden's long text is past the window, which is why it
 			// is in the golden. Widening the window moves only the mask.
 			{"a sliding window four times too wide", func(m *model.Model) func() {
@@ -297,7 +293,7 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 			}},
 		},
 		"qwen3-embedding-0.6b": {
-			{"mean pooling on a last-token model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolMean) }},
+			{"mean pooling on a last-token model", func(m *model.Model) func() { return pool(m, jlm.PoolMean) }},
 			{"bidirectional attention on a causal model", func(m *model.Model) func() {
 				undo := relowered(m)
 				m.Cfg.NonCausal = true

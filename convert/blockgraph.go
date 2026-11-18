@@ -205,40 +205,42 @@ func (n *mjNames) UnmarshalJSON(b []byte) error {
 // most (-1 for any).
 func graphSteps() map[string][4]int {
 	return map[string][4]int{
-		"in":            {0, 0, 0, 0},
-		"norm":          {1, 1, 1, 1},
-		"layer_norm":    {1, 1, 1, -1},
-		"head_norm":     {1, 1, 1, 1},
-		"matvec":        {1, 1, 1, -1},
-		"add":           {2, 2, 0, 0},
-		"rope":          {1, 2, 0, 0},
-		"rope_table":    {0, 0, 0, 0},
-		"history_pool":  {0, 0, 0, 0},
-		"kv_append":     {2, 2, 0, 0},
-		"kv_from":       {0, 0, 0, 0},
-		"attend":        {1, 2, 0, -1},
-		"indexer":       {2, 2, 0, 0},
-		"select":        {1, 2, 0, 0},
-		"act":           {1, -1, 0, 0},
-		"stated":        {1, -1, 0, 0},
-		"emit":          {0, -1, 0, 0},
-		"split_sum":     {1, 1, 0, 0},
-		"mark":          {0, 0, 0, 0},
-		"routed":        {0, 0, 0, 0},
-		"let":           {1, 1, 0, 0},
-		"sigmoid_mul":   {2, 2, 0, 0},
-		"silu":          {1, 1, 0, 0},
-		"silu_gated":    {2, 2, 0, 0},
-		"expr":          {0, -1, 0, 0},
-		"out":           {1, -1, 0, 0},
-		"streams_in":    {1, 1, 0, 0},
-		"stream_read":   {2, 3, 0, 0},
-		"stream_writes": {1, 1, 0, 0},
-		"stream_join":   {2, 2, 0, 0},
-		"stream_at":     {0, 0, 0, 0},
-		"out_streams":   {0, 1, 0, 0},
-		"each":          {0, 0, 0, 0},
-		"concat":        {1, -1, 0, 0},
+		"in":             {0, 0, 0, 0},
+		"norm":           {1, 1, 1, 1},
+		"layer_norm":     {1, 1, 1, -1},
+		"head_norm":      {1, 1, 1, 1},
+		"matvec":         {1, 1, 1, -1},
+		"add":            {2, 2, 0, 0},
+		"rope":           {1, 2, 0, 0},
+		"rope_table":     {0, 0, 0, 0},
+		"history_pool":   {0, 0, 0, 0},
+		"kv_append":      {2, 2, 0, 0},
+		"kv_from":        {0, 0, 0, 0},
+		"attend":         {1, 2, 0, -1},
+		"indexer":        {2, 2, 0, 0},
+		"select":         {1, 2, 0, 0},
+		"act":            {1, -1, 0, 0},
+		"stated":         {1, -1, 0, 0},
+		"emit":           {0, -1, 0, 0},
+		"split_sum":      {1, 1, 0, 0},
+		"mark":           {0, 0, 0, 0},
+		"routed":         {0, 0, 0, 0},
+		"let":            {1, 1, 0, 0},
+		"sigmoid_mul":    {2, 2, 0, 0},
+		"silu":           {1, 1, 0, 0},
+		"silu_gated":     {2, 2, 0, 0},
+		"expr":           {0, -1, 0, 0},
+		"out":            {1, -1, 0, 0},
+		"streams_in":     {1, 1, 0, 0},
+		"stream_read":    {2, 3, 0, 0},
+		"stream_writes":  {1, 1, 0, 0},
+		"stream_join":    {2, 2, 0, 0},
+		"stream_at":      {0, 0, 0, 0},
+		"out_streams":    {0, 1, 0, 0},
+		"expand_streams": {1, 1, 0, 0},
+		"stream_mix":     {0, 0, 0, 0},
+		"each":           {0, 0, 0, 0},
+		"concat":         {1, -1, 0, 0},
 	}
 }
 
@@ -364,6 +366,14 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 			ws = append(ws, b.W)
 		}
 		for _, w := range ws {
+			if xs := templated(w); len(xs) != 0 {
+				for _, x := range xs {
+					if err := g.compile(x, runs...); err != nil {
+						return fmt.Errorf("op %d (%s): %q: %w", i, o.Op, w, err)
+					}
+				}
+				continue
+			}
 			if _, ok := names.blockRole(strings.TrimSuffix(w, "?")); !ok {
 				return fmt.Errorf("op %d (%s): %q is not a tensor name the container knows", i, o.Op, w)
 			}
@@ -398,6 +408,15 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 			for _, part := range []string{".key", ".query", ".weight"} {
 				named[o.Out+part] = true
 			}
+			continue
+		case o.Op == "expand_streams":
+			// It writes the streams it makes as the part's outputs.
+			continue
+		case o.Op == "stream_mix":
+			if o.Out == "" {
+				return fmt.Errorf("op %d (%s) names no output", i, o.Op)
+			}
+			named[o.Out] = true
 			continue
 		case strings.HasPrefix(o.Op, "stream") || o.Op == "out_streams":
 			if o.Op != "streams_in" && o.Op != "stream_join" && !named[o.Streams] {
@@ -444,22 +463,83 @@ func (g *mjGraph) checkEach(o mjBlockOp, named map[string]bool, runs []string, n
 	if _, fact := (&blockFacts{c: &jlm.Config{}}).vars()[o.As]; o.As == "" || fact || slices.Contains(runs, o.As) {
 		return fmt.Errorf("its runs are named %q, which is empty, a fact or an enclosing run", o.As)
 	}
-	if o.N == "" || o.Out == "" || o.Name == "" || len(o.Steps) == 0 {
-		return fmt.Errorf("an each states a count, an output, its name and its steps")
+	// An each that names no output runs its steps in turn, a run's values
+	// the next run's; one that names one joins its runs' last values.
+	seq := o.Out == "" && o.Name == ""
+	if o.N == "" || !seq && (o.Out == "" || o.Name == "") || len(o.Steps) == 0 {
+		return fmt.Errorf("an each states a count, its steps, and an output and its name or neither")
 	}
 	for _, x := range []string{o.If, o.N} {
 		if err := g.compile(x, runs...); err != nil {
 			return err
 		}
 	}
-	if last := o.Steps[len(o.Steps)-1]; last.Out == "" || last.Op == "each" {
+	if last := o.Steps[len(o.Steps)-1]; !seq && (last.Out == "" || last.Op == "each") {
 		return fmt.Errorf("its last step names no value")
 	}
 	if err := g.checkOps(o.Steps, named, append(slices.Clone(runs), o.As), names); err != nil {
 		return err
 	}
-	named[o.Out] = true
+	if !seq {
+		named[o.Out] = true
+	}
 	return nil
+}
+
+// templated is the expressions a weight name holds between braces, none for
+// a name that holds none.
+func templated(name string) []string {
+	var xs []string
+	for {
+		a := strings.IndexByte(name, '{')
+		b := strings.IndexByte(name, '}')
+		if a < 0 || b < a {
+			return xs
+		}
+		xs = append(xs, name[a+1:b])
+		name = name[b+1:]
+	}
+}
+
+// named is o with each weight name's expressions between braces replaced by
+// their values over vars (dec.blk.{k}.attn_q at k 1 is dec.blk.1.attn_q).
+func (g *mjGraph) named(o mjBlockOp, vars map[string]jinja.Value) (mjBlockOp, error) {
+	fill := func(name string) (string, error) {
+		var out strings.Builder
+		for {
+			a := strings.IndexByte(name, '{')
+			b := strings.IndexByte(name, '}')
+			if a < 0 || b < a {
+				out.WriteString(name)
+				return out.String(), nil
+			}
+			v, err := g.value(name[a+1:b], vars)
+			if err != nil {
+				return "", err
+			}
+			out.WriteString(name[:a])
+			out.WriteString(v.String())
+			name = name[b+1:]
+		}
+	}
+	if !slices.ContainsFunc(o.W, func(w string) bool { return len(templated(w)) != 0 }) &&
+		!slices.ContainsFunc(o.Bind, func(b mjBinding) bool { return len(templated(b.W)) != 0 }) {
+		return o, nil
+	}
+	o.W, o.Bind = slices.Clone(o.W), slices.Clone(o.Bind)
+	for k, w := range o.W {
+		var err error
+		if o.W[k], err = fill(w); err != nil {
+			return o, err
+		}
+	}
+	for k := range o.Bind {
+		var err error
+		if o.Bind[k].W, err = fill(o.Bind[k].W); err != nil {
+			return o, err
+		}
+	}
+	return o, nil
 }
 
 // unrolled is ops with each each's steps in its place once a run, inside
@@ -501,12 +581,18 @@ func (g *mjGraph) unrolled(ops []mjBlockOp, vars map[string]jinja.Value, runs ma
 			if err != nil {
 				return nil, err
 			}
+			if o.Out == "" {
+				out = append(out, steps...)
+				continue
+			}
 			v := fmt.Sprintf("%s#%d", o.Out, j)
 			steps[len(steps)-1].Out = v
 			join.In = append(join.In, v)
 			out = append(out, steps...)
 		}
-		out = append(out, join)
+		if o.Out != "" {
+			out = append(out, join)
+		}
 	}
 	return out, nil
 }
@@ -587,6 +673,15 @@ func (v tensorNames) blockRole(name string) (jlm.Role, bool) {
 	if r, ok := v.roleOf(name); ok {
 		return r, true
 	}
+	// A decision head's block names its block (dec.blk.N.), as the source
+	// does: its role is the one identify reads there.
+	if strings.HasPrefix(name, "dec.blk.") {
+		for _, n := range []string{name + ".weight", name} {
+			if r, _, _, err := v.identify(n); err == nil {
+				return r, true
+			}
+		}
+	}
 	// A tensor the converter makes, by splitting or folding, has the
 	// container's name alone (ssm_x.dt of ssm_x); the block roles are the
 	// low codes.
@@ -660,7 +755,10 @@ func StateBlocksAs(s *jlm.Source, arch string, keys map[string]int64) error {
 	for k, v := range keys {
 		d.AsDict().Set(k, jinja.NewInt(v))
 	}
-	return StateBlockGraphs(&Config{Config: s.Config}, s, g, d, nil)
+	if err := StateBlockGraphs(&Config{Config: s.Config}, s, g, d, nil); err != nil {
+		return err
+	}
+	return StateFront(s.Config, s)
 }
 
 // usedGraphs are the library's graphs g's uses name, in their order.
@@ -704,6 +802,21 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		taken[streamsFeature] = true
 	}
 	b := graph.NewBlock(li)
+	if err := g.run(b, g.Block, bf, li, taken); err != nil {
+		return nil, err
+	}
+	if err := graph.Verify(b.G, bf.facts); err != nil {
+		return nil, err
+	}
+	if u := graph.Unbound(b.G, bf.facts); len(u) != 0 {
+		return nil, fmt.Errorf("the block stores %v, which its graph does not bind", u)
+	}
+	return b.G, nil
+}
+
+// run emits steps into b over bf's facts as block li's, each feature a step
+// takes added to taken where that is not nil.
+func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li int, taken map[string]bool) error {
 	vals := map[string]graph.ValueID{}
 	hists := map[string]graph.StateRef{}
 	marks := map[string]int{}
@@ -712,16 +825,20 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 	facts := bf.vars()
 	vars := facts
 	num := func(x string) (float64, error) { return g.num(x, vars) }
-	ops, err := g.unrolled(g.Block, facts, nil)
+	ops, err := g.unrolled(steps, facts, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for i, o := range ops {
 		vars = o.with(facts)
+		var err error
+		if o, err = g.named(o, vars); err != nil {
+			return fmt.Errorf("op %d (%s): %w", i, o.Op, err)
+		}
 		if o.If != "" {
 			on, err := g.flag(o.If, vars)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (%s): %w", i, o.Op, err)
+				return fmt.Errorf("op %d (%s): %w", i, o.Op, err)
 			}
 			if !on {
 				continue
@@ -730,7 +847,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		if taken != nil {
 			f, err := opFeature(o)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			taken[f] = true
 		}
@@ -738,13 +855,13 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		for k, v := range o.In {
 			id, ok := vals[v]
 			if !ok {
-				return nil, fmt.Errorf("op %d (%s) reads %q, which no op this block runs names", i, o.Op, v)
+				return fmt.Errorf("op %d (%s) reads %q, which no op this block runs names", i, o.Op, v)
 			}
 			in[k] = id
 		}
 		var w []jlm.Role
 		for _, name := range o.W {
-			r, _ := names.blockRole(strings.TrimSuffix(name, "?"))
+			r, _ := bf.names.blockRole(strings.TrimSuffix(name, "?"))
 			if _, ok := bf.facts.Inventory[r]; !ok && strings.HasSuffix(name, "?") {
 				continue
 			}
@@ -754,7 +871,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		for _, h := range o.Hist {
 			r, ok := hists[h]
 			if !ok {
-				return nil, fmt.Errorf("op %d (%s) reads history %q, which no op this block runs appends", i, o.Op, h)
+				return fmt.Errorf("op %d (%s) reads history %q, which no op this block runs appends", i, o.Op, h)
 			}
 			reads = append(reads, r)
 		}
@@ -763,7 +880,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "in":
 			width, err := num(o.Width)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			y = b.In(o.Out, int(width))
 		case "norm":
@@ -771,7 +888,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if o.Eps != "" {
 				var err error
 				if eps, err = num(o.Eps); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			y = b.Norm(in[0], w[0], eps)
@@ -780,7 +897,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if o.Eps != "" {
 				var err error
 				if eps, err = num(o.Eps); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			y = b.LayerNorm(in[0], w[0], eps, w[1:]...)
@@ -789,7 +906,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if o.Width != "" {
 				n, err := num(o.Width)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				hd = int(n)
 			}
@@ -797,12 +914,12 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "matvec":
 			rows, err := num(o.Rows)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			q8 := false
 			if o.Int8 != "" {
 				if q8, err = g.flag(o.Int8, vars); err != nil {
-					return nil, fmt.Errorf("op %d (matvec): %w", i, err)
+					return fmt.Errorf("op %d (matvec): %w", i, err)
 				}
 			}
 			if !q8 {
@@ -823,7 +940,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if o.Alpha != "" {
 				var err error
 				if alpha, err = num(o.Alpha); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			if alpha != 0 && alpha != 1 {
@@ -835,10 +952,10 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "rope":
 			a, err := bf.ropeOf(g, o, vars)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if a, err = overridden(a, g, o, vars); err != nil {
-				return nil, fmt.Errorf("op %d (rope): %w", i, err)
+				return fmt.Errorf("op %d (rope): %w", i, err)
 			}
 			name := o.Name
 			if name == "" {
@@ -848,10 +965,10 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "rope_table":
 			a, err := bf.ropeOf(g, o, vars)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if a, err = overridden(a, g, o, vars); err != nil {
-				return nil, fmt.Errorf("op %d (rope_table): %w", i, err)
+				return fmt.Errorf("op %d (rope_table): %w", i, err)
 			}
 			y = b.RopeTableAt(a, a.Span)
 		case "kv_append":
@@ -859,15 +976,15 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if o.At != "" {
 				var err error
 				if at, err = num(o.At); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			a, err := overridden(graph.Attrs{}, g, o, vars)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (kv_append): %w", i, err)
+				return fmt.Errorf("op %d (kv_append): %w", i, err)
 			}
 			if at < 0 || at != math.Trunc(at) || at > math.MaxUint8 {
-				return nil, fmt.Errorf("op %d appends to history %v, not a history's index", i, at)
+				return fmt.Errorf("op %d appends to history %v, not a history's index", i, at)
 			}
 			h := uint8(at)
 			hists[o.Out] = graph.StateRef{State: graph.StateKV, Hist: h, Version: b.KVAppendEvery(h, in[0], in[1], 0, a.Span)}
@@ -875,17 +992,17 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "kv_from":
 			at, err := num(o.At)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if at != math.Trunc(at) || at < 0 || int(at) >= li {
-				return nil, fmt.Errorf("op %d reads block %v's history, which is not an earlier block's", i, at)
+				return fmt.Errorf("op %d reads block %v's history, which is not an earlier block's", i, at)
 			}
 			hists[o.Out] = graph.SharedHistory(int(at))
 			continue
 		case "attend":
 			a, err := overridden(bf.attend(), g, o, vars)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (attend): %w", i, err)
+				return fmt.Errorf("op %d (attend): %w", i, err)
 			}
 			if len(in) == 2 {
 				y = b.AttendSelected(in[0], reads[0], in[1], a, w...)
@@ -894,13 +1011,13 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			}
 			at := &b.G.Ops[len(b.G.Ops)-1]
 			if at.Kind != graph.OpAttend || len(at.Out) != 1 || at.Out[0] != y {
-				return nil, fmt.Errorf("op %d (attend): the attention is not the builder's last op", i)
+				return fmt.Errorf("op %d (attend): the attention is not the builder's last op", i)
 			}
 			at.Reads = append(at.Reads, reads[1:]...)
 		case "indexer":
 			ix, err := bf.indexer(b, g, o, vars, in[0], in[1])
 			if err != nil {
-				return nil, fmt.Errorf("op %d (indexer): %w", i, err)
+				return fmt.Errorf("op %d (indexer): %w", i, err)
 			}
 			for part, v := range ix {
 				vals[o.Out+"."+part] = v
@@ -909,29 +1026,29 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "select":
 			var err error
 			if y, err = bf.selected(b, g, o, vars, in, reads[0]); err != nil {
-				return nil, fmt.Errorf("op %d (select): %w", i, err)
+				return fmt.Errorf("op %d (select): %w", i, err)
 			}
 		case "act":
 			width, err := num(o.Width)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			name := o.Name
 			if name == "" {
 				name = "act"
 			}
-			if y, err = b.Stated(name, c.ActAt(li), in, int(width), bf.facts); err != nil {
-				return nil, fmt.Errorf("op %d's stated activation: %w", i, err)
+			if y, err = b.Stated(name, bf.c.ActAt(li), in, int(width), bf.facts); err != nil {
+				return fmt.Errorf("op %d's stated activation: %w", i, err)
 			}
 		case "stated":
 			var err error
-			if y, err = stated(b, c, o, in, bf, num); err != nil {
-				return nil, fmt.Errorf("op %d's stated %s: %w", i, o.Of, err)
+			if y, err = stated(b, bf.c, o, in, bf, num); err != nil {
+				return fmt.Errorf("op %d's stated %s: %w", i, o.Of, err)
 			}
 		case "emit":
 			outs, err := emitted(b, g, o, in, reads, bf, vars)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
+				return fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
 			}
 			for k, r := range o.Outs {
 				if r.As != "" {
@@ -944,29 +1061,29 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			continue
 		case "history_pool":
 			if len(reads) != 1 || len(o.Bind) != 1 || len(o.Outs) != 1 {
-				return nil, fmt.Errorf("op %d's history pool reads %d histories through %d bias tables into %d results, not one of each",
+				return fmt.Errorf("op %d's history pool reads %d histories through %d bias tables into %d results, not one of each",
 					i, len(reads), len(o.Bind), len(o.Outs))
 			}
 			a, err := overridden(graph.Attrs{}, g, o, vars)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (history_pool): %w", i, err)
+				return fmt.Errorf("op %d (history_pool): %w", i, err)
 			}
 			width, err := num(o.Outs[0].Width)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			bias, _ := names.blockRole(strings.TrimSuffix(o.Bind[0].W, "?"))
+			bias, _ := bf.names.blockRole(strings.TrimSuffix(o.Bind[0].W, "?"))
 			if y, err = historyPool(b, reads[0], a, bias, int(width)); err != nil {
-				return nil, fmt.Errorf("op %d (history_pool): %w", i, err)
+				return fmt.Errorf("op %d (history_pool): %w", i, err)
 			}
 		case "split_sum":
 			parts, err := num(o.Parts)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			n, wd := int(parts), b.G.Values[in[0]].Width
 			if n < 1 || wd%n != 0 {
-				return nil, fmt.Errorf("op %d splits %d into %v parts", i, wd, parts)
+				return fmt.Errorf("op %d splits %d into %v parts", i, wd, parts)
 			}
 			for j := range n {
 				s := b.Emit(graph.OpSlice, in, []graph.Result{{Name: o.Name, Width: wd / n}}, nil,
@@ -991,7 +1108,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "expr":
 			var err error
 			if y, err = exprOp(b, g, o, in, bf, vars); err != nil {
-				return nil, fmt.Errorf("op %d (expr): %w", i, err)
+				return fmt.Errorf("op %d (expr): %w", i, err)
 			}
 		case "silu_gated":
 			name := o.Name
@@ -1033,7 +1150,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "streams_in":
 			xs, bank, err := bf.streamsIn(b, in[0])
 			if err != nil {
-				return nil, fmt.Errorf("op %d (streams_in): %w", i, err)
+				return fmt.Errorf("op %d (streams_in): %w", i, err)
 			}
 			lists[o.Out] = xs
 			if bank != 0 {
@@ -1043,7 +1160,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		case "stream_read":
 			u, err := bf.sub(o.Of)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (stream_read): %w", i, err)
+				return fmt.Errorf("op %d (stream_read): %w", i, err)
 			}
 			side := graph.ValueID(0)
 			if len(in) == 3 {
@@ -1051,38 +1168,66 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			}
 			var ex []graph.ValueID
 			if y, ex, err = graph.StreamRead(b, bf.facts, u, lists[o.Streams], in[0], in[1], side, bf.ops(b, g, o, vars)); err != nil {
-				return nil, fmt.Errorf("op %d (stream_read): %w", i, err)
+				return fmt.Errorf("op %d (stream_read): %w", i, err)
 			}
 			lists[o.Out+".ex"] = ex
 		case "stream_writes":
 			u, err := bf.sub(o.Of)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (stream_writes): %w", i, err)
+				return fmt.Errorf("op %d (stream_writes): %w", i, err)
 			}
 			out, err := graph.StreamWrites(b, bf.facts, u, lists[o.Streams], in[0], lists[o.Ex])
 			if err != nil {
-				return nil, fmt.Errorf("op %d (stream_writes): %w", i, err)
+				return fmt.Errorf("op %d (stream_writes): %w", i, err)
 			}
 			lists[o.Out] = out
 			continue
 		case "stream_join":
 			u, err := bf.sub(o.Of)
 			if err != nil {
-				return nil, fmt.Errorf("op %d (stream_join): %w", i, err)
+				return fmt.Errorf("op %d (stream_join): %w", i, err)
 			}
 			if y, err = graph.StreamJoin(b, bf.facts, u, in[0], in[1], bf.resid(b)); err != nil {
-				return nil, fmt.Errorf("op %d (stream_join): %w", i, err)
+				return fmt.Errorf("op %d (stream_join): %w", i, err)
 			}
 		case "stream_at":
 			k, err := num(o.At)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			xs := lists[o.Streams]
 			if int(k) < 0 || int(k) >= len(xs) {
-				return nil, fmt.Errorf("op %d reads stream %v of %d", i, k, len(xs))
+				return fmt.Errorf("op %d reads stream %v of %d", i, k, len(xs))
 			}
 			y = xs[int(k)]
+		case "stream_mix":
+			// The head's stated read of every stream, an input a stream.
+			n, d := statedStreams(bf.c), int(bf.c.NEmbd)
+			xs := make([]graph.ValueID, n)
+			xs[0] = b.In("x", d)
+			for k := 1; k < n; k++ {
+				xs[k] = b.In(fmt.Sprintf("x.%d", k), d)
+			}
+			var err error
+			if y, _, err = graph.StreamRead(b, bf.facts, &bf.c.Streams.Head, xs, xs[0], xs[0], 0, nil); err != nil {
+				return fmt.Errorf("op %d (stream_mix): %w", i, err)
+			}
+		case "expand_streams":
+			// The input rows' streams past the first, each its stated
+			// expansion of the row or a copy of it, written as they are made.
+			for k, p := range bf.c.Streams.Expand {
+				if p == nil {
+					w := b.G.Values[in[0]].Width
+					y = b.Emit(graph.OpSlice, in, []graph.Result{{Name: "stream", Width: w}}, nil, graph.Attrs{Width: w}, nil, nil)[0]
+				} else {
+					var err error
+					if y, err = graph.LowerStated(b, p, in, bf.facts); err != nil {
+						return fmt.Errorf("op %d's expansion of stream %d: %w", i, k+1, err)
+					}
+				}
+				b.Out(y)
+			}
+			continue
 		case "out_streams":
 			out := slices.Clone(lists[o.Streams])
 			if len(in) == 1 {
@@ -1091,7 +1236,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			if k := bf.streamsAt().Bank; k != 0 {
 				bank, ok := vals[o.Streams+".bank"]
 				if !ok || int(k) >= len(out) {
-					return nil, fmt.Errorf("op %d banks into stream %d of %d with no bank copy of %q", i, k, len(out), o.Streams)
+					return fmt.Errorf("op %d banks into stream %d of %d with no bank copy of %q", i, k, len(out), o.Streams)
 				}
 				out[k] = bank
 			}
@@ -1100,13 +1245,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		}
 		vals[o.Out] = y
 	}
-	if err := graph.Verify(b.G, bf.facts); err != nil {
-		return nil, err
-	}
-	if u := graph.Unbound(b.G, bf.facts); len(u) != 0 {
-		return nil, fmt.Errorf("the block stores %v, which its graph does not bind", u)
-	}
-	return b.G, nil
+	return nil
 }
 
 // historyPool pools the history h (rows of a.Width) into width channels over
@@ -1661,6 +1800,9 @@ type blockFacts struct {
 	src jinja.Value
 	// names is the tensor-name vocabulary a recipe's weights are read in.
 	names tensorNames
+	// part is a part outside the blocks the facts state (frontFacts), nil
+	// for a block's.
+	part *frontPart
 }
 
 func blockFactsOf(c *jlm.Config, s *jlm.Source, li int, names tensorNames) *blockFacts {
@@ -1740,90 +1882,112 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		return r, sh, held, nil
 	}
 	return map[string]jinja.Value{
-		"layer":              jinja.NewInt(int64(li)),
-		"trunk":              i(c.NLayer),
-		"head_blocks":        i(c.HeadBlocks()),
-		"decision_heads":     i(c.DecisionHeads),
-		"decision_eps":       jinja.NewFloat(float64(c.DecisionEps)),
-		"src":                bf.srcKeys(),
-		"embd":               i(c.NEmbd),
-		"heads":              i(c.NHead),
-		"kv_heads":           i(c.NKVHeadAt(li)),
-		"head_dim":           jinja.NewInt(int64(bf.headDim)),
-		"ffn":                i(c.NFFNAt(li)),
-		"eps":                jinja.NewFloat(bf.eps),
-		"residual_scale":     jinja.NewFloat(float64(c.ResidualScale)),
-		"rope_at":            jinja.NewBool(bf.ropeAt()),
-		"sliding":            jinja.NewBool(bf.c.Sliding(bf.li)),
-		"inf":                jinja.NewFloat(math.Inf(1)),
-		"experts":            i(c.NExpert),
-		"experts_used":       i(c.NExpertUsed),
-		"expert_groups":      i(c.NExpertGroup),
-		"expert_groups_used": i(c.NExpertGroupUsed),
-		"expert_scale":       jinja.NewFloat(float64(c.ExpertScale)),
-		"expert_norm":        jinja.NewBool(!c.Flags.Has(jlm.FlagNoExpertNorm)),
-		"expert_weight_in":   jinja.NewBool(c.Flags.Has(jlm.FlagExpertWeightIn)),
-		"moe":                jinja.NewBool(bf.moe()),
-		"linear":             jinja.NewBool(li < len(c.LayerKinds) && c.LayerKinds[li] == jlm.LayerLinearAttn),
-		"parallel":           jinja.NewBool(c.Flags.Has(jlm.FlagParallel)),
-		"qk_l2":              jinja.NewBool(c.Flags.Has(jlm.FlagQKL2Norm)),
-		"qk_norm":            jinja.NewBool(c.QKNormAt(li)),
-		"router_weight":      jinja.NewBool(len(c.RouterWeight.Terms) != 0),
-		"token_act":          jinja.NewBool(c.ActQuant == jlm.ActQuantRowInt8),
-		"selects":            jinja.NewBool(c.Selection.At(li)),
-		"key_width":          jinja.NewInt(int64(keyWidth(c.Selection))),
-		"select_weighted":    jinja.NewBool(c.Selection.At(li) && c.Selection.Weight != nil),
-		"kv_lora":            i(c.KVLoraRank),
-		"rot":                i(c.NRot),
-		"v_head_dim":         jinja.NewInt(int64(cmp.Or(c.HeadDimV, c.HeadDim))),
-		"latent_eps":         jinja.NewFloat(cmp.Or(float64(c.LatentNormEps), bf.eps)),
-		"qk_norm_wide":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormWide)),
-		"qk_norm_post":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
-		"rope_keeps_rms":     jinja.NewBool(2*len(c.RopeTable) <= int(c.NRot)),
-		"non_causal":         jinja.NewBool(c.Flags.Has(jlm.FlagNonCausal)),
-		"streams":            jinja.NewInt(int64(statedStreams(c))),
-		"stream_pre":         jinja.NewBool(bf.streamsAt().Pre.Read != nil),
-		"attn_writes":        jinja.NewBool(len(bf.streamsAt().Attn.Writes) != 0),
-		"attn_join":          jinja.NewBool(bf.streamsAt().Attn.Join != nil),
-		"ffn_writes":         jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
-		"ple_dim":            i(c.PLEDim),
-		"hc_streams":         i(c.HCMult),
-		"hc_rank":            i(c.HCLowRank),
-		"hc_iters":           i(c.HCIters),
-		"hc_eps":             jinja.NewFloat(float64(c.HCEps)),
-		"attn_res_block":     i(c.AttnResBlock),
-		"ngram":              i(c.NGram),
-		"ngram_block":        i(c.NGramBlock),
-		"ngram_heads":        i(c.NGramHeadsPer),
-		"ngram_row":          i(c.NGramRowDim),
-		"ngram_conv":         i(c.NGramConv),
-		"ngram_eos":          i(c.NGramEOS),
-		"ngram_image":        i(c.NGramImage),
-		"ngram_mul":          counts(c.NGramMul),
-		"ngram_off":          counts(c.NGramOff),
-		"ngram_voc":          counts(c.NGramVoc),
-		"kv_shared":          jinja.NewBool(c.KVShared(li)),
-		"kv_source":          jinja.NewInt(int64(c.KVSource(li))),
-		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
-		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
-		"temp_scale":         jinja.NewFloat(float64(c.AttnTempScale)),
-		"temp_offset":        jinja.NewFloat(float64(c.AttnTempOffset)),
-		"temp_floor":         i(c.AttnTempFloor),
-		"layer_norm":         jinja.NewBool(c.Flags.Has(jlm.FlagLayerNorm)),
-		"qkv_act":            jinja.NewBool(c.QKVAct() != nil),
-		"v_heads":            i(c.SSM.NHeadV),
-		"k_heads":            i(c.SSM.Groups),
-		"k_dim":              i(c.SSM.StateSize),
-		"v_dim":              jinja.NewInt(int64(bf.vDim())),
-		"conv":               i(c.SSM.ConvKernel),
-		"chans":              jinja.NewInt(int64(c.SSM.Inner) + 2*int64(c.SSM.Groups)*int64(c.SSM.StateSize)),
-		"delta_scale":        jinja.NewFloat(bf.deltaScale()),
-		"tiled":              jinja.NewBool(c.Flags.Has(jlm.FlagDeltaKeyTiled)),
-		"state_span":         jinja.NewInt(int64(bf.stateSpan())),
-		"norm_groups":        jinja.NewInt(int64(max(c.SSM.Groups, 1))),
-		"kind":               jinja.NewString(bf.kind()),
-		"deep_taps":          jinja.NewInt(int64(bf.taps)),
-		"side_width":         jinja.NewInt(int64(bf.taps)*int64(c.NEmbd) + int64(c.NLayer)*int64(c.PLEDim)),
+		"layer":                  jinja.NewInt(int64(li)),
+		"trunk":                  i(c.NLayer),
+		"head_blocks":            i(c.HeadBlocks()),
+		"decision_heads":         i(c.DecisionHeads),
+		"decision_eps":           jinja.NewFloat(float64(c.DecisionEps)),
+		"src":                    bf.srcKeys(),
+		"embd":                   i(c.NEmbd),
+		"heads":                  i(c.NHead),
+		"kv_heads":               i(c.NKVHeadAt(li)),
+		"head_dim":               jinja.NewInt(int64(bf.headDim)),
+		"ffn":                    i(c.NFFNAt(li)),
+		"eps":                    jinja.NewFloat(bf.eps),
+		"residual_scale":         jinja.NewFloat(float64(c.ResidualScale)),
+		"rope_at":                jinja.NewBool(bf.ropeAt()),
+		"sliding":                jinja.NewBool(bf.c.Sliding(bf.li)),
+		"inf":                    jinja.NewFloat(math.Inf(1)),
+		"experts":                i(c.NExpert),
+		"experts_used":           i(c.NExpertUsed),
+		"expert_groups":          i(c.NExpertGroup),
+		"expert_groups_used":     i(c.NExpertGroupUsed),
+		"expert_scale":           jinja.NewFloat(float64(c.ExpertScale)),
+		"expert_norm":            jinja.NewBool(!c.Flags.Has(jlm.FlagNoExpertNorm)),
+		"expert_weight_in":       jinja.NewBool(c.Flags.Has(jlm.FlagExpertWeightIn)),
+		"moe":                    jinja.NewBool(bf.moe()),
+		"linear":                 jinja.NewBool(li < len(c.LayerKinds) && c.LayerKinds[li] == jlm.LayerLinearAttn),
+		"parallel":               jinja.NewBool(c.Flags.Has(jlm.FlagParallel)),
+		"qk_l2":                  jinja.NewBool(c.Flags.Has(jlm.FlagQKL2Norm)),
+		"qk_norm":                jinja.NewBool(c.QKNormAt(li)),
+		"router_weight":          jinja.NewBool(len(c.RouterWeight.Terms) != 0),
+		"token_act":              jinja.NewBool(c.ActQuant == jlm.ActQuantRowInt8),
+		"selects":                jinja.NewBool(c.Selection.At(li)),
+		"key_width":              jinja.NewInt(int64(keyWidth(c.Selection))),
+		"select_weighted":        jinja.NewBool(c.Selection.At(li) && c.Selection.Weight != nil),
+		"kv_lora":                i(c.KVLoraRank),
+		"rot":                    i(c.NRot),
+		"v_head_dim":             jinja.NewInt(int64(cmp.Or(c.HeadDimV, c.HeadDim))),
+		"latent_eps":             jinja.NewFloat(cmp.Or(float64(c.LatentNormEps), bf.eps)),
+		"qk_norm_wide":           jinja.NewBool(c.Flags.Has(jlm.FlagQKNormWide)),
+		"qk_norm_post":           jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
+		"rope_keeps_rms":         jinja.NewBool(2*len(c.RopeTable) <= int(c.NRot)),
+		"non_causal":             jinja.NewBool(c.Flags.Has(jlm.FlagNonCausal)),
+		"streams":                jinja.NewInt(int64(statedStreams(c))),
+		"stream_pre":             jinja.NewBool(bf.streamsAt().Pre.Read != nil),
+		"attn_writes":            jinja.NewBool(len(bf.streamsAt().Attn.Writes) != 0),
+		"attn_join":              jinja.NewBool(bf.streamsAt().Attn.Join != nil),
+		"ffn_writes":             jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
+		"ple_dim":                i(c.PLEDim),
+		"hc_streams":             i(c.HCMult),
+		"hc_rank":                i(c.HCLowRank),
+		"hc_iters":               i(c.HCIters),
+		"hc_eps":                 jinja.NewFloat(float64(c.HCEps)),
+		"attn_res_block":         i(c.AttnResBlock),
+		"ngram":                  i(c.NGram),
+		"ngram_block":            i(c.NGramBlock),
+		"ngram_heads":            i(c.NGramHeadsPer),
+		"ngram_row":              i(c.NGramRowDim),
+		"ngram_conv":             i(c.NGramConv),
+		"ngram_eos":              i(c.NGramEOS),
+		"ngram_image":            i(c.NGramImage),
+		"ngram_mul":              counts(c.NGramMul),
+		"ngram_off":              counts(c.NGramOff),
+		"ngram_voc":              counts(c.NGramVoc),
+		"kv_shared":              jinja.NewBool(c.KVShared(li)),
+		"kv_source":              jinja.NewInt(int64(c.KVSource(li))),
+		"row_windowed":           jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
+		"nope_global":            jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
+		"temp_scale":             jinja.NewFloat(float64(c.AttnTempScale)),
+		"temp_offset":            jinja.NewFloat(float64(c.AttnTempOffset)),
+		"temp_floor":             i(c.AttnTempFloor),
+		"layer_norm":             jinja.NewBool(c.Flags.Has(jlm.FlagLayerNorm)),
+		"qkv_act":                jinja.NewBool(c.QKVAct() != nil),
+		"v_heads":                i(c.SSM.NHeadV),
+		"k_heads":                i(c.SSM.Groups),
+		"k_dim":                  i(c.SSM.StateSize),
+		"v_dim":                  jinja.NewInt(int64(bf.vDim())),
+		"conv":                   i(c.SSM.ConvKernel),
+		"chans":                  jinja.NewInt(int64(c.SSM.Inner) + 2*int64(c.SSM.Groups)*int64(c.SSM.StateSize)),
+		"delta_scale":            jinja.NewFloat(bf.deltaScale()),
+		"tiled":                  jinja.NewBool(c.Flags.Has(jlm.FlagDeltaKeyTiled)),
+		"state_span":             jinja.NewInt(int64(bf.stateSpan())),
+		"norm_groups":            jinja.NewInt(int64(max(c.SSM.Groups, 1))),
+		"kind":                   jinja.NewString(bf.kind()),
+		"deep_taps":              jinja.NewInt(int64(bf.taps)),
+		"side_width":             jinja.NewInt(int64(bf.taps)*int64(c.NEmbd) + int64(c.NLayer)*int64(c.PLEDim)),
+		"vocab":                  i(c.NVocab),
+		"final_softcap":          jinja.NewFloat(float64(c.FinalSoftcap)),
+		"logit_scale":            jinja.NewFloat(cmp.Or(float64(c.LogitScale), 1)),
+		"embd_scale":             jinja.NewFloat(cmp.Or(float64(c.EmbdScale), 1)),
+		"hidden":                 jinja.NewBool(bf.part != nil && bf.part.hidden),
+		"pooling":                jinja.NewInt(int64(c.Flags.Pooling())),
+		"pool_last":              jinja.NewInt(int64(jlm.PoolLast)),
+		"expands":                jinja.NewBool(len(c.Streams.Expand) != 0),
+		"collapsed":              jinja.NewBool(bf.part != nil && bf.part.collapsed),
+		"marker_eps":             jinja.NewFloat(bf.markerEps()),
+		"decision_routing":       i(c.DecisionRouting),
+		"decision_blocks":        i(c.DecisionBlocks),
+		"joint_question_spans":   jinja.NewInt(jlm.JointQuestionSpans),
+		"joint_option_spans":     jinja.NewInt(jlm.JointOptionSpans),
+		"joint_option_question":  jinja.NewInt(jlm.JointOptionQuestion),
+		"joint_question_types":   jinja.NewInt(jlm.JointQuestionTypes),
+		"joint_question_options": jinja.NewInt(jlm.JointQuestionOptions),
+		"joint_fields":           jinja.NewInt(jlm.JointFields),
+		"joint_tokens":           jinja.NewInt(jlm.JointTokens),
+		"residual_streams":       jinja.NewInt(int64(max(int(c.HCMult), statedStreams(c), 1))),
+		"states_streams":         jinja.NewBool(statedStreams(c) > 1 && max(int(c.HCMult), statedStreams(c), 1) == statedStreams(c)),
+		"ple_width":              jinja.NewInt(int64(c.NLayer) * int64(c.PLEDim)),
 		"stored": jinja.NewCallable("stored", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
 			_, _, held, err := tensor("stored", args)
 			return jinja.NewBool(held), err
@@ -1831,6 +1995,13 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"dense": jinja.NewCallable("dense", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
 			r, _, _, err := tensor("dense", args)
 			return jinja.NewBool(bf.dense[r]), err
+		}),
+		"k": jinja.NewCallable("k", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+			_, sh, held, err := tensor("k", args)
+			if err == nil && !held {
+				err = fmt.Errorf("k(%q): the block stores no such tensor", args[0].AsString())
+			}
+			return jinja.NewInt(int64(sh.K)), err
 		}),
 		"rows": jinja.NewCallable("rows", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
 			_, sh, held, err := tensor("rows", args)

@@ -149,11 +149,41 @@ func StateActivations(c *Config, s *jlm.Source) error {
 	return StateGated(c, gating(n, func(li int) bool { return gate[li] }, func(li int) bool { return up[li] }), xielu)
 }
 
-// StateStored states the FFN activations of a container written before
-// they were stated, from its config and the tensors it stores, as
-// StateActivations states a source's; false for one that states them or has
-// no layers (jlm.Restate).
+// StateStored states what a container written before it was stated lacks,
+// from its config and the tensors it stores (jlm.Restate): its FFN
+// activations, as StateActivations states a source's, and its parts outside
+// the blocks, as StateFront does; false for one that states both.
 func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
+	acts, err := stateStoredActs(f, jc)
+	if err != nil {
+		return false, err
+	}
+	front, err := stateStoredFront(f, jc)
+	return acts || front, err
+}
+
+// stateStoredFront states the parts outside the blocks of a container that
+// states its blocks and none of them, over the entries it stores: what a
+// v33 container lacks, the same statement its conversion would make now.
+func stateStoredFront(f *jlm.File, jc *jlm.Config) (bool, error) {
+	if jc.Front.Stated() || len(jc.Blocks.Of) == 0 {
+		return false, nil
+	}
+	s := &jlm.Source{Config: jc, Vision: f.Vision()}
+	for i := range f.Entries() {
+		e := &f.Entries()[i]
+		s.Tensors = append(s.Tensors, jlm.Tensor{Role: e.Role, Block: e.Block, Index: e.Index, Type: e.Type, NDim: e.NDim,
+			Dims: e.Dims, Name: e.Name, RowTable: f.RowTable(e)})
+	}
+	if err := StateFront(jc, s); err != nil {
+		return false, err
+	}
+	return jc.Front.Stated(), nil
+}
+
+// stateStoredActs is StateStored's activations: false for a container that
+// states them or has no layers.
+func stateStoredActs(f *jlm.File, jc *jlm.Config) (bool, error) {
 	c := &Config{Config: jc}
 	roped, err := stateStoredRopeTable(jc)
 	if err != nil {

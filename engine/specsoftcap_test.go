@@ -52,7 +52,7 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 			text := specPrompts()[0]
 			prompt := m.Vocab.Encode(text, true)
 			greedyCap, logitCap := float32(amax/2), float32(amax/8)
-			m.Cfg.FinalSoftcap = greedyCap
+			undoCap := cfgMut(m, func(c *model.Config) { c.FinalSoftcap = greedyCap })
 			want := plainGreedy(t, m, prompt, n, nil)
 			oracle := oracleFor(name, want)
 
@@ -63,7 +63,8 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 			if st.Drafted == 0 || st.Accepted == 0 {
 				t.Fatalf("host: %d drafted and %d accepted -- the speculation never ran", st.Drafted, st.Accepted)
 			}
-			m.Cfg.FinalSoftcap = logitCap
+			undoCap()
+			cfgMut(m, func(c *model.Config) { c.FinalSoftcap = logitCap })
 			w := specVerifyCapped(t, m, nil, prompt, want, false)
 			bad := specVerifyCapped(t, m, nil, prompt, want, true)
 			t.Logf("host: %d tokens equal, %d drafted, %d accepted; verify rows against decode: worst logit NMSE "+
@@ -97,8 +98,7 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 					g := open()
 					w := specVerifyCapped(t, m, g, prompt, want, false)
 					g.Close()
-					m.Cfg.FinalSoftcap = greedyCap
-					defer func() { m.Cfg.FinalSoftcap = logitCap }()
+					defer cfgMut(m, func(c *model.Config) { c.FinalSoftcap = greedyCap })()
 					g = open()
 					defer g.Close()
 					want := plainGreedy(t, m, prompt, n, g)
@@ -144,9 +144,7 @@ func specCapBound(t *testing.T, m *model.Model, spec string, prompt, toks []int3
 		noDevice(t, spec, err)
 	}
 	defer g.Close()
-	keep := m.Cfg.FinalSoftcap
-	m.Cfg.FinalSoftcap = 0
-	defer func() { m.Cfg.FinalSoftcap = keep }()
+	defer cfgMut(m, func(c *model.Config) { c.FinalSoftcap = 0 })()
 	ctl := specVerifyCapped(t, m, g, prompt, toks, false, io...)
 	t.Logf("%s: the same rows uncapped against uncapped decode: worst logit NMSE %.3e", spec, ctl)
 	return max(denseStepBand*ctl, 1e-9)
@@ -176,7 +174,7 @@ func openSpecCapped(t *testing.T, path string) (*model.Model, float64) {
 		m.Close()
 		t.Fatal("the host's logits are all zero -- a cap would compare nothing")
 	}
-	m.Cfg.FinalSoftcap = float32(amax / 8)
+	cfgMut(m, func(c *model.Config) { c.FinalSoftcap = float32(amax / 8) })
 	return m, amax
 }
 

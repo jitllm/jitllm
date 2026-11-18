@@ -418,6 +418,9 @@ type Config struct {
 	JointHead *JointHead
 	// Blocks are the blocks' graphs where the converter states them.
 	Blocks BlockGraphs
+	// Front are the graphs of the parts outside the blocks where the
+	// converter states them (FrontGraphs). The thirty-first optional tail.
+	Front FrontGraphs
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:

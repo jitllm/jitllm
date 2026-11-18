@@ -42,7 +42,7 @@ func TestFinalSoftcapReachesTheDeviceHead(t *testing.T) {
 	}
 	// Half the largest logit: tanh is far from linear there, so an uncapped
 	// row differs by a large fraction of its own norm.
-	m.Cfg.FinalSoftcap = float32(amax / 2)
+	defer cfgMut(m, func(c *model.Config) { c.FinalSoftcap = float32(amax / 2) })()
 	want := teacherForce(t, m, ids, instOpts...)
 
 	nmse := func(got, w []float32) float64 {

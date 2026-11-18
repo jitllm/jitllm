@@ -1541,6 +1541,11 @@ input	format/jlm/format.go	"jlm: container is version %d and this build reads %d
 input	format/jlm/format.go	"jlm: data offset %d is not %d-aligned"
 input	format/jlm/format.go	"jlm: not a jlm container (magic %q)"
 input	format/jlm/format.go	"jlm: page size %d is not a non-zero multiple of %d"
+input	format/jlm/front.go	"jlm: %d front parts named for %d graphs"
+input	format/jlm/front.go	"jlm: %q names no front part"
+input	format/jlm/front.go	"jlm: the front part %q is stated twice"
+input	format/jlm/front.go	"jlm: the front part %q names prediction block %d of %d"
+input	format/jlm/front.go	"jlm: the front part %q's graph is %d bytes"
 input	format/jlm/generation.go	"jlm: generation %s %v is not a number at least 0"
 input	format/jlm/generation.go	"jlm: generation repetition_penalty is 0"
 input	format/jlm/generation.go	"jlm: generation top_k %d is negative"
@@ -2003,6 +2008,7 @@ input	model/embed.go	"model: dense heads %dx%d then %dx%d do not map %d back to 
 input	model/embed.go	"model: the container carries one of two dense heads"
 context	model/front.go	"block %d"
 input	model/front.go	"block %d's stated graph honours a picture's key runs %v where the container's layers say %v: convert the model again"
+input	model/front.go	"model: a head of %d outputs with no one projection to its vocabulary"
 input	model/front.go	"model: a joint head %d wide in %d heads with %d joint blocks"
 input	model/front.go	"model: a joint head that stores no %v"
 input	model/front.go	"model: a marker head that stores no %v"
@@ -2013,10 +2019,12 @@ input	model/front.go	"model: block %d reads its %v, which the file does not stor
 input	model/front.go	"model: block %d turns a rotary of its own beside the model's rotary sections"	a container the converter does not write
 input	model/front.go	"model: the front end states no graph for %s: %s"	a block of a container the converter did not write: the census runs every one it writes
 context	model/front.go	"model: the front end states no graph for %s: %s: %w"	a block of a container the converter did not write: the census runs every one it writes
+input	model/front.go	"model: the head projects to its vocabulary twice"
 context	model/front.go	"model: the marker head's block %d: %w"
 input	model/front.go	"model: the marker head's block %d states no attention over its %d-wide rows beside a LayerNorm"
 input	model/front.go	"model: the marker head's block %d states no graph: convert the model again"
 context	model/front.go	"model: the scorer's activation: %w"
+input	model/front.go	"model: the stated %s: %w"
 input	model/front.go	"no block %d"
 context	model/front.go	"prediction block %d's own head: %w"
 context	model/front.go	"the block's graph does not verify: %w"

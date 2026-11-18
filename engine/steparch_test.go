@@ -240,6 +240,6 @@ func openSoftcapStep(t *testing.T) *model.Model {
 		m.Close()
 		t.Fatal("the host's logits are all zero -- a cap would compare nothing")
 	}
-	m.Cfg.FinalSoftcap = float32(amax / 8)
+	cfgMut(m, func(c *model.Config) { c.FinalSoftcap = float32(amax / 8) })
 	return m
 }

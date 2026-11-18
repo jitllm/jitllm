@@ -81,13 +81,14 @@ func TestPredictionBlocksAreTheStatedBlocks(t *testing.T) {
 	if _, err := writeAt(sq, predictSource(2), fp, 32); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := upgradeWith(stamp, sq); err != nil {
-		t.Fatal(err)
-	}
-	if bad, err := os.ReadFile(sq); err != nil {
-		t.Fatal(err)
-	} else if bytes.Equal(bad, want) {
-		t.Fatal("a chain that only stamped v33 gave the fresh container: the gate does not see the step")
+	// The stamped record misreads at v33: a later step refuses it, or the
+	// chain ends in other bytes than the fresh container's.
+	if _, err := upgradeWith(stamp, sq); err == nil {
+		if bad, err := os.ReadFile(sq); err != nil {
+			t.Fatal(err)
+		} else if bytes.Equal(bad, want) {
+			t.Fatal("a chain that only stamped v33 gave the fresh container: the gate does not see the step")
+		}
 	}
 
 	// A v31 record counting a block its statement leaves out.

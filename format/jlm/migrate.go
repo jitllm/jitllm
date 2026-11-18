@@ -47,6 +47,8 @@ func migrationFor(v uint32, st Stating) func(path string) error {
 		return migrate31
 	case 32:
 		return migrate32
+	case 33:
+		return migrate33
 	}
 	return nil
 }
@@ -185,6 +187,19 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// migrate33 is version 33 to 34. v34's config record may state the parts
+// outside the blocks (Config.Front); a v33 container states none, so only the
+// version word changes, in place, and the upgrade's restatement states them
+// over what the container holds (Restate, convert.StateStored).
+func migrate33(path string) error {
+	f, err := openAt(path, 33)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return setVersion(path, 34)
 }
 
 // migrate32 is version 32 to 33. v33's config record keeps no count of

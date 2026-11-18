@@ -46,16 +46,16 @@ func statedAgain(m *model.Model) func() { return statedWith(m, nil) }
 // carry (a block's window), which no config field of m's reaches.
 func statedWith(m *model.Model, edit func(*jlm.Config)) func() {
 	jc := m.Container.Config()
-	was := jc.Blocks
-	blocks, err := restatedBlocks(m, edit)
+	was, wasFront := jc.Blocks, jc.Front
+	blocks, front, err := restatedBlocks(m, edit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "statedAgain: %v\n", err)
 	}
-	jc.Blocks = blocks
+	jc.Blocks, jc.Front = blocks, front
 	undo := relowered(m)
 	return func() {
 		undo()
-		jc.Blocks = was
+		jc.Blocks, jc.Front = was, wasFront
 	}
 }
 
@@ -78,15 +78,16 @@ func withCfg(m *model.Model, c *model.Config) func() {
 // none is the lowering's to read), and the stored tensors its front end
 // reads in place of the container's (restate). Each changed field must read
 // back from the restated container as the violation set it. edit, where not
-// nil, is made to the container's config after them.
-func restatedBlocks(m *model.Model, edit func(*jlm.Config)) (jlm.BlockGraphs, error) {
+// nil, is made to the container's config after them. The parts outside the
+// blocks the converter states over the same come with them.
+func restatedBlocks(m *model.Model, edit func(*jlm.Config)) (jlm.BlockGraphs, jlm.FrontGraphs, error) {
 	src, err := convertedFrom(m)
 	if err != nil {
-		return jlm.BlockGraphs{}, err
+		return jlm.BlockGraphs{}, jlm.FrontGraphs{}, err
 	}
 	p, err := model.Open(m.Container.Path)
 	if err != nil {
-		return jlm.BlockGraphs{}, fmt.Errorf("restating %s: %w", src, err)
+		return jlm.BlockGraphs{}, jlm.FrontGraphs{}, fmt.Errorf("restating %s: %w", src, err)
 	}
 	changed := changedFields(p.Cfg, m.Cfg)
 	p.Close()
@@ -97,7 +98,7 @@ func restatedBlocks(m *model.Model, edit func(*jlm.Config)) (jlm.BlockGraphs, er
 	fields := statedFields()
 	dir, err := os.MkdirTemp("", "restated")
 	if err != nil {
-		return jlm.BlockGraphs{}, err
+		return jlm.BlockGraphs{}, jlm.FrontGraphs{}, err
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "restated"+model.Ext)
@@ -113,19 +114,19 @@ func restatedBlocks(m *model.Model, edit func(*jlm.Config)) (jlm.BlockGraphs, er
 		}
 		restatedTensors(s, hook)
 	}); err != nil {
-		return jlm.BlockGraphs{}, fmt.Errorf("restating %s: %w", src, err)
+		return jlm.BlockGraphs{}, jlm.FrontGraphs{}, fmt.Errorf("restating %s: %w", src, err)
 	}
 	cf, err := jlm.Open(path)
 	if err != nil {
-		return jlm.BlockGraphs{}, fmt.Errorf("restating %s: %w", src, err)
+		return jlm.BlockGraphs{}, jlm.FrontGraphs{}, fmt.Errorf("restating %s: %w", src, err)
 	}
-	blocks := cf.Config().Blocks
+	blocks, front := cf.Config().Blocks, cf.Config().Front
 	cf.Close()
 	// A violated model may be one Open refuses (BitNet's inner norms without
 	// its per-token activations); its graphs are stated all the same.
 	r, err := model.Open(path)
 	if err != nil {
-		return blocks, nil
+		return blocks, front, nil
 	}
 	defer r.Close()
 	for _, f := range changed {
@@ -133,10 +134,10 @@ func restatedBlocks(m *model.Model, edit func(*jlm.Config)) (jlm.BlockGraphs, er
 			continue
 		}
 		if got, want := reflect.ValueOf(*r.Cfg).FieldByName(f).Interface(), reflect.ValueOf(*m.Cfg).FieldByName(f).Interface(); !sameStated(got, want) {
-			return jlm.BlockGraphs{}, fmt.Errorf("restating %s: the container states %s %v where the violation set %v", src, f, got, want)
+			return jlm.BlockGraphs{}, jlm.FrontGraphs{}, fmt.Errorf("restating %s: the container states %s %v where the violation set %v", src, f, got, want)
 		}
 	}
-	return blocks, nil
+	return blocks, front, nil
 }
 
 // sameStated is whether a and b are one field's value as a container holds
@@ -238,6 +239,7 @@ func statedFields() map[string]func(c *jlm.Config, mc *model.Config) {
 		"ExpertScale":   func(c *jlm.Config, mc *model.Config) { c.ExpertScale = float32(mc.ExpertScale) },
 		"ResidualScale": func(c *jlm.Config, mc *model.Config) { c.ResidualScale = float32(mc.ResidualScale) },
 		"LogitScale":    func(c *jlm.Config, mc *model.Config) { c.LogitScale = float32(mc.LogitScale) },
+		"EmbdScale":     func(c *jlm.Config, mc *model.Config) { c.EmbdScale = float32(mc.EmbdScale) },
 		"LatentNormEps": func(c *jlm.Config, mc *model.Config) { c.LatentNormEps = float32(mc.LatentNormEps) },
 		"AttnTempScale": func(c *jlm.Config, mc *model.Config) { c.AttnTempScale = float32(mc.AttnTempScale) },
 		"AttnTempFloor": func(c *jlm.Config, mc *model.Config) { c.AttnTempFloor = uint32(mc.AttnTempFloor) },
@@ -459,7 +461,7 @@ func TestAnUnviolatedModelIsStatedAgainAsItWas(t *testing.T) {
 			same := func() bool {
 				return slices.Equal(jc.Blocks.Of, was.Of) && slices.Equal(jc.Blocks.Graphs, was.Graphs)
 			}
-			got, err := restatedBlocks(m, nil)
+			got, _, err := restatedBlocks(m, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

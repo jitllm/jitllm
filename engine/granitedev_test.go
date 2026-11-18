@@ -123,9 +123,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 							return cfgMut(m, func(c *model.Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
 						}},
 						{"logit divisor skipped", nil, func() func() {
-							keep := m.Cfg.LogitScale
-							m.Cfg.LogitScale = 1
-							return func() { m.Cfg.LogitScale = keep }
+							return cfgMut(m, func(c *model.Config) { c.LogitScale = 1 })
 						}},
 					}
 					if cs.EmbedLaunches > 0 {
@@ -306,12 +304,13 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			c := m.Cfg
 			// granite-3.3-2b's residual_scale, logits_scaling and embedding
 			// multiplier, and an attention multiplier of 1/head_dim, as
-			// Granite's own configs state it.
-			c.ResidualScale, c.LogitScale, c.EmbdScale = 0.22, 8, 12
-			c.AttnScale = 1 / float64(c.HeadDim)
+			// Granite's own configs state it, stated into the model's graphs.
+			defer cfgMut(m, func(c *model.Config) {
+				c.ResidualScale, c.LogitScale, c.EmbdScale = 0.22, 8, 12
+				c.AttnScale = 1 / float64(c.HeadDim)
+			})()
 			ids := m.Vocab.Encode("The capital of France is a city on the river", true)
 			decode := func(st *Instance) [][]float32 {
 				var out [][]float32
@@ -414,8 +413,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						mut  func() func()
 					}{
 						{"logit divisor skipped", nil, func() func() {
-							c.LogitScale = 1
-							return func() { c.LogitScale = 8 }
+							return cfgMut(m, func(c *model.Config) { c.LogitScale = 1 })
 						}},
 						// The residual and attention scales as the model's statement
 						// of them, which the composer's blocks read.

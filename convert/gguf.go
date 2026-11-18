@@ -186,6 +186,9 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		if err := StateBlockGraphs(&Config{Config: s.Config}, s, g, ggufKeys(f), o.taken); err != nil {
 			return nil, err
 		}
+		if err := StateFront(s.Config, s); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }

@@ -46,6 +46,9 @@ const Magic = "JITLLM\x00\x00"
 //
 // Revisions, newest first, each of which a previous reader would misread:
 //
+//	v34  the config record may state the parts outside the blocks (Front):
+//	     the head, the input rows, the readout, the prediction blocks' entry
+//	     and head, each a graph the engine decodes
 //	v33  the config record keeps no count of prediction blocks, which are
 //	     the blocks the graph statement states past the trunk
 //	     (PredictionBlocks)
@@ -78,7 +81,7 @@ const Magic = "JITLLM\x00\x00"
 //	     block, index) identity, a typed config and pre-tokenizer stages
 //	v5   Q6_K's payload is a 4-bit plus a 2-bit plane
 //	v3   no tensor is in GGUF layout
-const Version = 33
+const Version = 34
 
 // HeaderBytes is the fixed header. Everything after it is located by offset.
 // It is 192 because every offset in this header is u64; squeezing offsets

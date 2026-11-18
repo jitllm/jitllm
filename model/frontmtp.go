@@ -58,6 +58,12 @@ func (m *Model) mtpEntryGraph(li int) (*graph.Graph, Uncovered, error) {
 		// The trunk's table, which the block reads in place of its own.
 		f.Inventory[jlm.RolePredictEmbd] = graph.Shape{K: d, Rows: c.NVocab}
 	}
+	if g, ok, err := m.statedPart(jlm.FrontPredict(jlm.FrontPredictEntry, li-c.NLayer), li, f); ok {
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
+	}
 	b := graph.NewBlock(li)
 	tok := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "e", Width: d}},
 		[]graph.Binding{{Role: jlm.RolePredictEmbd, K: d, Rows: c.NVocab}}, graph.Attrs{}, nil, nil)[0]

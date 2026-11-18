@@ -232,8 +232,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// implies the first twenty-eight, no graphs standing for none. The
 	// thirtieth, the stated generation defaults, implies the first
 	// twenty-nine, an empty table standing for none; an older reader drops it
-	// and generates as it did before the field existed.
-	gen := c.Generation != nil
+	// and generates as it did before the field existed. The thirty-first,
+	// the parts' graphs outside the blocks, implies the first thirty, no
+	// generation defaults standing for none.
+	front := c.Front.Stated()
+	gen := front || c.Generation != nil
 	rope := gen || len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
 	graphs := rope || len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
 	joint := graphs || c.JointHead != nil
@@ -442,6 +445,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if gen {
 		encodeGeneration(w, c.Generation)
+	}
+	if front {
+		encodeFrontGraphs(w, &c.Front)
 	}
 	return w.b
 }
@@ -676,6 +682,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		c.Generation = decodeGeneration(r)
 	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Front = decodeFrontGraphs(r)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -712,6 +721,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		return nil, fmt.Errorf("jlm: %d layers' bidirectional statement for %d layers", n, c.NLayer)
 	}
 	if err := ngramValid(c); err != nil {
+		return nil, err
+	}
+	if err := c.Front.valid(int(c.PredictionBlocks())); err != nil {
 		return nil, err
 	}
 	if err := c.Blocks.valid(c.statedBlocks()); err != nil {
