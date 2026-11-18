@@ -96,8 +96,13 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 		// blocks once.
 		{"vllm-d3-long", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge.longpictures.reference.json", 0.08, ""},
 	}
-	// int8Tol is a case's tolerance on the CPU's int8 activations where it is
-	// wider than its float forms': vllm-d3's runtime case read 0.137 there.
+	// int8Tol is a case's tolerance on int8 activations where it is wider
+	// than its float forms': the CPU's, and a card's with no matrix unit,
+	// whose prompt projections multiply the device's int8 activation rows
+	// (the V100 through Vulkan enables no VK_KHR_cooperative_matrix).
+	// vllm-d3's runtime case read 0.137 on the CPU's and 0.0765 on that
+	// card's, 0.0854 with a map run in the reductions reading it: a rounding
+	// the int8 rows amplify, one block's logits 1e-3 apart.
 	int8Tol := map[string]float64{"vllm-d3-runtime": 0.15}
 	// longReq is the request a case asks in place of pictures.
 	longReq := map[string]string{"vllm-d3-long": "longpictures"}
@@ -146,6 +151,13 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 				ans, err := d.Decide(state, qs, pics...)
 				if err != nil {
 					t.Fatal(err)
+				}
+				if g != nil {
+					units := g.Stats().MatrixLaunches[nn.PartPrompt]
+					if units == 0 {
+						tol = max(tol, int8Tol[c.name])
+					}
+					t.Logf("%d prompt launch(es) on the card's matrix unit: tolerance %.3g", units, tol)
 				}
 				worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold), tol)
 				t.Logf("%d pictures, %d prompt rows, worst difference %.5f", len(pics), d.InputTokens(), worst)
