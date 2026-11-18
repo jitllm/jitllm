@@ -712,6 +712,7 @@ bug	composer/pass_args.go	"jit: %s: argument field %d holds both %s and %s"
 bug	composer/pass_args.go	"jit: %s: argument field %d holds two loop counts"
 bug	composer/pass_args.go	"jit: %s: coordinate %d of a calls' space of %d axes has no word of the device's %d, which Serial binds to loops"
 bug	composer/pass_args.go	"jit: %s: loop count node %d is neither a length nor a constant, and no count word is left for it"
+skip	composer/pass_coarsen.go	"%s, which the host stores, read at a place its store does not name"
 skip	composer/pass_coarsen.go	"a chain of more than %d nodes, its members %d"
 skip	composer/pass_coarsen.go	"a reduction exchanged over its threads read at another output than theirs"
 skip	composer/pass_coarsen.go	"a reduction from its first term without its term's coordinate"
@@ -1409,7 +1410,6 @@ bug	engine/probe/formed.go	"probe: %s has a call word at %d past the argument bl
 bug	engine/probe/formed.go	"probe: %s has no host code"
 bug	engine/probe/gpu.go	"probe: %s binds %v, which a probe does not hold"
 bug	engine/probe/gpu.go	"probe: %s has no GPU code"
-bug	engine/probe/gpu.go	"probe: %s is a kernel of the warm launch too"
 fault	engine/probe/gpu.go	"probe: %s was not timed"	the host states no figure; the probe measures without it
 fault	engine/probe/gpu.go	"probe: %v chains of %d and %d count %v and took %v seconds"	the host states no figure; the probe measures without it
 bug	engine/probe/gpu.go	"probe: no chain of the %v class"
