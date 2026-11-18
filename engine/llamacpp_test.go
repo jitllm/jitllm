@@ -215,6 +215,11 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 				t.Skipf("open: %v", err)
 			}
 			defer m.Close()
+			// An embedding model has no head to decode with: its vectors are
+			// held to the GGUF oracle's by TestEmbeddingsMatchReference.
+			if m.IsEmbedding() {
+				t.Skip("an embedding model: it pools, and decodes nothing to compare")
+			}
 			if m.Vocab == nil {
 				t.Skipf("no tokenizer: %v", m.TokErr)
 			}
