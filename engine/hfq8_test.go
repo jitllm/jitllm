@@ -25,8 +25,13 @@ func TestSafetensorsQ8MatchTransformers(t *testing.T) {
 	if len(golds) == 0 {
 		t.Fatal("no goldens -- run scripts/hfgold.py; this gate proved nothing")
 	}
+	var large []string
 	for _, g := range golds {
 		name := strings.TrimSuffix(filepath.Base(g), ".json")
+		if hfGoldLarge(g) {
+			large = append(large, name)
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			dir := testmodels.Path(name)
 			if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
@@ -114,6 +119,9 @@ func TestSafetensorsQ8MatchTransformers(t *testing.T) {
 			}
 			t.Logf("%d matrices Q8_0, %d positions, worst NMSE %.2e, %d over the bound", q8, len(gold.IDs), worst, over)
 		})
+	}
+	if len(large) > 0 {
+		t.Logf("over 2 GiB, not swept (JITLLM_SLOW=1 admits them): %s", strings.Join(large, ", "))
 	}
 }
 
