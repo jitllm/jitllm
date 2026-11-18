@@ -149,7 +149,7 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	e.stored = make([]bool, len(n.Stores))
 	e.iter, e.phi, e.shared = map[int]ir.Value{}, map[int]ir.Value{}, map[int]ir.Value{}
 	e.homes()
-	named := n.bufsNamed()
+	named, reached := n.bufsNamed(), n.bufsReached()
 	for i, bf := range n.Bufs {
 		if bf.Kind == BufShared {
 			// A plane no access names any more (Stage moves its accesses to
@@ -159,6 +159,10 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 				v = b.Shared(fmt.Sprintf("s%d", i), bf.Elem, bf.Size)
 			}
 			e.params = append(e.params, v)
+			continue
+		}
+		if !reached[i] {
+			e.params = append(e.params, 0)
 			continue
 		}
 		e.params = append(e.params, b.Param(fmt.Sprintf("p%d", i), bf.Elem))
@@ -585,6 +589,35 @@ func (n *Kernel) bufsNamed() map[int]bool {
 		}
 	}
 	return named
+}
+
+// bufsReached is which of n's buffers its GPU code reaches: those a load,
+// a tile's load or scale, a store, a cursor or a call argument names. A
+// buffer it does not reach is no parameter of the code and no binding of
+// it: a fused chain's intermediate values, one a parameter each, passed
+// CUDA's 4 KiB of parameters at a thousand.
+func (n *Kernel) bufsReached() []bool {
+	r := make([]bool, len(n.Bufs))
+	for _, nd := range n.Nodes {
+		switch nd.Op {
+		case OpLoad, OpTileLoad, OpTileScale:
+			r[nd.Buf] = true
+		}
+	}
+	for _, s := range n.Stores {
+		r[s.Buf] = true
+	}
+	for _, a := range n.Args {
+		if a.Buf >= 0 {
+			r[a.Buf] = true
+		}
+	}
+	for _, l := range n.Loops {
+		for _, c := range l.Cursors {
+			r[c.Buf] = true
+		}
+	}
+	return r
 }
 
 func (e *lowerer) poisonShared() {

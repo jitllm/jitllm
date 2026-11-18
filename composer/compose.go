@@ -427,8 +427,12 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 				written[s.Buf] = true
 			}
 		}
+		var reached []bool
+		if l.GPU != nil {
+			reached = k.bufsReached()
+		}
 		for bi, b := range k.Bufs {
-			if b.Kind != BufShared {
+			if b.Kind != BufShared && (reached == nil || reached[bi]) {
 				o := b.Operand
 				o.Copy = 0
 				own := !k.Work && k.Group == 0 && slices.Contains(k.Own, o)
