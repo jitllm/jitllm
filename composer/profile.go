@@ -122,7 +122,7 @@ func cpuWideProfile() Profile {
 		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9, 15}},
 		Prescale{},
 		Bounds{},
-		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
+		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap}, {From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Workers{Rows: 16, Tile: 64},
 		RowJam{N: 4},
 		Serial{Coords: len(mainArgs().Coords)},
