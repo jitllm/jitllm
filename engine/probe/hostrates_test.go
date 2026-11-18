@@ -78,6 +78,18 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 		}
 		cases = append(cases, rate, delay)
 	}
+	lrk, lck := mapped(e.rateKernel(cost.ClassLanes)), mapped(e.chainKernel(cost.ClassLanes))
+	lanesRate := rateCase{name: "lanes rate",
+		built:    func() (float64, error) { return issueRate(lrk, 8, 1), nil },
+		composed: func() (float64, error) { return lanesStepRate(fm, lanes, 1) }}
+	if runtime.GOARCH == "arm64" {
+		lanesRate.lo, lanesRate.hi = 0.3, 0.5
+		lanesRate.why = "(the composer's arm64 vector is two NEON registers: a sum's exchange is a REV64 on each beside an add on each, four instructions the estimator counts as one exchange, where the built's pairwise add is one; measured 0.38 on an M4)"
+	}
+	cases = append(cases, lanesRate,
+		rateCase{name: "lanes delay",
+			built:    func() (float64, error) { return 1 / issueRate(lck, 8, 1), nil },
+			composed: func() (float64, error) { return lanesDelay(fm, lanes) }})
 	mk := mapped(e.mixKernel())
 	cases = append(cases, rateCase{name: "mix rate", lo: 0.5, hi: 0.85,
 		why:      "(the composed mix's values are all words: index adds and reads, each read loading its table's address too, which the estimator does not count, where the built issues float work beside them; measured 0.64 on a Xeon at AVX2, 0.73 at SSE, 0.59 on an M4)",
@@ -122,6 +134,23 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 			t.Errorf("%s: composed/built %.3f outside [%.3f, %.3f]", c.name, m, lo, hi)
 		}
 	}
+}
+
+// issueRate is the instructions a second threads issue together through
+// hand-built kernel k, each trip perTrip of them. Each thread's block is a
+// cache line of its own: a load that crosses a line is a cost of its own,
+// and the mix's loads from a block 40 bytes into a line issued at a third
+// of the core's rate.
+func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
+	const trips = 1 << 22
+	words := make([]uint64, 8*(threads+1))
+	first := (64 - int(uintptr(unsafe.Pointer(&words[0]))%64)) % 64 / 8
+	run := func(t int) {
+		block := words[first+8*t : first+8*t+8]
+		block[0] = trips
+		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
+	}
+	return perTrip * trips * float64(threads) / parallel(threads, run)
 }
 
 // builtCallCost is the seconds a call of the hand-built empty kernel k

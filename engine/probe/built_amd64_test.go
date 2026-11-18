@@ -10,6 +10,33 @@ import (
 // same in SSE's encodings with an add where AVX2 has a fused multiply-add
 // and four floats a vector rather than eight.
 
+// buf is a kernel's buffer, declared SSE-tier on a host that runs that
+// tier, so Map lets it run there.
+func (e emitter) buf() *x86.Buf {
+	var a x86.Buf
+	if e.sse {
+		a.DeclareISA(x86.ISATierSSE)
+	}
+	return &a
+}
+
+// zero clears vector register r.
+func (e emitter) zero(a *x86.Buf, r x86.Reg) {
+	if e.sse {
+		a.XORPS(r, r, r)
+		return
+	}
+	a.VPXOR(r, r, r)
+}
+
+// done ends a kernel that used vector registers.
+func (e emitter) done(a *x86.Buf) {
+	if !e.sse {
+		a.VZEROUPPER()
+	}
+	a.RET()
+}
+
 // emptyKernel returns at once.
 func (e emitter) emptyKernel() ([]byte, error) {
 	a := e.buf()

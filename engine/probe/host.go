@@ -20,12 +20,12 @@ import (
 
 // The host probe's measuring kernels are the composer's forms of graphs of
 // ops, each gated against the hand-built kernel it replaced (hostforms.go):
-// the reads, the chase, each class's rate and delay, the mix and a call,
-// each rate the instructions of its class the estimator counts in a form
-// over the seconds it took. The lanes class's are still generated per
-// architecture (lanesKernel), since no form moves a vector's lanes a trip;
-// each architecture provides hostCheck (whether this host runs them) and
-// hostLanes (a vector's floats) and formLanes (a counted vector's).
+// the reads, the chase, each class's rate and delay, the lanes class's an
+// iteration's sums over pairs of a vector's lanes, the mix and a call, each
+// rate the instructions of its class the estimator counts in a form over
+// the seconds it took. Each architecture provides hostCheck (whether this
+// host runs them) and hostLanes (a vector's floats) and formLanes (a
+// counted vector's).
 
 // cache is a data cache level: its size and whether CPUs share it.
 type cache struct {
@@ -122,7 +122,7 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 	}
 	for cl := cost.Class(0); cl < cost.NumClasses; cl++ {
 		if cl == cost.ClassLanes {
-			if d.Rates[cl], d.Delay[cl], err = lanesRate(h, e, workers); err != nil {
+			if d.Rates[cl], d.Delay[cl], err = lanesRate(fm, e.formLanes(), workers); err != nil {
 				return d, err
 			}
 			continue
@@ -142,32 +142,6 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		return d, err
 	}
 	return d, nil
-}
-
-// lanesRate is the lanes class's rate, one thread's and every worker's
-// together, and its delay, from the kernels the probe still emits for it
-// (lanesKernel): an iteration's terms are elementwise, so no form of the
-// composer's moves a vector's lanes a trip.
-func lanesRate(h *cpu.Target, e emitter, workers int) (cost.Rate, float64, error) {
-	var r cost.Rate
-	var delay float64
-	for _, chain := range [2]bool{false, true} {
-		code, err := e.lanesKernel(chain)
-		if err != nil {
-			return r, 0, err
-		}
-		k, err := h.Map(code)
-		if err != nil {
-			return r, 0, err
-		}
-		if chain {
-			delay = 1 / issueRate(k, 8, 1)
-		} else {
-			r = cost.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
-		}
-		k.Close()
-	}
-	return r, delay, nil
 }
 
 // emitter emits the probe's kernels for a host: on amd64, the SSE tier's
@@ -391,22 +365,6 @@ func readRate(r *reader, set int64, threads int) (float64, error) {
 	}
 	secs := parallel(threads, run)
 	return float64(set) * float64(reps) * float64(threads) / secs, nil
-}
-
-// issueRate is the instructions a second threads issue together, each trip
-// perTrip of them. Each thread's block is a cache line of its own: a load
-// that crosses a line is a cost of its own, and the mix's loads from a block
-// 40 bytes into a line issued at a third of the core's rate.
-func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
-	const trips = 1 << 22
-	words := make([]uint64, 8*(threads+1))
-	first := (64 - int(uintptr(unsafe.Pointer(&words[0]))%64)) % 64 / 8
-	run := func(t int) {
-		block := words[first+8*t : first+8*t+8]
-		block[0] = trips
-		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-	}
-	return perTrip * trips * float64(threads) / parallel(threads, run)
 }
 
 // parallel is the median seconds of rounds of threads running run at once,

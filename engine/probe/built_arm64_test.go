@@ -8,6 +8,25 @@ import (
 // The hand-built kernels the composed rates, delays, mix and call replaced,
 // the control arms of TestComposedHostRatesMatchTheBuilt.
 
+// loop is body run [0] times, the vector and general registers it uses
+// cleared first.
+func (e emitter) loop(a *a64.A64, body func()) ([]byte, error) {
+	a.LDRx(a64.X2, a64.X0, 0)
+	for r := range 16 {
+		a.MOVIzero(a64.V0 + a64.VReg(r))
+	}
+	for r := a64.X3; r <= a64.X7; r++ {
+		a.MOVimm(r, 0)
+	}
+	top := a.Label()
+	a.Bind(top)
+	body()
+	a.SUBimm(a64.X2, a64.X2, 1)
+	a.CBNZ(a64.X2, top)
+	a.RET()
+	return a.Bytes()
+}
+
 // emptyKernel returns at once.
 func (e emitter) emptyKernel() ([]byte, error) {
 	var a a64.A64

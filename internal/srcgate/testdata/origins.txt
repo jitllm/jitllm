@@ -1431,6 +1431,7 @@ bug	engine/probe/host.go	"probe: a chase of %d bytes past the walk's %d words"
 fault	engine/probe/host.go	"probe: walks of %d and %d steps took %v seconds"	the host states no figure; the probe measures without it
 limit	engine/probe/host_amd64.go	"probe: the host's measuring kernels need SSE4.1 and SSSE3 at least; this host is %v"
 fault	engine/probe/host_other.go	"probe: no host probe for %s"	the host states no figure; the probe measures without it
+fault	engine/probe/hostforms.go	"probe: a chain of sums over lanes took %v seconds, its adds alone %v"	the host states no figure; the probe measures without it
 fault	engine/probe/hostforms.go	"probe: forms at %d and %d count %v and took %v seconds"	the host states no figure; the probe measures without it
 bug	engine/probe/hostforms.go	"probe: no step of the %v class"
 bug	engine/probe/hostforms.go	"probe: the read form issues no load"

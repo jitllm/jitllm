@@ -1984,3 +1984,48 @@ rows agree within the band (L1 0.9947, L2 0.9984, L3 1.0021, memory
 runs where scripts/genhardware runs it, and its L1 rows there land on the
 clock the governor left; whether it should warm its thread before the
 short rows is unmeasured.
+
+## The probes' last hand-built kernels, composed
+
+The last kernels engine/probe built by hand timed a lane exchange in a
+loop: on the host a vector's pairs swapped (VPERMILPS 0xB1, SHUFPS on the
+SSE tier, a pairwise add on arm64), on a card a chain of subgroup
+exchanges and a workgroup's sum. No op formed a timed loop of either: the
+composer exchanged lanes only at the end of a reduction, and an
+iteration's terms were elementwise. An iteration's trip now reads a term
+summed over runs of its row (graph.OpIterate, Attrs.Width), and each class
+is an iteration of such sums: a pair's on the host and for a card's lanes
+class (an exchange beside an add), a workgroup's for its group class. On a
+card a run of at most a subgroup is a butterfly of shuffles and a longer
+one a workgroup's sum (SpanThreads); on the host the elements are vector
+lanes, each run summed by exchanges across them, or copies of the body
+where the row is narrower than a vector (SpanLanes).
+
+A sum's exchange comes with an add, as a butterfly's does, so a delay is
+the chain of sums less the same chain of their adds alone: the estimator
+adds each node's delay along a path, the add's its own. The rates are the
+sums' beside their adds. Held to the built kernels in one process
+(TestComposedHostRatesMatchTheBuilt, TestComposedGPUProbeMatchesTheBuilt),
+composed/built:
+
+| number | Xeon AVX2 | Xeon SSE | M4 host | V100 CUDA | M4 Metal |
+|---|---|---|---|---|---|
+| lanes, all threads | | | | 1.00 | 0.90 |
+| lanes, a thread | 0.95-1.00 | 1.00-1.01 | 0.38 | 0.82 | 0.71 |
+| lanes delay | 0.99-1.04 | 1.00-1.01 | 0.95-1.02 | 1.21 | 0.71 |
+| group, all threads | | | | 1.11 | 0.82 |
+| group, a thread | | | | 0.90 | 0.72 |
+| group delay | | | | 1.10 | 1.41 |
+
+The Xeon is box 49 under the performance governor. On arm64 the composer's
+vector is two NEON registers, so a sum's exchange is four instructions the
+estimator counts as one, where the built pairwise add was one. On a card a
+thread issues the sum's add beside its exchange. The delays part by
+device: on a V100 an add's result reaches an exchange later than an
+exchange's does, on an M4 an exchange's reaches an add sooner than it
+reaches the next exchange. The composed workgroup sum waits on the
+workgroup twice a trip, its slots read before the next trip writes them
+(RULE 13), where the built waited once and let the next trip's writes race
+the reads; the built's all-threads rate carried the kernel's floor in one
+launch, which the composed arm's two trip counts cancel. Each such number
+is held to a range that says so.

@@ -201,25 +201,32 @@ func mixGraph(trips int) *graph.Graph {
 }
 
 // hostRate is the instructions a second threads issue together through
-// the forms of graphAt at two sizes, short and long, as count counts them,
-// each thread on rows of its own (bindRow) and each form timed over calls
-// calls: what a call costs beside its work cancels in the difference. The
-// larger form counts at least least more, else it lost the work it was
-// asked for.
+// the forms of graphAt at two sizes, as hostWork takes them.
 func hostRate(fm former, graphAt func(size int) *graph.Graph, v uint32, short, long, calls, threads int, count func(*formed) float64, least float64) (float64, error) {
+	n, secs, err := hostWork(fm, graphAt, v, short, long, calls, threads, count, least)
+	return n / secs, err
+}
+
+// hostWork is the instructions threads issue together through the forms
+// of graphAt at two sizes, short and long, as count counts them, and the
+// seconds between the two, each thread on rows of its own (bindRow) and
+// each form timed over calls calls: what a call costs beside its work
+// cancels in the difference. The larger form counts at least least more,
+// else it lost the work it was asked for.
+func hostWork(fm former, graphAt func(size int) *graph.Graph, v uint32, short, long, calls, threads int, count func(*formed) float64, least float64) (float64, float64, error) {
 	var issued, secs [2]float64
 	for i, size := range [2]int{short, long} {
 		g := graphAt(size)
 		f, err := fm.form(g, 1)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		issued[i] = count(f)
 		runs := make([]*bound, threads)
 		for t := range runs {
 			if runs[t], err = bindRow(f, g, v); err != nil {
 				f.close()
-				return 0, err
+				return 0, 0, err
 			}
 		}
 		secs[i] = parallel(threads, func(t int) {
@@ -231,9 +238,9 @@ func hostRate(fm former, graphAt func(size int) *graph.Graph, v uint32, short, l
 		f.close()
 	}
 	if !(issued[1]-issued[0] >= least) || !(secs[1] > secs[0]) {
-		return 0, fmt.Errorf("probe: forms at %d and %d count %v and took %v seconds", short, long, issued, secs)
+		return 0, 0, fmt.Errorf("probe: forms at %d and %d count %v and took %v seconds", short, long, issued, secs)
 	}
-	return (issued[1] - issued[0]) * float64(calls*threads) / (secs[1] - secs[0]), nil
+	return (issued[1] - issued[0]) * float64(calls*threads), secs[1] - secs[0], nil
 }
 
 // bindRow is f, formed from g, bound to its first input holding v, a
@@ -320,6 +327,88 @@ func chainRate(fm former, cl cost.Class, lanes int) (float64, error) {
 	n := stepRow(cl, lanes)
 	return hostRate(fm, func(trips int) *graph.Graph { return iterateRow(step, elem, n, 1, delaySteps, trips) }, v,
 		tripsShort, tripsLong, iterateCalls, 1, func(f *formed) float64 { return f.count(cl) }, float64((tripsLong-tripsShort)*delaySteps))
+}
+
+// lanesGraph is a row of n through trips trips of an iteration carrying
+// chains values, each through deep steps a trip and each starting at the
+// row's element: a step sums its value over each pair of the row's elements
+// (a sum over runs), or where plain is set adds the value to itself, the
+// same add with no exchange.
+func lanesGraph(n, chains, deep, trips int, plain bool) *graph.Graph {
+	var terms []graph.Term
+	for range chains {
+		terms = append(terms, graph.Term{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgIn}, {Kind: graph.ArgConst}}})
+	}
+	outs := make([]uint64, chains)
+	for c := range chains {
+		terms = append(terms, graph.Term{Fn: graph.MapF32, Args: [3]graph.Arg{{Kind: graph.ArgState, Index: c}}})
+		for range deep {
+			last := len(terms) - 1
+			step := graph.Term{Fn: graph.MapF32, Args: [3]graph.Arg{{Kind: graph.ArgSum, Index: last}}}
+			if plain {
+				step = graph.Term{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: last}, {Kind: graph.ArgTerm, Index: last}}}
+			}
+			terms = append(terms, step)
+		}
+		outs[c] = uint64(len(terms) - 1)
+	}
+	b := graph.New()
+	x := b.In("x", n)
+	y := b.Emit(graph.OpIterate, []graph.ValueID{x}, []graph.Result{{Name: "lanes", Width: n * chains}}, nil,
+		graph.Attrs{Taps: chains, Span: trips, Width: lanesRun, Words: outs, Expr: terms}, nil, nil)[0]
+	b.Out(y)
+	return b.G
+}
+
+// lanesCalls is the calls each of lanesDelay's chains is timed over.
+const lanesCalls = 4 * iterateCalls
+
+// lanesRate is the lanes class's rate, one thread's and every worker's
+// together (lanesStepRate), and its delay (lanesDelay).
+func lanesRate(fm former, lanes, workers int) (cost.Rate, float64, error) {
+	one, err := lanesStepRate(fm, lanes, 1)
+	if err != nil {
+		return cost.Rate{}, 0, err
+	}
+	all, err := lanesStepRate(fm, lanes, workers)
+	if err != nil {
+		return cost.Rate{}, 0, err
+	}
+	delay, err := lanesDelay(fm, lanes)
+	return cost.Rate{Thread: one, Total: all}, delay, err
+}
+
+// lanesStepRate is the exchanges across lanes a second threads issue
+// together: rateChains values of a vector, each summed over pairs of its
+// lanes a trip.
+func lanesStepRate(fm former, lanes, threads int) (float64, error) {
+	return hostRate(fm, func(trips int) *graph.Graph { return lanesGraph(lanes, rateChains, 1, trips, false) }, 0,
+		tripsShort, tripsLong, iterateCalls, threads, func(f *formed) float64 { return f.count(cost.ClassLanes) }, float64((tripsLong-tripsShort)*rateChains))
+}
+
+// lanesDelay is the seconds an exchange across lanes waits for the one
+// before: one value through delaySteps sums over pairs of its lanes a trip,
+// less the same chain of adds alone, over the exchanges. An exchange waits a
+// cycle and an add several, so each chain is timed over lanesCalls calls:
+// the difference of two waits is as noisy as both.
+func lanesDelay(fm former, lanes int) (float64, error) {
+	var n, secs [2]float64
+	for i, plain := range [2]bool{false, true} {
+		cl := cost.ClassLanes
+		if plain {
+			cl = cost.ClassFloat
+		}
+		var err error
+		n[i], secs[i], err = hostWork(fm, func(trips int) *graph.Graph { return lanesGraph(lanes, 1, delaySteps, trips, plain) }, 0,
+			tripsShort, tripsLong, lanesCalls, 1, func(f *formed) float64 { return f.count(cl) }, float64((tripsLong-tripsShort)*delaySteps))
+		if err != nil {
+			return 0, err
+		}
+	}
+	if !(secs[0] > secs[1]) {
+		return 0, fmt.Errorf("probe: a chain of sums over lanes took %v seconds, its adds alone %v", secs[0], secs[1])
+	}
+	return (secs[0] - secs[1]) / n[0], nil
 }
 
 // issued is every instruction of f the estimator counts.
