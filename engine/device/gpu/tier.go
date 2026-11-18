@@ -2466,12 +2466,17 @@ func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre 
 		g.LastErr = fmt.Sprintf("tier: %d rows do not split into %d sheets", nrows, pre.Sheets)
 		return false
 	}
-	sq, sd, ssc, err := layout.PackedWords(q, nrows/pre.Sheets, k)
-	if err != nil {
-		g.LastErr = err.Error()
-		return false
+	// A raw bank's sheets are its rows, expert-major and end to end at their
+	// own bytes: the one span the kernels index, as it stood in the file.
+	per := [3]int{layout.RawRowBytes(q, k) * (nrows / pre.Sheets)}
+	if !layout.IsRaw(q) {
+		sq, sd, ssc, err := layout.PackedWords(q, nrows/pre.Sheets, k)
+		if err != nil {
+			g.LastErr = err.Error()
+			return false
+		}
+		per = [3]int{sq * 4, sd * 4, ssc * 4}
 	}
-	per := [3]int{sq * 4, sd * 4, ssc * 4}
 	var bufs [3]backend.Buf
 	free := func() {
 		for _, b := range bufs {
@@ -2481,7 +2486,7 @@ func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre 
 		}
 	}
 	for i, n := range per {
-		b, err := g.dev.Alloc(max(n*pre.Sheets, 4))
+		b, err := g.dev.Alloc(max((n*pre.Sheets+3)/4*4, 4))
 		if err != nil {
 			free()
 			return false

@@ -564,10 +564,10 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 			continue
 		}
 		pk := pair.w.Packed
-		raw := pk == nil && layout.IsRaw(pair.r.t) && len(pair.w.Data) > 0
-		if pair.r == nil || !pair.r.ok || pk == nil && !raw {
+		if pair.r == nil || !pair.r.ok || pk == nil && len(pair.w.Data) == 0 {
 			return fmt.Errorf("tier: streamed bank %d has no host side", m)
 		}
+		raw := layout.IsRaw(pair.r.t)
 		for pl := 0; pl < 3; pl++ {
 			n := st.sh[m][pl]
 			if n == 0 {
@@ -593,12 +593,12 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 				if int(e) >= nExpert {
 					return fmt.Errorf("tier: the router selected expert %d of %d", e, nExpert)
 				}
-				// A bank in expert pages hands over one sheet at a time; a
-				// contiguous one is sliced at e*n.
+				// A bank in expert pages hands over one sheet at a time, a
+				// raw bank's its rows; a contiguous one is sliced at e*n.
 				var src []byte
 				release := func() {}
 				ts := time.Now()
-				if !raw && pk.Sheet != nil {
+				if pk != nil && pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(e))
 					release = rel
 					if err != nil {

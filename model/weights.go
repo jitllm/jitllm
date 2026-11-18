@@ -40,43 +40,20 @@ func RopeAxesPlanes(r *nn.Rope) []float32 {
 // the weight's bytes -- there is no one span of them -- and it exists because
 // every consumer of an nn.Weight reads an empty Data as "no weight here".
 // bankWeight is wt for a mixture's bank over fr. A bank in expert pages has no
-// span to hand over, so the device gets Sheet instead: expert x's planes, held
-// in their page of fr until the device has copied them. A float bank -- which
-// the device reads row-major out of Data -- is gathered into one buffer, since
-// that path has no Sheet; only the synthetic fixtures have one. It builds a
-// Weight each call (its Sheet closure and Packed): the caller keeps it for the
-// frames it was built over.
+// span to hand over, so the device gets Sheet instead: expert x's planes --
+// a raw bank's (a float or a verbatim format's) its rows, in QS -- held in
+// their page of fr until the device has copied them. It builds a Weight each
+// call (its Sheet closure and Packed): the caller keeps it for the frames it
+// was built over.
 func (m *Model) BankWeight(fr *jlm.Frames, t Tensor) nn.Weight {
 	c := m.Container
 	if c == nil || t.E == nil || !c.ExpertPaged(t.E) {
 		return Wt(t)
 	}
-	if t.Packed == nil {
-		return m.gatheredBank(fr, t)
-	}
 	sheets := int(t.E.Dims[2])
 	nrow := t.Rows / max(sheets, 1)
 	return nn.Weight{T: t.Typ, Data: m.splitBank[:], Rows: t.Rows, K: t.K,
 		Packed: &nn.Packed{Sheet: func(x int) (nn.Packed, func(), error) { return m.sheetOf(fr, t.E, x, nrow) }, Sheets: sheets}}
-}
-
-// gatheredBank is a float bank, which the device reads row-major out of Data:
-// gathered into one buffer, since that path has no Sheet. Only the synthetic
-// fixtures have one.
-func (m *Model) gatheredBank(fr *jlm.Frames, t Tensor) nn.Weight {
-	sheets := int(t.E.Dims[2])
-	nrow := t.Rows / max(sheets, 1)
-	var buf []byte
-	for x := 0; x < sheets; x++ {
-		p, release, err := m.sheetOf(fr, t.E, x, nrow)
-		if err != nil {
-			release()
-			return Wt(Tensor{})
-		}
-		buf = append(buf, p.QS...)
-		release()
-	}
-	return nn.Weight{T: t.Typ, Data: buf, Rows: t.Rows, K: t.K}
 }
 
 // sheetHold is the pins an expert sheet holds until the device has copied it:
