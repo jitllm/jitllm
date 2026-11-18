@@ -6,12 +6,13 @@ import (
 )
 
 // gpuStep is class cl's chained step on a GPU, the terms appended after
-// last, the row's element type, and false for a class an expression does
-// not issue: a float multiply-add of the value by itself, an integer shift
-// and exclusive or, an integer multiply-add of the value by itself, an
-// exponential. None of them folds across a chain; a multiply-add by the
-// row's element and a constant does on Vulkan, whose launch of a deeper
-// chain of them took no longer.
+// last, the row's element type, and false for a class with no step: a float
+// multiply-add of the value by itself, an integer shift and exclusive or, an
+// integer multiply-add of the value by itself, an exponential, and for the
+// lanes and group classes the value summed over its run of the row
+// (gpuRun), an iteration's alone. None of them folds across a chain; a
+// multiply-add by the row's element and a constant does on Vulkan, whose
+// launch of a deeper chain of them took no longer.
 func gpuStep(cl cost.Class) (func(terms []graph.Term, last graph.Arg) []graph.Term, graph.Elem, bool) {
 	in := graph.Arg{Kind: graph.ArgIn}
 	k := func(v float64) graph.Arg { return graph.Arg{Kind: graph.ArgConst, Const: v} }
@@ -34,8 +35,36 @@ func gpuStep(cl cost.Class) (func(terms []graph.Term, last graph.Arg) []graph.Te
 		return func(terms []graph.Term, last graph.Arg) []graph.Term {
 			return append(terms, graph.Term{Fn: graph.MapExp, Args: [3]graph.Arg{last}})
 		}, graph.ElemF32, true
+	case cost.ClassLanes, cost.ClassGroup:
+		return func(terms []graph.Term, last graph.Arg) []graph.Term {
+			if last.Kind != graph.ArgTerm {
+				terms = append(terms, graph.Term{Fn: graph.MapF32, Args: [3]graph.Arg{last}})
+				last = graph.Arg{Kind: graph.ArgTerm, Index: len(terms) - 1}
+			}
+			return append(terms, graph.Term{Fn: graph.MapF32, Args: [3]graph.Arg{{Kind: graph.ArgSum, Index: last.Index}}})
+		}, graph.ElemF32, true
 	}
 	return nil, 0, false
+}
+
+// lanesRun is the elements a lanes step sums over: a pair, its sum an
+// exchange of the pair's lanes beside an add. groupRun is a group step's:
+// the probe's workgroup.
+const (
+	lanesRun = 2
+	groupRun = 256
+)
+
+// gpuRun is the run class cl's step sums over, 0 for a class whose step
+// sums nothing.
+func gpuRun(cl cost.Class) int {
+	switch cl {
+	case cost.ClassLanes:
+		return lanesRun
+	case cost.ClassGroup:
+		return groupRun
+	}
+	return 0
 }
 
 // countedAs is the class the estimator counts class cl's chain in: on a GPU
@@ -98,6 +127,23 @@ func iterateGraph(cl cost.Class, n, chains, deep, trips int) (*graph.Graph, bool
 	if !ok {
 		return nil, false
 	}
+	return iterateSteps(step, elem, gpuRun(cl), n, chains, deep, trips), true
+}
+
+// addsGraph is the lanes class's chain (iterateGraph) of one value with
+// each sum over a pair an add of the row's element: the same adds, no
+// exchange, and none a device's compiler can fold into the next, as it may
+// a chain of doublings.
+func addsGraph(n, deep, trips int) *graph.Graph {
+	step := func(terms []graph.Term, last graph.Arg) []graph.Term {
+		return append(terms, graph.Term{Fn: graph.MapAdd, Args: [3]graph.Arg{last, {Kind: graph.ArgIn}}})
+	}
+	return iterateSteps(step, graph.ElemF32, 0, n, 1, deep, trips)
+}
+
+// iterateSteps is iterateGraph through step, of elements elem, its sums
+// over runs of run.
+func iterateSteps(step func(terms []graph.Term, last graph.Arg) []graph.Term, elem graph.Elem, run, n, chains, deep, trips int) *graph.Graph {
 	var terms []graph.Term
 	for c := range chains {
 		terms = append(terms, graph.Term{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgIn}, {Kind: graph.ArgConst, Const: float64(c + 1)}}})
@@ -115,10 +161,10 @@ func iterateGraph(cl cost.Class, n, chains, deep, trips int) (*graph.Graph, bool
 	x := b.In("x", n)
 	b.G.Values[x].Elem = elem
 	y := b.Emit(graph.OpIterate, []graph.ValueID{x}, []graph.Result{{Name: "chains", Width: n * chains}}, nil,
-		graph.Attrs{Taps: chains, Span: trips, Words: outs, Expr: terms}, nil, nil)[0]
+		graph.Attrs{Taps: chains, Span: trips, Width: run, Words: outs, Expr: terms}, nil, nil)[0]
 	b.G.Values[y].Elem = elem
 	b.Out(y)
-	return b.G, true
+	return b.G
 }
 
 // wrapGraph is threads columns, each summing per floats of a table of

@@ -1425,6 +1425,7 @@ bug	engine/probe/gpu.go	"probe: %s has no GPU code"
 fault	engine/probe/gpu.go	"probe: %s was not timed"	the host states no figure; the probe measures without it
 fault	engine/probe/gpu.go	"probe: %v chains of %d and %d count %v and took %v seconds"	the host states no figure; the probe measures without it
 bug	engine/probe/gpu.go	"probe: no chain of the %v class"
+fault	engine/probe/gpu.go	"probe: sums over lanes took %v seconds, their adds alone %v"	the host states no figure; the probe measures without it
 fault	engine/probe/gpu.go	"probe: walks of %d and %d steps took %v seconds"	the host states no figure; the probe measures without it
 bug	engine/probe/host.go	"probe: a chase of %d bytes past the walk's %d words"
 fault	engine/probe/host.go	"probe: walks of %d and %d steps took %v seconds"	the host states no figure; the probe measures without it

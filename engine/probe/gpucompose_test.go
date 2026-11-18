@@ -16,7 +16,8 @@ import (
 // the rounds, twice the built probe's own spread over them and never under
 // 10%. A number the built measures wrong is held by bounds that say why:
 // its median ratio not past one plus the band, and in every round over
-// another number of the composed probe's by the band. The numbers both arms
+// another number of the composed probe's by the band. A number the two arms
+// take different work for is held to a range whose reason says how (took). The numbers both arms
 // still measure with one built kernel are the harness's own control, held
 // to the band too: the two arms timing one kernel apart is the harness's
 // fault, whatever the composed numbers read.
@@ -80,6 +81,31 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				{"L1 bytes", func(d cost.Device) float64 { return float64(d.Caches[0].Bytes) }, true, "", "", nil},
 				{"L2 latency", func(d cost.Device) float64 { return d.Caches[1].Latency }, true, walked, "", nil},
 			}
+			// took is, by number, the range composed/built is held to where
+			// the two arms take different work, and why.
+			type within struct {
+				lo, hi float64
+				why    string
+			}
+			took := map[string]within{}
+			issue := "a composed sum issues its add beside its exchange, a subgroup's issue the two share, where the built issues exchanges alone"
+			feeds := "a composed exchange is timed feeding an add, as a butterfly's does, the add's own wait taken off (the estimator adds each node's along a path), where the built's feeds the next exchange"
+			twice := "a composed sum over the workgroup waits on it twice a trip, its slots read before the next trip writes them (RULE 13), where the built waits once and lets the next trip's writes race the reads"
+			switch {
+			case clocked && dev.API() == "ptx":
+				took["lanes a thread"] = within{0.6, 0.95, "(" + issue + "; measured 0.82 on a V100)"}
+				took["lanes delay"] = within{1, 1.35, "(" + feeds + ": an add's result reaches an exchange later than an exchange's does; measured 1.21 on a V100)"}
+				took["group all"] = within{1, 1.25, "(the built times one launch of 256 trips, the kernel's floor in it, which the composed arm's two trip counts cancel; measured 1.11 on a V100)"}
+				took["group a thread"] = within{0.8, 1, "(" + twice + "; measured 0.90 on a V100)"}
+				took["group delay"] = within{1, 1.25, "(" + twice + "; measured 1.10 on a V100)"}
+			case clocked && dev.API() == "msl":
+				took["lanes all"] = within{0.8, 1, "(" + issue + "; measured 0.90 on an M4)"}
+				took["lanes a thread"] = within{0.6, 0.85, "(" + issue + "; measured 0.71 on an M4)"}
+				took["lanes delay"] = within{0.6, 0.85, "(" + feeds + ": an exchange's result reaches an add sooner than it reaches an exchange; measured 0.71 on an M4)"}
+				took["group all"] = within{0.7, 0.95, "(" + twice + "; measured 0.82 on an M4)"}
+				took["group a thread"] = within{0.6, 0.85, "(" + twice + "; measured 0.72 on an M4)"}
+				took["group delay"] = within{1.2, 1.6, "(" + twice + "; measured 1.41 on an M4)"}
+			}
 			for cl := range cost.ClassMem {
 				_, _, composed := gpuStep(cl)
 				apart := ""
@@ -134,6 +160,14 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 					t.Logf("%-16s not held to the built: %s", f.name, f.apart)
 				}
 				if f.apart != "" {
+					continue
+				}
+				if w, ok := took[f.name]; ok && f.composed {
+					t.Logf("%-16s held to [%.2f, %.2f]: %s", f.name, w.lo, w.hi, w.why)
+					if r < w.lo || r > w.hi {
+						t.Errorf("%s: composed/built %.3f outside [%.2f, %.2f]", f.name, r, w.lo, w.hi)
+					}
+					checked++
 					continue
 				}
 				if !f.composed {

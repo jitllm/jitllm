@@ -48,11 +48,13 @@ import (
 // iteration too, each column's index wrapped at the set and its sum a
 // float's. The last cache's rate is every warp streaming the set from a
 // phase of its own, so a multiprocessor's warps together read more than its
-// nearest cache holds. The lanes' and the workgroup's exchanges are still
-// kernels built from IR. Each is timed on the device's clock where the
-// backend has one.
+// nearest cache holds. The lanes' and the workgroup's exchanges are an
+// iteration's sums over runs of its row, a pair's (an exchange across lanes
+// beside an add) and a workgroup's; an exchange's delay is its chain's less
+// the same chain of its adds alone, its rates the sums' beside their adds.
+// Each is timed on the device's clock where the backend has one.
 func GPU(d backend.Device) (cost.Device, error) {
-	const lanes, width = 32, 256
+	const lanes, width = 32, groupRun
 	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API())}}
 	if out.Slots == 0 {
 		out.Slots = defaultSlots
@@ -181,39 +183,24 @@ func GPU(d backend.Device) (cost.Device, error) {
 		out.Caches[1] = cost.Cache{Bytes: l2, Rate: cost.Rate{Total: rate}, Latency: l2lat}
 	}
 
-	sums, err := p.alloc(4 * threads)
-	if err != nil {
-		return out, err
-	}
-	for cl, op := range gpuOps() {
-		rate := func(chains, deep, threads int) (float64, error) {
-			trips := 1 << 12
-			if threads <= width {
-				trips = 1 << 15
-			}
-			if cl == cost.ClassGroup {
-				trips /= 16
-			}
-			k, err := gpuOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
-			if err != nil {
-				return 0, err
-			}
-			f, err := p.kernel(k, max(1, threads/width), min(width, threads), sums)
-			if err != nil {
-				return 0, err
-			}
-			secs, err := p.time(f, 4)
-			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
+	for cl := range cost.ClassMem {
+		if cl == cost.ClassLanes && p.dev.Lanes < ir.SubgroupLanes {
+			// A device that guarantees no subgroup's lanes forms no
+			// exchange across them: its runs are sums over a workgroup.
+			continue
 		}
 		chains := 8
 		if cl == cost.ClassGroup {
 			chains = 1
 		}
 		var total float64
-		if _, _, ok := gpuStep(cl); ok {
-			total, err = p.slope(cl, 16*threads, chains, 16, 64)
+		if gpuRun(cl) > 0 {
+			// Every thread's rows through an iteration: a sum over runs is
+			// an iteration's.
+			n := max(groupRun, threads/groupRun*groupRun)
+			total, err = p.slopeOf(cl, func(trips int) (*graph.Graph, bool) { return iterateGraph(cl, n, chains, 1, trips) }, 1<<10, 1<<13)
 		} else {
-			total, err = rate(chains, 1, threads)
+			total, err = p.slope(cl, 16*threads, chains, 16, 64)
 		}
 		if err != nil {
 			return out, err
@@ -222,24 +209,25 @@ func GPU(d backend.Device) (cost.Device, error) {
 		if cl != cost.ClassGroup {
 			alone = lanes
 		}
-		var one, chain float64
-		if _, _, ok := gpuStep(cl); ok {
-			// A thread's rate and a chain's delay: a subgroup of rows
-			// through an iteration, timed between two trip counts.
-			iter := func(chains, deep int) (float64, error) {
-				return p.slopeOf(cl, func(trips int) (*graph.Graph, bool) { return iterateGraph(cl, alone, chains, deep, trips) }, 1<<10, 1<<13)
-			}
-			if one, err = iter(chains, 1); err != nil {
-				return out, err
-			}
-			if chain, err = iter(1, 8); err != nil {
-				return out, err
-			}
-		} else {
-			if one, err = rate(chains, 1, alone); err != nil {
-				return out, err
-			}
-			if chain, err = rate(1, 8, alone); err != nil {
+		// A thread's rate and a chain's delay: a subgroup of rows, a
+		// workgroup's for the group class, through an iteration, timed
+		// between two trip counts.
+		iter := func(chains, deep int) (float64, error) {
+			return p.slopeOf(cl, func(trips int) (*graph.Graph, bool) { return iterateGraph(cl, alone, chains, deep, trips) }, 1<<10, 1<<13)
+		}
+		one, err := iter(chains, 1)
+		if err != nil {
+			return out, err
+		}
+		chain, err := iter(1, 8)
+		if err != nil {
+			return out, err
+		}
+		if cl == cost.ClassLanes {
+			// A chain's wait on its exchanges, the adds beside them taken
+			// off: the estimator adds each node's delay along a path, an
+			// add's its own.
+			if chain, err = p.lanesApart(alone, 8); err != nil {
 				return out, err
 			}
 		}
@@ -338,15 +326,6 @@ func (p *gpuProbe) compile(k *ir.Kernel) (backend.Kernel, error) {
 	return c, nil
 }
 
-// kernel is k compiled, launched at groups workgroups of width over bufs.
-func (p *gpuProbe) kernel(k *ir.Kernel, groups, width int, bufs ...backend.Buf) (*gpuForm, error) {
-	c, err := p.compile(k)
-	if err != nil {
-		return nil, err
-	}
-	return &gpuForm{ks: []backend.Kernel{c}, names: []string{k.Name}, groups: []int{groups}, widths: []int{width}, args: [][]backend.Buf{bufs}}, nil
-}
-
 // form is g's kernels as the composer forms them for the device at one row,
 // compiled, each value bound to its buffer in vals or one of its own, and
 // each constant block, scratch and the step's row count to one of its own.
@@ -414,16 +393,23 @@ func (p *gpuProbe) slope(cl cost.Class, n, chains, short, long int) (float64, er
 // slopeOf is the instructions of class cl a second between the forms of
 // graphAt at two sizes, short and long, as slope takes them.
 func (p *gpuProbe) slopeOf(cl cost.Class, graphAt func(int) (*graph.Graph, bool), short, long int) (float64, error) {
+	n, secs, err := p.workOf(cl, graphAt, short, long)
+	return n / secs, err
+}
+
+// workOf is the instructions of class cl the form of graphAt at size long
+// issues past its form at size short, and the seconds between the two.
+func (p *gpuProbe) workOf(cl cost.Class, graphAt func(int) (*graph.Graph, bool), short, long int) (float64, float64, error) {
 	_, clocked := Timer(p.d)
 	var count, secs [2]float64
 	for i, size := range [2]int{short, long} {
 		g, ok := graphAt(size)
 		if !ok {
-			return 0, fmt.Errorf("probe: no chain of the %v class", cl)
+			return 0, 0, fmt.Errorf("probe: no chain of the %v class", cl)
 		}
 		f, err := p.form(g, nil)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		count[i] = f.count(countedAs(cl))
 		if clocked {
@@ -432,13 +418,34 @@ func (p *gpuProbe) slopeOf(cl cost.Class, graphAt func(int) (*graph.Graph, bool)
 			secs[i], err = p.wall(f, 64)
 		}
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 	if !(count[1] > count[0]) || !(secs[1] > secs[0]) {
-		return 0, fmt.Errorf("probe: %v chains of %d and %d count %v and took %v seconds", cl, short, long, count, secs)
+		return 0, 0, fmt.Errorf("probe: %v chains of %d and %d count %v and took %v seconds", cl, short, long, count, secs)
 	}
-	return (count[1] - count[0]) / (secs[1] - secs[0]), nil
+	return count[1] - count[0], secs[1] - secs[0], nil
+}
+
+// lanesApart is the exchanges across lanes a second a row of n issues
+// through a chain of deep sums over pairs a trip, less the seconds of the
+// same chain with each sum an add alone (addsGraph): what the row's
+// exchanges cost a chain apart from the adds beside them.
+func (p *gpuProbe) lanesApart(n, deep int) (float64, error) {
+	k, sums, err := p.workOf(cost.ClassLanes, func(trips int) (*graph.Graph, bool) {
+		return iterateGraph(cost.ClassLanes, n, 1, deep, trips)
+	}, 1<<10, 1<<13)
+	if err != nil {
+		return 0, err
+	}
+	_, adds, err := p.workOf(cost.ClassFloat, func(trips int) (*graph.Graph, bool) { return addsGraph(n, deep, trips), true }, 1<<10, 1<<13)
+	if err != nil {
+		return 0, err
+	}
+	if !(sums > adds) {
+		return 0, fmt.Errorf("probe: sums over lanes took %v seconds, their adds alone %v", sums, adds)
+	}
+	return k / (sums - adds), nil
 }
 
 // request asks for g at one row on the device the probe measures, its
@@ -693,99 +700,4 @@ func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 		return 0, fmt.Errorf("probe: walks of %d and %d steps took %v seconds", chaseShort, chaseLong, secs)
 	}
 	return (secs[1] - secs[0]) / (chaseLong - chaseShort), nil
-}
-
-// gpuOp is instructions of a class a probe chains, ones the device's
-// compiler cannot fold across a chain (a multiply-add of the value by
-// itself, a shift and an exclusive or, not an add of a constant): its
-// value's type, the instructions applied to a value, given the workgroup
-// memory the kernel declares where shared is set and the thread's index,
-// and how many instructions the estimator counts in it where more than
-// one. The integer class is a shift and an exclusive or, the index class a
-// multiply-add: an integer multiply is slower than the rest on some
-// devices. The estimator counts a multiply-add of integers as a multiply
-// and an add, as it counts the composed index chain whose total rate it
-// takes, though a device issues it as one instruction.
-type gpuOp struct {
-	t      ir.Type
-	op     func(b *ir.Builder, sh, tid, x ir.Value) ir.Value
-	shared bool
-	per    float64
-}
-
-// gpuOps is the instructions each class's rate is measured over.
-func gpuOps() map[cost.Class]gpuOp {
-	return map[cost.Class]gpuOp{
-		cost.ClassFloat: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Fma(x, b.ConstF32(0.999), b.ConstF32(0.001))
-		}},
-		cost.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
-		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
-		}},
-		cost.ClassIndex: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
-		}},
-		cost.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
-		cost.ClassGroup: {t: ir.F32, op: groupSum, shared: true},
-	}
-}
-
-// groupSum is a workgroup's sum the way the composer's GPU lowering forms
-// one: each subgroup's butterfly of shuffles, the subgroups' sums through
-// workgroup memory and a barrier, a butterfly over them.
-func groupSum(b *ir.Builder, sh, tid, x ir.Value) ir.Value {
-	butterfly := func(v ir.Value) ir.Value {
-		for m := ir.SubgroupLanes / 2; m >= 1; m /= 2 {
-			v = b.Add(ir.F32, v, b.ShuffleXor(ir.F32, v, int64(m)))
-		}
-		return v
-	}
-	b.Store(sh, b.Shr(ir.U32, tid, b.Const(ir.U32, 5)), butterfly(x), 0)
-	b.Barrier()
-	return butterfly(b.Load(ir.F32, sh, b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1)), 0))
-}
-
-// gpuOpKernel runs, in each thread of workgroups of width, chains
-// independent chains of trips of op, deep of them a chain a trip, and
-// stores their sum.
-func gpuOpKernel(name string, chains, deep, trips, width int, op gpuOp) (*ir.Kernel, error) {
-	b := ir.New(name, [3]int{width, 1, 1})
-	out := b.Param("out", ir.F32)
-	var sh ir.Value
-	if op.shared {
-		sh = b.Shared("probe_group", ir.F32, width)
-	}
-	tid := b.TID()
-	t := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), tid)
-	inits := make([]ir.Value, chains)
-	for i := range inits {
-		x := b.Add(ir.U32, t, b.Const(ir.U32, int64(i)))
-		if op.t == ir.F32 {
-			x = b.Mul(ir.F32, b.CvtF32(x), b.ConstF32(1e-6))
-		}
-		inits[i] = x
-	}
-	b.Loop(int64(trips))
-	accs := make([]ir.Value, chains)
-	for i := range accs {
-		accs[i] = b.Phi(op.t, inits[i])
-	}
-	for _, acc := range accs {
-		next := acc
-		for range deep {
-			next = op.op(b, sh, tid, next)
-		}
-		b.SetPhi(acc, next)
-	}
-	b.EndLoop()
-	sum := accs[0]
-	for _, acc := range accs[1:] {
-		sum = b.Add(op.t, sum, acc)
-	}
-	if op.t != ir.F32 {
-		sum = b.CvtF32(sum)
-	}
-	b.Store(out, t, sum, 0)
-	return b.Done()
 }
