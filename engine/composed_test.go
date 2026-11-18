@@ -826,7 +826,9 @@ func TestComposedBlocksServe(t *testing.T) {
 									worstGot := 0.0
 									for i := range ref {
 										et, eg := refDist(runs[dev][g][pi], i), logitNMSE(got[i], ref[i])
-										if math.IsNaN(et) || math.IsNaN(eg) || !(et > 0) {
+										// Without the GGUF oracle the reference is its own
+										// want, 0 from it by construction.
+										if math.IsNaN(et) || math.IsNaN(eg) || lcpp != nil && !(et > 0) {
 											t.Fatalf("prompt %d step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", pi, i, et, eg)
 										}
 										ratios = append(ratios, eg/max(et, floor))
