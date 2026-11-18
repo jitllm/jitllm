@@ -24,8 +24,12 @@ import (
 // the 2048 positions a device reserves (tier initKVCap) cannot fit in. A budget
 // picked by hand left whatever room placement's rounding happened to leave,
 // and on some budgets that held the growth and nothing spilled.
+//
+// The two devices are two cards (distinctCards): one card under two backends
+// is one pool, sized at the larger of the two caps, so the second cap gives
+// the first card's blocks no room and the relocate arm's prompt is declined.
 func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
-	testdevices.Require(t, "cuda:0")
+	devs := testdevices.Take(t, 2, "cuda:0,cuda:1")
 	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
@@ -43,7 +47,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 	// formed counts what the CPU device composed while the tokens ran: a
 	// spill moves a block between cards and composes nothing on the way.
 	formed := 0
-	run := func(g *gpu.GPU) (*Instance, []int32) {
+	run := func(t *testing.T, g *gpu.GPU) (*Instance, []int32) {
 		st := testInstance(t, m, len(prompt)+gen+1)
 		if g != nil {
 			st.SetDevice(g)
@@ -70,39 +74,38 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 		}
 		return st, out
 	}
-	host, want := run(nil)
+	host, want := run(t, nil)
 	host.Close()
 	// The first card is capped so the second takes blocks too (chosen with
 	// JITLLM_SPILL_BUDGET).
 	first := spillBudget(380_000_000)
-	// open tries cuda:0 beside each second device, capping the ones caps names.
-	open := func(caps map[string]uint64) *gpu.GPU {
-		for _, second := range testdevices.Within([]string{"cuda:1", "vulkan:1"}) {
-			spec := ""
-			for _, name := range []string{"cuda:0", second} {
-				if spec != "" {
-					spec += ","
-				}
-				spec += name
-				if b := caps[name]; b > 0 {
-					spec += "=" + strconv.FormatUint(b, 10)
-				}
+	// open opens the two cards, capping the ones caps names.
+	open := func(t *testing.T, caps map[string]uint64) *gpu.GPU {
+		spec := ""
+		for _, name := range devs {
+			if spec != "" {
+				spec += ","
 			}
-			// Fill-first: the proportional plan leaves every card room for the
-			// batched prefill's scratch, far more than this history grows by.
-			d, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
-				gpu.WithConfig(func(c *gpu.Config) { c.FillFirst = true }))
-			if err == nil && d != nil && len(d.Placed()) == 2 {
-				return d
+			spec += name
+			if b := caps[name]; b > 0 {
+				spec += "=" + strconv.FormatUint(b, 10)
 			}
+		}
+		// Fill-first: the proportional plan leaves every card room for the
+		// batched prefill's scratch, far more than this history grows by.
+		d, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.FillFirst = true }))
+		if err != nil || d == nil || len(d.Placed()) != 2 {
 			if d != nil {
 				d.Close()
 			}
+			return nil
 		}
-		return nil
+		distinctCards(t, d)
+		return d
 	}
 	// What each card holds once placed; the arms cap them there.
-	probe := open(map[string]uint64{"cuda:0": first})
+	probe := open(t, map[string]uint64{devs[0]: first})
 	if probe == nil {
 		t.Skip("no two devices -- this gate proved nothing")
 	}
@@ -121,14 +124,14 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 		name         string
 		caps         map[string]uint64
 		spill, reloc bool
-	}{{"spill", map[string]uint64{"cuda:0": held["cuda:0"]}, true, false}, {"relocate", held, false, true}} {
+	}{{"spill", map[string]uint64{devs[0]: held[devs[0]]}, true, false}, {"relocate", held, false, true}} {
 		t.Run(c.name, func(t *testing.T) {
-			g := open(c.caps)
+			g := open(t, c.caps)
 			if g == nil {
 				t.Skip("no two devices -- this gate proved nothing")
 			}
 			defer g.Close()
-			st, got := run(g)
+			st, got := run(t, g)
 			defer st.Close()
 			t.Logf("placed %v, %d spill(s), %d relocation(s), %d demotion(s), %d/%d blocks", g.Placed(),
 				st.Spills(), st.Relocations(), st.DeviceDemotions(), st.GPULayers(), m.Cfg.NLayer)
