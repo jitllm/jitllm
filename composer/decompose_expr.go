@@ -304,7 +304,7 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 // Taps the values after a trip, a carried value ExprState.
 func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 	n := o.Attr.Taps
-	if len(o.In) != 1 || len(o.Out) != 1 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n {
+	if len(o.In) < 1 || len(o.Out) != 1 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n {
 		return nil, fmt.Errorf("%d values carried through %d trips by %d terms", n, o.Attr.Span, len(o.Attr.Expr))
 	}
 	t := ir.F32
@@ -332,7 +332,19 @@ func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 		it.Init = append(it.Init, vals[j])
 		it.Next = append(it.Next, vals[next])
 	}
-	return []Prim{{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: t, Iterate: it}}, nil
+	p := Prim{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: t, Iterate: it}
+	// A table's loads reach its whole width.
+	for j, v := range o.In[1:] {
+		for s, op := range in {
+			if op == c.value(o.In[1+j]) {
+				if p.Facts.Extents == nil {
+					p.Facts.Extents = map[int]int{}
+				}
+				p.Facts.Extents[s] = c.width(v)
+			}
+		}
+	}
+	return []Prim{p}, nil
 }
 
 // exprTerms is terms ks of o's expression as a primitive's nodes over a
@@ -373,7 +385,16 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state
 	for _, k := range ks {
 		t := o.Attr.Expr[k]
 		args := make([]int, t.Fn.Arity())
+		take := t.Fn == graph.MapTake
+		if take {
+			if a := t.Args[0]; !words || a.Kind != graph.ArgIn || a.Index < 1 || a.Index >= len(o.In) {
+				return nil, nil, nil, fmt.Errorf("term %d takes from %v, which is no table", k, a.Kind)
+			}
+		}
 		for j := range args {
+			if take && j == 0 {
+				continue
+			}
 			switch a := t.Args[j]; a.Kind {
 			case graph.ArgIn:
 				if a.Index < 0 || a.Index >= len(o.In) {
@@ -421,9 +442,14 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state
 		}
 		var v int
 		var err error
-		if words {
+		switch {
+		case take:
+			table := c.value(o.In[t.Args[0].Index])
+			table.Elem = ir.U32
+			v = x.add(Expr{Op: ExprLoad, Type: ir.U32, In: use(table), A: args[1]})
+		case words:
 			v, err = x.wordFn(t.Fn, args)
-		} else {
+		default:
 			v, err = x.mapFn(t.Fn, args, c.exactDiv || !o.Attr.Exact)
 		}
 		if err != nil {

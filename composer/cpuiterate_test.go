@@ -9,16 +9,23 @@ import (
 )
 
 // IterateCase is an iteration over a row of N elements, carried Trips
-// trips: Words its shift-and-xor chain of three values over words, else
-// its counter and the multiply-add that reads it, over floats.
+// trips: Words its shift-and-xor chain of three values over words, Take a
+// walk of a table (each trip the word the one before named), else its
+// counter and the multiply-add that reads it, over floats.
 type IterateCase struct {
-	Words    bool
-	N, Trips int
+	Words, Take bool
+	N, Trips    int
 }
+
+// iterateTable is the walked table's words: one cycle through them all.
+const iterateTable = 1024
 
 func (c IterateCase) String() string {
 	kind := "floats"
-	if c.Words {
+	switch {
+	case c.Take:
+		kind = "take"
+	case c.Words:
 		kind = "words"
 	}
 	return fmt.Sprintf("%s_%dx%d", kind, c.N, c.Trips)
@@ -28,10 +35,12 @@ func (c IterateCase) String() string {
 // a thousand.
 func IterateCases() []IterateCase {
 	var cs []IterateCase
-	for _, words := range []bool{true, false} {
+	for _, kind := range []IterateCase{{Words: true}, {}, {Take: true}} {
 		for _, n := range []int{1, 7, 8, 33, 256} {
 			for _, trips := range []int{1, 3, 64, 1000} {
-				cs = append(cs, IterateCase{Words: words, N: n, Trips: trips})
+				c := kind
+				c.N, c.Trips = n, trips
+				cs = append(cs, c)
 			}
 		}
 	}
@@ -40,7 +49,10 @@ func IterateCases() []IterateCase {
 
 // Taps is how many values c carries.
 func (c IterateCase) Taps() int {
-	if c.Words {
+	switch {
+	case c.Take:
+		return 1
+	case c.Words:
 		return 3
 	}
 	return 2
@@ -58,6 +70,22 @@ func IterateGraph(c IterateCase) *graph.Graph {
 	tm := func(j int) graph.Arg { return graph.Arg{Kind: graph.ArgTerm, Index: j} }
 	var terms []graph.Term
 	elem := graph.ElemF32
+	if c.Take {
+		b := graph.New()
+		x := b.In("x", c.N)
+		b.G.Values[x].Elem = graph.ElemU32
+		tab := b.In("table", iterateTable)
+		b.G.Values[tab].Elem = graph.ElemU32
+		terms = []graph.Term{
+			{Fn: graph.MapAdd, Args: [3]graph.Arg{in, k(0)}},
+			{Fn: graph.MapTake, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 1}, st(0)}},
+		}
+		y := b.Emit(graph.OpIterate, []graph.ValueID{x, tab}, []graph.Result{{Name: "y", Width: c.N}}, nil,
+			graph.Attrs{Taps: 1, Span: c.Trips, Expr: terms}, nil, nil)[0]
+		b.G.Values[y].Elem = graph.ElemU32
+		b.Out(y)
+		return b.G
+	}
 	if c.Words {
 		elem = graph.ElemU32
 		terms = []graph.Term{
@@ -92,24 +120,48 @@ func IterateGraph(c IterateCase) *graph.Graph {
 	return b.G
 }
 
-// IterateInput is c's row: words or floats, each element its own start.
-func IterateInput(c IterateCase) []uint32 {
+// IterateInputs are c's inputs by name: its row, words or floats, each
+// element its own start, and for a walk the table.
+func IterateInputs(c IterateCase) map[string][]uint32 {
 	x := make([]uint32, c.N)
 	for i := range x {
-		if c.Words {
+		switch {
+		case c.Take:
+			x[i] = uint32(i*37) % iterateTable
+		case c.Words:
 			x[i] = uint32(i)*2654435761 + 12345
-		} else {
+		default:
 			x[i] = math.Float32bits(float32(i%11)*0.25 - 1)
 		}
 	}
-	return x
+	in := map[string][]uint32{"x": x}
+	if c.Take {
+		// One cycle: the order of a multiplier coprime to the table's size.
+		tab := make([]uint32, iterateTable)
+		order := make([]uint32, iterateTable)
+		for i := range order {
+			order[i] = uint32(i*389+7) % iterateTable
+		}
+		for i, at := range order {
+			tab[at] = order[(i+1)%iterateTable]
+		}
+		in["table"] = tab
+	}
+	return in
 }
 
 // IterateWant is c's output, its trips taken in order.
-func IterateWant(c IterateCase, x []uint32) []uint32 {
+func IterateWant(c IterateCase, in map[string][]uint32) []uint32 {
 	n := c.Taps()
 	want := make([]uint32, c.N*n)
-	for i, w := range x {
+	for i, w := range in["x"] {
+		if c.Take {
+			for range c.Trips {
+				w = in["table"][w]
+			}
+			want[i] = w
+			continue
+		}
 		if c.Words {
 			s0, s1, s2 := w+1, w^0x9e3779b9, w*7
 			for range c.Trips {
@@ -135,7 +187,7 @@ func IterateWant(c IterateCase, x []uint32) []uint32 {
 // exact and floats within 1e-6 of their size, "" for none.
 func IterateMismatch(c IterateCase, got, want []uint32) string {
 	for i := range want {
-		if c.Words {
+		if c.Words || c.Take {
 			if got[i] != want[i] {
 				return fmt.Sprintf("element %d (value %d of %d) is %#x, want %#x", i/c.Taps(), i%c.Taps(), i/c.Taps(), got[i], want[i])
 			}
@@ -166,12 +218,16 @@ func gateComposedCPUIterate(t *testing.T, cpuOn cpuArm) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			x := IterateInput(c)
+			in := IterateInputs(c)
 			got := make([]uint32, c.N*c.Taps())
-			if err := runCPUCalls(cpuOn, codes, g, map[string][]uint32{"x": x, g.Values[g.Out[0]].Name: got}); err != nil {
+			bufs := map[string][]uint32{g.Values[g.Out[0]].Name: got}
+			for name, w := range in {
+				bufs[name] = w
+			}
+			if err := runCPUCalls(cpuOn, codes, g, bufs); err != nil {
 				t.Fatal(err)
 			}
-			if bad := IterateMismatch(c, got, IterateWant(c, x)); bad != "" {
+			if bad := IterateMismatch(c, got, IterateWant(c, in)); bad != "" {
 				t.Fatalf("%d code(s): %s", len(codes), bad)
 			}
 		})

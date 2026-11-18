@@ -52,9 +52,14 @@ func TestComposedGPUIterate(t *testing.T) {
 						}
 						return b
 					}
-					x := composer.IterateInput(c)
+					in := composer.IterateInputs(c)
 					n := c.N * c.Taps()
-					vals := map[graph.ValueID]backend.Buf{0: alloc(x), g.Out[0]: alloc(poisoned(n))}
+					vals := map[graph.ValueID]backend.Buf{g.Out[0]: alloc(poisoned(n))}
+					for id, v := range g.Values {
+						if w, ok := in[v.Name]; ok {
+							vals[graph.ValueID(id)] = alloc(w)
+						}
+					}
 					own := map[composer.Operand]backend.Buf{}
 					for _, cd := range codes {
 						k, err := d.Compile(cd.GPU)
@@ -95,7 +100,7 @@ func TestComposedGPUIterate(t *testing.T) {
 					for i := range got {
 						got[i] = binary.LittleEndian.Uint32(raw[4*i:])
 					}
-					if bad := composer.IterateMismatch(c, got, composer.IterateWant(c, x)); bad != "" {
+					if bad := composer.IterateMismatch(c, got, composer.IterateWant(c, in)); bad != "" {
 						t.Fatalf("%d code(s): %s", len(codes), bad)
 					}
 				})

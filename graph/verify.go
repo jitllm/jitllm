@@ -313,7 +313,7 @@ func Verify(g *Graph, f Facts) error {
 		case OpIterate:
 			n := o.Attr.Taps
 			named := len(o.Attr.Words) == n && !slices.ContainsFunc(o.Attr.Words, func(w uint64) bool { return w < uint64(n) || w >= uint64(len(o.Attr.Expr)) })
-			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n ||
+			if len(o.In) < 1 || len(o.Out) != 1 || len(o.Weight) != 0 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n ||
 				len(o.Attr.Words) != 0 && !named ||
 				width(o.Out[0]) != n*width(o.In[0]) || g.Values[o.Out[0]].Elem != g.Values[o.In[0]].Elem {
 				bad("%s: %d values carried through %d trips by %d terms from a row of %d into %d", at, n, o.Attr.Span,
@@ -327,9 +327,12 @@ func Verify(g *Graph, f Facts) error {
 				}
 				for j, a := range tm.Args {
 					ok := true
+					table := tm.Fn == MapTake && j == 0
 					switch {
 					case j >= ar:
 						ok = a.Kind == ArgNone
+					case table:
+						ok = a.Kind == ArgIn && a.Index >= 1 && a.Index < len(o.In) && g.Values[o.In[a.Index]].Elem == ElemU32
 					case a.Kind == ArgIn:
 						ok = a.Index == 0
 					case a.Kind == ArgTerm:

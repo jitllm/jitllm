@@ -132,12 +132,19 @@ func (k *Kernel) jamSteps(o, i int) ([]int, bool) {
 		c, ok := step(ax[len(ax)-1])
 		return ok && c == 1
 	}
+	folds := k.foldsOf(i)
 	for x, nd := range k.Nodes {
 		if nd.Op != OpLoad || x >= len(hs) || hs[x] != i {
 			continue
 		}
 		if k.readsNode(x, it) && !consecutive(nd.Ax, nd.A) {
 			return nil, false
+		}
+		// An address a carried value makes is each lane's own data.
+		for _, f := range folds {
+			if k.readsNode(x, f) {
+				return nil, false
+			}
 		}
 	}
 	steps := make([]int, len(k.Stores))

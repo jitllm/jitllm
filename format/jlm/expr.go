@@ -43,6 +43,7 @@ const (
 	FnXor                     // a ^ b, over words
 	FnShl                     // a << b, over words
 	FnShr                     // a >> b, over words, zeros shifted in
+	FnTake                    // operand a's word at the index b: a table read whole, over words
 	numFns
 )
 
@@ -58,7 +59,7 @@ func (f Fn) Arity() int {
 		return 1
 	case FnWhere, FnFma:
 		return 3
-	case FnAdd, FnSub, FnMul, FnDiv, FnMax, FnMin, FnLess, FnEqual, FnRem, FnAnd, FnOr, FnXor, FnShl, FnShr:
+	case FnAdd, FnSub, FnMul, FnDiv, FnMax, FnMin, FnLess, FnEqual, FnRem, FnAnd, FnOr, FnXor, FnShl, FnShr, FnTake:
 		return 2
 	}
 	return 0
@@ -133,6 +134,8 @@ func (f Fn) String() string {
 		return "shl"
 	case FnShr:
 		return "shr"
+	case FnTake:
+		return "take"
 	}
 	return fmt.Sprintf("fn%d", f)
 }
