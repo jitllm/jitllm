@@ -84,14 +84,16 @@ func viewOf(b Buf, nd Node, sp []int) bool {
 	if b.Shape == nil || slices.Equal(b.Shape, sp) {
 		return nd.Ax == nil || len(nd.Ax) == len(sp) && nd.Imm == 0
 	}
-	n, m := 1, 1
-	for _, x := range b.Shape {
+	return elements(b.Shape) == elements(sp) && b.Base == 0 && b.Offset == 0 && (nd.Ax == nil || len(nd.Ax) == len(b.Shape) && nd.Imm == 0)
+}
+
+// elements is how many elements a shape of extents sh holds.
+func elements(sh []int) int {
+	n := 1
+	for _, x := range sh {
 		n *= x
 	}
-	for _, x := range sp {
-		m *= x
-	}
-	return n == m && b.Base == 0 && b.Offset == 0 && (nd.Ax == nil || len(nd.Ax) == len(b.Shape) && nd.Imm == 0)
+	return n
 }
 
 // coordsOf is the coordinates in a space of extents sp of the flat index

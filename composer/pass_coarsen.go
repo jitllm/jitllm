@@ -422,18 +422,27 @@ func (k *coarse) coordLeaf(n *Kernel, coords []int) func(i int, nd Node) (int, b
 // what it reads: the producing member's value at the place, or the host's.
 func (k *coarse) read(n *Kernel, i int, nd Node, coords []int) (int, bool) {
 	o := n.Bufs[nd.Buf].Operand
-	if s, ok := k.hostVal[o]; ok && nd.Ax != nil && len(nd.Ax) == len(s.Ax) {
+	if s, ok := k.hostVal[o]; ok {
+		// Read from memory, the host's output would race the host's threads
+		// storing it in the same workgroup.
+		ax, ok := k.hostPlace(n.Bufs[nd.Buf], nd, k.host.Bufs[s.Buf].Shape)
+		if !ok || len(ax) != len(s.Ax) {
+			if k.err == nil {
+				k.err = fmt.Errorf("%s, which the host stores, read at a place its store does not name", o.Name)
+			}
+			return 0, true
+		}
 		// One element, read by a window's amax and again by its code, is
 		// one value: its place named as produce names a member's.
-		key := k.key(fmt.Sprintf("host %d", s.Val), nd.Ax)
+		key := k.key(fmt.Sprintf("host %d", s.Val), ax)
 		if v, ok := k.memo[key]; ok {
 			return v, true
 		}
 		jc := k.host.Loops[s.At].Elem - 1
 		row := s.Ax[0]
-		sub := map[int]int{jc: nd.Ax[len(nd.Ax)-1]}
-		if h := k.host.Nodes[row]; h.Op == OpCoord && k.m.Nodes[nd.Ax[0]].Op == OpConst {
-			sub[row] = nd.Ax[0]
+		sub := map[int]int{jc: ax[len(ax)-1]}
+		if h := k.host.Nodes[row]; h.Op == OpCoord && k.m.Nodes[ax[0]].Op == OpConst {
+			sub[row] = ax[0]
 		}
 		v := k.m.copyOf(s.Val, sub)
 		k.memo[key] = v
@@ -467,6 +476,24 @@ func (k *coarse) read(n *Kernel, i int, nd Node, coords []int) (int, bool) {
 		return k.produce(from, fs, nd.Ax), true
 	}
 	return k.produce(from, fs, coords), true
+}
+
+// hostPlace is the coordinates in the host's store, of extents hs, that
+// load nd of buffer b reads: its own in a buffer of that shape, else its
+// element's row-major place -- a read at a flat index, or in another shape
+// of as many elements, as Recompute runs a map in a reader of one.
+func (k *coarse) hostPlace(b Buf, nd Node, hs []int) ([]int, bool) {
+	switch {
+	case nd.Ax != nil && (b.Shape == nil || hs == nil || slices.Equal(b.Shape, hs)):
+		return nd.Ax, true
+	case hs == nil:
+		return nil, false
+	case nd.Ax == nil:
+		return k.m.coordsOf(nd.A, nd.Imm, hs), true
+	case nd.Imm != 0 || elements(b.Shape) != elements(hs):
+		return nil, false
+	}
+	return k.m.coordsOf(k.m.flatIndex(nd.Ax, b.Shape), 0, hs), true
 }
 
 // sameIndex reports whether n's load reads the place p's store writes, the
