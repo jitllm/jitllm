@@ -30,6 +30,17 @@ func TestGenerationTailRoundTrips(t *testing.T) {
 	if len(encodeConfig(base())) >= len(encodeConfig(c)) {
 		t.Fatal("the stated draw wrote no tail")
 	}
+	// The parts' graphs imply the generation record: stating them and no
+	// draw writes the zero record, which reads as none stated.
+	parts := base()
+	parts.Front = FrontGraphs{Names: []string{FrontHead}, Graphs: []string{"head"}}
+	got, err = decodeConfig(encodeConfig(parts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Generation != nil || got.Front.Graph(FrontHead) != "head" {
+		t.Fatalf("the parts stated and no draw read as the draw %+v and the head %q", got.Generation, got.Front.Graph(FrontHead))
+	}
 	for _, bad := range []Generation{
 		{Temperature: 1, TopP: 1.5, TypicalP: 1, RepetitionPenalty: 1},
 		{Temperature: -1, TopP: 1, TypicalP: 1, RepetitionPenalty: 1},

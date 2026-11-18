@@ -444,7 +444,13 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.bool(c.PictureRope.Side)
 	}
 	if gen {
-		encodeGeneration(w, c.Generation)
+		// No draw stated is the zero record, which no draw is (its
+		// repetition penalty is 0).
+		g := c.Generation
+		if g == nil {
+			g = &Generation{}
+		}
+		encodeGeneration(w, g)
 	}
 	if front {
 		encodeFrontGraphs(w, &c.Front)
@@ -680,7 +686,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		c.PictureRope.Side = r.bool()
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.Generation = decodeGeneration(r)
+		if g := decodeGeneration(r); *g != (Generation{}) {
+			c.Generation = g
+		}
 	}
 	if r.err == nil && len(r.b) > 0 {
 		c.Front = decodeFrontGraphs(r)
