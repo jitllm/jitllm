@@ -12,7 +12,7 @@ import (
 // the streamed pass's upload skipped, so each pass reads whatever the free ids
 // held, and demands the comparison fail.
 func TestKVEvictionGateDiscriminates(t *testing.T) {
-	for _, name := range []string{evictModels()[0], "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-cohere2.gguf", "synth-exaone4.gguf"} {
+	for _, name := range []string{evictModels()[0], "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-cohere2.gguf", "synth-exaone4.gguf", "synth-deepseek4-hca.gguf"} {
 		t.Run(name, func(t *testing.T) {
 			eg := newEvictGateOf(t, name)
 			free := eg.run(t, nil, nil)

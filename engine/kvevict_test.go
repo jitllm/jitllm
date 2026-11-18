@@ -103,7 +103,12 @@ func evictGateOn(t *testing.T, m *model.Model) *evictGate {
 	eg := &evictGate{m: m}
 	eg.prompt = m.Vocab.Encode(strings.Repeat("The clerk counted barrels of salt on the upper floor. ", 3), true)[:24]
 	eg.turn = m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 10), false)[:100]
-	st := testInstance(t, m, eg.seq())
+	// The host at the card's float32 history. An f16 history's rounding is a
+	// band of its own, and on a mixture it carries a router across a near
+	// tie: synth-deepseek4-hca's third block picks experts 6 and 1 at position
+	// 145 over an f16 history, 6 and 5 over a float32 one and on the card, and
+	// the bound took that step's 0.69 as the card's distance from the host.
+	st := testInstance(t, m, eg.seq(), WithKVF16(false))
 	defer st.Close()
 	lg, err := st.Prefill(eg.prompt)
 	if err != nil {
