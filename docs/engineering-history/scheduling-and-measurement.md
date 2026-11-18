@@ -1894,6 +1894,22 @@ a term or the fusion 13 (12 of them TestComposedCPUGroupedRouter's), split
 dots 8 -- so the last rung's one-at-a-time is rare there, and the cost is
 the whole graph formed again per retry.
 
+**What a mixture's start costs.** OLMoE-1B-7B Q4_K_M's CPU instance, made
+on box 50 beside a census lane (the times a direction, the counts not):
+33 s to the instance at JITLLM_CORES 12 and at 1 alike (composition does not
+run on the engine's workers), 124 forms asked, 48 retries of the ladder,
+13 min of composing summed over the asks. The register pass took 1 min 45 s
+of it, cursors 24 s, simplify 21 s, args 17 s and order 17 s. Sampled by
+instruction, a form's first formation (`formWith`) is 22.7% of the start
+and its second, the one with its tails counting (`Registry.untailed`),
+19.7%: the second starts the ladder from nothing, so it takes every retry
+the first took. Inside the register pass the readers of every node are laid
+out again at each rematerialization and each sink (`stepScratch.readers`,
+`Kernel.args` the most instructions of any function, 9.9%), where a sink
+only moves a node in the sequence and leaves every node's readers as they
+were. At one core the 16-token run's wall was 89 s against llama.cpp's
+10.4, 417 G instructions.
+
 ## The start: a placement composed one form at a time
 
 A CPU profile of `jitllm run -devices cuda:0` on Gemma 4 E2B (a V100,
