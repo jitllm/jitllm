@@ -5269,7 +5269,26 @@ both arms built on one HEAD, each A/B after its A/A:
 | Qwen3-30B-A3B Q4_K_M | 1.0019 (0.0058) | 1.0000 (0.0033) | 5.19 -> 5.18 |
 | Llama-3.2-1B Q4_K_M (dense) | 0.9977 (0.0284) | 1.0168 (0.0626) | 57.36 -> 58.34 |
 
-Whether the last-level misses moved with the walk was not counted then.
+The misses had moved, and the rate at twelve cores had not. Counted later
+on box 50's E5-2680 v4 at one core (jitllm at `JITLLM_CORES=1` beside
+llama.cpp's CPU build at `-t 1`, OLMoE-1B-7B-0924-Instruct Q4_K_M, a decode
+token as the 400-token run less the 16-token run over 384, both engines in
+one pass beside a census lane on the box):
+
+| per decode token | jitllm | llama.cpp |
+|---|---|---|
+| user cycles | 0.318 G | 0.345 G |
+| instructions | 0.484 G | 0.531 G |
+| last-level load misses | 0.5 M | 1.0 M |
+| decode rate over 384 tokens | 8.5 tok/s | 7.6 tok/s |
+
+At one core the mixture decodes ahead of llama.cpp and misses half as
+often; every expert page was read at load (4.09 GiB, nothing read during
+decode). The twelve-core rows above (14.7 against about 60) are then the
+decode's spread over the workers: llama.cpp goes from 7.6 at one core to
+about 60 at twelve, jitllm from 8.5 to 14.7. Beside it, the cold start: the
+16-token run took 89 s of wall (79.7 s user) against llama.cpp's 10.4 s,
+the instance's composition at one core, 417 G instructions.
 
 **The cold spill, tried.** The expert kernels' bindings spill copies a
 loop walks every trip (gate Q4_K 104 stack references, down Q6_K 185, down
