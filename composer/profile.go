@@ -80,6 +80,7 @@ func gpuProfile() Profile {
 		Running{},
 		HalfPairs{Kinds: []PrimKind{PrimMatrix}},
 		Phases{Params: 64},
+		Fit{},
 	}}
 }
 
