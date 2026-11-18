@@ -149,7 +149,7 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	e.stored = make([]bool, len(n.Stores))
 	e.iter, e.phi, e.shared = map[int]ir.Value{}, map[int]ir.Value{}, map[int]ir.Value{}
 	e.homes()
-	named, reached := n.bufsNamed(), n.bufsReached()
+	named, reached := n.bufsNamed(), n.BufsReached()
 	for i, bf := range n.Bufs {
 		if bf.Kind == BufShared {
 			// A plane no access names any more (Stage moves its accesses to
@@ -591,12 +591,12 @@ func (n *Kernel) bufsNamed() map[int]bool {
 	return named
 }
 
-// bufsReached is which of n's buffers its GPU code reaches: those a load,
+// BufsReached is which of n's buffers its GPU code reaches: those a load,
 // a tile's load or scale, a store, a cursor or a call argument names. A
 // buffer it does not reach is no parameter of the code and no binding of
 // it: a fused chain's intermediate values, one a parameter each, passed
 // CUDA's 4 KiB of parameters at a thousand.
-func (n *Kernel) bufsReached() []bool {
+func (n *Kernel) BufsReached() []bool {
 	r := make([]bool, len(n.Bufs))
 	for _, nd := range n.Nodes {
 		switch nd.Op {

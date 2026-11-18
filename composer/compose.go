@@ -429,7 +429,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		}
 		var reached []bool
 		if l.GPU != nil {
-			reached = k.bufsReached()
+			reached = k.BufsReached()
 		}
 		for bi, b := range k.Bufs {
 			if b.Kind != BufShared && (reached == nil || reached[bi]) {

@@ -135,8 +135,13 @@ func EstimateCodes(r Composer, f composer.Model, s composer.Step, p Placement, s
 			}
 			e := estimator{k: k, s: s, trips: map[int]float64{}, homes: k.Homes()}
 			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}, Storage: map[int]composer.Operand{}}
+			// A GPU code binds the buffers it reaches, in their order.
+			var reached []bool
+			if codes[0].Code.Lowered.GPU != nil {
+				reached = k.BufsReached()
+			}
 			for b, buf := range k.Bufs {
-				if buf.Kind == composer.BufShared {
+				if buf.Kind == composer.BufShared || reached != nil && !reached[b] {
 					continue
 				}
 				n := int64(composer.ElemBytes(buf))
