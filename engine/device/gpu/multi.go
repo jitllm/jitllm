@@ -1259,6 +1259,18 @@ type run struct {
 	split  bool
 }
 
+// sharesDevice reports two runs of rs on one device.
+func sharesDevice(rs []run) bool {
+	for i := range rs {
+		for j := range i {
+			if rs[j].dev == rs[i].dev {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // tables is the rotary tables run r is handed. A run of a model of mixed
 // geometry is one geometry, built with one table (scratchPlanOf): the run's
 // blocks' table, where the first goes. A non-causal set is built with every
@@ -1854,15 +1866,19 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 		}
 		return true
 	}
-	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && g.split {
-		// The pieces go one after another: two runs of one device at two
-		// geometries share that device's tier, which the pipeline would drive
-		// from two goroutines at once.
+	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs)) {
+		// The pieces go one after another: two runs of one device -- at two
+		// geometries, or either side of another device's after a block
+		// spilled past a full card -- share that device's tier, which the
+		// pipeline would drive from two goroutines at once.
 		if !g.pieces(sid, rs, pos, n, x, cs, tail) {
 			return false
 		}
 		if head != nil && tail == nil {
-			return headOfLast(hd, sid, hi, pos, n, x, nn.RopeTables{cs[0]}, head)
+			if g.split {
+				cs = nn.RopeTables{cs[0]}
+			}
+			return headOfLast(hd, sid, hi, pos, n, x, cs, head)
 		}
 		return true
 	}
