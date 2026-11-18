@@ -88,6 +88,39 @@ func rateGraph(cl cost.Class, n, chains, deep int) (*graph.Graph, bool) {
 	return b.G, true
 }
 
+// iterateGraph is a row of n through trips trips of an iteration carrying
+// chains values, each through deep steps of class cl a trip, the value c
+// starting at the row's element plus c+1: one value is the class's delay, a
+// few a thread's rate, the trips a loop the code keeps rather than code laid
+// out straight.
+func iterateGraph(cl cost.Class, n, chains, deep, trips int) (*graph.Graph, bool) {
+	step, elem, ok := gpuStep(cl)
+	if !ok {
+		return nil, false
+	}
+	var terms []graph.Term
+	for c := range chains {
+		terms = append(terms, graph.Term{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgIn}, {Kind: graph.ArgConst, Const: float64(c + 1)}}})
+	}
+	outs := make([]uint64, chains)
+	for c := range chains {
+		last := graph.Arg{Kind: graph.ArgState, Index: c}
+		for range deep {
+			terms = step(terms, last)
+			last = graph.Arg{Kind: graph.ArgTerm, Index: len(terms) - 1}
+		}
+		outs[c] = uint64(len(terms) - 1)
+	}
+	b := graph.New()
+	x := b.In("x", n)
+	b.G.Values[x].Elem = elem
+	y := b.Emit(graph.OpIterate, []graph.ValueID{x}, []graph.Result{{Name: "chains", Width: n * chains}}, nil,
+		graph.Attrs{Taps: chains, Span: trips, Words: outs, Expr: terms}, nil, nil)[0]
+	b.G.Values[y].Elem = elem
+	b.Out(y)
+	return b.G, true
+}
+
 // chaseGraph is a walk of steps through a table of words: each step takes
 // the word the one before named, the first named by the row at.
 func chaseGraph(words, steps int) (*graph.Graph, graph.ValueID, graph.ValueID) {

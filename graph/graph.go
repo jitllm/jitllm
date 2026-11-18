@@ -405,7 +405,8 @@ const (
 	// Span trips in order: Expr's first Taps terms are the values before the
 	// first trip, read at the element as OpExpr's are; the terms after them
 	// are a trip's, ArgState term Index the value it carries into the trip,
-	// and the last Taps terms the values it carries out. Out[0]'s element
+	// and the values it carries out the terms Words names, value j term
+	// Words[j], or the last Taps terms where Words is empty. Out[0]'s element
 	// i*Taps+j is value j of element i after the last trip. A trip follows
 	// the one before it: no trips are taken apart or regrouped. A primitive.
 	OpIterate

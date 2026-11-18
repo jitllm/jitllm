@@ -72,10 +72,16 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				case cl == cost.ClassSpecial:
 					apart = "the device's JIT of the composed exponentials, straight code, against the built loop's: the same form through SPIR-V reaches the built rate on the same card"
 				}
+				// A thread and a chain run in an iteration's loop, not straight
+				// code: held to the built loop on every class that composes.
+				looped := ""
+				if composed && !clocked {
+					looped = "the built arm times one launch's wall, its submission with it, which the composed arm's two trip counts cancel"
+				}
 				fields = append(fields,
 					field{names[cl] + " all", func(d cost.Device) float64 { return d.Rates[cl].Total }, composed, apart},
-					field{names[cl] + " a thread", func(d cost.Device) float64 { return d.Rates[cl].Thread }, false, ""},
-					field{names[cl] + " delay", func(d cost.Device) float64 { return d.Delay[cl] }, false, ""})
+					field{names[cl] + " a thread", func(d cost.Device) float64 { return d.Rates[cl].Thread }, composed, looped},
+					field{names[cl] + " delay", func(d cost.Device) float64 { return d.Delay[cl] }, composed, looped})
 			}
 			checked := 0
 			for _, f := range fields {

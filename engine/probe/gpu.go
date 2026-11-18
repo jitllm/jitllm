@@ -225,13 +225,26 @@ func GPU(d backend.Device) (cost.Device, error) {
 		if cl != cost.ClassGroup {
 			alone = lanes
 		}
-		one, err := rate(chains, 1, alone)
-		if err != nil {
-			return out, err
-		}
-		chain, err := rate(1, 8, alone)
-		if err != nil {
-			return out, err
+		var one, chain float64
+		if _, _, ok := gpuStep(cl); ok {
+			// A thread's rate and a chain's delay: a subgroup of rows
+			// through an iteration, timed between two trip counts.
+			iter := func(chains, deep int) (float64, error) {
+				return p.slopeOf(cl, func(trips int) (*graph.Graph, bool) { return iterateGraph(cl, alone, chains, deep, trips) }, 1<<10, 1<<13)
+			}
+			if one, err = iter(chains, 1); err != nil {
+				return out, err
+			}
+			if chain, err = iter(1, 8); err != nil {
+				return out, err
+			}
+		} else {
+			if one, err = rate(chains, 1, alone); err != nil {
+				return out, err
+			}
+			if chain, err = rate(1, 8, alone); err != nil {
+				return out, err
+			}
 		}
 		out.Rates[cl] = cost.Rate{Thread: one / float64(alone), Total: total}
 		out.Delay[cl] = float64(alone) / chain
@@ -392,13 +405,19 @@ func (p *gpuProbe) form(g *graph.Graph, vals map[graph.ValueID]backend.Buf) (*gp
 // thread alone stalls on fetching it. The device's clock times them where
 // its backend has one, else the wall of a session's launches.
 func (p *gpuProbe) slope(cl cost.Class, n, chains, short, long int) (float64, error) {
+	return p.slopeOf(cl, func(deep int) (*graph.Graph, bool) { return rateGraph(cl, n, chains, deep) }, short, long)
+}
+
+// slopeOf is the instructions of class cl a second between the forms of
+// graphAt at two sizes, short and long, as slope takes them.
+func (p *gpuProbe) slopeOf(cl cost.Class, graphAt func(int) (*graph.Graph, bool), short, long int) (float64, error) {
 	warm := p.warm
 	p.warm = nil
 	defer func() { p.warm = warm }()
 	_, clocked := Timer(p.d)
 	var count, secs [2]float64
-	for i, deep := range [2]int{short, long} {
-		g, ok := rateGraph(cl, n, chains, deep)
+	for i, size := range [2]int{short, long} {
+		g, ok := graphAt(size)
 		if !ok {
 			return 0, fmt.Errorf("probe: no chain of the %v class", cl)
 		}

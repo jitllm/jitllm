@@ -322,8 +322,15 @@ func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	it := &Iterate{Trips: o.Attr.Span}
 	for j := range n {
+		next := len(ks) - n + j
+		if len(o.Attr.Words) == n {
+			next = int(o.Attr.Words[j])
+		}
+		if next < n || next >= len(ks) {
+			return nil, fmt.Errorf("value %d carried out by term %d of %d", j, next, len(ks))
+		}
 		it.Init = append(it.Init, vals[j])
-		it.Next = append(it.Next, vals[len(ks)-n+j])
+		it.Next = append(it.Next, vals[next])
 	}
 	return []Prim{{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: t, Iterate: it}}, nil
 }
