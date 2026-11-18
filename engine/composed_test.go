@@ -697,6 +697,15 @@ func TestComposedBlocksServe(t *testing.T) {
 							if a.tile > 0 && noGraph || a.stream != 0 && (noGraph || m.Cfg.NExpert == 0) {
 								continue
 							}
+							// A model stating experts whose blocks are all dense
+							// (synth-deepseek-dense, its dense lead the whole
+							// model) has no bank to stream.
+							if a.stream != 0 && mixtureBlocks(m) == 0 {
+								if g == 0 {
+									t.Logf("%s: none of the %d blocks holds a routed bank, so there is nothing to stream", a.name, m.Cfg.NLayer)
+								}
+								continue
+							}
 							if a.stream == streamBudget && budgetElsewhere()[file] != "" {
 								t.Logf("%s: its budget arm runs on %s", a.name, budgetElsewhere()[file])
 								continue
@@ -775,13 +784,15 @@ func TestComposedBlocksServe(t *testing.T) {
 									// Every step's input row gathered by the composer, from
 									// the head where it is the embedding and from the token
 									// embedding the device holds beside it where it is not
-									// (tinyllama, stories15M), and the prompt's rows too.
+									// (tinyllama, stories15M), and the prompt's rows too. A
+									// head at home under a budget leaves the card neither, and
+									// the rows are the host's: none asked of the card.
 									if a.parts&nn.ComposedEmbed != 0 {
 										ne, de := st.ServedPart(nn.ComposedEmbed)
 										ne += st.ReplayedPart(nn.ComposedEmbed)
 										np, dp := st.ServedPart(nn.PromptEmbed)
 										switch {
-										case ne+de != len(toks):
+										case (headOn || ne+de > 0) && ne+de != len(toks):
 											t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
 										case headOn && ne != len(toks):
 											t.Fatalf("the composer gathered %d of %d steps' rows (%s)", ne, len(toks), declinesOf(st))

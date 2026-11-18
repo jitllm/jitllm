@@ -21,9 +21,9 @@ import (
 
 // pagedExpertModels are the mixtures whose banks the composed block serves
 // from pages on a card (TestComposedExpertPagesServe): the router families'
-// fixtures with their matrices in Q8_0 (a float bank has no packed sheets to
-// send, and the tier refuses to stream it by that name) and the checkpoints
-// one card of 16 GiB runs.
+// fixtures with their matrices in Q8_0 and the checkpoints one card of 16 GiB
+// runs. Their float banks stream too, a sheet at a time from the expert
+// pages, in TestComposedBlocksServe's stream arms.
 func pagedExpertModels() []string {
 	return []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 		"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "synth-ernie45moe-hf" + q8Suffix,
@@ -686,10 +686,13 @@ const (
 
 // streamOpts is the tier options of arm a for mixture m on dev: for the
 // budget, what m's blocks take placed as the arm places them -- its parts,
-// graph setting, prompt width and context ctx -- less half of what
-// streaming one mixture block saves on the card, measured: the blocks placed
-// resident and placed streamed with no expert cache, the difference over the
-// mixture blocks.
+// graph setting, prompt width and context ctx -- and the slack the card keeps
+// free beside every allocation (Stats.Slack), less half of what streaming one
+// mixture block saves on the card, measured: the blocks placed resident and
+// placed streamed with no expert cache, the difference over the mixture
+// blocks. Without the slack a fixture's budget (a cut of 87 KB against 448 KB
+// of slack on synth-deepseek-lite) held its last block neither resident nor
+// streamed.
 // Placement keeps the blocks that fit resident and streams the rest, the
 // last first, so a deeper cut leaves that block home; and a fixture's banks
 // are kilobytes, where the card's allocation pieces can make a streamed
@@ -730,12 +733,7 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 			}
 			return st
 		}
-		mixed := 0
-		for li := range m.Cfg.NLayer {
-			if _, b := m.BlockBytes(li); b > 0 {
-				mixed++
-			}
-		}
+		mixed := mixtureBlocks(m)
 		rs, ss := probe(false), probe(true)
 		resident, streamed := rs.BudgetUsed, ss.BudgetUsed
 		if mixed == 0 || streamed >= resident {
@@ -745,8 +743,9 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 				streamed, ss.ScratchBytes, ss.ComposedBytes, ss.KVPoolBytes, ss.RoundingBytes, ss.CacheBytes, ss.StreamBlocks)
 		}
 		cut := (resident - streamed) / uint64(mixed) / 2
-		t.Logf("experts under a budget: %d bytes resident, %d streamed over %d mixture blocks; the budget %d", resident, streamed, mixed, resident-cut)
-		return []gpu.Option{gpu.WithBudget(resident - cut)}
+		budget := resident + rs.Slack - cut
+		t.Logf("experts under a budget: %d bytes resident, %d streamed over %d mixture blocks, %d of slack; the budget %d", resident, streamed, mixed, rs.Slack, budget)
+		return []gpu.Option{gpu.WithBudget(budget)}
 	case streamCache:
 		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
 		return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) {
@@ -754,6 +753,18 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 		})}
 	}
 	return nil
+}
+
+// mixtureBlocks is how many of m's blocks hold a routed bank: what a stream
+// arm has to stream.
+func mixtureBlocks(m *model.Model) int {
+	n := 0
+	for li := range m.Cfg.NLayer {
+		if _, b := m.BlockBytes(li); b > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // streamSelected fails t unless a run of arm a streamed its mixture blocks
