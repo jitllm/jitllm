@@ -121,19 +121,22 @@ func iterateGraph(cl cost.Class, n, chains, deep, trips int) (*graph.Graph, bool
 	return b.G, true
 }
 
-// chaseGraph is a walk of steps through a table of words: each step takes
-// the word the one before named, the first named by the row at.
-func chaseGraph(words, steps int) (*graph.Graph, graph.ValueID, graph.ValueID) {
+// chaseGraph is a walk of trips steps through a table of words, one row's
+// iteration: each trip takes the word the one before named, the first
+// named by the row at.
+func chaseGraph(words, trips int) (*graph.Graph, graph.ValueID, graph.ValueID) {
 	b := graph.New()
-	tab := b.In("table", words)
-	b.G.Values[tab].Elem = graph.ElemU32
 	at := b.In("at", 1)
 	b.G.Values[at].Elem = graph.ElemU32
-	v := at
-	for range steps {
-		v = b.Emit(graph.OpTake, []graph.ValueID{tab, v}, []graph.Result{{Name: "next", Width: 1}}, nil, graph.Attrs{}, nil, nil)[0]
-		b.G.Values[v].Elem = graph.ElemU32
+	tab := b.In("table", words)
+	b.G.Values[tab].Elem = graph.ElemU32
+	terms := []graph.Term{
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgIn}, {Kind: graph.ArgConst}}},
+		{Fn: graph.MapTake, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 1}, {Kind: graph.ArgState}}},
 	}
+	v := b.Emit(graph.OpIterate, []graph.ValueID{at, tab}, []graph.Result{{Name: "reached", Width: 1}}, nil,
+		graph.Attrs{Taps: 1, Span: trips, Expr: terms}, nil, nil)[0]
+	b.G.Values[v].Elem = graph.ElemU32
 	b.Out(v)
 	return b.G, tab, at
 }

@@ -42,12 +42,12 @@ import (
 // issues (gpuStep) is the composer's form of rows through chains of the
 // class's terms, the instructions of the class the estimator counts in it
 // over the seconds, taken between two depths so a launch's own cost
-// cancels. A thread's rate and a chain's delay, the reads a cache serves,
-// the chase and the lanes' and the workgroup's exchanges are still kernels
-// built from IR: a composed form is straight code without a loop, and a
-// thread alone running enough of it to time stalls on fetching its
-// instructions. Each is timed on the device's clock where the backend has
-// one.
+// cancels. A thread's rate, a chain's delay and the chase are one row's
+// iteration, a loop the code keeps, timed between two trip counts: a
+// thread alone running straight code long enough to time stalls on
+// fetching its instructions. The reads a cache serves and the lanes' and
+// the workgroup's exchanges are still kernels built from IR. Each is timed
+// on the device's clock where the backend has one.
 func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
 	out := cost.Device{Device: composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API())}}
@@ -272,6 +272,12 @@ type gpuProbe struct {
 	bufs []backend.Buf
 	ks   []backend.Kernel
 	warm *gpuForm
+	// walks are the chase's two forms, over walked words of walkOn, its
+	// first word read from start.
+	walks  [2]*gpuForm
+	walked int
+	walkOn backend.Buf
+	start  backend.Buf
 }
 
 // gpuForm is kernels launched in order, each with its workgroups, width and
@@ -667,8 +673,13 @@ func (p *gpuProbe) wall(f *gpuForm, n int) (float64, error) {
 	return times[len(times)/2], nil
 }
 
-// chase is the seconds one read waits, a single thread walking a random
-// cycle through the 128-byte lines of set bytes of buf.
+// chaseShort and chaseLong are the walk's two lengths: their difference is
+// the steps a chase times.
+const chaseShort, chaseLong = 1 << 12, 1 << 16
+
+// chase is the seconds one read waits, one row walking a random cycle
+// through the 128-byte lines of set bytes of buf, between two walks'
+// lengths. Its forms are made once, over the largest set it walks.
 func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 	const line = 128 / 4
 	lines := int(max(2, set/128))
@@ -680,29 +691,39 @@ func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 	if err := buf.Write(unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), len(words)*4)); err != nil {
 		return 0, err
 	}
-	const steps = 1 << 16
-	b := ir.New(fmt.Sprintf("probe_chase_%d", lines), [3]int{1, 1, 1})
-	in, out := b.Param("in", ir.U32), b.Param("out", ir.U32)
-	first := b.Const(ir.U32, int64(order[0]*line))
-	b.Loop(steps)
-	at := b.Phi(ir.U32, first)
-	b.SetPhi(at, b.Load(ir.U32, in, at, 0))
-	b.EndLoop()
-	b.Store(out, b.Const(ir.U32, 0), at, 0)
-	sink, err := p.alloc(4)
-	if err != nil {
+	if p.start == nil {
+		start, err := p.alloc(4)
+		if err != nil {
+			return 0, err
+		}
+		p.start = start
+	}
+	first := []uint32{uint32(order[0] * line)}
+	if err := p.start.Write(unsafe.Slice((*byte)(unsafe.Pointer(&first[0])), 4)); err != nil {
 		return 0, err
 	}
-	k, err := b.Done()
-	if err != nil {
-		return 0, err
+	if buf != p.walkOn || len(words) > p.walked {
+		for i, trips := range [2]int{chaseShort, chaseLong} {
+			g, tab, at := chaseGraph(len(words), trips)
+			f, err := p.form(g, map[graph.ValueID]backend.Buf{tab: buf, at: p.start})
+			if err != nil {
+				return 0, err
+			}
+			p.walks[i] = f
+		}
+		p.walkOn, p.walked = buf, len(words)
 	}
-	f, err := p.kernel(k, 1, 1, buf, sink)
-	if err != nil {
-		return 0, err
+	var secs [2]float64
+	for i, f := range p.walks {
+		var err error
+		if secs[i], err = p.time(f, 3); err != nil {
+			return 0, err
+		}
 	}
-	secs, err := p.time(f, 3)
-	return secs / steps, err
+	if !(secs[1] > secs[0]) {
+		return 0, fmt.Errorf("probe: walks of %d and %d steps took %v seconds", chaseShort, chaseLong, secs)
+	}
+	return (secs[1] - secs[0]) / (chaseLong - chaseShort), nil
 }
 
 // gpuOp is instructions of a class a probe chains, ones the device's

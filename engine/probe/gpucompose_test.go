@@ -54,6 +54,10 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				// the built one: the two measure different things.
 				apart string
 			}
+			walked := ""
+			if !clocked {
+				walked = "the built arm times one launch's wall, its submission with it, which the composed arm's two walks cancel"
+			}
 			fields := []field{
 				{"bandwidth", func(d cost.Device) float64 { return d.Bandwidth }, true, ""},
 				{"floor", func(d cost.Device) float64 { return d.Floor }, true, ""},
@@ -61,7 +65,10 @@ func TestComposedGPUProbeMatchesTheBuilt(t *testing.T) {
 				{"L1 rate", func(d cost.Device) float64 { return d.Caches[0].Rate.Total }, false, ""},
 				{"L2 rate", func(d cost.Device) float64 { return d.Caches[1].Rate.Total }, false, ""},
 				{"overlap", func(d cost.Device) float64 { return d.Overlap }, false, ""},
-				{"latency", func(d cost.Device) float64 { return d.Latency }, false, ""},
+				{"latency", func(d cost.Device) float64 { return d.Latency }, true, walked},
+				{"L1 latency", func(d cost.Device) float64 { return d.Caches[0].Latency }, true, walked},
+				{"L1 bytes", func(d cost.Device) float64 { return float64(d.Caches[0].Bytes) }, true, ""},
+				{"L2 latency", func(d cost.Device) float64 { return d.Caches[1].Latency }, true, walked},
 			}
 			for cl := range cost.ClassMem {
 				_, _, composed := gpuStep(cl)
