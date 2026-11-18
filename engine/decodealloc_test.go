@@ -20,6 +20,43 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
+// TestDecodeDoesNotAllocateAcrossCards holds a warm decode token at zero
+// engine allocations where blocks read another block's history across two
+// cards: the readers on one card, the block whose history they read on the
+// other, the readers' card holding a copy of it appended every token. It is a
+// gate of two cards, never one card under two backends (distinctCards).
+func TestDecodeDoesNotAllocateAcrossCards(t *testing.T) {
+	resident := WithPageBudget(1 << 40)
+	for _, name := range []string{"synth-gemma4-e.gguf", "synth-gemma3n.gguf"} {
+		t.Run(name, func(t *testing.T) {
+			p := testmodels.Path(name)
+			d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
+			g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
+			if err != nil || g == nil {
+				noDevice(t, d[0]+","+d[1], err)
+			}
+			defer g.Close()
+			distinctCards(t, g)
+			m, err := model.Open(jlmOf(t, p))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			_, cut := historyCut(t, m)
+			up := map[int]Place{}
+			for li := cut; li < m.Cfg.NLayer; li++ {
+				up[li] = Place{On: d[1]}
+			}
+			r0 := g.Stats()
+			decodeAllocs(t, m, g, WithStreamTrial(false), resident,
+				WithPlacement(Placement{Blocks: up, Rest: &Place{On: d[0]}, Head: &Place{On: d[0]}, Strict: true}))
+			if n := g.Stats().HistoryCopyPages - r0.HistoryCopyPages; n == 0 {
+				t.Fatalf("no page reached a history copy: the arm read no history across the cards")
+			}
+		})
+	}
+}
+
 // TestDecodeDoesNotAllocate holds a warm decode token at ZERO heap
 // allocations, on the host and on every device backend present, for a
 // dense model and a mixture. A count of allocations does not depend on the
@@ -106,36 +143,6 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 							backs, n, d[0], d[1], declinesOf(st))
 					}
 					t.Logf("%d rows gathered on %s and read back for blocks on %s", backs, d[0], d[1])
-				})
-			}
-			// A history read across two cards: the blocks reading another
-			// block's history on one card, it on the other, whose history
-			// the readers' card holds a copy of, appended every token.
-			if name == "synth-gemma4-e.gguf" || name == "synth-gemma3n.gguf" {
-				t.Run("two-card-history", func(t *testing.T) {
-					d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
-					if err != nil || g == nil {
-						noDevice(t, d[0]+","+d[1], err)
-					}
-					defer g.Close()
-					distinctCards(t, g)
-					m2, err := model.Open(jlmOf(t, p))
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer m2.Close()
-					_, cut := historyCut(t, m2)
-					up := map[int]Place{}
-					for li := cut; li < m2.Cfg.NLayer; li++ {
-						up[li] = Place{On: d[1]}
-					}
-					r0 := g.Stats()
-					decodeAllocs(t, m2, g, WithStreamTrial(false), resident,
-						WithPlacement(Placement{Blocks: up, Rest: &Place{On: d[0]}, Head: &Place{On: d[0]}, Strict: true}))
-					if n := g.Stats().HistoryCopyPages - r0.HistoryCopyPages; n == 0 {
-						t.Fatalf("no page reached a history copy: the arm read no history across the cards")
-					}
 				})
 			}
 			// The server's decode groups: a dense model, a mixture and a
