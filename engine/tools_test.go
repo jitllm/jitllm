@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,7 +73,7 @@ func toolModels() []string {
 		"qwen2.5-1.5b-instruct-q4_k_m",    // Hermes <tool_call>, tools in the system turn
 		"Qwen3-0.6B-Q8_0",                 // Hermes, `arguments is string` branch
 		"Llama-3.2-1B-Instruct-Q4_K_M",    // JSON in the first user turn, ipython role
-		"Mistral-7B-Instruct-v0.3-Q4_K_M", // this GGUF's template has NO tools: refused
+		"Mistral-7B-Instruct-v0.3-Q4_K_M", // no tools and no system role: the generic form
 	}
 }
 
@@ -133,8 +134,15 @@ func TestToolPromptMatchesTransformers(t *testing.T) {
 		if src, _ := m.ChatTemplate(""); !strings.Contains(src, "tools") && !strings.Contains(src, "tool_calls") {
 			// A template trained without tools is served the generic form: the
 			// conversation carries the sentence that tells the model how to
-			// answer, and does not render as if no tools had been declared.
-			got, err := m.ChatPromptTools(toolFixtureMessages(), []byte(toolFixtureTools), true)
+			// answer, and does not render as if no tools had been declared. One
+			// with no system role refuses the fixture's system message, and the
+			// rest of the conversation is served the form.
+			msgs := toolFixtureMessages()
+			got, err := m.ChatPromptTools(msgs, []byte(toolFixtureTools), true)
+			var sr *model.SystemRoleError
+			if errors.As(err, &sr) && sr.Message == 0 {
+				got, err = m.ChatPromptTools(msgs[1:], []byte(toolFixtureTools), true)
+			}
 			m.Close()
 			if err != nil || !strings.Contains(got, "Respond in JSON format, either with `tool_call`") {
 				t.Errorf("%s: a template without tools was not served the generic form (err %v):\n%s", name, err, got)
