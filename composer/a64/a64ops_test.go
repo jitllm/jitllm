@@ -32,6 +32,8 @@ func TestA64OpsMatchLLVM(t *testing.T) {
 		{"fmaxp v1.4s, v2.4s, v3.4s", func(a *A64) { a.FMAXP4s(1, 2, 3) }, 0x6e23f441},
 		{"sshl v1.4s, v2.4s, v3.4s", func(a *A64) { a.SSHL4s(1, 2, 3) }, 0x4ea34441},
 		{"rev64 v1.4s, v30.4s", func(a *A64) { a.REV64s4(1, 30) }, 0x4ea00bc1},
+		{"ext v1.16b, v2.16b, v3.16b, #8", func(a *A64) { a.EXT16b(1, 2, 3, 8) }, 0x6e034041},
+		{"ext v0.16b, v1.16b, v2.16b, #8", func(a *A64) { a.EXT16b(0, 1, 2, 8) }, 0x6e024020},
 		{"neg v1.4s, v30.4s", func(a *A64) { a.NEG4s(1, 30) }, 0x6ea0bbc1},
 		{"xtn v1.4h, v30.4s", func(a *A64) { a.XTN4h(1, 30) }, 0x0e612bc1},
 		{"fcvtn v1.4h, v30.4s", func(a *A64) { a.FCVTN4h(1, 30) }, 0x0e216bc1},

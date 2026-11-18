@@ -106,8 +106,13 @@ func (p RunLengths) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return out, nil
 }
 
-// runWidths is k with its widths taken at run time, nil where none is.
+// runWidths is k with its widths taken at run time, nil where none is. A
+// kernel summing runs of its row (Spans) keeps its width: its runs and its
+// vectors are cut at it.
 func (k *Kernel) runWidths() *Kernel {
+	if k.Spans > 0 {
+		return nil
+	}
 	for i, nd := range k.Nodes {
 		if nd.Op == OpFold && k.readOutside(i) {
 			return nil

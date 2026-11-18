@@ -99,6 +99,10 @@ type Kernel struct {
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.
 	Rows, Clamp int
+	// Spans, where set, is the elements of the last axis's runs the kernel
+	// sums over (OpSpanSum): a thread past the last element takes its place
+	// in the last run, and the kernel's width is not taken at run time.
+	Spans int
 	// Capacity, where set, is the rows of a step the kernel's leading axis holds
 	// at the form's capacity, in units of Capacity/Space[0] rows: a call runs
 	// the rows its table states (tableCall), at most Capacity, and
@@ -467,6 +471,11 @@ const (
 	// OpPackHalves is A's and B's low binary16 halves in one word, A's
 	// low, or with Imm 1 their high halves (ir.OpPackHalves).
 	OpPackHalves
+	// OpSpanSum is float A summed over the run of Imm elements of the
+	// space's last axis this element is in, Imm a power of two: every
+	// element of the run alike (an iteration's sum over runs). A device's
+	// pass forms it (SpanLanes, SpanThreads); no lowering reads it.
+	OpSpanSum
 	numOps
 )
 
@@ -768,6 +777,8 @@ func (o Op) String() string {
 		return "tilescale"
 	case OpPackHalves:
 		return "packhalves"
+	case OpSpanSum:
+		return "spansum"
 	}
 	return fmt.Sprintf("op%d", o)
 }

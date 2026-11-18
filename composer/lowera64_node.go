@@ -209,6 +209,25 @@ func (e *a64Lowerer) node(i int) {
 		each(e.reg(i), s, s, a.TRN2s4)
 	case OpSwapPairs:
 		each2(e.reg(i), e.reg(nd.A), a.REV64s4)
+	case OpShuffle:
+		r, s := e.reg(i), e.reg(nd.A)
+		switch nd.Imm {
+		case 1:
+			each2(r, s, a.REV64s4)
+		case 2:
+			each2(r, s, func(d, n a64.VReg) { a.EXT16b(d, n, n, 8) })
+		case 4:
+			if r == s {
+				a.EOR16b(lo(r), lo(r), hi(r))
+				a.EOR16b(hi(r), hi(r), lo(r))
+				a.EOR16b(lo(r), lo(r), hi(r))
+				break
+			}
+			a.MOVvec(lo(r), hi(s))
+			a.MOVvec(hi(r), lo(s))
+		default:
+			e.fail("node %d: an exchange of lanes %d apart in a vector of 8", i, nd.Imm)
+		}
 	case OpCopy:
 		e.mov(e.reg(i), e.reg(nd.A))
 	case OpFirstLane:

@@ -98,6 +98,9 @@ func (a *A64) SSHL4s(vd, vn, vm VReg)  { a.v3(0x4EA04400, vd, vn, vm) }
 func (a *A64) REV64s4(vd, vn VReg)     { a.v2(0x4EA00800, vd, vn) }
 func (a *A64) NEG4s(vd, vn VReg)       { a.v2(0x6EA0B800, vd, vn) }
 
+// EXT16b is vn's bytes from imm on, then vm's.
+func (a *A64) EXT16b(vd, vn, vm VReg, imm uint8) { a.v3(0x6E000000|uint32(imm&15)<<11, vd, vn, vm) }
+
 // FCVTN2h8 is fcvtn2 vd.8h, vn.4s: the upper 64 bits, the lower kept.
 func (a *A64) FCVTN2h8(vd, vn VReg) { a.v2(0x4E216800, vd, vn) }
 

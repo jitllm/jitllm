@@ -187,9 +187,17 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	} else {
 		flat = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
 		e.flat = flat
-		if n.Clamp > 0 {
+		switch {
+		case n.Clamp > 0 && n.Spans > 1:
+			e.fail("a launch held to a run-time count sums runs of %d", n.Spans)
+		case n.Clamp > 0:
 			flat = b.Min(ir.U32, flat, b.Sub(ir.U32, e.get(n.Clamp-1), b.Const(ir.U32, 1)))
-		} else {
+		case n.Spans > 1:
+			// A surplus thread takes its own place in the last run, so the
+			// runs it sums with are that run's threads and their duplicates.
+			last := b.Add(ir.U32, b.Const(ir.U32, int64(n.Elements()-n.Spans)), b.And(ir.U32, flat, b.Const(ir.U32, int64(n.Spans-1))))
+			flat = b.Min(ir.U32, flat, last)
+		default:
 			flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.Elements()-1)))
 		}
 	}

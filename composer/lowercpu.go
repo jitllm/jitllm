@@ -578,6 +578,17 @@ func (e *x86Lowerer) node(i int) {
 		a.VMOVSHDUP(e.reg(i), e.reg(nd.A))
 	case OpSwapPairs:
 		a.VPERMILPS(e.reg(i), e.reg(nd.A), 0xB1)
+	case OpShuffle:
+		switch nd.Imm {
+		case 1:
+			a.VPERMILPS(e.reg(i), e.reg(nd.A), 0xB1)
+		case 2:
+			a.VPERMILPS(e.reg(i), e.reg(nd.A), 0x4E)
+		case 4:
+			a.VPERM2F128(e.reg(i), e.reg(nd.A), e.reg(nd.A), 0x01)
+		default:
+			e.fail("node %d: an exchange of lanes %d apart in a vector of 8", i, nd.Imm)
+		}
 	case OpCopy:
 		a.VMOVAPSReg(e.reg(i), e.reg(nd.A))
 	case OpFirstLane:

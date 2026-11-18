@@ -40,6 +40,7 @@ func TestComposedCPUGatesOnSSE(t *testing.T) {
 		{"IndexTakesARemainder", gateCPUIndexTakesARemainder},
 		{"IndexTakesEveryIntegerForm", gateCPUIndexTakesEveryIntegerForm},
 		{"Iterate", gateComposedCPUIterate},
+		{"IterateSpans", gateComposedCPUIterateSpans},
 		{"Attend", gateComposedCPUAttend},
 		{"AttendRows", gateComposedCPUAttendRows},
 		{"CrossAttend", gateComposedCPUCrossAttend},

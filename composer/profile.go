@@ -47,6 +47,7 @@ func gpuProfile() Profile {
 		Recompute{MapsOnly: true},
 		Prefetch{Except: []PrimKind{PrimMatrix}},
 		RowTiles{Rows: 16},
+		SpanThreads{},
 		Threads{Group: 128},
 		LiveRows{},
 		WorkRow{Group: 1024, Heads: 32},
@@ -108,6 +109,9 @@ func cpuNarrow(passes []Pass) []Pass {
 		case Vectorize:
 			q.Lanes, q.Quads = 4, false
 			ps = q
+		case SpanLanes:
+			q.Lanes = 4
+			ps = q
 		case Halves:
 			q.KeepsPayload = false
 			ps = q
@@ -127,6 +131,7 @@ func cpuWideProfile() Profile {
 		Workers{Rows: 16, Tile: 64},
 		RowJam{N: 4},
 		Serial{Coords: len(mainArgs().Coords)},
+		SpanLanes{Lanes: 8},
 		Unsigned{},
 		Simplify{ConstLast: true},
 		RunLengths{},

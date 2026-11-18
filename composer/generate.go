@@ -217,6 +217,8 @@ func (g *generator) values(es []Expr, coords []int) []int {
 			}
 		case OpConst:
 			vals[i] = k.add(Node{Op: OpConst, Type: e.Type, Imm: e.Imm})
+		case OpSpanSum:
+			vals[i] = k.add(Node{Op: OpSpanSum, Type: e.Type, A: vals[e.A], Imm: e.Imm})
 		default:
 			vals[i] = k.add(Node{Op: e.Op, Type: e.Type, A: vals[e.A], B: vals[e.B], C: vals[e.C]})
 		}

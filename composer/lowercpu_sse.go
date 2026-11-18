@@ -370,6 +370,15 @@ func (e *x86Lowerer) nodeSSE(i int) {
 		a.MOVSHDUP(e.reg(i), e.reg(nd.A))
 	case OpSwapPairs:
 		a.PSHUFD(e.reg(i), e.reg(nd.A), 0xB1)
+	case OpShuffle:
+		switch nd.Imm {
+		case 1:
+			a.PSHUFD(e.reg(i), e.reg(nd.A), 0xB1)
+		case 2:
+			a.PSHUFD(e.reg(i), e.reg(nd.A), 0x4E)
+		default:
+			e.fail("node %d: an exchange of lanes %d apart in a vector of 4", i, nd.Imm)
+		}
 	case OpCopy:
 		a.MOVAPS(e.reg(i), e.reg(nd.A))
 	case OpFirstLane:

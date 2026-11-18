@@ -301,8 +301,8 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 
 // decomposeIterate is an iteration over its input's elements: its terms
 // one primitive, the first Taps the values before the first trip, the last
-// Taps the values after a trip, a carried value ExprState, each term of
-// its own type. Where each value has an output of its own, they are the
+// Taps the values after a trip, a carried value ExprState, a term summed
+// over a run of the row OpSpanSum, each term of its own type. Where each value has an output of its own, they are the
 // primitive's Stores.
 func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
 	n := o.Attr.Taps
@@ -462,6 +462,12 @@ func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, elems
 					return nil, nil, nil, fmt.Errorf("term %d reads a carried value, which only an iteration carries", k)
 				}
 				args[j] = typed(x.add(Expr{Op: ExprState, In: a.Index, Type: x.e[v].Type}))
+			case graph.ArgSum:
+				v, ok := vals[a.Index]
+				if elems == nil || !ok || o.Attr.Width < 1 || x.e[v].Type != ir.F32 {
+					return nil, nil, nil, fmt.Errorf("term %d reads term %d summed over runs of %d, which only an iteration's float terms are", k, a.Index, o.Attr.Width)
+				}
+				args[j] = x.add(Expr{Op: OpSpanSum, Type: ir.F32, A: v, Imm: int64(o.Attr.Width)})
 			default:
 				return nil, nil, nil, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
 			}
