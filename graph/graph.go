@@ -401,6 +401,14 @@ const (
 	// zero past them -- a row read by a matrix stored wider than it, its k
 	// padded to whole blocks. A primitive.
 	OpPad
+	// OpIterate is Taps values for each of In[0]'s elements carried through
+	// Span trips in order: Expr's first Taps terms are the values before the
+	// first trip, read at the element as OpExpr's are; the terms after them
+	// are a trip's, ArgState term Index the value it carries into the trip,
+	// and the last Taps terms the values it carries out. Out[0]'s element
+	// i*Taps+j is value j of element i after the last trip. A trip follows
+	// the one before it: no trips are taken apart or regrouped. A primitive.
+	OpIterate
 	numOps
 )
 
@@ -506,6 +514,8 @@ func (k OpKind) String() string {
 		return "head_dots"
 	case OpPad:
 		return "pad"
+	case OpIterate:
+		return "iterate"
 	case OpUniform:
 		return "uniform"
 	case OpPut:

@@ -310,6 +310,38 @@ func Verify(g *Graph, f Facts) error {
 				a.Taps < 1 || g.Values[o.Out[0]].Width < 1 {
 				bad("%s: a sound of sample format %d and %d taps into %%%s", at, a.Sound, a.Taps, g.Values[o.Out[0]].Name)
 			}
+		case OpIterate:
+			n := o.Attr.Taps
+			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n ||
+				width(o.Out[0]) != n*width(o.In[0]) || g.Values[o.Out[0]].Elem != g.Values[o.In[0]].Elem {
+				bad("%s: %d values carried through %d trips by %d terms from a row of %d into %d", at, n, o.Attr.Span,
+					len(o.Attr.Expr), width(o.In[0]), width(o.Out[0]))
+				break
+			}
+			for k, tm := range o.Attr.Expr {
+				ar := tm.Fn.Arity()
+				if ar == 0 {
+					bad("%s: term %d has no function", at, k)
+				}
+				for j, a := range tm.Args {
+					ok := true
+					switch {
+					case j >= ar:
+						ok = a.Kind == ArgNone
+					case a.Kind == ArgIn:
+						ok = a.Index == 0
+					case a.Kind == ArgTerm:
+						ok = a.Index >= 0 && a.Index < k
+					case a.Kind == ArgState:
+						ok = k >= n && a.Index >= 0 && a.Index < n
+					default:
+						ok = a.Kind == ArgConst
+					}
+					if !ok {
+						bad("%s: term %d's operand %d does not name one the op has", at, k, j)
+					}
+				}
+			}
 		case OpMeanRows:
 			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || len(o.Attr.Expr) == 0 || rows(o.Out[0]) != 1 ||
 				width(o.In[0]) != width(o.Out[0]) {

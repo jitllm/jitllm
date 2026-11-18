@@ -326,6 +326,17 @@ func (e *x86Lowerer) node(i int) {
 		case init.Op == OpConst && init.Imm == 0:
 			r := e.reg(i)
 			a.VPXOR(r, r, r)
+		case init.Op == OpLoad && e.gpr(i) && !k.Bufs[init.Buf].Half && (e.home[nd.B] < 0 || !k.within(e.home[nd.B], nd.At)):
+			// A carried word that starts at a word loaded outside its loop.
+			a.MOVLLoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+		case init.Op == OpLoad && e.home[nd.B] >= 0 && !k.within(e.home[nd.B], nd.At) && !k.Bufs[init.Buf].Half:
+			// A value that starts at one loaded in a loop around its own:
+			// that loop's lanes, or its one element.
+			if init.Imm > 0 || e.lanes(e.home[nd.B]) > 0 {
+				a.VMOVDQULoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+			} else {
+				a.VMOVSSLoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+			}
 		case init.Op == OpLoad && e.home[nd.B] < 0 && init.Imm > 0:
 			a.VMOVDQULoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		case init.Op == OpLoad && e.home[nd.B] < 0:

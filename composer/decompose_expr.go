@@ -291,8 +291,49 @@ func (sp *exprSplit) splitRefused(err error) bool {
 // is one of ks or, where rows is given, the scratch row rows names for it.
 // An expression into words is evaluated in words (wordFn).
 func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
-	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
 	sh := c.rows(o.Out[0])
+	e, in, _, err := exprTerms(o, c, ks, rows, sh, nil)
+	if err != nil {
+		return Prim{}, err
+	}
+	return Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e}, nil
+}
+
+// decomposeIterate is an iteration over its input's elements: its terms
+// one primitive, the first Taps the values before the first trip, the last
+// Taps the values after a trip, a carried value ExprState.
+func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
+	n := o.Attr.Taps
+	if len(o.In) != 1 || len(o.Out) != 1 || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n {
+		return nil, fmt.Errorf("%d values carried through %d trips by %d terms", n, o.Attr.Span, len(o.Attr.Expr))
+	}
+	t := ir.F32
+	if c.Graph.Values[o.Out[0]].Elem == graph.ElemU32 {
+		t = ir.U32
+	}
+	ks := make([]int, len(o.Attr.Expr))
+	for k := range ks {
+		ks[k] = k
+	}
+	sh := c.rows(o.In[0])
+	e, in, vals, err := exprTerms(o, c, ks, nil, sh, func(x *exprs, j int) int { return x.add(Expr{Op: ExprState, In: j, Type: t}) })
+	if err != nil {
+		return nil, err
+	}
+	it := &Iterate{Trips: o.Attr.Span}
+	for j := range n {
+		it.Init = append(it.Init, vals[j])
+		it.Next = append(it.Next, vals[len(ks)-n+j])
+	}
+	return []Prim{{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: t, Iterate: it}}, nil
+}
+
+// exprTerms is terms ks of o's expression as a primitive's nodes over a
+// space of shape sh, its rows by its elements: the nodes, the operands
+// they read and each term's node. state, where set, is the node of a value
+// an iteration carries; where nil, a term reading one is refused.
+func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, state func(x *exprs, j int) int) ([]Expr, []Operand, map[int]int, error) {
+	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
 	R, W := sh[0], sh[1]
 	var x exprs
 	r, i := x.coord(0), x.coord(1)
@@ -329,15 +370,15 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 			switch a := t.Args[j]; a.Kind {
 			case graph.ArgIn:
 				if a.Index < 0 || a.Index >= len(o.In) {
-					return Prim{}, fmt.Errorf("term %d reads operand %d of %d", k, a.Index, len(o.In))
+					return nil, nil, nil, fmt.Errorf("term %d reads operand %d of %d", k, a.Index, len(o.In))
 				}
 				args[j] = operand(o.In[a.Index])
 			case graph.ArgWeight:
 				if words {
-					return Prim{}, fmt.Errorf("term %d reads a stored vector's float into words", k)
+					return nil, nil, nil, fmt.Errorf("term %d reads a stored vector's float into words", k)
 				}
 				if a.Index < 0 || a.Index >= len(o.Weight) || a.Elem < 0 || a.Elem >= o.Weight[a.Index].K {
-					return Prim{}, fmt.Errorf("term %d reads element %d of bound vector %d", k, a.Elem, a.Index)
+					return nil, nil, nil, fmt.Errorf("term %d reads element %d of bound vector %d", k, a.Elem, a.Index)
 				}
 				w := o.Weight[a.Index]
 				args[j] = x.at(use(Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}), []int{w.K}, x.u(uint32(a.Elem)))
@@ -346,7 +387,7 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 				case !words:
 					args[j] = x.f(float32(a.Const))
 				case a.Const < 0 || a.Const >= 1<<32 || a.Const != math.Trunc(a.Const):
-					return Prim{}, fmt.Errorf("term %d reads %v, which is no word", k, a.Const)
+					return nil, nil, nil, fmt.Errorf("term %d reads %v, which is no word", k, a.Const)
 				default:
 					args[j] = x.u(uint32(a.Const))
 				}
@@ -355,15 +396,20 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 				v, ok := vals[a.Index]
 				switch {
 				case a.Index < 0 || a.Index >= k:
-					return Prim{}, fmt.Errorf("term %d reads term %d", k, a.Index)
+					return nil, nil, nil, fmt.Errorf("term %d reads term %d", k, a.Index)
 				case !ok && rows == nil:
-					return Prim{}, fmt.Errorf("term %d reads term %d, which is not made", k, a.Index)
+					return nil, nil, nil, fmt.Errorf("term %d reads term %d, which is not made", k, a.Index)
 				case !ok:
 					v = x.at(use(rows[a.Index]), []int{R, W}, r, i)
 				}
 				args[j] = v
+			case graph.ArgState:
+				if state == nil {
+					return nil, nil, nil, fmt.Errorf("term %d reads a carried value, which only an iteration carries", k)
+				}
+				args[j] = state(&x, a.Index)
 			default:
-				return Prim{}, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
+				return nil, nil, nil, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
 			}
 		}
 		var v int
@@ -374,9 +420,9 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 			v, err = x.mapFn(t.Fn, args, c.exactDiv || !o.Attr.Exact)
 		}
 		if err != nil {
-			return Prim{}, err
+			return nil, nil, nil, err
 		}
 		vals[k] = v
 	}
-	return Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e}, nil
+	return x.e, in, vals, nil
 }

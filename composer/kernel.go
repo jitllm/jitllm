@@ -246,6 +246,9 @@ type Loop struct {
 	StepsLast bool
 	// Of, where a split set it, is 1 + the loop this one takes trips of.
 	Of int
+	// Serial is a loop whose trips follow each other: its folds carry
+	// values, not sums, and no pass takes its trips apart or regroups them.
+	Serial bool
 }
 
 // Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the

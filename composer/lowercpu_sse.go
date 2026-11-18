@@ -189,6 +189,14 @@ func (e *x86Lowerer) nodeSSE(i int) {
 		case init.Op == OpConst && init.Imm == 0:
 			r := e.reg(i)
 			a.PXOR(r, r, r)
+		case init.Op == OpLoad && e.gpr(i) && !k.Bufs[init.Buf].Half && (e.home[nd.B] < 0 || !k.within(e.home[nd.B], nd.At)):
+			a.MOVLLoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+		case init.Op == OpLoad && e.home[nd.B] >= 0 && !k.within(e.home[nd.B], nd.At) && !k.Bufs[init.Buf].Half:
+			if init.Imm > 0 || e.lanes(e.home[nd.B]) > 0 {
+				a.MOVDQULoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+			} else {
+				a.MOVSSLoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+			}
 		case init.Op == OpLoad && e.home[nd.B] < 0 && init.Imm > 0:
 			a.MOVDQULoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		case init.Op == OpLoad && e.home[nd.B] < 0:

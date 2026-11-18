@@ -19,6 +19,9 @@ const (
 	// PrimMatrix is a reduction formed on the device's matrix unit (Matrix):
 	// tiles staged in workgroup memory, its sums in collective tiles.
 	PrimMatrix
+	// PrimIterate is a map whose element carries values through a loop of
+	// trips taken in order (Iterate).
+	PrimIterate
 )
 
 type OperandKind uint8
@@ -147,6 +150,8 @@ type Prim struct {
 	Facts    Facts
 	// Scan is a scan's state, where Kind is PrimScan.
 	Scan *Scan
+	// Iterate is an iteration's loop, where Kind is PrimIterate.
+	Iterate *Iterate
 	// Sweep is a primitive a form over a history read in passes runs once a
 	// pass (History.Passes): what reads a pass's keys and what folds it into
 	// a running partial.
@@ -175,6 +180,14 @@ type Scan struct {
 	// where it is written, a run's start at the node From of that table.
 	Loops bool
 	From  int
+}
+
+// Iterate is an iteration's loop of Trips trips: Init[j] the node of value
+// j before the first trip, Next[j] the node of it after a trip, ExprState
+// In j the value carried into the trip.
+type Iterate struct {
+	Trips      int
+	Init, Next []int
 }
 
 type Start uint8

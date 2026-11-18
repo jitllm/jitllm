@@ -17,6 +17,8 @@ func generate(p Prim) (*Kernel, error) {
 			return generateScanLoops(p)
 		}
 		return generateScan(p)
+	case PrimIterate:
+		return generateIterate(p)
 	default:
 		return nil, fmt.Errorf("jit: no naive form of primitive %d", p.Kind)
 	}
@@ -118,13 +120,42 @@ func generate(p Prim) (*Kernel, error) {
 	return k, nil
 }
 
+// generateIterate is an iteration's naive IR: an element of its input's
+// space each, its values the folds of one serial loop of its trips, each
+// stored after the loop at its place in the element's row of values.
+func generateIterate(p Prim) (*Kernel, error) {
+	it := p.Iterate
+	if it == nil || it.Trips < 1 || len(it.Init) == 0 || len(it.Init) != len(it.Next) || len(p.Shape) != 2 {
+		return nil, fmt.Errorf("jit: an iteration with no loop")
+	}
+	t, n := elemOf(p.Type), len(it.Init)
+	k := &Kernel{Name: "iterate", Kind: PrimIterate, Space: append([]int(nil), p.Shape...)}
+	coords := []int{k.add(Node{Op: OpCoord, A: 0, Type: ir.U32}), k.add(Node{Op: OpCoord, A: 1, Type: ir.U32})}
+	c := k.loop(it.Trips, -1)
+	k.Loops[c].Serial = true
+	g := &generator{k: k, p: &p, flat: map[Operand]int{}, shaped: map[Operand]int{}, state: make([]int, n)}
+	for j := range g.state {
+		g.state[j] = k.add(Node{Op: OpFold, At: c, Type: t})
+	}
+	vals := g.values(p.Expr, coords)
+	b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Shape: []int{p.Shape[0], p.Shape[1] * n}})
+	for j, f := range g.state {
+		k.Nodes[f].B, k.Nodes[f].A = vals[it.Init[j]], vals[it.Next[j]]
+		col := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, coords[1], k.u32(n)), k.u32(j))
+		k.Stores = append(k.Stores, Store{Buf: b, Val: f, At: -1, Ax: []int{coords[0], col}})
+	}
+	return k, nil
+}
+
 // generator instances a primitive's expressions as IR nodes, each operand
 // one buffer: one read by flat index, one read at coordinates of its shape.
+// state is an iteration's carried values, its loop's folds.
 type generator struct {
 	k            *Kernel
 	p            *Prim
 	flat, shaped map[Operand]int
 	pos          *Positions
+	state        []int
 }
 
 func (g *generator) value(es []Expr, coords []int) int {
@@ -139,6 +170,8 @@ func (g *generator) values(es []Expr, coords []int) []int {
 		switch e.Op {
 		case ExprCoord:
 			vals[i] = coords[e.A]
+		case ExprState:
+			vals[i] = g.state[e.In]
 		case ExprLoad:
 			vals[i] = k.load(g.buffer(g.flat, e.In, nil), vals[e.A])
 		case ExprAt:

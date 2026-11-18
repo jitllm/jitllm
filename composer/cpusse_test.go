@@ -39,6 +39,7 @@ func TestComposedCPUGatesOnSSE(t *testing.T) {
 		{"SelectBroadcastsAGeneralMask", gateCPUSelectBroadcastsAGeneralMask},
 		{"IndexTakesARemainder", gateCPUIndexTakesARemainder},
 		{"IndexTakesEveryIntegerForm", gateCPUIndexTakesEveryIntegerForm},
+		{"Iterate", gateComposedCPUIterate},
 		{"Attend", gateComposedCPUAttend},
 		{"AttendRows", gateComposedCPUAttendRows},
 		{"CrossAttend", gateComposedCPUCrossAttend},

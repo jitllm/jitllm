@@ -30,6 +30,16 @@ func (e *a64Lowerer) node(i int) {
 			a.MOVreg(e.xr(i), a64.XZR)
 		case init.Op == OpConst && init.Imm == 0:
 			e.zero(e.reg(i))
+		case init.Op == OpLoad && x.gpr(i) && !k.Bufs[init.Buf].Half && (x.home[nd.B] < 0 || !k.within(x.home[nd.B], nd.At)):
+			e.access(a64.A64LdrW, uint8(e.xr(i)), e.addr(init.Buf, init.A, init.Ptr))
+		case init.Op == OpLoad && x.home[nd.B] >= 0 && !k.within(x.home[nd.B], nd.At) && !k.Bufs[init.Buf].Half:
+			r := e.reg(i)
+			if init.Imm > 0 || x.lanes(x.home[nd.B]) > 0 {
+				e.load8(r, e.addr(init.Buf, init.A, init.Ptr))
+			} else {
+				e.vaccess(a64.A64LdrS, lo(r), e.addr(init.Buf, init.A, init.Ptr))
+				a.MOVIzero(hi(r))
+			}
 		case init.Op == OpLoad && x.home[nd.B] < 0 && init.Imm > 0:
 			e.load8(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		case init.Op == OpLoad && x.home[nd.B] < 0:
