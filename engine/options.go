@@ -131,9 +131,10 @@ type modelOpts struct {
 	// the instances it makes trace with it too.
 	tracer func(layer int, name string, v []float32)
 
-	// kvType and kvTypeSet force the cache's format, overriding what
-	// nn.KVWidthPaysOff decides. Two fields because "not forced" and "forced
-	// to f32" are different states.
+	// kvType and kvTypeSet force the cache's format, overriding the default:
+	// the device's (nn.KVDefaulter), f32 where a selection reads the history.
+	// Two fields because "not forced" and "forced to f32" are different
+	// states.
 	kvType    model.KVType
 	kvTypeSet bool
 }
@@ -421,8 +422,8 @@ func WithPageBudget(bytes uint64) Option {
 	return func(l *loadOpts) { l.opt.pageBudget, l.opt.pageBudgetSet = bytes, true }
 }
 
-// WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:
-// WithKVType(KVF16) or WithKVType(KVF32).
+// WithKVF16 forces the cache width, overriding the device's default and the
+// f32 a selection's history takes: WithKVType(KVF16) or WithKVType(KVF32).
 func WithKVF16(on bool) Option {
 	t := model.KVF32
 	if on {

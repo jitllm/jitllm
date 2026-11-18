@@ -119,7 +119,7 @@ func kvF16IsSelectedAndRuns(t *testing.T, opts ...Option) {
 		// And the tuner's own answer, unforced: it takes f16 only when the f16
 		// kernel costs no more, so amd64 and arm64 can differ.
 		auto := testInstance(t, m, 32, instOpts...)
-		t.Logf("%-30s unforced: KVWidthPaysOff -> f16=%v", name, auto.KVIsF16())
+		t.Logf("%-30s unforced: the default -> f16=%v", name, auto.KVIsF16())
 		auto.Close()
 		s32.Close()
 		s16.Close()

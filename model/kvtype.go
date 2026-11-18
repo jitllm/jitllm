@@ -5,8 +5,9 @@ import (
 )
 
 // KVType is the KV cache's element format, forced per model with WithKVType
-// (or SetKVType). Unforced, the cache is f32 or f16 by nn.KVWidthPaysOff, and
-// a quantized cache is never chosen for the caller: it changes the answer.
+// (or SetKVType). Unforced, the cache is the device's default
+// (nn.KVDefaulter), f32 where a selection reads the history, and a quantized
+// cache is never chosen for the caller: it changes the answer.
 //
 //	KVF32   4 bytes an element
 //	KVF16   binary16, 2 bytes an element
