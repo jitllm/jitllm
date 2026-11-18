@@ -3,6 +3,7 @@
 package probe
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -13,17 +14,18 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/sched"
 )
 
 // The host probe's measuring kernels are the composer's forms of graphs of
-// ops where one is gated against the hand-built kernel it replaces
-// (hostforms.go): the special class's delay is a composed chain's seconds
-// over the estimator's count of the class in it. The rest are generated per
-// architecture: each provides hostCheck (whether this host runs them),
-// hostLanes (a vector's floats), and readKernel, chaseKernel, rateKernel,
-// chainKernel, mixKernel and emptyKernel, with one contract for the
-// argument block they read.
+// ops, each gated against the hand-built kernel it replaced (hostforms.go):
+// the reads, the chase, each class's rate and delay, the mix and a call,
+// each rate the instructions of its class the estimator counts in a form
+// over the seconds it took. The lanes class's are still generated per
+// architecture (lanesKernel), since no form moves a vector's lanes a trip;
+// each architecture provides hostCheck (whether this host runs them) and
+// hostLanes (a vector's floats) and formLanes (a counted vector's).
 
 // cache is a data cache level: its size and whether CPUs share it.
 type cache struct {
@@ -52,15 +54,12 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 	fm := newFormer(h)
 	read := &reader{fm: fm, forms: map[int]*formed{}}
 	defer read.close()
-	chase, err := e.chaseKernel()
+	const dram = 512 << 20
+	walk, err := newWalk(fm, dram)
 	if err != nil {
 		return d, err
 	}
-	walk, err := h.Map(chase)
-	if err != nil {
-		return d, err
-	}
-	defer walk.Close()
+	defer walk.close()
 	largest := sizes[len(sizes)-1].bytes
 	evict := make([]byte, 2*largest)
 	nearer := int64(0)
@@ -96,7 +95,6 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		}
 		nearer = c.bytes
 	}
-	const dram = 512 << 20
 	if d.Thread, err = readRate(read, dram/int64(workers), 1); err != nil {
 		return d, err
 	}
@@ -123,95 +121,138 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 		return d, err
 	}
 	for cl := cost.Class(0); cl < cost.NumClasses; cl++ {
-		code, err := e.rateKernel(cl)
-		if err != nil {
-			return d, err
-		}
-		if code == nil {
+		if cl == cost.ClassLanes {
+			if d.Rates[cl], d.Delay[cl], err = lanesRate(h, e, workers); err != nil {
+				return d, err
+			}
 			continue
 		}
-		k, err := h.Map(code)
-		if err != nil {
+		if d.Rates[cl], d.Delay[cl], err = classRate(fm, cl, e.formLanes(), workers); err != nil {
 			return d, err
 		}
-		d.Rates[cl] = cost.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
-		k.Close()
-		delay, ok, err := chainDelay(fm, cl)
-		if err != nil {
-			return d, err
-		}
-		if ok {
-			d.Delay[cl] = delay
-			continue
-		}
-		code, err = e.chainKernel(cl)
-		if err != nil {
-			return d, err
-		}
-		k, err = h.Map(code)
-		if err != nil {
-			return d, err
-		}
-		d.Delay[cl] = 1 / issueRate(k, 8, 1)
-		k.Close()
 	}
-	code, err := e.mixKernel()
-	if err != nil {
+	if d.Issue, err = mixRate(fm, workers); err != nil {
 		return d, err
 	}
-	mix, err := h.Map(code)
-	if err != nil {
-		return d, err
-	}
-	d.Issue = cost.Rate{Thread: issueRate(mix, 24, 1), Total: issueRate(mix, 24, workers)}
-	mix.Close()
 	d.Delay[cost.ClassMem] = d.Caches[0].Latency
 	if cl := cost.ClassMem; d.Rates[cl].Thread == 0 && d.Caches[0].Bytes > 0 {
 		d.Rates[cl] = cost.Rate{Thread: d.Caches[0].Rate.Thread / 32, Total: d.Caches[0].Rate.Total / 32}
 	}
-	code, err = e.emptyKernel()
-	if err != nil {
+	if d.Launch, err = callCost(fm); err != nil {
 		return d, err
 	}
-	call, err := h.Map(code)
-	if err != nil {
-		return d, err
-	}
-	defer call.Close()
-	d.Launch = callCost(call)
 	return d, nil
+}
+
+// lanesRate is the lanes class's rate, one thread's and every worker's
+// together, and its delay, from the kernels the probe still emits for it
+// (lanesKernel): an iteration's terms are elementwise, so no form of the
+// composer's moves a vector's lanes a trip.
+func lanesRate(h *cpu.Target, e emitter, workers int) (cost.Rate, float64, error) {
+	var r cost.Rate
+	var delay float64
+	for _, chain := range [2]bool{false, true} {
+		code, err := e.lanesKernel(chain)
+		if err != nil {
+			return r, 0, err
+		}
+		k, err := h.Map(code)
+		if err != nil {
+			return r, 0, err
+		}
+		if chain {
+			delay = 1 / issueRate(k, 8, 1)
+		} else {
+			r = cost.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
+		}
+		k.Close()
+	}
+	return r, delay, nil
 }
 
 // emitter emits the probe's kernels for a host: on amd64, the SSE tier's
 // legacy-encoded 128-bit forms where sse is set.
 type emitter struct{ sse bool }
 
+// walk is the chase's two forms, chaseShort and chaseLong steps of
+// chaseGraph over a table of up to words words, and its values.
+type walk struct {
+	forms         [2]*formed
+	words         int
+	at, tab, next graph.ValueID
+}
+
+// newWalk forms the chase over a table of up to bytes bytes.
+func newWalk(fm former, bytes int64) (*walk, error) {
+	w := &walk{words: int(bytes / 4)}
+	for i, trips := range [2]int{chaseShort, chaseLong} {
+		g, tab, at := chaseGraph(w.words, trips)
+		f, err := fm.form(g, 1)
+		if err != nil {
+			w.close()
+			return nil, err
+		}
+		w.forms[i], w.tab, w.at, w.next = f, tab, at, g.Out[0]
+	}
+	return w, nil
+}
+
+func (w *walk) close() {
+	for _, f := range w.forms {
+		if f != nil {
+			f.close()
+		}
+	}
+}
+
+// chaseCalls is the calls each walk length is timed over.
+const chaseCalls = 16
+
 // chaseLatency is the seconds one read waits walking a random cycle
 // through the cache lines of set bytes, so the prefetchers cannot run
-// ahead. A cache's set is twice the level before it, past that level and
+// ahead, between the walk's two lengths so a call's own cost cancels. Each
+// call starts where the one before stopped, so neither length re-reads a
+// prefix. A cache's set is twice the level before it, past that level and
 // within the TLB's reach, and the set is on huge pages where the kernel
 // grants them, as the engine's frames ask, so the walk waits for the cache
 // and not for page walks.
-func chaseLatency(k *cpu.Code, set int64) (float64, error) {
+func chaseLatency(w *walk, set int64) (float64, error) {
 	const line = 64
 	lines := int(max(2, set/line))
+	if lines*line/4 > w.words {
+		return 0, fmt.Errorf("probe: a chase of %d bytes past the walk's %d words", set, w.words)
+	}
 	raw, free, err := hugeBuffer(lines * line)
 	if err != nil {
 		return 0, err
 	}
 	defer free()
-	buf := unsafe.Slice((*uint64)(unsafe.Pointer(&raw[0])), len(raw)/8)
+	words := unsafe.Slice((*uint32)(unsafe.Pointer(&raw[0])), len(raw)/4)
 	order := rand.Perm(lines)
 	for i, at := range order {
-		next := order[(i+1)%lines]
-		buf[at*line/8] = uint64(uintptr(unsafe.Pointer(&buf[next*line/8])))
+		words[at*line/4] = uint32(order[(i+1)%lines] * line / 4)
 	}
-	steps := max(1<<20, 4*lines)
-	block := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[order[0]*line/8]))), uint64(steps)}
-	secs := parallel(1, func(int) {
-		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-	})
-	return secs / float64(steps), nil
+	// A line of its own: the word a walk starts at and stops on.
+	at := make([]uint32, 16)
+	at[0] = uint32(order[0] * line / 4)
+	var secs [2]float64
+	for i, f := range w.forms {
+		b, err := f.bind(map[graph.ValueID]unsafe.Pointer{w.at: unsafe.Pointer(&at[0]), w.tab: unsafe.Pointer(&raw[0]), w.next: unsafe.Pointer(&at[0])})
+		if err != nil {
+			return 0, err
+		}
+		secs[i] = parallel(1, func(int) {
+			for range chaseCalls {
+				b.run()
+			}
+		})
+		runtime.KeepAlive(b)
+	}
+	runtime.KeepAlive(at)
+	if !(secs[1] > secs[0]) {
+		return 0, fmt.Errorf("probe: walks of %d and %d steps took %v seconds", chaseShort, chaseLong, secs)
+	}
+	return (secs[1] - secs[0]) / (chaseCalls * (chaseLong - chaseShort)), nil
 }
 
 // retention is the fraction of a buffer an eighth of cache c's size that
@@ -366,17 +407,6 @@ func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
 		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
 	}
 	return perTrip * trips * float64(threads) / parallel(threads, run)
-}
-
-// callCost is the seconds an empty call costs.
-func callCost(k *cpu.Code) float64 {
-	const calls = 1 << 20
-	var block [8]uint64
-	return parallel(1, func(int) {
-		for range calls {
-			k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-		}
-	}) / calls
 }
 
 // parallel is the median seconds of rounds of threads running run at once,
