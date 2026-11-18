@@ -118,12 +118,16 @@ func twoInstancesRunABlockOnTwoCards(t *testing.T, path string) {
 	if len(placed) < 2 {
 		t.Skipf("%s took %d block(s); the upper half of one is all of it", a, len(placed))
 	}
+	first := placed[0]
 	placed = placed[len(placed)/2:]
 	lo, hi := placed[0], placed[len(placed)-1]+1
 	for _, li := range placed {
 		glo, ghi := y.kvSpan(li)
 		lo, hi = min(lo, glo), max(hi, ghi)
 	}
+	// One history group from the stack's first block up: the move takes
+	// every block, and the projection stays on a reading them there.
+	whole := lo <= first
 	one, onB := g.Bytes(), g.DevStats()[1].BudgetUsed
 	var got [2][][]float32
 	for j := range ntok {
@@ -151,7 +155,9 @@ func twoInstancesRunABlockOnTwoCards(t *testing.T, path string) {
 			t.Logf("%d block(s) moved to %s, %d KV bytes by %q; weights %d -> %d bytes", len(mv.Moved), b,
 				mv.KVBytes, mv.Path, one, g.Bytes())
 		}
-		if j == headAt {
+		if j == headAt && whole {
+			t.Logf("the upper half's history group reaches block %d: all moved to %s, the projection stays on %s", first, b, a)
+		} else if j == headAt {
 			rest := y.placedOn(a)
 			if len(rest) == 0 {
 				t.Fatalf("the second instance holds no block on %s after its upper half moved", a)
