@@ -838,7 +838,10 @@ func auditList(t *testing.T, towers bool) []auditModel {
 	for _, lm := range library.Models() {
 		p, copies := libraryPath(lm.File)
 		if p == "" {
-			if !towers || lm.MMProj != "" {
+			switch {
+			case lm.Bytes > 2<<30 && os.Getenv("JITLLM_SLOW") == "":
+				t.Logf("%s: over 2 GiB and not on this box, not swept (JITLLM_SLOW=1 admits it)", lm.Name)
+			case !towers || lm.MMProj != "":
 				missing("%s: MODEL MISSING: %s is not in %s (https://huggingface.co/%s)", lm.Name, lm.File, testmodels.Dir(), lm.Repo)
 			}
 			continue
@@ -886,9 +889,12 @@ func auditList(t *testing.T, towers bool) []auditModel {
 	for _, g := range golds {
 		name := strings.TrimSuffix(filepath.Base(g), ".json")
 		dir := testmodels.Path(name)
-		if fileExists(filepath.Join(dir, "config.json")) {
+		switch {
+		case fileExists(filepath.Join(dir, "config.json")):
 			add(name+" (safetensors)", dir, true)
-		} else if !towers {
+		case hfGoldLarge(g):
+			t.Logf("%s: over 2 GiB and not on this box, not swept (JITLLM_SLOW=1 admits it)", name)
+		case !towers:
 			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", name, dir)
 		}
 	}
@@ -899,11 +905,15 @@ func auditList(t *testing.T, towers bool) []auditModel {
 			add(rel, p, false)
 		}
 	}
-	for _, rel := range auditHFDirs() {
-		if dir := testmodels.Path(rel); fileExists(filepath.Join(dir, "config.json")) {
-			add(rel+" (safetensors)", dir, true)
-		} else if !towers {
-			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", rel, dir)
+	for _, d := range auditHFDirs() {
+		dir := testmodels.Path(d.rel)
+		switch {
+		case fileExists(filepath.Join(dir, "config.json")):
+			add(d.rel+" (safetensors)", dir, true)
+		case d.bytes > 2<<30 && os.Getenv("JITLLM_SLOW") == "":
+			t.Logf("%s: over 2 GiB and not on this box, not swept (JITLLM_SLOW=1 admits it)", d.rel)
+		case !towers:
+			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", d.rel, dir)
 		}
 	}
 	return out
@@ -974,10 +984,22 @@ func auditPicture(t *testing.T) image.Image {
 }
 
 // auditHFDirs are safetensors inputs held to their reference outside
-// testdata/golden/hf, relative to the model directory: a class whose
-// fixtures carry their own goldens appends them (kimik3_test.go).
-func auditHFDirs() []string {
-	return []string{"hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf", "realck/Phi-tiny-MoE-instruct-hf"}
+// testdata/golden/hf, relative to the model directory, with their
+// safetensors' bytes: a box that does not hold one over 2 GiB names it
+// rather than fails, as it names a catalogue file. A class whose fixtures
+// carry their own goldens appends them (kimik3_test.go).
+func auditHFDirs() []auditHFDir {
+	return []auditHFDir{
+		{"hf/synth-kimik3", 85262304},
+		{"kimik3/Kimi-K3-0.40B-MXFP4-hf", 1472194984},
+		{"realck/Phi-tiny-MoE-instruct-hf", 7510687752},
+	}
+}
+
+// auditHFDir is one of auditHFDirs: where it is and its bytes.
+type auditHFDir struct {
+	rel   string
+	bytes int64
 }
 
 // auditDecision is the decision models' GGUFs two directories down; d1's and

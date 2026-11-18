@@ -40,6 +40,20 @@ func declinedRefusal(err error) bool {
 	return false
 }
 
+// hfGoldLarge says golden g's checkpoint is over 2 GiB and JITLLM_SLOW is not
+// set: the GGUF sweeps' policy (nnaudit_test.go), read off the golden so a
+// box that does not hold the checkpoint knows its size.
+func hfGoldLarge(g string) bool {
+	b, err := os.ReadFile(g)
+	if err != nil {
+		return false
+	}
+	var gold struct {
+		Bytes int64 `json:"bytes"`
+	}
+	return json.Unmarshal(b, &gold) == nil && gold.Bytes > 2<<30 && os.Getenv("JITLLM_SLOW") == ""
+}
+
 // TestSafetensorsMatchTransformers gates the safetensors path against
 // transformers itself: scripts/hfgold.py runs the reference class over fixed ids
 // in float32 and records the logits, so the container's graph is compared with
@@ -57,8 +71,13 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 	// The KV cache is f32, since the bound is the whole gate: the binary16
 	// cache's own rounding is near the weakest violation. WithKVF16 configures
 	// only the model this gate opens.
+	var large []string
 	for _, g := range golds {
 		name := strings.TrimSuffix(filepath.Base(g), ".json")
+		if hfGoldLarge(g) {
+			large = append(large, name)
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			b, err := os.ReadFile(g)
 			if err != nil {
@@ -73,6 +92,9 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 					// sentencepiece's, where the directory ships tokenizer.model
 					SPIDs []int32 `json:"sp_ids"`
 					SPDec string  `json:"sp_dec"`
+					// tokenizer.json's pieces with the specials the class
+					// adds, where those depart from its post-processor's
+					ClsIDs []int32 `json:"cls_ids"`
 				} `json:"tok"`
 				Pos []struct {
 					Argmax int       `json:"argmax"`
@@ -105,6 +127,13 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 				t.Fatalf("no tokenizer: %v", m.TokErr)
 			}
 			for _, tk := range gold.Tok {
+				// The class's specials win over the post-processor's where a
+				// class rebuilds it from tokenizer_config (hfVocabOf).
+				if tk.ClsIDs != nil {
+					t.Logf("tokenizer.json's post-processor departs from its class on %q: %v against %v -- "+
+						"matching the class", tk.Text, tk.IDs, tk.ClsIDs)
+					tk.IDs = tk.ClsIDs
+				}
 				// Where sentencepiece (what the weights were trained against)
 				// exists, it wins; tokenizer.json's departures are logged.
 				if tk.SPIDs != nil {
@@ -163,6 +192,9 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 			}
 			t.Logf("%d positions, worst NMSE %.2e", len(gold.IDs), worst)
 		})
+	}
+	if len(large) > 0 {
+		t.Logf("over 2 GiB, not swept (JITLLM_SLOW=1 admits them): %s", strings.Join(large, ", "))
 	}
 }
 

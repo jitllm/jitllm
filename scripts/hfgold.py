@@ -487,6 +487,13 @@ def main(dirs):
                 "head": [round(float(x), 7) for x in r[:NLOGIT]],
             })
         tk = Tokenizer.from_file(os.path.join(path, "tokenizer.json"))
+        # The specials the class adds: a class that reads add_bos_token or
+        # add_eos_token rebuilds tokenizer.json's post-processor from them.
+        try:
+            from transformers import AutoTokenizer
+            ctk = AutoTokenizer.from_pretrained(path)
+        except Exception:
+            ctk = None
         sp = None
         if os.path.exists(os.path.join(path, "tokenizer.model")):
             import sentencepiece
@@ -495,6 +502,13 @@ def main(dirs):
         for x in TEXTS:
             e = tk.encode(x).ids
             r = {"text": x, "ids": e, "dec": tk.decode(e, skip_special_tokens=True)}
+            if ctk is not None:
+                c, cp = ctk(x)["input_ids"], ctk(x, add_special_tokens=False)["input_ids"]
+                k = next((i for i in range(len(c) - len(cp) + 1) if c[i:i + len(cp)] == cp), None)
+                if k is not None:
+                    cls = c[:k] + tk.encode(x, add_special_tokens=False).ids + c[k + len(cp):]
+                    if cls != e:
+                        r["cls_ids"] = cls
             if sp is not None:
                 # The post-processor's leading specials (a BOS), then the
                 # sentencepiece encoding; sentencepiece adds no specials itself.
@@ -502,7 +516,9 @@ def main(dirs):
                 r["sp_ids"] = lead + sp.encode(x)
                 r["sp_dec"] = tk.decode(r["sp_ids"], skip_special_tokens=True)
             toks.append(r)
-        rec = {"dir": d, "ids": ids, "vocab": vocab, "pos": rows, "tok": toks}
+        # The checkpoint's bytes: the gates sweep one over 2 GiB only when asked.
+        size = sum(os.path.getsize(os.path.join(path, f)) for f in os.listdir(path) if f.endswith(".safetensors"))
+        rec = {"dir": d, "ids": ids, "vocab": vocab, "pos": rows, "tok": toks, "bytes": size}
         if note:
             rec["note"] = note
         with open(os.path.join(OUT, d + ".json"), "w") as f:
