@@ -25,11 +25,15 @@ import (
 // picked by hand left whatever room placement's rounding happened to leave,
 // and on some budgets that held the growth and nothing spilled.
 //
-// The two devices are two cards (distinctCards): one card under two backends
-// is one pool, sized at the larger of the two caps, so the second cap gives
-// the first card's blocks no room and the relocate arm's prompt is declined.
+// The two devices are two cards (distinctCards); one card under two backends
+// is TestOneCardUnderTwoBackendsSpillsAndRelocates.
 func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
-	devs := testdevices.Take(t, 2, "cuda:0,cuda:1")
+	fullCardSpills(t, testdevices.Take(t, 2, "cuda:0,cuda:1"), distinctCards)
+}
+
+// fullCardSpills is the spill gate over devs; card holds the opened tier to
+// the cards the caller means.
+func fullCardSpills(t *testing.T, devs []string, card func(testing.TB, *gpu.GPU)) {
 	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
@@ -101,7 +105,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 			}
 			return nil
 		}
-		distinctCards(t, d)
+		card(t, d)
 		return d
 	}
 	// What each card holds once placed; the arms cap them there.
@@ -133,8 +137,8 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 			defer g.Close()
 			st, got := run(t, g)
 			defer st.Close()
-			t.Logf("placed %v, %d spill(s), %d relocation(s), %d demotion(s), %d/%d blocks", g.Placed(),
-				st.Spills(), st.Relocations(), st.DeviceDemotions(), st.GPULayers(), m.Cfg.NLayer)
+			t.Logf("placed %v, %d spill(s), %d relocation(s), %d demotion(s), %d/%d blocks, %d charge(s) past the pool", g.Placed(),
+				st.Spills(), st.Relocations(), st.DeviceDemotions(), st.GPULayers(), m.Cfg.NLayer, g.Stats().PoolOver)
 			if c.spill && formed != 0 {
 				t.Fatalf("the spill composed %d block(s) on the CPU while the tokens ran", formed)
 			}

@@ -79,3 +79,34 @@ func TestOneCardUnderTwoBackendsIsOneBudget(t *testing.T) {
 	}
 	noDevice(t, c+" and a Vulkan device of the same card", nil)
 }
+
+// TestOneCardUnderTwoBackendsSpillsAndRelocates is the spill gate on one card
+// listed twice, a CUDA device and the Vulkan device of the same card: one
+// pool, sized at the larger cap, both views spending it at once while a
+// prompt's pieces are pipelined through them. A view that found room and
+// uploaded after lost it to the other between the two, and the prompt was
+// declined (4 of 9 runs on a V100).
+func TestOneCardUnderTwoBackendsSpillsAndRelocates(t *testing.T) {
+	c := testdevices.One("cuda:0")
+	vk := []string{"vulkan:0", "vulkan:1", "vulkan:2", "vulkan:3", "vulkan:4", "vulkan:5", "vulkan:6", "vulkan:7"}
+	for _, v := range testdevices.Within(vk) {
+		g, err := openGPU(t, gpu.WithDevices(c+","+v), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || g == nil {
+			continue
+		}
+		clash := cardClash(g.Hardware())
+		g.Close()
+		if clash == "" {
+			continue
+		}
+		t.Logf("%s + %s: %s", c, v, clash)
+		fullCardSpills(t, []string{c, v}, func(t testing.TB, g *gpu.GPU) {
+			t.Helper()
+			if cardClash(g.Hardware()) == "" {
+				t.Fatalf("%s and %s opened as two cards", c, v)
+			}
+		})
+		return
+	}
+	noDevice(t, c+" and a Vulkan device of the same card", nil)
+}

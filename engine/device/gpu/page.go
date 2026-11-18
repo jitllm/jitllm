@@ -129,7 +129,7 @@ func (g *devTier) slots() int {
 	if pl := g.pool.Limit(); pl > 0 {
 		// What the pool would allow, plus what this device's own slots already
 		// hold -- those bytes come back to the pool when a page goes out.
-		free := g.pageBytes
+		free := g.pageBytes + g.claimed
 		if u := g.pool.Used(); pl > u {
 			free += pl - u
 		}
@@ -169,7 +169,7 @@ func (g *devTier) slotsIfPerm(n uint64) int {
 		avail = g.limit - perm
 	}
 	if pl := g.pool.Limit(); pl > 0 {
-		free := g.pageBytes
+		free := g.pageBytes + g.claimed
 		if u := g.pool.Used(); pl > u+n {
 			free += pl - u - n
 		}
@@ -579,6 +579,25 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		g.noteCause(nn.FailRoom)
 		return false
 	}
+	// The room is held from here to the last tensor's upload: another device
+	// of the pool runs beside this one (GPU.pipeline) and would otherwise
+	// spend it between the reclaim and the uploads.
+	before, held := g.claim(l.pg.bytes + l.pg.round + g.reserved() + g.slack())
+	if !held {
+		if g.reclaim(l.pg.bytes+l.pg.round, li, lo, hi) {
+			before, held = g.claim(l.pg.bytes + l.pg.round + g.reserved() + g.slack())
+		}
+		if !held {
+			if l.pg.in {
+				return g.holdPages(li, li+1)
+			}
+			g.LastErr = fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
+				li, l.pg.bytes+l.pg.round, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+			g.noteCause(nn.FailRoom)
+			return false
+		}
+	}
+	defer g.unclaim(before)
 	// Whatever the recording named is about to be joined by buffers that did not
 	// exist when it was captured.
 	g.dropGraph()

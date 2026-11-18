@@ -383,6 +383,10 @@ type Stats struct {
 	// ConvBlocks is convolutional tower blocks run on the device.
 	ConvBlocks int64
 	NoRoom     int // tensors the DEVICE refused: something else is using the card
+	// PoolOver is how many charges left the device's pool past its limit: a
+	// charge no claim covered, made after another device of the pool spent
+	// the room this one had checked.
+	PoolOver int
 	// SessionDeclines is blocks a session could not take because its history
 	// did not fit beside the sessions already there (see Config.Sessions).
 	SessionDeclines int
@@ -880,6 +884,7 @@ func (s *Stats) add(o Stats) {
 	s.Declined += o.Declined
 	s.ConvBlocks += o.ConvBlocks
 	s.NoRoom += o.NoRoom
+	s.PoolOver += o.PoolOver
 	s.SessionDeclines += o.SessionDeclines
 	s.RopeTableUploads += o.RopeTableUploads
 	s.Prepacked += o.Prepacked
@@ -1094,13 +1099,33 @@ func (p *Pool) room(n uint64) bool {
 	return p.used+n <= p.limit
 }
 
-func (p *Pool) take(n uint64) {
+// take charges n bytes whether or not they fit, and reports whether the pool
+// is still inside its limit.
+func (p *Pool) take(n uint64) bool {
 	if p == nil {
-		return
+		return true
 	}
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.used += n
-	p.mu.Unlock()
+	return p.limit == 0 || p.used <= p.limit
+}
+
+// claim takes n bytes if they fit, the check and the take in one step: a
+// device of the pool that checks room and charges after leaves the bytes
+// between the two to every other device of the pool, and two devices running
+// at once (one card under two backends, pipelined) both spent them.
+func (p *Pool) claim(n uint64) bool {
+	if p == nil {
+		return true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.limit > 0 && p.used+n > p.limit {
+		return false
+	}
+	p.used += n
+	return true
 }
 
 func (p *Pool) give(n uint64) {
@@ -1125,7 +1150,41 @@ func (g *devTier) room(n uint64) bool {
 	// blocks out never sees the room it made.
 	g.settleRounding()
 	n += g.reserved() + g.slack()
-	return g.used+n <= g.limit && g.pool.room(n)
+	return g.used+n <= g.limit && g.pool.room(n-min(n, g.claimed))
+}
+
+// claim holds n bytes of the pool for this device, beyond what it holds
+// already, so the charges of the operation it opens find them however the
+// other devices of the pool spend meanwhile. It returns the hold before it,
+// which unclaim restores. Callers hold g.mu.
+func (g *devTier) claim(n uint64) (uint64, bool) {
+	before := g.claimed
+	if n <= g.claimed {
+		return before, true
+	}
+	if !g.pool.claim(n - g.claimed) {
+		return before, false
+	}
+	g.claimed = n
+	return before, true
+}
+
+// unclaim gives the pool back what the operation claim opened did not
+// spend. Callers hold g.mu.
+func (g *devTier) unclaim(before uint64) {
+	if g.claimed > before {
+		g.pool.give(g.claimed - before)
+		g.claimed = before
+	}
+}
+
+// poolTake charges n bytes to the pool, from this device's claim first.
+func (g *devTier) poolTake(n uint64) {
+	c := min(n, g.claimed)
+	g.claimed -= c
+	if !g.pool.take(n-c) && n > c {
+		g.PoolOver++
+	}
 }
 
 // roomSeat is room for a session's history on a block that has live sessions
@@ -1136,7 +1195,8 @@ func (g *devTier) roomSeat(need uint64, live int, hist uint64) bool {
 		res := g.reserved()
 		credit := min(hist, res)
 		need += g.slack()
-		return g.used+res-credit+need <= g.limit && g.pool.room(res-credit+need)
+		n := res - credit + need
+		return g.used+n <= g.limit && g.pool.room(n-min(n, g.claimed))
 	}
 	return g.room(need)
 }
@@ -1145,7 +1205,7 @@ func (g *devTier) roomSeat(need uint64, live int, hist uint64) bool {
 func (g *devTier) charge(n uint64) {
 	g.used += n
 	g.explicit += int64(n)
-	g.pool.take(n)
+	g.poolTake(n)
 	g.settleRounding()
 }
 
@@ -1446,6 +1506,10 @@ type devShared struct {
 	mvPartCap int
 	used      uint64
 	limit     uint64
+	// claimed is what this device took from its pool ahead of the charges
+	// an admission or a page-in is about to make (claim): spent by them first,
+	// the rest given back when the operation ends.
+	claimed uint64
 	// why is where limit came from, in words, for the report.
 	why string
 

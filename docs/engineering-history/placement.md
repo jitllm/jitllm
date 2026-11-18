@@ -4953,3 +4953,25 @@ copies not appended, gpu.Faults "copystale": the logits leave the band on
 every pair),
 TestDecodeDoesNotAllocate's two-card-history arms, and
 TestAWidePromptOfStreamsGoesInPieces.
+
+## One pool spent by two devices
+
+One card listed as cuda:N and vulkan:N is one physical device under two
+backends, and the tier gives the two one pool (planSlots groups devices by
+backend.Identity), sized at the larger of their caps rather than the sum.
+TestAFullCardSpillsABlockOntoTheNextOne went red on the fan's one slot whose
+card was both of its devices (its second device was hardcoded as vulkan:1):
+the relocate arm's prompt was declined at block 0, the Vulkan view's ledger
+at 634 MB of a 985 MB cap and the pool at 975 MB, the CUDA view's 341 MB
+being the rest. Every other slot skipped the gate, and the skips read as
+greens. The gate now takes two distinct cards (8f880d01d).
+
+The engine side was a race, not a leak: a long prompt pipelines its pieces
+through both devices at once, and admission and page-in checked the pool for
+room and then charged it tensor by tensor, so the other device spent the
+bytes between the two. Instrumented, a page-in of block 0 on cuda:0 found
+318 of its 354 MB used and was declined at its first upload with the pool at
+980 of 985 MB; once the pool reached 994 of 985. Red 5 of 24 loops on one
+card before the claim, 40 of 40 green after, and 2 of 16 red with the claim
+made a no-op. What is still open is in open-questions.md ("one pool spent
+by two devices").

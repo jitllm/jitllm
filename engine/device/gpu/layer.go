@@ -1707,6 +1707,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 	}
+	// What was found room for is held until the block's last charge, as a
+	// page-in holds it (pageInHold).
+	before, held := g.claim(need + g.reserved() + g.slack())
+	if !held {
+		g.Declined++
+		g.LastErr = fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
+			li, need, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+		return false
+	}
+	defer g.unclaim(before)
 	// The staging is sized after the block is admitted, from what is left
 	// (need is what the block still has to spend). If that is not enough it is
 	// not allocated and the covered tensors are packed on the host. It is
@@ -2005,7 +2015,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.prewarming = was
 	}
 	// Admitting a block charges its KV cache forever, so the slot count just
-	// fell; give back whatever no longer fits under it.
+	// fell; give back whatever no longer fits under it. The claim's rest is
+	// the pool's first, or trim reads it as held.
+	g.unclaim(before)
 	g.trim()
 	return true
 }
