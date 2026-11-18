@@ -1866,11 +1866,12 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 		}
 		return true
 	}
-	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs)) {
+	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs) || g.carriesRows(sid, rs)) {
 		// The pieces go one after another: two runs of one device -- at two
 		// geometries, or either side of another device's after a block
 		// spilled past a full card -- share that device's tier, which the
-		// pipeline would drive from two goroutines at once.
+		// pipeline would drive from two goroutines at once. So does a chunk
+		// carrying rows the pipeline does not cut per piece (carriesRows).
 		if !g.pieces(sid, rs, pos, n, x, cs, tail) {
 			return false
 		}
@@ -1944,8 +1945,28 @@ func headOfLast(hd *devTier, sid uint64, hi, pos, n int, x []float32, cs nn.Rope
 	if head.RowLogits || n <= 1 {
 		return hd.layersFor(sid, hi, hi, pos, n, x, cs, head)
 	}
-	e := len(x) / n
-	return hd.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], cs.Rows(n-1, n, n), head)
+	// The last row of every stream: a residual of several is stream-major.
+	ns := hd.streams()
+	e := len(x) / n / ns
+	return hd.layersFor(sid, hi, hi, pos+n-1, 1, hd.streamCut(x, ns, e, n-1, 1, n), cs.Rows(n-1, n, n), head)
+}
+
+// carriesRows reports that a chunk of session sid over runs rs carries rows
+// beside the residual's one stream -- several streams, laid out stream-major,
+// or per-row inputs -- which GPU.pieces cuts per piece (streamCut, sideAtOf)
+// and GPU.pipeline does not: it cuts the residual as rows of one stream and
+// stages no inputs, and synth-gemma3n's 600-row prompt over two cards stood
+// at NMSE 1.99 from the CPU's.
+func (g *GPU) carriesRows(sid uint64, rs []run) bool {
+	for _, r := range rs {
+		if r.dev.streams() > 1 {
+			return true
+		}
+		if s := r.dev.sideOf(sid); len(s.ple) > 0 || len(s.cut) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // putRuns hands layersCall's runs slice back for the next call.

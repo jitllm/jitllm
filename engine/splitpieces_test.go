@@ -127,3 +127,82 @@ func splitPieces(g *gpu.GPU) int {
 	}
 	return n
 }
+
+// TestAWidePromptOfStreamsGoesInPieces: synth-gemma3n -- four residual
+// streams (AltUp) and per-layer inputs, one geometry -- with its lower blocks
+// on one card and the KV-sharing group and the rest on the other, a 600-row
+// prompt wider than a submission. The pipeline cut its residual as rows of
+// one stream and staged no per-layer inputs (NMSE 1.99 from the CPU's with
+// the projection on the second card, 1.67 on the first); it goes in pieces
+// (GPU.pieces), each through every run, and the projection on the first card
+// takes the last row of every stream (headOfLast). Held to the CPU's logits
+// inside three times one card's band, with Stats.SplitPieces counting the
+// pieces.
+func TestAWidePromptOfStreamsGoesInPieces(t *testing.T) {
+	m, _, io := openGemma3n(t, "synth-gemma3n")
+	defer m.Close()
+	const n = 600
+	ids := make([]int32, n)
+	for i := range ids {
+		ids[i] = int32((i*7919 + 13) % m.Cfg.NVocab)
+	}
+	want, err := testInstance(t, m, n+8, io...).Prefill(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append([]float32(nil), want...)
+	a, b := moveDevices(t)
+	nl := m.Cfg.NLayer
+	g1, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff), gpu.WithDevices(a))
+	if err != nil || g1 == nil {
+		noDevice(t, a, err)
+	}
+	one := testInstance(t, m, n+8, io...)
+	if err := one.SetDevice(g1); err != nil {
+		t.Fatal(err)
+	}
+	lg, err := one.Prefill(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	band, _ := nmseOf(lg, want)
+	one.Close()
+	g1.Close()
+	lo := nl / 2
+	for li := nl / 2; li < nl; li++ {
+		lo = min(lo, kvSourceOf(m, li))
+	}
+	up := map[int]Place{}
+	for li := lo; li < nl; li++ {
+		up[li] = Place{On: b}
+	}
+	for _, head := range []string{a, b} {
+		t.Run("head-on-"+head, func(t *testing.T) {
+			g, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff), gpu.WithDevices(a+","+b))
+			if err != nil || g == nil {
+				noDevice(t, a+","+b, err)
+			}
+			defer g.Close()
+			distinctCards(t, g)
+			st := testInstance(t, m, n+8, append(append([]Option(nil), io...),
+				WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: head}, Strict: true}))...)
+			defer st.Close()
+			if err := st.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			lg, err := st.Prefill(ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := nmseOf(lg, want)
+			if splitPieces(g) == 0 {
+				t.Fatal("no piece ran: the prompt did not go in pieces over the two cards")
+			}
+			if bound := max(3*band, 1e-9); !(got <= bound) || Greedy(lg) != Greedy(want) {
+				t.Fatalf("the prompt over two cards stands at NMSE %.3e from the CPU's (greedy %d, the CPU's %d), above %.3e, three times one card's %.3e",
+					got, Greedy(lg), Greedy(want), bound, band)
+			}
+			t.Logf("%d pieces: NMSE %.3e from the CPU's, one card's %.3e", splitPieces(g), got, band)
+		})
+	}
+}
