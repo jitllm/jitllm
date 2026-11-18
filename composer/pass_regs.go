@@ -1908,6 +1908,17 @@ func (b *binder86) vectors() error {
 			}
 		}
 	}
+	uses := map[int]int{}
+	for j := range k.Nodes {
+		for _, a := range k.args(j, &buf) {
+			uses[a]++
+		}
+	}
+	for x := range k.Stores {
+		for _, a := range k.storeArgs(&k.Stores[x]) {
+			uses[*a]++
+		}
+	}
 	held := make([]int, b.p.Vectors)
 	for r := range held {
 		held[r] = -1
@@ -2081,6 +2092,14 @@ func (b *binder86) vectors() error {
 				continue
 			}
 			want := lowest(0, -1)
+			if r := k.Nodes[init].Reg - 1; k.Loops[k.Nodes[f].At].Serial && r >= 0 && k.needsVector(init) && b.last.of(init) == pos {
+				// An iteration's value starts in its start's register, read
+				// last here: the starts and the values are not held at once.
+				free(pos, false)
+				if !busy[r] {
+					want = r
+				}
+			}
 			if h := k.Nodes[f].Hint - 1; h >= 0 && !busy[h] {
 				want = h
 			}
@@ -2167,11 +2186,11 @@ func (b *binder86) vectors() error {
 			}
 			// A sum's one reader in its loop, the first of a chain of
 			// several to its step, takes the sum's register.
-			if f := carried(nd); reg < 0 && f >= 0 && k.Nodes[f].Op == OpFold && k.Nodes[f].Reg > 0 && k.needsVector(f) && k.Nodes[f].At == hs[i] && reads[f] == 1 {
+			if f := carried(nd); reg < 0 && f >= 0 && k.Nodes[f].Op == OpFold && k.Nodes[f].Reg > 0 && k.needsVector(f) && k.Nodes[f].At == hs[i] && reads[f] == 1 && k.readsNode(k.Nodes[f].A, i) {
 				reg = k.Nodes[f].Reg - 1
 				carry[reg] = f
 			}
-			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && b.last.of(first) == pos {
+			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && b.last.of(first) == pos && k.alongCarry(carry, k.Nodes[first].Reg-1, i, uses) {
 				reg = k.Nodes[first].Reg - 1
 			}
 			if reg < 0 {
@@ -3032,6 +3051,19 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 // carried is the operand of nd a result may take the register of: a
 // multiply-add's or byte dot's addend, else the first operand of an
 // operation the lowering makes in place of its first; -1 for others.
+// alongCarry reports whether node i may take register r from the value
+// before it in a chain: r carries no sum to its step (carry), or i is that
+// step or read once on the way to it, so no value r holds outlives the step
+// that ends in r.
+func (k *Kernel) alongCarry(carry map[int]int, r, i int, uses map[int]int) bool {
+	f, ok := carry[r]
+	if !ok {
+		return true
+	}
+	step := k.Nodes[f].A
+	return i == step || uses[i] == 1 && k.readsNode(step, i)
+}
+
 func carried(nd Node) int {
 	switch nd.Op {
 	case OpFma, OpDot4, OpDot4U:
