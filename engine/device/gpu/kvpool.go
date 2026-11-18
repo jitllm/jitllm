@@ -317,9 +317,9 @@ func (g *devTier) allocLayerPool(geom kvGeom, p, n int) (k, v backend.Buf, err e
 	if k, err = g.dev.Alloc(kw * 4); err != nil {
 		return nil, nil, err
 	}
-	if err = k.Write(make([]byte, kw*4)); err == nil && vw > 0 {
+	if err = g.zeroBuf(k, kw*4); err == nil && vw > 0 {
 		if v, err = g.dev.Alloc(vw * 4); err == nil {
-			err = v.Write(make([]byte, vw*4))
+			err = g.zeroBuf(v, vw*4)
 		}
 	}
 	if err != nil {
@@ -330,6 +330,34 @@ func (g *devTier) allocLayerPool(geom kvGeom, p, n int) (k, v backend.Buf, err e
 		return nil, nil, err
 	}
 	return k, v, nil
+}
+
+// zeroChunk is the host zeros zeroBuf writes before its copies on the device.
+const zeroChunk = 64 << 10
+
+// zeroBuf zeroes b's first n bytes: one write of the kept host zeros, then
+// copies on the device, each doubling the zeroed prefix. A write of the
+// whole buffer from the host made a layer's growth past a prompt's pages
+// allocate, clear and send hundreds of MiB a layer, and the collector ran
+// over them: 1.2 s of a decode token on four V100s, where the copies take
+// a millisecond.
+func (g *devTier) zeroBuf(b backend.Buf, n int) error {
+	if g.zeroHost == nil {
+		g.zeroHost = make([]byte, zeroChunk)
+	}
+	c := min(n, zeroChunk)
+	if err := b.WriteAt(0, g.zeroHost[:c]); err != nil {
+		return err
+	}
+	for c < n {
+		m := min(c, n-c)
+		if err := g.dev.Copy(b, c, b, 0, m); err != nil {
+			return err
+		}
+		g.KVZeroCopies++
+		c += m
+	}
+	return nil
 }
 
 // allocPages gives sequence s count more pages in layer l, all or none. The

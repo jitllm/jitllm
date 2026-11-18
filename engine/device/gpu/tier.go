@@ -727,6 +727,9 @@ type Stats struct {
 	// RecZeroHost counts seat zeroings written from the host because the
 	// kept zeros could not be had on the device (recZeroLayers).
 	RecZeroHost int
+	// KVZeroCopies counts the copies on the device that zeroed a KV layer's
+	// new buffers (zeroBuf).
+	KVZeroCopies uint64
 	// EmbedLaunches counts prompt chunks whose rows the device gathered from
 	// the tied head (EmbedRows) -- the selection check that the host lookup
 	// was actually skipped.
@@ -980,6 +983,7 @@ func (s *Stats) add(o Stats) {
 	s.RecZeroCopies += o.RecZeroCopies
 	s.RecZeroSource += o.RecZeroSource
 	s.RecZeroHost += o.RecZeroHost
+	s.KVZeroCopies += o.KVZeroCopies
 	s.EmbedLaunches += o.EmbedLaunches
 	s.EmbedReadBacks += o.EmbedReadBacks
 	s.HeadFolds += o.HeadFolds
@@ -1332,6 +1336,8 @@ type devShared struct {
 	snapCount int
 	// zeroList is recZeroLayers' copies, run as one list.
 	zeroList []backend.CopyRange
+	// zeroHost is the host zeros zeroBuf writes, made at its first call.
+	zeroHost []byte
 	// recZeros is the zeros a seat's zeroing copies from (recZeroLayers),
 	// uploaded at the widest zeroing and kept while there are pools: a
 	// prompt that resets its sequence's state made and freed it each time.
