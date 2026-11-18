@@ -59,7 +59,7 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 	if err != nil {
 		return out, err
 	}
-	sums, err := p.alloc(4 * threads)
+	sums, err := p.alloc(4 * 16 * threads)
 	if err != nil {
 		return out, err
 	}
@@ -179,8 +179,10 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 	}
 
 	ops := map[cost.Class]oldOp{
+		// The value by itself: a multiply-add by two constants is one a
+		// compiler folds across steps laid out straight (Vulkan's did).
 		cost.ClassFloat: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Fma(x, b.ConstF32(0.999), b.ConstF32(0.001))
+			return b.Fma(x, x, b.ConstF32(0.001))
 		}},
 		cost.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
 		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
@@ -197,6 +199,14 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 	p.warm = loaded
 	defer func() { p.warm = nil }()
 	for cl, op := range ops {
+		run := func(chains, deep, trips, threads int) (float64, error) {
+			k, err := oldOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
+			if err != nil {
+				return 0, err
+			}
+			secs, err := p.time(k, max(1, threads/width), min(width, threads), 4, sums)
+			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
+		}
 		rate := func(chains, deep, threads int) (float64, error) {
 			trips := 1 << 12
 			if threads <= width {
@@ -205,18 +215,23 @@ func oldGPU(d backend.Device) (cost.Device, error) {
 			if cl == cost.ClassGroup {
 				trips /= 16
 			}
-			k, err := oldOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
-			if err != nil {
-				return 0, err
-			}
-			secs, err := p.time(k, max(1, threads/width), min(width, threads), 4, sums)
-			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
+			return run(chains, deep, trips, threads)
 		}
 		chains := 8
 		if cl == cost.ClassGroup {
 			chains = 1
 		}
 		total, err := rate(chains, 1, threads)
+		if cl != cost.ClassLanes && cl != cost.ClassGroup {
+			// Over the composed form's rows, sixteen times the slots'
+			// threads, at eight steps a trip, the same steps a thread. The
+			// slots' 64 workgroups of a device that does not state its slots
+			// do not divide over the M4's ten cores, and Metal's compiler
+			// keeps the loop as written, its counter and branch beside every
+			// step: so the M4's float rate read 0.74 of the composed form's,
+			// and 0.99 over 1024 workgroups at eight steps a trip.
+			total, err = run(chains, 8, (1<<12)/(8*16), 16*threads)
+		}
 		if err != nil {
 			return out, err
 		}
