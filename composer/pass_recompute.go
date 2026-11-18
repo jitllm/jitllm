@@ -41,9 +41,12 @@ func (p Recompute) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				if nd.Op != OpLoad || c.Bufs[nd.Buf].Operand != o {
 					continue
 				}
-				ax := nd.Ax
-				if ax == nil {
+				ax, sh := nd.Ax, c.Bufs[nd.Buf].Shape
+				switch {
+				case ax == nil:
 					ax = c.coordsOf(nd.A, nd.Imm, pk.Space)
+				case sh != nil && !slices.Equal(sh, pk.Space):
+					ax = c.coordsOf(c.flatIndex(ax, sh), 0, pk.Space)
 				}
 				leaf := func(_ int, x Node) (int, bool) {
 					if x.Op == OpCoord {
@@ -61,6 +64,34 @@ func (p Recompute) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		i--
 	}
 	return out, nil
+}
+
+// flatIndex is the row-major index of coordinates ax in a shape of
+// extents sh.
+func (n *Kernel) flatIndex(ax, sh []int) int {
+	ix := ax[0]
+	for d := 1; d < len(ax); d++ {
+		ix = n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, ix, n.u32(sh[d])), ax[d])
+	}
+	return ix
+}
+
+// viewOf says load nd of buffer b reads a map's output over space sp
+// element for element: at sp's coordinates or a flat index, or at the
+// coordinates of another shape of as many elements, row-major as sp is,
+// read from the buffer's start.
+func viewOf(b Buf, nd Node, sp []int) bool {
+	if b.Shape == nil || slices.Equal(b.Shape, sp) {
+		return nd.Ax == nil || len(nd.Ax) == len(sp) && nd.Imm == 0
+	}
+	n, m := 1, 1
+	for _, x := range b.Shape {
+		n *= x
+	}
+	for _, x := range sp {
+		m *= x
+	}
+	return n == m && b.Base == 0 && b.Offset == 0 && (nd.Ax == nil || len(nd.Ax) == len(b.Shape) && nd.Imm == 0)
 }
 
 // coordsOf is the coordinates in a space of extents sp of the flat index
@@ -110,11 +141,11 @@ func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 		}
 		reads := 0
 		for _, nd := range c.Nodes {
-			if nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o {
-				reads++
+			if nd.Op != OpLoad || c.Bufs[nd.Buf].Operand != o {
+				continue
 			}
-			if sh := c.Bufs[nd.Buf].Shape; nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o && (nd.Ax != nil && (len(nd.Ax) != len(pk.Space) || nd.Imm != 0) ||
-				sh != nil && !slices.Equal(sh, pk.Space)) {
+			reads++
+			if !viewOf(c.Bufs[nd.Buf], nd, pk.Space) {
 				return nil, false
 			}
 		}
@@ -137,9 +168,10 @@ func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 }
 
 // writesBound says k writes an output a call may bind over the part's
-// input in: its own stream's in a block of several, any other part's.
+// input in: its own stream's in a block of several, any other part's;
+// none where the request states its inputs and outputs apart.
 func writesBound(k *Kernel, in Operand) bool {
-	if in.Kind != OperandValue || in.Out {
+	if k.Apart || in.Kind != OperandValue || in.Out {
 		return false
 	}
 	for _, b := range k.Bufs {
