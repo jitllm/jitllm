@@ -9848,9 +9848,23 @@ an object's properties in one order (every order of n keys is 2^n rules), an
 integer in int form (which numerals with a fraction and an exponent are
 integral is not context-free), the reply ending where its value does (RFC
 8259's trailing ws adds nothing, and ending at the value lets a reply end
-without the model choosing to), no leap second (a table of announced
-instants, not a rule), and a number's minimum and maximum, not built yet
-(docs/open-questions.md).
+without the model choosing to), and no leap second (a table of announced
+instants, not a rule).
+
+A number's minimum and maximum were refused by name until the numerals
+between two bounds were built, as an integer's range had been: a number
+within bounds is written with no exponent (which numerals with one lie
+within compares the exponent's value with the place of the first digit, not
+context-free either), its integral part held to the bounds as an integer's is
+and its fraction digit by digit (`grammar/schemarange.go`, numberRange). A
+schema with bounds and no type had written its numbers as integers until
+then, the bounds built for integers alone; it writes numbers now. A bound is
+written a digit at a time, so a bound past 1024 digits either side of its
+point is refused by name, numbers' and integers' alike: an integer bound of
+10^999999, which a big.Rat accepts, had written its range a digit at a time
+with each level copying the one inside it. `TestNumberRangesAreExact` holds
+eighteen ranges to every numeral of up to three fraction digits around them,
+either sign, against big.Rat's comparison.
 
 Every keyword of a schema holds at once, and the first compiler read some
 alone: an anyOf or oneOf dropped the keywords beside it,

@@ -4,8 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 )
+
+// maxBoundDigits is how many digits a bound may take on either side of its
+// point. The rules are written a digit at a time, so a request's bound is
+// held to a ceiling as its text is (maxSchemaText); this one is past the
+// widest a float64 writes, 309 integral digits and 5e-324's 324 fraction
+// digits.
+const maxBoundDigits = 1024
 
 // boundKeys are the keywords that bound a number.
 func boundKeys() []string {
@@ -36,6 +44,9 @@ func intBounds(s map[string]any) (lo, hi *big.Int, ok bool, err error) {
 		if !isNum {
 			return nil, nil, false, fmt.Errorf("grammar: %s must be a number", k)
 		}
+		if _, err := fixedOf(k, string(n)); err != nil {
+			return nil, nil, false, err
+		}
 		r, isRat := new(big.Rat).SetString(string(n))
 		if !isRat {
 			return nil, nil, false, fmt.Errorf("grammar: %s is %q, not a number", k, n)
@@ -65,6 +76,307 @@ func intBounds(s map[string]any) (lo, hi *big.Int, ok bool, err error) {
 		}
 	}
 	return lo, hi, lo == nil || hi == nil || lo.Cmp(hi) <= 0, nil
+}
+
+// fixed is a bound's value written out with no exponent: its sign, its
+// integral part with no leading zero ("0" for none) and its fraction with no
+// trailing zero. Zero has no sign.
+type fixed struct {
+	neg         bool
+	whole, frac string
+}
+
+func (f fixed) String() string {
+	s := f.whole
+	if f.frac != "" {
+		s += "." + f.frac
+	}
+	if f.neg {
+		s = "-" + s
+	}
+	return s
+}
+
+func (f fixed) zero() bool { return f.whole == "0" && f.frac == "" }
+
+// fixedOf is keyword k's JSON number n written out, from its significant
+// digits and power of ten (decimal).
+func fixedOf(k, n string) (fixed, error) {
+	c, ok := decimal(n)
+	if !ok {
+		return fixed{}, fmt.Errorf("grammar: %s is %q, not a number", k, n)
+	}
+	if c == "0" {
+		return fixed{whole: "0"}, nil
+	}
+	var f fixed
+	if strings.HasPrefix(c, "-") {
+		f.neg, c = true, c[1:]
+	}
+	sig, e, _ := strings.Cut(c, "e")
+	exp, err := strconv.ParseInt(e, 10, 64)
+	if err != nil {
+		return fixed{}, fmt.Errorf("grammar: %s is %q, not a number", k, n)
+	}
+	point := int64(len(sig)) + exp
+	if point > maxBoundDigits || int64(len(sig))-point > maxBoundDigits {
+		return fixed{}, ErrUnsupported{fmt.Sprintf("a bound past %d digits either side of its point", maxBoundDigits)}
+	}
+	switch p := int(point); {
+	case p >= len(sig):
+		f.whole = sig + strings.Repeat("0", p-len(sig))
+	case p <= 0:
+		f.whole, f.frac = "0", strings.Repeat("0", -p)+sig
+	default:
+		f.whole, f.frac = sig[:p], sig[p:]
+	}
+	return f, nil
+}
+
+// cmpFixed is -1, 0 or 1 as a is below, at or above b. Fractions with no
+// trailing zero compare as their text does.
+func cmpFixed(a, b fixed) int {
+	if a.neg != b.neg {
+		if a.neg {
+			return -1
+		}
+		return 1
+	}
+	c := len(a.whole) - len(b.whole)
+	if c == 0 {
+		c = strings.Compare(a.whole, b.whole)
+	}
+	if c == 0 {
+		c = strings.Compare(a.frac, b.frac)
+	}
+	c = min(max(c, -1), 1)
+	if a.neg {
+		return -c
+	}
+	return c
+}
+
+// bound is one side of a number's range: its value, and whether the value
+// itself is outside (an exclusive bound).
+type bound struct {
+	v      fixed
+	strict bool
+}
+
+// empty reports whether no value lies from lo to hi.
+func empty(lo, hi bound) bool {
+	c := cmpFixed(lo.v, hi.v)
+	return c > 0 || c == 0 && (lo.strict || hi.strict)
+}
+
+// numberBounds is the range schema s admits a number in: the tightest of its
+// bounds on each side, nil on a side it does not bound.
+func numberBounds(s map[string]any) (lo, hi *bound, err error) {
+	for _, k := range boundKeys() {
+		v, has := s[k]
+		if !has {
+			continue
+		}
+		n, isNum := v.(json.Number)
+		if !isNum {
+			return nil, nil, fmt.Errorf("grammar: %s must be a number", k)
+		}
+		d, err := fixedOf(k, string(n))
+		if err != nil {
+			return nil, nil, err
+		}
+		cur, up := &hi, -1
+		if strings.HasSuffix(k, "inimum") {
+			cur, up = &lo, 1
+		}
+		strict := strings.HasPrefix(k, "exclusive")
+		if *cur != nil {
+			if c := up * cmpFixed(d, (*cur).v); c < 0 || c == 0 && !strict {
+				continue
+			}
+		}
+		*cur = &bound{v: d, strict: strict}
+	}
+	return lo, hi, nil
+}
+
+// numberRange is the rule text for the numbers from lo to hi, a nil side
+// unbounded, as RFC 8259's number writes them with no exponent: a minus
+// before a negative, no leading zero, a fraction of any length, and 0 as 0
+// or -0. lo to hi holds a value (empty is false).
+func numberRange(lo, hi *bound) string {
+	zero := bound{v: fixed{whole: "0"}}
+	abs := func(b *bound) *bound {
+		return &bound{v: fixed{whole: b.v.whole, frac: b.v.frac}, strict: b.strict}
+	}
+	var alts []string
+	if hi == nil || !hi.v.neg {
+		from := zero
+		if lo != nil && !lo.v.neg {
+			from = *lo
+		}
+		if m := magnitudes(from, hi); m != "" {
+			alts = append(alts, "( "+m+" )")
+		}
+	}
+	if lo == nil || lo.v.neg || lo.v.zero() {
+		from := zero
+		if hi != nil && (hi.v.neg || hi.v.zero()) {
+			from = *abs(hi)
+		}
+		var to *bound
+		if lo != nil {
+			to = abs(lo)
+		}
+		if m := magnitudes(from, to); m != "" {
+			alts = append(alts, `"-" ( `+m+" )")
+		}
+	}
+	return "( " + strings.Join(alts, " | ") + " )"
+}
+
+// magnitudes is the rule text for the numerals with no sign and no exponent
+// from lo to hi, hi nil for no end, "" for none: lo's integral part followed
+// by a fraction from lo's, the integral parts between followed by any
+// fraction, and hi's followed by a fraction up to hi's.
+func magnitudes(lo bound, hi *bound) string {
+	if hi != nil && empty(lo, *hi) {
+		return ""
+	}
+	var alts []string
+	whole := func(w string, eps bool, ne string) {
+		if f, ok := fraction(eps, ne); ok {
+			alts = append(alts, `"`+w+`"`+f)
+		}
+	}
+	if hi != nil && lo.v.whole == hi.v.whole {
+		eps, ne := fracBetween(lo.v.frac, lo.strict, hi.v.frac, hi.strict)
+		whole(lo.v.whole, eps, ne)
+		return strings.Join(alts, " | ")
+	}
+	eps, ne := fracAtLeast(lo.v.frac, lo.strict)
+	whole(lo.v.whole, eps, ne)
+	a, _ := new(big.Int).SetString(lo.v.whole, 10)
+	a.Add(a, big.NewInt(1))
+	var b *big.Int
+	if hi != nil {
+		b, _ = new(big.Int).SetString(hi.v.whole, 10)
+		b.Sub(b, big.NewInt(1))
+	}
+	if b == nil || a.Cmp(b) <= 0 {
+		alts = append(alts, `( `+numerals(a, b)+` ) ( "." [0-9]+ )?`)
+	}
+	if hi != nil {
+		eps, ne := fracAtMost(hi.v.frac, hi.strict)
+		whole(hi.v.whole, eps, ne)
+	}
+	return strings.Join(alts, " | ")
+}
+
+// fraction is the rule text after an integral part whose fraction's digits D
+// are held to a bound: none where D may be empty (eps), and ne, the rule
+// text for the nonempty D, after a point. ok is false where neither is.
+func fraction(eps bool, ne string) (string, bool) {
+	switch {
+	case eps && ne != "":
+		return ` ( "." ( ` + ne + ` ) )?`, true
+	case eps:
+		return "", true
+	case ne != "":
+		return ` "." ( ` + ne + ` )`, true
+	}
+	return "", false
+}
+
+// led is the rule text for the digits beginning with c, the rest held as eps
+// and ne say, "" where none are.
+func led(c byte, eps bool, ne string) string {
+	q := `"` + string(c) + `"`
+	switch {
+	case eps && ne != "":
+		return q + " ( " + ne + " )?"
+	case eps:
+		return q
+	case ne != "":
+		return q + " ( " + ne + " )"
+	}
+	return ""
+}
+
+func alternatives(alts ...string) string {
+	var out []string
+	for _, a := range alts {
+		if a != "" {
+			out = append(out, a)
+		}
+	}
+	return strings.Join(out, " | ")
+}
+
+// fracAtLeast is the digits D of a fraction 0.D from 0.f up, 0.f itself
+// excluded where strict: eps where D may be empty, ne the rule text for the
+// nonempty D, "" for none.
+func fracAtLeast(f string, strict bool) (eps bool, ne string) {
+	if f == "" {
+		if strict {
+			return false, `"0"* [1-9] [0-9]*`
+		}
+		return true, `[0-9]+`
+	}
+	above := ""
+	if f[0] < '9' {
+		above = digitClass(f[0]+1, '9') + " [0-9]*"
+	}
+	eps, ne = fracAtLeast(f[1:], strict)
+	return false, alternatives(above, led(f[0], eps, ne))
+}
+
+// fracAtMost is the digits D of a fraction 0.D up to 0.f, 0.f itself
+// excluded where strict.
+func fracAtMost(f string, strict bool) (eps bool, ne string) {
+	if f == "" {
+		if strict {
+			return false, ""
+		}
+		return true, `"0"+`
+	}
+	below := ""
+	if f[0] > '0' {
+		below = digitClass('0', f[0]-1) + " [0-9]*"
+	}
+	eps, ne = fracAtMost(f[1:], strict)
+	return true, alternatives(below, led(f[0], eps, ne))
+}
+
+// fracBetween is the digits D of a fraction 0.D from 0.lf to 0.hf, ls and hs
+// excluding each, 0.lf no more than 0.hf: their common first digits, then the
+// first they differ in split three ways as sameLength splits it. An empty lf
+// is 0, its digits zeros.
+func fracBetween(lf string, ls bool, hf string, hs bool) (eps bool, ne string) {
+	if hf == "" {
+		if ls || hs {
+			return false, ""
+		}
+		return true, `"0"+`
+	}
+	eps = lf == "" && !ls
+	a, lr := byte('0'), ""
+	if lf != "" {
+		a, lr = lf[0], lf[1:]
+	}
+	b, hr := hf[0], hf[1:]
+	if a == b {
+		e, n := fracBetween(lr, ls, hr, hs)
+		return eps, led(a, e, n)
+	}
+	mid := ""
+	if a+1 < b {
+		mid = digitClass(a+1, b-1) + " [0-9]*"
+	}
+	e, n := fracAtLeast(lr, ls)
+	from := led(a, e, n)
+	e, n = fracAtMost(hr, hs)
+	return eps, alternatives(from, mid, led(b, e, n))
 }
 
 // intRange is the rule text for the integers lo through hi, a nil side

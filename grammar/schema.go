@@ -22,8 +22,8 @@ import (
 // 2020-12 reads it), allOf over object schemas (schemaobj.go; each part's
 // additionalProperties holds the keys the other parts name), items,
 // prefixItems (followed by items or not), minItems, maxItems, minLength,
-// maxLength, an integer's minimum, maximum, exclusiveMinimum and
-// exclusiveMaximum, format (date, time and date-time as RFC 3339 writes them,
+// maxLength, a number's and an integer's minimum, maximum, exclusiveMinimum
+// and exclusiveMaximum, format (date, time and date-time as RFC 3339 writes them,
 // uuid as RFC 4122 does; any other is an annotation, as 2020-12 reads it),
 // pattern (pattern.go), enum and const (beside a type and each other; beside
 // any other keyword refused by name), anyOf and oneOf (each branch held to
@@ -46,14 +46,15 @@ import (
 //   - An integer is written as RFC 8259's int, with no fraction or exponent.
 //     2020-12 counts 1.0 and 1.5e1 as integers too, but which numerals with
 //     a fraction and an exponent are integral compares the exponent's value
-//     with the fraction's length, which no context-free grammar holds. A
-//     schema with bounds and no type writes its numbers as integers.
+//     with the fraction's length, which no context-free grammar holds.
+//   - A number within bounds is written with no exponent, for the same
+//     reason: which numerals with one lie between two bounds compares the
+//     exponent's value with the place of the first digit. A bound is written
+//     a digit at a time, and past maxBoundDigits either side of its point is
+//     refused by name.
 //   - A oneOf is written only where no value can satisfy two of its
 //     branches (schemaobj.go, disjoint), and refused by name otherwise: the
 //     union of the branches cannot exclude a value two of them both match.
-//   - A number's minimum and maximum are refused by name, not built yet: the
-//     numerals without an exponent between two bounds are a regular language,
-//     as an integer range is (docs/open-questions.md).
 //   - The reply ends where its value does: RFC 8259's JSON-text allows
 //     whitespace after the value, which adds nothing to it, and ending at the
 //     value is what lets a constrained reply end without the model choosing
@@ -517,17 +518,11 @@ func (c *converter) visitObject(s map[string]any, name string) (string, error) {
 		types = ts
 	} else {
 		// Every type, each held to the keywords that apply to it: an
-		// object's keywords say nothing about a string. A number within
-		// bounds is written as an integer there, the bounds built for
-		// integers alone.
+		// object's keywords say nothing about a string.
 		if onlyAnnotations(s, "") {
 			return c.prim("value"), nil
 		}
-		num := "number"
-		if hasBounds(s) {
-			num = "integer"
-		}
-		types = []string{"object", "array", "string", num, "boolean", "null"}
+		types = []string{"object", "array", "string", "number", "boolean", "null"}
 	}
 	if len(types) == 0 {
 		return "", nothing("type []")
@@ -730,10 +725,17 @@ func (c *converter) typed(s map[string]any, t, name string) (string, error) {
 		}
 		return c.add(name, intRange(lo, hi)), nil
 	case "number":
-		if hasBounds(s) {
-			return "", ErrUnsupported{"minimum, maximum and their exclusive forms on a number (not built yet)"}
+		if !hasBounds(s) {
+			return c.prim(t), nil
 		}
-		return c.prim(t), nil
+		lo, hi, err := numberBounds(s)
+		if err != nil {
+			return "", err
+		}
+		if lo != nil && hi != nil && empty(*lo, *hi) {
+			return "", nothing(fmt.Sprintf("a number range from %v to %v", lo.v, hi.v))
+		}
+		return c.add(name, numberRange(lo, hi)), nil
 	case "string":
 		lo, hi, err := bounds(s, "minLength", "maxLength")
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand/v2"
 	"regexp"
 	"runtime"
@@ -230,6 +231,8 @@ func schemaCases() []schemaCase {
 		{`{"prefixItems":[{"type":"integer"},{"type":"boolean"}],"minItems":2,"maxItems":3}`, `[1,true,null]`, `[1]`},
 		{`{"type":"integer","minimum":-12,"exclusiveMaximum":250}`, `-12`, `250`},
 		{`{"type":"array","items":{"type":"integer","exclusiveMinimum":0.5,"maximum":1e3}}`, `[1,1000]`, `[0]`},
+		{`{"type":"number","exclusiveMinimum":-1.5,"maximum":2.25}`, `-1.4999`, `-1.5`},
+		{`{"type":"object","properties":{"p":{"minimum":0.5}}}`, `{"p":0.75}`, `{"p":0.25}`},
 		{`{"type":"object","properties":{"d":{"type":"string","format":"date"},"t":{"type":"string","format":"date-time"},` +
 			`"c":{"type":"string","format":"time"},"u":{"type":"string","format":"uuid"},"h":{"type":"string","format":"hostname"}},` +
 			`"required":["d","t","u"]}`,
@@ -469,6 +472,124 @@ func TestIntegerRangesAreExact(t *testing.T) {
 	}
 }
 
+// TestNumberRangesAreExact holds a number's bounds to the numbers they
+// admit, each written as RFC 8259's number with no exponent: every numeral
+// of up to three fraction digits around each range is taken exactly where
+// its value lies within, either sign, 0 as -0 too; a side no keyword bounds
+// has no end.
+func TestNumberRangesAreExact(t *testing.T) {
+	v := newToyVocab()
+	var numerals []string
+	for _, w := range []string{"0", "1", "2", "3"} {
+		numerals = append(numerals, w, "-"+w)
+		for n := 1; n <= 3; n++ {
+			for f := range int(math.Pow10(n)) {
+				x := fmt.Sprintf("%s.%0*d", w, n, f)
+				numerals = append(numerals, x, "-"+x)
+			}
+		}
+	}
+	rat := func(s string) *big.Rat {
+		r, ok := new(big.Rat).SetString(s)
+		if !ok {
+			t.Fatalf("%q is not a number", s)
+		}
+		return r
+	}
+	for _, rg := range []struct {
+		lo, hi string
+		ls, hs bool
+	}{
+		{"0", "1", false, false}, {"0.25", "1.5", true, false}, {"-1.05", "0.3", false, true},
+		{"-2", "-0.5", true, true}, {"0", "0", false, false}, {"1.2", "1.25", false, false},
+		{"-0.125", "0.125", true, true}, {"0.999", "1.001", false, false}, {"-1.5", "", false, false},
+		{"", "0.05", false, false}, {"", "0", false, true}, {"0", "", true, false},
+		{"1e-1", "2.5E0", false, false}, {"-3", "3", false, false}, {"0.5", "0.5", false, false},
+		{"2.01", "2.1", true, true}, {"-0.09", "-0.009", false, false}, {"0.1", "2.9", true, true},
+	} {
+		schema := `{"type":"number"`
+		key := func(name string, strict bool) string {
+			if strict {
+				return "exclusive" + strings.ToUpper(name[:1]) + name[1:]
+			}
+			return name
+		}
+		if rg.lo != "" {
+			schema += fmt.Sprintf(`,%q:%s`, key("minimum", rg.ls), rg.lo)
+		}
+		if rg.hi != "" {
+			schema += fmt.Sprintf(`,%q:%s`, key("maximum", rg.hs), rg.hi)
+		}
+		schema += "}"
+		src, err := FromJSONSchema([]byte(schema))
+		if err != nil {
+			t.Fatalf("%s: %v", schema, err)
+		}
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
+		in := func(x *big.Rat) bool {
+			if rg.lo != "" {
+				if c := x.Cmp(rat(rg.lo)); c < 0 || c == 0 && rg.ls {
+					return false
+				}
+			}
+			if rg.hi != "" {
+				if c := x.Cmp(rat(rg.hi)); c > 0 || c == 0 && rg.hs {
+					return false
+				}
+			}
+			return true
+		}
+		taken := 0
+		for _, x := range numerals {
+			want := in(rat(x))
+			if accepts(m, x) != want {
+				t.Fatalf("%s: %s accepted %v\n%s", schema, x, !want, src)
+			}
+			if want {
+				taken++
+			}
+		}
+		if taken == 0 {
+			t.Fatalf("%s: no numeral was in the range", schema)
+		}
+		long := strings.Repeat("9", 40)
+		for x, want := range map[string]bool{
+			long + ".5": in(rat(long)), "-" + long + ".5": in(rat("-" + long)), "0" + long: false,
+			"1.": false, ".5": false, "1e0": false, "0.5e0": false, "-": false, "": false,
+		} {
+			if accepts(m, x) != want {
+				t.Errorf("%s: %s accepted %v", schema, x, !want)
+			}
+		}
+	}
+	for schema, cases := range map[string]map[string]bool{
+		`{"type":"number","minimum":1,"exclusiveMinimum":1}`:   {"1": false, "1.0": false, "1.0001": true},
+		`{"type":"number","exclusiveMinimum":1,"minimum":1}`:   {"1": false, "1.0": false, "1.0001": true},
+		`{"type":"number","maximum":2,"exclusiveMaximum":3}`:   {"2": true, "2.00": true, "2.5": false},
+		`{"type":"number","minimum":-5e-3,"maximum":0.5e1}`:    {"-0.005": true, "-0.0051": false, "5": true, "5.00001": false},
+		`{"type":"number","exclusiveMinimum":0,"maximum":1e2}`: {"0": false, "-0": false, "0.000": false, "0.0001": true, "100": true},
+	} {
+		src, err := FromJSONSchema([]byte(schema))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
+		for s, want := range cases {
+			if accepts(m, s) != want {
+				t.Errorf("%s: %s accepted %v", schema, s, !want)
+			}
+		}
+	}
+	for _, schema := range []string{
+		`{"type":"number","minimum":2.5,"maximum":2.25}`,
+		`{"type":"number","exclusiveMinimum":0.1,"maximum":0.1}`,
+	} {
+		if _, err := FromJSONSchema([]byte(schema)); err == nil {
+			t.Errorf("%s: a range no number lies in was built", schema)
+		}
+	}
+}
+
 func TestSchemaGrammarAcceptsAndRefuses(t *testing.T) {
 	v := newToyVocab()
 	for _, c := range schemaCases() {
@@ -546,7 +667,9 @@ func TestSchemaRefusesByName(t *testing.T) {
 		"lookaround":                       `{"type":"string","pattern":"^(?=a)a$"}`,
 		"backreference":                    `{"type":"string","pattern":"(a)\\1"}`,
 		"word boundary":                    `{"type":"string","pattern":"\\bx"}`,
-		"minimum":                          `{"type":"number","minimum":3}`,
+		"past 1024 digits":                 `{"type":"number","maximum":1e1025}`,
+		"either side of its point":         `{"type":"integer","exclusiveMinimum":-1.5e-1024}`,
+		"a number range":                   `{"type":"number","minimum":2,"exclusiveMaximum":2}`,
 		"allOf":                            `{"allOf":[{"type":"string","maxLength":2},{"maxLength":3}]}`,
 		"uniqueItems":                      `{"type":"array","uniqueItems":true}`,
 		"$ref":                             `{"$ref":"https://example.com/s.json"}`,

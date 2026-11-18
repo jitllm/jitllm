@@ -162,12 +162,6 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
 
 ## Smaller open items
 
-- A JSON Schema number's minimum and maximum are refused by name
-  (`grammar/schema.go`). Numerals without an exponent between two bounds are
-  a regular language, as an integer range is (`grammar/schemarange.go`), so
-  the build is owed: `-? int frac?` held to the bounds digit by digit, the
-  exponent left out as an integer's is.
-
 - Q4_K/Q5_K are not Tok-invariant on SPIR-V — ~40% of elements differ at 6.1e-05,
   spirv only, ptx and msl exact. Bounded at NMSE 1e-8, **undiagnosed**; it is the
   min term's fold.
