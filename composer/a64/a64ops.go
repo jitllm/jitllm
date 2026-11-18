@@ -140,6 +140,24 @@ func (a *A64) LSRV(rd, rn, rm XReg)   { a.x3(0x9AC02400, rd, rn, rm) }
 // MUL is mul xd, xn, xm: the low 64 bits of the product.
 func (a *A64) MUL(rd, rn, rm XReg) { a.x3(0x9B007C00, rd, rn, rm) }
 
+// ADDw, SUBw, ANDw, ORRw, EORw and MULw are the 32-bit forms: wd from wn and
+// wm, the upper half of xd zeroed.
+func (a *A64) ADDw(rd, rn, rm XReg) { a.x3(0x0B000000, rd, rn, rm) }
+func (a *A64) SUBw(rd, rn, rm XReg) { a.x3(0x4B000000, rd, rn, rm) }
+func (a *A64) ANDw(rd, rn, rm XReg) { a.x3(0x0A000000, rd, rn, rm) }
+func (a *A64) ORRw(rd, rn, rm XReg) { a.x3(0x2A000000, rd, rn, rm) }
+func (a *A64) EORw(rd, rn, rm XReg) { a.x3(0x4A000000, rd, rn, rm) }
+func (a *A64) MULw(rd, rn, rm XReg) { a.x3(0x1B007C00, rd, rn, rm) }
+
+// ADDimmW and SUBimmW are add and sub wd, wn, #imm, imm in [0,4095].
+func (a *A64) ADDimmW(rd, rn XReg, imm int32) {
+	a.w(0x11000000 | a.imm12(imm, "add") | uint32(rn)<<5 | uint32(rd))
+}
+
+func (a *A64) SUBimmW(rd, rn XReg, imm int32) {
+	a.w(0x51000000 | a.imm12(imm, "sub") | uint32(rn)<<5 | uint32(rd))
+}
+
 // UDIV is udiv xd, xn, xm: zero where xm is zero.
 func (a *A64) UDIV(rd, rn, rm XReg) { a.x3(0x9AC00800, rd, rn, rm) }
 
@@ -190,6 +208,11 @@ const (
 	CondGT A64Cond = 12
 	CondLE A64Cond = 13
 )
+
+// CSELw is csel wd, wn, wm, cond.
+func (a *A64) CSELw(rd, rn, rm XReg, c A64Cond) {
+	a.w(0x1A800000 | uint32(rm)<<16 | uint32(c)<<12 | uint32(rn)<<5 | uint32(rd))
+}
 
 // CSINV is csinv xd, xn, xm, cond: xn where cond holds, else xm's bits
 // inverted.

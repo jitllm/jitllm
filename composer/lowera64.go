@@ -249,6 +249,23 @@ func (e *a64Lowerer) addConstTo(dst, src a64.XReg, c int64) {
 	}
 }
 
+// addWordTo is dst = src + c on 32 bits, the upper half zeroed.
+func (e *a64Lowerer) addWordTo(dst, src a64.XReg, c int32) {
+	switch {
+	case c >= 0 && c <= 4095:
+		e.a.ADDimmW(dst, src, c)
+	case c < 0 && c >= -4095:
+		e.a.SUBimmW(dst, src, -c)
+	default:
+		t := a64Imm
+		if src == a64Imm {
+			t = a64T
+		}
+		e.a.MOVconst(t, uint64(uint32(c)))
+		e.a.ADDw(dst, src, t)
+	}
+}
+
 // addr is the address of buffer b at constant index node ix through
 // pointer ptr, as x86Lowerer.addr makes it.
 func (e *a64Lowerer) addr(b, ix, ptr int) a64Mem {

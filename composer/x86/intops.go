@@ -254,3 +254,103 @@ func (a *Buf) VPSHUFDx(dst, src Reg, imm byte) {
 	a.modrmReg(dst, src)
 	a.u8(imm)
 }
+
+// ADDL is dst += src on 32 bits, zero-extended.
+func (a *Buf) ADDL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x01)
+	a.modrmReg(src, dst)
+}
+
+// SUBL is dst -= src on 32 bits, zero-extended.
+func (a *Buf) SUBL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x29)
+	a.modrmReg(src, dst)
+}
+
+// ANDL is dst &= src on 32 bits, zero-extended.
+func (a *Buf) ANDL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x21)
+	a.modrmReg(src, dst)
+}
+
+// ORL is dst |= src on 32 bits, zero-extended.
+func (a *Buf) ORL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x09)
+	a.modrmReg(src, dst)
+}
+
+// XORL is dst ^= src on 32 bits, zero-extended.
+func (a *Buf) XORL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x31)
+	a.modrmReg(src, dst)
+}
+
+// IMULL is dst *= src on 32 bits, the product's low half zero-extended.
+func (a *Buf) IMULL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, dst, noIndex, src)
+	a.u8(0x0F)
+	a.u8(0xAF)
+	a.modrmReg(dst, src)
+}
+
+// NEGL is dst = -dst on 32 bits, zero-extended.
+func (a *Buf) NEGL(dst Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0xF7)
+	a.modrmReg(Reg(3), dst)
+}
+
+// ADDLimm is dst += imm on 32 bits, zero-extended.
+func (a *Buf) ADDLimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	if imm >= -128 && imm <= 127 {
+		a.u8(0x83)
+		a.modrmReg(Y0, dst)
+		a.u8(byte(imm))
+		return
+	}
+	a.u8(0x81)
+	a.modrmReg(Y0, dst)
+	a.u32(uint32(imm))
+}
+
+// XORLimm is dst ^= imm on 32 bits, zero-extended.
+func (a *Buf) XORLimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(6), dst)
+	a.u32(uint32(imm))
+}
+
+// ORLimm is dst |= imm on 32 bits, zero-extended.
+func (a *Buf) ORLimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(1), dst)
+	a.u32(uint32(imm))
+}
+
+// IMULLimm is dst = src * imm on 32 bits, the product's low half
+// zero-extended.
+func (a *Buf) IMULLimm(dst, src Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, dst, noIndex, src)
+	a.u8(0x69)
+	a.modrmReg(dst, src)
+	a.u32(uint32(imm))
+}

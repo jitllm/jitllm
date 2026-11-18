@@ -47,6 +47,18 @@ func TestGPREncodings(t *testing.T) {
 		{"cmp $0x3f,%r9d", func(a *Buf) { a.CMPLimm(R9, 63) }, "4181f93f000000"},
 		{"vpsllvd %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPSLLVD(Y3, Y1, Y2) }, "c4e27547da"},
 		{"vpsravd %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPSRAVD(Y3, Y1, Y2) }, "c4e27546da"},
+		{"add %r9d,%edx", func(a *Buf) { a.ADDL(RDX, R9) }, "4401ca"},
+		{"sub %ebx,%r12d", func(a *Buf) { a.SUBL(R12, RBX) }, "4129dc"},
+		{"and %r9d,%eax", func(a *Buf) { a.ANDL(RAX, R9) }, "4421c8"},
+		{"or %edx,%r11d", func(a *Buf) { a.ORL(R11, RDX) }, "4109d3"},
+		{"xor %r13d,%r8d", func(a *Buf) { a.XORL(R8, R13) }, "4531e8"},
+		{"imul %ebx,%r12d", func(a *Buf) { a.IMULL(R12, RBX) }, "440fafe3"},
+		{"neg %r12d", func(a *Buf) { a.NEGL(R12) }, "41f7dc"},
+		{"add $0x7,%r10d", func(a *Buf) { a.ADDLimm(R10, 7) }, "4183c207"},
+		{"add $0x1000,%ecx", func(a *Buf) { a.ADDLimm(RCX, 4096) }, "81c100100000"},
+		{"xor $0x80808080,%ebx", func(a *Buf) { a.XORLimm(RBX, -0x7f7f7f80) }, "81f380808080"},
+		{"or $0x10,%r13d", func(a *Buf) { a.ORLimm(R13, 0x10) }, "4181cd10000000"},
+		{"imul $0x28,%ebx,%r12d", func(a *Buf) { a.IMULLimm(R12, RBX, 40) }, "4469e328000000"},
 	} {
 		var a Buf
 		c.emit(&a)

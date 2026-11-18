@@ -1267,7 +1267,7 @@ func (e *x86Lowerer) integer(i int) {
 			return
 		}
 		if nd.Op == OpMul {
-			a.IMULimm(dst, src, imm)
+			a.IMULLimm(dst, src, imm)
 		} else {
 			if src != dst {
 				a.MOVQ(dst, src)
@@ -1283,13 +1283,13 @@ func (e *x86Lowerer) integer(i int) {
 			case OpAnd:
 				a.ANDimm32(dst, imm)
 			case OpAdd:
-				a.ADDimm(dst, imm)
+				a.ADDLimm(dst, imm)
 			case OpSub:
-				a.ADDimm(dst, -imm)
+				a.ADDLimm(dst, -imm)
 			case OpXor:
-				a.XORimm32(dst, imm)
+				a.XORLimm(dst, imm)
 			case OpOr:
-				a.ORimm32(dst, imm)
+				a.ORLimm(dst, imm)
 			case OpMin, OpMax:
 				// dst is a; where a is past the constant, the constant.
 				skip := a.Label()
@@ -1339,25 +1339,25 @@ func (e *x86Lowerer) integer(i int) {
 			a.SARX(dst, reloadReg, y)
 		case OpSub:
 			if dst == y {
-				a.NEGQ(dst)
-				a.ADDQ(dst, x)
+				a.NEGL(dst)
+				a.ADDL(dst, x)
 			} else {
 				if dst != x {
 					a.MOVQ(dst, x)
 				}
-				a.SUBQ(dst, y)
+				a.SUBL(dst, y)
 			}
 		case OpMin, OpMax:
 			if dst == y {
 				x, y = y, x
 			}
 			if dst != x {
-				a.MOVQ(dst, x)
+				a.MOVL(dst, x)
 			}
 			skip := a.Label()
 			a.CMPL(dst, y)
 			e.keepIf(nd, skip)
-			a.MOVQ(dst, y)
+			a.MOVL(dst, y)
 			a.Bind(skip)
 		case OpAdd, OpMul, OpAnd, OpOr, OpXor:
 			if dst == y {
@@ -1368,15 +1368,15 @@ func (e *x86Lowerer) integer(i int) {
 			}
 			switch nd.Op {
 			case OpAdd:
-				a.ADDQ(dst, y)
+				a.ADDL(dst, y)
 			case OpMul:
-				a.IMUL(dst, y)
+				a.IMULL(dst, y)
 			case OpAnd:
-				a.ANDQ(dst, y)
+				a.ANDL(dst, y)
 			case OpOr:
-				a.ORQ(dst, y)
+				a.ORL(dst, y)
 			case OpXor:
-				a.XORQ(dst, y)
+				a.XORL(dst, y)
 			}
 		default:
 			e.fail("node %d: no general-register form of %s", i, nd.Op)
@@ -1384,9 +1384,9 @@ func (e *x86Lowerer) integer(i int) {
 		}
 	}
 	switch nd.Op {
-	case OpAdd, OpSub, OpMul, OpShl, OpSar, OpXor, OpOr, OpMin, OpMax:
-		// An immediate sign-extends: xor or or by one with its top bit set
-		// sets the high half too.
+	case OpShl, OpSar:
+		// A 64-bit shift reaches past 32 bits; the 32-bit operations above
+		// zero the upper half themselves.
 		a.MOVL(dst, dst)
 	}
 }

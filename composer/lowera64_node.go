@@ -679,7 +679,7 @@ func (e *a64Lowerer) integer(i int) {
 		switch nd.Op {
 		case OpMul:
 			a.MOVconst(a64Imm, sext(c.Imm))
-			a.MUL(dst, src, a64Imm)
+			a.MULw(dst, src, a64Imm)
 		case OpSar:
 			a.SXTW(dst, src)
 			a.ASRimm(dst, dst, uint8(c.Imm&63))
@@ -689,21 +689,21 @@ func (e *a64Lowerer) integer(i int) {
 			a.LSLimm(dst, src, uint8(c.Imm&63))
 		case OpAnd:
 			a.MOVconst(a64Imm, sext(c.Imm))
-			a.ANDreg(dst, src, a64Imm)
+			a.ANDw(dst, src, a64Imm)
 		case OpAdd:
-			e.addConstTo(dst, src, int64(int32(c.Imm)))
+			e.addWordTo(dst, src, int32(c.Imm))
 		case OpSub:
-			e.addConstTo(dst, src, -int64(int32(c.Imm)))
+			e.addWordTo(dst, src, -int32(c.Imm))
 		case OpXor:
 			a.MOVconst(a64Imm, sext(c.Imm))
-			a.EORreg(dst, src, a64Imm)
+			a.EORw(dst, src, a64Imm)
 		case OpOr:
 			a.MOVconst(a64Imm, sext(c.Imm))
-			a.ORRreg(dst, src, a64Imm)
+			a.ORRw(dst, src, a64Imm)
 		case OpMin, OpMax:
 			a.MOVconst(a64Imm, uint64(uint32(c.Imm)))
 			a.CMPw(src, a64Imm)
-			a.CSEL(dst, src, a64Imm, keep(nd))
+			a.CSELw(dst, src, a64Imm, keep(nd))
 		default:
 			e.fail("node %d: no general-register form of %s by a constant", i, nd.Op)
 			return
@@ -723,32 +723,34 @@ func (e *a64Lowerer) integer(i int) {
 		case OpShl:
 			a.LSLV(dst, p, q)
 		case OpSub:
-			a.SUBreg(dst, p, q)
+			a.SUBw(dst, p, q)
 		case OpMin, OpMax:
 			a.CMPw(p, q)
-			a.CSEL(dst, p, q, keep(nd))
+			a.CSELw(dst, p, q, keep(nd))
 		case OpAdd:
-			a.ADDreg(dst, p, q)
+			a.ADDw(dst, p, q)
 		case OpMul:
-			a.MUL(dst, p, q)
+			a.MULw(dst, p, q)
 		case OpSar:
 			a.SXTW(a64Q, p)
 			a.ASRV(dst, a64Q, q)
 		case OpDiv, OpRem:
 			e.divide(nd, dst, p, q)
 		case OpAnd:
-			a.ANDreg(dst, p, q)
+			a.ANDw(dst, p, q)
 		case OpOr:
-			a.ORRreg(dst, p, q)
+			a.ORRw(dst, p, q)
 		case OpXor:
-			a.EORreg(dst, p, q)
+			a.EORw(dst, p, q)
 		default:
 			e.fail("node %d: no general-register form of %s", i, nd.Op)
 			return
 		}
 	}
 	switch nd.Op {
-	case OpAdd, OpSub, OpMul, OpShl, OpSar, OpXor, OpOr, OpMin, OpMax:
+	case OpShl, OpSar:
+		// An X shift reaches past 32 bits; the W forms above zero the upper
+		// half themselves.
 		a.MOVw(dst, dst)
 	}
 }

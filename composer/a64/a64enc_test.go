@@ -38,6 +38,16 @@ func TestA64NewEncodingsMatchLLVM(t *testing.T) {
 		{"prfm pldl1keep, [x3]", func(a *A64) { a.PRFM(X3, 0) }, 0xf9800060},
 		{"prfm pldl2keep, [x1]", func(a *A64) { a.PRFMop(prfmPLDL2KEEP, X1, 0) }, 0xf9800022},
 		{"prfm pldl1keep, [x11, #32760]", func(a *A64) { a.PRFM(XReg(11), 32760) }, 0xf9bffd60},
+		{"add w3, w4, w5", func(a *A64) { a.ADDw(X3, X4, X5) }, 0x0b050083},
+		{"sub wzr, w0, w30", func(a *A64) { a.SUBw(XZR, X0, X30) }, 0x4b1e001f},
+		{"and w7, w8, w9", func(a *A64) { a.ANDw(X7, X8, X9) }, 0x0a090107},
+		{"orr w10, w11, w12", func(a *A64) { a.ORRw(X10, X11, X12) }, 0x2a0c016a},
+		{"eor w13, w14, w15", func(a *A64) { a.EORw(X13, X14, X15) }, 0x4a0f01cd},
+		{"mul w16, w17, w18", func(a *A64) { a.MULw(X16, X17, X18) }, 0x1b127e30},
+		{"csel w1, w2, w3, lt", func(a *A64) { a.CSELw(X1, X2, X3, CondLT) }, 0x1a83b041},
+		{"add w4, w5, #123", func(a *A64) { a.ADDimmW(X4, X5, 123) }, 0x1101eca4},
+		{"sub w6, w7, #4095", func(a *A64) { a.SUBimmW(X6, X7, 4095) }, 0x513ffce6},
+		{"add w0, w30, w17", func(a *A64) { a.ADDw(X0, X30, X17) }, 0x0b1103c0},
 	} {
 		var a A64
 		c.emit(&a)
