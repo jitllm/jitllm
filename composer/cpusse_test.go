@@ -32,6 +32,7 @@ func TestComposedCPUGatesOnSSE(t *testing.T) {
 		{"RowsMatVec", gateComposedCPURowsMatVec},
 		{"Equal", gateComposedCPUEqual},
 		{"ReduceIndexWords", gateComposedCPUReduceIndexWords},
+		{"WordConstantsReload", gateComposedCPUWordConstantsReload},
 		{"Halves", gateComposedCPUHalves},
 		{"Q8Rows", gateComposedCPUQ8Rows},
 		{"BlockRows", gateComposedCPUBlockRows},

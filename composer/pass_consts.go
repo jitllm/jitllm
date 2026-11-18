@@ -6,12 +6,13 @@ import (
 	"github.com/jitllm/jitllm/composer/ir"
 )
 
-// Consts places a kernel's float constants, zero aside, in a block of words
-// its call points to, each read from its word where it was used: for a
-// device whose instructions take no float immediate. A kernel that has the
-// block places its integer constants held in vectors there too, read from
-// it where a vector reads them, and each lane's index as that many words,
-// one table for every read of it. The tables come first, then the integer
+// Consts places a kernel's float constants, zero aside, and the integer
+// constants it holds in vectors in a block of words its call points to,
+// each read from its word where a vector reads it: a device's instructions
+// take no float immediate, and a load of the block is what a binding short
+// of registers reads again where the constant is used (rematerialize),
+// which an immediate is not. Each lane's index is that many words, one
+// table for every read of it. The tables come first, then the integer
 // words, then the float words, each in the order the code first reads
 // them, each store's value evaluated its deeper operand first.
 // A kernel whose constants are the words of Shared reads Shared instead,
@@ -27,7 +28,6 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		vw := k.VectorWords()
 		var at []int
-		floats := false
 		seen := map[int]bool{}
 		memo := map[int]int{}
 		uc := k.useCounts()
@@ -39,13 +39,9 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			seen[i] = true
 			nd := k.Nodes[i]
 			switch {
-			case nd.Op == OpConst && nd.Type == ir.F32 && uint32(nd.Imm) != 0:
+			case nd.Op == OpConst && nd.Type == ir.F32 && uint32(nd.Imm) != 0,
+				nd.Op == OpConst && vw[i] && nd.Imm != 0, nd.Op == OpLanes:
 				at = append(at, i)
-				floats = true
-				return
-			case nd.Op == OpConst && vw[i] && nd.Imm != 0, nd.Op == OpLanes:
-				at = append(at, i)
-				floats = floats || nd.Op == OpLanes
 				return
 			}
 			for _, a := range k.evalArgs(&nd, memo, nil, uc) {
@@ -58,11 +54,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 		}
 		m, at := k.fromTables(at)
-		floats = false
-		for _, i := range at {
-			floats = floats || m.Nodes[i].Type == ir.F32 || m.Nodes[i].Op == OpLanes
-		}
-		if !floats {
+		if len(at) == 0 {
 			if m == k {
 				return nil, false, nil
 			}
