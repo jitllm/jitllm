@@ -1932,8 +1932,12 @@ func (s *Instance) prepOffered(adm nn.LayerDevice, li int, plan *nn.LayerPlan, w
 
 // heldOnOffer reports whether a block another session holds is where offerOn
 // asks for it. A held block is attached where it is, so one held elsewhere is
-// offered to offerOn whole, and the tier says why it cannot move.
+// offered to offerOn whole, and the tier says why it cannot move. A spilling
+// block goes to a card after the one holding it, so it is offered whole.
 func (s *Instance) heldOnOffer(adm nn.LayerDevice, li int) bool {
+	if s.spilling == li+1 {
+		return false
+	}
 	if s.offerOn == "" {
 		return true
 	}

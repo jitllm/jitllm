@@ -299,6 +299,12 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 	if o == nil && old == nil && li < len(g.share) && g.share[li] > start {
 		start = g.share[li]
 	}
+	shared := false
+	if old != nil {
+		old.mu.Lock()
+		shared = old.sharedBeyond(li, sid)
+		old.mu.Unlock()
+	}
 	// Priced on the second block, not the first: the first block admitted to a
 	// device also pays one-time charges (the unpack staging buffer), which
 	// overstates the per-block cost and spreads the plan over a device too
@@ -346,7 +352,7 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 				continue
 			}
 			g.mu.Lock()
-			g.routeTo(sid, li, o, d, old != nil)
+			g.routeTo(sid, li, o, d, old != nil && !shared)
 			g.cur = i
 			g.geo[li] = geoOf(p)
 			g.split = g.split || p.MixedGeom
@@ -368,7 +374,10 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 			}
 			g.mu.Unlock()
 			g.noteCopies(sid)
-			if old != nil {
+			switch {
+			case shared:
+				g.leaveCopy(sid, li, old)
+			case old != nil:
 				old.ReleaseLayers(li, li+1)
 			}
 			return true
@@ -522,6 +531,7 @@ func (g *GPU) dropRoutes(sid uint64) {
 	g.mu.Lock()
 	r := g.route[sid]
 	delete(g.route, sid)
+	delete(g.refused, sid)
 	var free []retiree
 	for li, d := range r {
 		if g.own[li] != d && !g.routed(li, d) {
@@ -693,27 +703,22 @@ func (g *GPU) planShares(per, fixed uint64) {
 
 // SpillAfter arms the next PrepLayer of block li to place it on a device after
 // the one holding it, and reports whether there is one. When a later device
-// takes it the old copy is freed; when none does, nothing has changed.
+// takes it the old copy is freed, or kept for the other sessions running it
+// there; when none does, nothing has changed.
 //
 // It is how a full card grows its KV history without demoting the model:
 // moving the first card's highest block onto the next shifts the seam and keeps
 // both runs contiguous, so it costs no crossing.
 func (g *GPU) SpillAfter(li int) bool { return g.spillAfter(li, 0) }
 
-// spillAfter is SpillAfter for session sid. A block another session has
-// history on does not move: the move frees the old copy, and that session's
-// history with it.
+// spillAfter is SpillAfter for session sid. A block another session runs
+// stays where it is for that session: sid takes a copy on the later device
+// (prepLayer), as a move by name does (prepLayerOn).
 func (g *GPU) spillAfter(li int, sid uint64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	o := g.at(sid, li)
 	if o == nil || slices.Index(g.devs, o) == len(g.devs)-1 {
-		return false
-	}
-	o.mu.Lock()
-	shared := o.sharedBeyond(li, sid)
-	o.mu.Unlock()
-	if shared {
 		return false
 	}
 	g.spillFrom, g.spillLi = o, li
@@ -2446,7 +2451,10 @@ func (g *GPU) reserveKV(sid uint64, pos int) bool {
 		}
 	}
 	g.mu.Lock()
-	g.refused = refused
+	if g.refused == nil {
+		g.refused = map[uint64]*devTier{}
+	}
+	g.refused[sid] = refused
 	g.mu.Unlock()
 	return refused == nil
 }
@@ -2486,18 +2494,23 @@ func (g *GPU) RoomGen() uint64 {
 	return n
 }
 
-// Refused lists the blocks held by the device whose last ReserveKV refused, or
-// nothing when it did not, so a caller making room takes from that device
-// rather than from whichever card holds the highest block.
-func (g *GPU) Refused() []int {
+// Refused is refused for the zero session: a caller that never attached.
+func (g *GPU) Refused() []int { return g.refusedBlocks(0) }
+
+// refusedBlocks lists the blocks session sid runs on the device whose last
+// ReserveKV for sid refused, or nothing when it did not, so a caller making
+// room takes from that device rather than from whichever card holds the
+// highest block -- and not a block sid runs elsewhere, on its own copy.
+func (g *GPU) refusedBlocks(sid uint64) []int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.refused == nil {
+	r := g.refused[sid]
+	if r == nil {
 		return nil
 	}
 	var out []int
-	for li, d := range g.own {
-		if d == g.refused {
+	for li := range g.own {
+		if g.at(sid, li) == r {
 			out = append(out, li)
 		}
 	}

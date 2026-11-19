@@ -1881,8 +1881,9 @@ type GPU struct {
 	stageMu   sync.Mutex
 	stages    int
 	rowsCalls atomic.Int32
-	// refused is the device whose last ReserveKV said no, or nil. See Refused.
-	refused *devTier
+	// refused is, by session, the device whose last ReserveKV said no, or
+	// nil. See Refused.
+	refused map[uint64]*devTier
 	// spillFrom, when set, sends the next PrepLayer of block spillLi to a
 	// device after spillFrom, and frees spillFrom's copy once one takes it.
 	// See SpillAfter.

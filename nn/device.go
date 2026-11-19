@@ -1356,8 +1356,8 @@ type BlockPlanner interface {
 	PlanBlocks(n int, extra uint64)
 }
 
-// RefusalReporter lists the blocks on the device whose last reservation
-// refused, so room is made there.
+// RefusalReporter lists the blocks the caller runs on the device whose last
+// reservation for it refused, so room is made there.
 type RefusalReporter interface{ Refused() []int }
 
 // Spiller moves a block onto a later device when the one holding it is full.

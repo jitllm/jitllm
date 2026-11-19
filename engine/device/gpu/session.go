@@ -248,7 +248,7 @@ func (s *gpuSession) ReserveKV(pos int) bool {
 }
 
 // Refused forwards the tier's answer; see GPU.Refused.
-func (s *gpuSession) Refused() []int { return s.g.Refused() }
+func (s *gpuSession) Refused() []int { return s.g.refusedBlocks(s.sid) }
 
 // SpillAfter forwards; see GPU.SpillAfter.
 func (s *gpuSession) SpillAfter(li int) bool { return s.g.spillAfter(li, s.sid) }
