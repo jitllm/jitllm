@@ -29,7 +29,9 @@ func (s *Instance) PlaceBlocks(lo, hi int) (int, error) {
 }
 
 // placeOnto puts the CPU blocks of [lo, hi) on the device named to ("" the
-// tier's choice) through the offer path, and their history after them. It
+// tier's choice) through the offer path, and their history after them: the
+// card holds it, and the CPU device's pages of it go, but where a block on
+// the CPU device reads it, whose copy they are now (histcross.go). It
 // reports the blocks placed.
 func (s *Instance) placeOnto(lo, hi int, to string) ([]int, error) {
 	if s.ld == nil {
@@ -76,6 +78,9 @@ func (s *Instance) placeOnto(lo, hi int, to string) ([]int, error) {
 				}
 			}
 			return placed, fmt.Errorf("model: block %d's history would not move to the device", li)
+		}
+		if li < len(s.kv.layers) && !s.lanesRead(li) {
+			s.kv.layers[li].dropResident()
 		}
 		placed = append(placed, li)
 	}

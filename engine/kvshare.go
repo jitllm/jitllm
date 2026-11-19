@@ -384,7 +384,7 @@ func (s *Instance) ShareKV(st *SharedStore) error {
 	}
 	s.kv.store, s.kv.share = st, st
 	if s.kv.devAt == nil {
-		s.kv.devAt = s.devAtFn()
+		s.kv.devAt, s.kv.copyAt = s.devAtFn()
 	}
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		s.kv.layers[li].sh = st
@@ -476,11 +476,48 @@ func (s *kvPages) sharedBytes() uint64 {
 // copy, or the store's existing copy replaces it and the session's buffers go
 // back to its pool.
 func (kc *kvCache) publishSealed(li, n int, key string) {
-	s := &kc.layers[li]
 	if kc.devAt(li) != nil {
 		kc.queuePublish(li, n, key) // named where it lives, on the card
 		return
 	}
+	kc.publishHost(li, n, key)
+	// The copy a card keeps of it for a block there is named there too.
+	if kc.copyAt == nil {
+		return
+	}
+	if d := kc.copyAt(li); d != nil && d.SharePage(li) == kc.layers[li].p {
+		d.PublishKV(li, n, key)
+	}
+}
+
+// publishCopies is publishSealed for the CPU device's copy of block li's
+// pages below cur, a card holding the block (histcross.go), from the first
+// it has not offered (copySealed): each held whole, the store's copy, as a
+// block on the CPU device's own page is. A page below what the copy holds
+// as history, or released behind its window, is passed over; it stops at
+// one the copy does not hold whole yet, or no key names.
+func (kc *kvCache) publishCopies(li, cur int) {
+	s := &kc.layers[li]
+	if !s.copy {
+		return
+	}
+	n := s.copySealed
+	for ; n < cur; n++ {
+		if n*s.p < s.genuine || (n >= s.mem.Len() || s.mem.K(n) == nil) && (n+1)*s.p <= s.copied[0] {
+			continue
+		}
+		key := kc.pageKey(li, n)
+		if key == "" || s.copied[0] < (n+1)*s.p {
+			break
+		}
+		kc.publishHost(li, n, key)
+	}
+	s.copySealed = n
+}
+
+// publishHost is publishSealed on the CPU device's page n.
+func (kc *kvCache) publishHost(li, n int, key string) {
+	s := &kc.layers[li]
 	if s.isShared(n) {
 		return // restored from the store: already the held copy
 	}
@@ -554,7 +591,6 @@ func (kc *kvCache) nameMoved(li, pos int) {
 
 // faultShared aliases page n of layer li from the store, or reports a miss.
 func (kc *kvCache) faultShared(li, n int, key string) error {
-	s := &kc.layers[li]
 	// A block on a device holds its history there: the page key names is
 	// put into the session's table on the card (nn.KVShareDevice.MapKV), no
 	// byte moved.
@@ -565,6 +601,24 @@ func (kc *kvCache) faultShared(li, n int, key string) error {
 		kc.mapped += 2
 		return nil
 	}
+	return kc.faultHost(li, n, key)
+}
+
+// faultCopy aliases page n of the CPU device's copy of block li's history,
+// which a card holds (histcross.go), from the store, or reports a miss.
+func (kc *kvCache) faultCopy(li, n int, key string) error {
+	if key == "" {
+		return ErrNoPage
+	}
+	s := &kc.layers[li]
+	s.extend(n)
+	s.setPage(n, nil, nil)
+	return kc.faultHost(li, n, key)
+}
+
+// faultHost is faultShared on the CPU device's page n.
+func (kc *kvCache) faultHost(li, n int, key string) error {
+	s := &kc.layers[li]
 	k := kc.share.acquire(kvStoreKey{key, li * 2, n}, s.pp)
 	if k == nil {
 		return ErrNoPage
@@ -622,6 +676,17 @@ func (kc *kvCache) unshareAll() {
 func (s *Instance) kvShareDevice() bool {
 	_, ok := s.ld.(nn.KVShareDevice)
 	return ok
+}
+
+// kvCopyAt is the device holding a copy of block li's history for a block on
+// it reading it when it names its pages, where block li runs on the CPU
+// device (histcross.go); nil otherwise.
+func (s *Instance) kvCopyAt(li int) nn.KVShareDevice {
+	if s.devAt(li) || !s.cardReads(li) {
+		return nil
+	}
+	d, _ := s.ld.(nn.KVShareDevice)
+	return d
 }
 
 // kvDevAt is the device holding block li's history when it names its pages

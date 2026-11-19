@@ -150,9 +150,12 @@ func (s *Instance) historyGroup(b, src int) bool {
 }
 
 // kvGroupOffered reports whether block li may be offered by offerRange(lo,
-// hi): every block of its history group is on a device already or offered
-// by the same call.
+// hi): its group may part across the CPU and a card (crossable), or every
+// block of it is on a device already or offered by the same call.
 func (s *Instance) kvGroupOffered(li, lo, hi int) bool {
+	if s.crossable(li) {
+		return true
+	}
 	for b := range s.histOf {
 		if s.historyGroup(b, li) && !s.devAt(b) && (b < lo || b >= hi) {
 			return false
@@ -201,20 +204,23 @@ func (s *Instance) splitFromItsHistory(li int) bool {
 }
 
 // fixKVGroups keeps every block that attends to another block's history on
-// the same side as that block, the CPU or the devices: between two cards a
-// reader reads a copy of the history its card holds (the tier's history
-// copies), and across the CPU and a card no copy is kept. A group split by
-// the placement -- a device that took the source and declined a reader, or a
-// relocation that took one member to the CPU -- moves to the CPU whole, with
-// every history its members keep. The device declines a reader whose
-// sources no card holds (tier) and offerRange offers a group only whole, so
-// this is the third half.
+// the same side as that block, the CPU or the devices, where no copy of it
+// can be kept on the reader's side: between two cards a reader reads a copy
+// of the history its card holds (the tier's history copies), and across the
+// CPU and a card a group that may part (crossable) reads a copy on its own
+// side (histcross.go). Any other group split by the placement -- a device
+// that took the source and declined a reader, or a relocation that took one
+// member to the CPU -- moves to the CPU whole, with every history its
+// members keep. The device declines a reader whose sources no card holds
+// (tier) and offerRange offers such a group only whole, so this is the third
+// half. The CPU device's copies no block there reads now go (crossSettle).
 func (s *Instance) fixKVGroups() {
+	defer s.crossSettle()
 	if s.ld == nil {
 		return
 	}
 	for li := range s.histOf {
-		if !s.splitFromItsHistory(li) {
+		if !s.splitFromItsHistory(li) || s.crossable(li) {
 			continue
 		}
 		for b := range s.histOf {

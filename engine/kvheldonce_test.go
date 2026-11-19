@@ -14,9 +14,11 @@ import (
 // kvDuplicates counts the pages of st's history held twice: a page the
 // session holds privately that the store holds as well (a copy beside the
 // session's), and on a block placed on a device any page the host holds of
-// it, or the store holds by its key (a host mirror of the card's history).
-// The page the session is writing into (the one past its sealed pages) is
-// its own in flight and not counted.
+// it, or the store holds by its key (a host mirror of the card's history),
+// but the CPU device's copy of it a block there reads (histcross.go), which
+// is held as the CPU device's own pages are. The page the session is
+// writing into (the one past its sealed pages) is its own in flight and not
+// counted.
 func kvDuplicates(t *testing.T, st *Instance) int {
 	t.Helper()
 	kc := st.kv
@@ -32,7 +34,7 @@ func kvDuplicates(t *testing.T, st *Instance) int {
 		cur := st.pos / pg.p
 		for n := 0; n <= cur && n < max(pg.mem.Len(), cur+1); n++ {
 			held := pg.mem.K(n) != nil
-			if st.devAt(li) {
+			if st.devAt(li) && !pg.copy {
 				if held {
 					dup++ // the host holds a page of the card's history
 				}

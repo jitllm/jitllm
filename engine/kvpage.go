@@ -201,6 +201,15 @@ type kvPages struct {
 	shared   []bool
 	sh       *SharedStore
 	cowFault bool
+	// copy says the pages are the CPU device's copy of a history a card
+	// writes, which a block on the CPU device reads (histcross.go); copied
+	// is, per sequence base, how many of its positions they hold as one,
+	// and sent how many the card's copies of the block's own pages hold.
+	copy         bool
+	copied, sent map[int]int
+	// copySealed is the first page of the copy not yet offered to the shared
+	// store (kvCache.publishCopies).
+	copySealed int
 }
 
 // keyStart is the first key position pos attends on this layer: the start of
@@ -459,6 +468,10 @@ type kvCache struct {
 	devAt  func(li int) nn.KVShareDevice
 	mapEnd int
 	mapped int64
+	// copyAt is the device holding a copy of block li's history for a block
+	// on it reading it, where li runs on the CPU device (Instance.kvCopyAt),
+	// set with devAt.
+	copyAt func(li int) nn.KVShareDevice
 	// chunked is how far aliasChunks has named this sequence's shared pages.
 	chunked int
 	// endsAt is Instance.endsAt, the prompt ends kept past a chunk boundary,
@@ -768,13 +781,16 @@ func (s *Instance) nextCacheID() string {
 // migrateKV moves block li's history between the host's pages and the tier.
 //
 // It gathers the pages into one contiguous run on the way out and scatters
-// them back on the way in (see gather).
+// them back on the way in (see gather). Sent to the card, the pages it
+// leaves are a copy of the history as far as pos, for a block on the CPU
+// device reading it (histcross.go).
 func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
-	// A block reading another's history has none of its own: it moves with
-	// its source (fixKVGroups keeps them together).
+	// A block reading another's history has none of its own: it reads its
+	// source's, or a copy of it on its own side (histcross.go).
 	if s.ld == nil || s.readsOther(li) {
 		return true
 	}
+	defer s.migrated(li, pos, toDevice)
 	pg := &s.kv.layers[li]
 	from, to := s.moveRoutes(toDevice)
 	if pg.p == 0 || pos <= 0 {
@@ -1146,6 +1162,7 @@ func (s *kvPages) dropResident() {
 	s.mem.Reset()
 	s.out, s.lastSealed = s.out[:0], 0
 	s.gone, s.genuine = 0, 0
+	s.crossForget(0)
 }
 
 // recFloor is the highest restore point at or under limit (kvCache.recAt),
@@ -1258,6 +1275,7 @@ func (kc *kvCache) dropTail(n int) {
 		if w := idx * pg.p; pg.written > w {
 			pg.written = w
 		}
+		pg.crossForget(idx * pg.p)
 	}
 }
 
@@ -1687,13 +1705,16 @@ func (kc *kvCache) seal(pos int) {
 		}
 		cur, _ := s.page(pos)
 		if kc.share != nil && kc.devAt(li) != nil {
-			// On the card: every page the position has passed is named there.
+			// On the card: every page the position has passed is named there,
+			// and held once on the host too where the CPU device keeps a copy
+			// of it (histcross.go).
 			for n := s.lastSealed; n < cur; n++ {
 				if key := kc.pageKey(li, n); key != "" {
 					kc.publishSealed(li, n, key)
 				}
 			}
 			s.lastSealed = max(s.lastSealed, cur)
+			kc.publishCopies(li, cur)
 			continue
 		}
 		// lastSealed means "stored", not "walked past": stop at the first page
@@ -1825,6 +1846,10 @@ func (kc *kvCache) fault(li, n int) error {
 	kc.fetched += 2
 	return nil
 }
+
+// faultCopyAt is fault for the CPU device's copy of a card's block, shared
+// (faultCopy).
+func (kc *kvCache) faultCopyAt(li, n int) error { return kc.faultCopy(li, n, kc.pageKey(li, n)) }
 
 // faultFill is fault for a page stored under its fill rather than as a whole
 // one. A short read is still a miss.
@@ -2232,7 +2257,11 @@ func (kv *kvCache) faultIn(li, page int) bool {
 	if page < pg.mem.Len() && pg.mem.K(page) != nil {
 		return true
 	}
-	if err := kv.fault(li, page); err != nil {
+	fault := kv.fault
+	if pg.copy && kv.share != nil {
+		fault = kv.faultCopyAt
+	}
+	if err := fault(li, page); err != nil {
 		// A page the store cannot return is a hole in the sequence's past, so
 		// the request fails. The error is recorded because this may run in a
 		// pool closure with no error path; kvCheck surfaces it at the entry
@@ -2486,6 +2515,7 @@ func (kc *kvCache) reset() {
 		}
 		s.mem.Reset()
 		s.out, s.lastSealed, s.written = s.out[:0], 0, 0
+		s.crossForget(0)
 	}
 	kc.seq, kc.named = kc.seq[:0], kc.named[:0]
 	if kc.bh == nil {

@@ -209,6 +209,7 @@ func (g *devTier) forgetCopy(sid uint64, src int) {
 	if len(g.histCopies[src]) == 0 {
 		delete(g.histCopies, src)
 	}
+	g.forgetHost(sid, src)
 	g.copyN.Add(-1)
 	kp := g.kvp
 	if kp == nil || g.ownsHistoryOf(sid, src) {
@@ -429,9 +430,10 @@ func (l *layer) readsInto(dst []int, li int) []int {
 
 // copiesFor gives device d the copies block li of plan p reads there for
 // session sid: of each block whose history it reads that runs on another
-// device for the session. made is the copies it made, for the caller to let
-// go (dropCopies) when d then declines the block; a copy that cannot be made
-// is why d cannot take it.
+// device for the session -- a card, or the CPU device for the history it
+// reads in place of its own (makeHostCopy). made is the copies it made, for
+// the caller to let go (dropCopies) when d then declines the block; a copy
+// that cannot be made is why d cannot take it.
 func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made []int, err error) {
 	for _, src := range readsOf(nil, li, p.Graph) {
 		if src >= li {
@@ -440,13 +442,26 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 		g.mu.Lock()
 		o := g.at(sid, src)
 		g.mu.Unlock()
-		if o == nil || o == d {
+		if o == d || o == nil && src != p.Graph.ReadsHistoryOf() {
 			continue
 		}
 		d.mu.Lock()
-		have := d.histCopies[src][sid]
+		have, host := d.histCopies[src][sid], d.hostOf[src][sid]
+		if have && host != (o == nil) {
+			d.forgetCopy(sid, src)
+			have = false
+		}
 		d.mu.Unlock()
 		if have {
+			continue
+		}
+		if o == nil {
+			win, chunked := p.Graph.AttendWindow()
+			if err := g.makeHostCopy(sid, src, d, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), p); err != nil {
+				g.dropCopies(sid, d, made)
+				return nil, err
+			}
+			made = append(made, src)
 			continue
 		}
 		if err := g.makeHistCopy(sid, src, o, d, p); err != nil {
@@ -492,20 +507,24 @@ func (g *GPU) settleCopies(sid uint64) error {
 	type hcopy struct {
 		d, o *devTier
 		src  int
+		l    *layer
 	}
 	var add, drop []hcopy
 	var srcs []int
 	for _, d := range devs {
 		d.mu.Lock()
+		// A source the session runs on the CPU device is wanted as the
+		// CPU's copy (o nil), of the history read in place of a block's own.
 		want := map[int]*devTier{}
+		by := map[int]*layer{}
 		for li, l := range d.layers {
 			if l == nil || !l.ok || at[li] != d {
 				continue
 			}
 			srcs = l.readsInto(srcs[:0], li)
 			for _, src := range srcs {
-				if o := at[src]; o != d {
-					want[src] = o
+				if o := at[src]; o != d && (o != nil || src == l.kvSrc) {
+					want[src], by[src] = o, l
 				}
 			}
 		}
@@ -513,16 +532,14 @@ func (g *GPU) settleCopies(sid uint64) error {
 			if !m[sid] {
 				continue
 			}
-			if o := want[src]; o != nil {
+			if o, ok := want[src]; ok && (o == nil) == d.hostOf[src][sid] {
 				delete(want, src)
 				continue
 			}
 			drop = append(drop, hcopy{d: d, src: src})
 		}
 		for src, o := range want {
-			if o != nil {
-				add = append(add, hcopy{d: d, o: o, src: src})
-			}
+			add = append(add, hcopy{d: d, o: o, src: src, l: by[src]})
 		}
 		d.mu.Unlock()
 	}
@@ -532,7 +549,14 @@ func (g *GPU) settleCopies(sid uint64) error {
 		c.d.mu.Unlock()
 	}
 	for _, c := range add {
-		if err := g.makeHistCopy(sid, c.src, c.o, c.d, nil); err != nil {
+		var err error
+		if c.o == nil {
+			geom, win, chunked, tail := c.l.readGeom()
+			err = g.makeHostCopy(sid, c.src, c.d, geom, win, chunked, tail, nil)
+		} else {
+			err = g.makeHistCopy(sid, c.src, c.o, c.d, nil)
+		}
+		if err != nil {
 			err = fmt.Errorf("tier: a copy of block %d's history on %s: %w", c.src, label(c.d.dev, c.d.ord), err)
 			c.d.mu.Lock()
 			c.d.LastErr = err.Error()

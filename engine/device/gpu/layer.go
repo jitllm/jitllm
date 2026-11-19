@@ -57,6 +57,11 @@ type layer struct {
 	// after them (devTier.bindMore).
 	kvSrc  int
 	kvMore []graph.HistoryRead
+	// rgeom and rtail are the geometry and tail a block reading another
+	// block's history reads it at: what a copy of it made here for this
+	// block holds (makeHostCopy).
+	rgeom kvGeom
+	rtail int
 	// runs is the sessions that placed the block here. A block holding no
 	// history of its own -- a KV-sharing one, a tower's -- is still theirs.
 	runs map[uint64]struct{}
@@ -1897,6 +1902,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 		l.kvSrc = hsrc
+		l.rgeom, l.rtail = g.kvGeomOf(p), historyTail(p.Graph)
 	}
 	if l.kvSrc != li {
 		// Nothing to allocate.

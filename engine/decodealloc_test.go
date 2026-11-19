@@ -57,6 +57,45 @@ func TestDecodeDoesNotAllocateAcrossCards(t *testing.T) {
 	}
 }
 
+// TestDecodeDoesNotAllocateAcrossTheCPU holds a warm decode token at zero
+// allocations with Gemma 4's and Gemma 3n's KV-sharing blocks split across
+// the CPU device and a card, both ways: the readers on the card, whose copy
+// of the CPU's history takes the source's row every token, and the readers
+// on the CPU device, whose copy takes it from the card's.
+func TestDecodeDoesNotAllocateAcrossTheCPU(t *testing.T) {
+	resident := WithPageBudget(1 << 40)
+	for _, name := range []string{"synth-gemma4-e.gguf", "synth-gemma3n.gguf"} {
+		for _, readersUp := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/readers-on-the-card-%t", name, readersUp), func(t *testing.T) {
+				p := testmodels.Path(name)
+				d := testdevices.One("cuda:0")
+				g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d)}, testTierOpts(t)...)...)
+				if err != nil || g == nil {
+					noDevice(t, d, err)
+				}
+				defer g.Close()
+				m, err := model.Open(jlmOf(t, p))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				_, cut := historyCut(t, m)
+				lower, upper := d, nn.CPU
+				if readersUp {
+					lower, upper = nn.CPU, d
+				}
+				r0 := g.Stats()
+				decodeAllocs(t, m, g, WithStreamTrial(false), resident, crossPlace(m.Cfg.NLayer, cut, lower, upper))
+				s := g.Stats()
+				if readersUp && s.HostCopyPages == r0.HostCopyPages || !readersUp && s.HostReadPages == r0.HostReadPages {
+					t.Fatalf("no page crossed to a copy (%d to the card's, %d to the CPU's): the arm read no history across the CPU and the card",
+						s.HostCopyPages-r0.HostCopyPages, s.HostReadPages-r0.HostReadPages)
+				}
+			})
+		}
+	}
+}
+
 // TestDecodeDoesNotAllocate holds a warm decode token at ZERO heap
 // allocations, on the host and on every device backend present, for a
 // dense model and a mixture. A count of allocations does not depend on the

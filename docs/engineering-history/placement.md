@@ -4986,8 +4986,9 @@ set its blocks run in, from the set's first block, as layersRows runs them,
 and the head's in the home set, riding the home set's blocks or a call of
 its own.
 
-Across the CPU and a card no copy is kept: a group a move to the CPU splits
-comes home whole, and comes back to a card whole (open-questions.md).
+Across the CPU and a card no copy was kept: a group a move to the CPU split
+came home whole, and came back to a card whole. It is "A history read across
+the CPU and a card" below.
 
 Gates: engine.TestAHistoryReadAcrossCards (synth-gemma4-e and synth-gemma3n
 split at the first source a block above reads, each pair of cards of one
@@ -5004,6 +5005,87 @@ copies not appended, gpu.Faults "copystale": the logits leave the band on
 every pair),
 TestDecodeDoesNotAllocate's two-card-history arms, and
 TestAWidePromptOfStreamsGoesInPieces.
+
+## A history read across the CPU and a card
+
+The open question as it stood: between two cards a reader read a copy of
+its source's history on its own card, and across the CPU and a card no copy
+was kept. A KV-sharing group a move to the CPU split came home whole
+(fixKVGroups), one on the CPU went to a card whole (groupWhole), and a strict
+placement splitting one was refused: synth-gemma4-e's [0,4) on the CPU and
+[4,6) on a card, "block 4 is on cpu, not cuda:0 (block 5 attends to block 2's
+history, which is not on this device)"; the reverse, "block 2 is on cpu, not
+cuda:0"; synth-gemma3n's [0,8) and [8,10) the same, on CUDA and on Vulkan.
+
+How it runs (engine/histcross.go, engine/device/gpu/histhost.go):
+
+- The side a reader runs on holds a copy of its source's history for the
+  session, written from the side that writes it before each run reading it,
+  from the first position the copy lacks to the run's end (crossRun: a
+  token's run, a prompt chunk's, a step's rows by session and sequence). A
+  block reads only blocks below it and the runs go in order, so the source
+  wrote those rows first.
+- On a card the copy is the tier's (makeHostCopy): the source's pool layer at
+  the reader's geometry, registered with the card copies (histCopies, hostOf),
+  made empty with the reader and written by the engine (nn.HistoryCopier:
+  CopyFrom, CopyRows) as whole pages in the card's layout. On the CPU device
+  the copy is the session's own pages of the block (kvPages.copy), which a
+  block on a card otherwise leaves empty, read from the card a page at a time
+  through the layer's read reserve (ReadRows), as the staged copy between two
+  backends reads.
+- The rows cross as floats: the CPU's history is binary16 or q8 where the
+  instance holds one, converted by the CPU device's composed conversions
+  (KVConvDevice), and each side pages at its own page size, so the two need
+  not page alike. Each copy pages as any history of its side: grown, released
+  behind a window, evicted and faulted back, counted in the session's bytes.
+- A move ends with the copies the placement reads (settleCopies on the cards,
+  crossSettle on the CPU device): a copy no reader there reads goes, one whose
+  block now runs beside its readers is its own pages, and a block moved to a
+  card leaves the CPU device's pages of it only where a block there reads
+  them, as the copy (placeOnto; before, MoveBlocks to a card left them
+  resident beside the card's, a host mirror TestKVIsHeldOnce's count would
+  name).
+- Two sessions sharing a prefix hold it once on each device: the CPU device's
+  copy publishes its sealed pages to the shared store and aliases the ones it
+  holds by name (publishCopy, crossAlias); the card's copy of a CPU block
+  names its pages on the card and maps the ones named there (shareHostCopy,
+  crossMap), where the two sides cut the history alike.
+
+A group parts this way only where its readers read no history but the one
+they bind in place of their own and no source keeps one past its rows
+(crossGroups); any other still comes home whole.
+
+On the way the gate found that a prefix never restored for Gemma 3n or
+Gemma 4 at all, on the CPU or anywhere: restore walks every attention layer's
+stored pages and takes the least coverage, and a block reading another's
+history keeps none, so its coverage was 0 and so was every restore
+(KVRestored 0 for a 128-position shared prefix, both models). Such a block no
+longer decides coverage (kvCache.covers); it reads the pages restored for its
+source (TestAPrefixRestoresPastSharedHistories).
+
+With the readers on the CPU device a second session sharing the prefix still
+restores nothing: the sources' windows on the card are cut at the card's
+page, 64 positions at least, and the CPU's at a window of 4 keys' 32, so no
+key the CPU's cache knows names the card's pages of them. Its CPU copies
+read the first session's pages through the store all the same.
+
+Gates: engine.TestAHistoryReadAcrossTheCPU (synth-gemma4-e and
+synth-gemma3n split at the first source a block above reads, on a CUDA card
+and on a Vulkan card: the readers on the card, a 600-row prompt and 14
+teacher-forced tokens against the CPU inside three times one card's band
+with the CPU's greedy pick, the split at 3.2e-8 and below where one card
+stands at 6.7e-7 on CUDA; the source moved beside its readers and back, the readers to the CPU,
+the blocks below them to the card, the readers back up and the blocks below
+them home, each block where its move put it and the copies held equal to the
+reads across devices after every move; the readers on the CPU device the
+same, with the CPU's copy taking no rows once made at 2.5e-2 to 1.5e-1 where
+the band is 1e-6; two instances stepping their rows together, both ways; and
+two sessions sharing a prefix, both ways, against the CPU and held once on
+each device; red at the commit before, every arm's placement refused),
+TestAHistoryReadAcrossTheCPUDiscriminates (the card's copies taking no rows,
+gpu.Faults "copystale": 3.3e-2 to 1.5e-1), TestDecodeDoesNotAllocateAcrossTheCPU
+(0 allocations over 64 tokens both ways), and TestAHistoryReadAcrossCards,
+whose source now moves to the CPU with its readers left on the card.
 
 ## One pool spent by two devices
 

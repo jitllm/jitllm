@@ -547,6 +547,9 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			if err := s.openPrompt(r, slot, base, p0, n, chunkRows, bidir); err != nil {
 				return nil, err
 			}
+			if err := s.crossRun(s.Session, s.routeOf(li), li, hi, slot*s.maxSeq, p0, p0+n); err != nil {
+				return nil, err
+			}
 			s.cutFor(r, hi-1, n)
 			if s.callTellOn(r, li, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.batchTables(n), fh) {
 				headDone = fh != nil

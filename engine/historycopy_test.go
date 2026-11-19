@@ -23,9 +23,9 @@ import (
 //
 // Mid-sequence the source moves beside its readers (the copy becomes its own
 // pages, and no card holds a copy), back to the first card (the readers'
-// card keeps its pages as a copy again), to the CPU (its readers come with
-// it: a history read across the CPU and a card is not built) and back, and
-// then the readers move to the second card alone, their copy made there
+// card keeps its pages as a copy again), to the CPU (its readers stay, and
+// their card's copy is written from the CPU's rows: histcross.go) and back,
+// and then the readers move to the second card alone, their copy made there
 // from the source's whole history. Each move is held to the logits of the
 // token after it.
 //
@@ -241,8 +241,10 @@ type historyStep struct {
 	to     string
 }
 
-// crossCardReads is the history copies st's placement needs: each block
-// whose history a block on another card reads, once a card it is read on.
+// crossCardReads is the history copies st's placement needs on its cards:
+// each block whose history a block on another card reads, or a block on the
+// CPU device whose history a block on a card reads in place of its own
+// (histcross.go), once a card it is read on.
 func crossCardReads(st *Instance, m *model.Model) int {
 	type pair struct {
 		src int
@@ -256,14 +258,15 @@ func crossCardReads(st *Instance, m *model.Model) int {
 		}
 		g := m.Composing().BlockGraph(li)
 		var srcs []int
-		if n := g.ReadsHistoryOf(); n >= 0 && n != li {
+		n := g.ReadsHistoryOf()
+		if n >= 0 && n != li {
 			srcs = append(srcs, n)
 		}
 		for _, r := range g.ReadsMore() {
 			srcs = append(srcs, r.Block)
 		}
 		for _, s := range srcs {
-			if at, ok := st.DeviceOf(s); ok && at != on {
+			if at, ok := st.DeviceOf(s); ok && at != on || !ok && s == n {
 				need[pair{s, on}] = true
 			}
 		}

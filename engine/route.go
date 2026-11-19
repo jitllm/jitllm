@@ -27,6 +27,9 @@ type route struct {
 	kvmig   nn.KVMigrator
 	histmig nn.HistoryMigrator
 	recmig  nn.RecMigrator
+	// hcopy keeps the copies of histories read across the CPU and a card
+	// (histcross.go).
+	hcopy nn.HistoryCopier
 	// recrows zeroes a row's recurrent state where the device holds it.
 	recrows nn.RecRowsDevice
 	rew     nn.RecRewinder
@@ -52,6 +55,7 @@ func newRoute(d nn.LayerRunner) route {
 	r.prompt, _ = d.(nn.PromptRows)
 	r.kvmig, _ = d.(nn.KVMigrator)
 	r.histmig, _ = d.(nn.HistoryMigrator)
+	r.hcopy, _ = d.(nn.HistoryCopier)
 	r.recmig, _ = d.(nn.RecMigrator)
 	r.recrows, _ = d.(nn.RecRowsDevice)
 	r.rew, _ = d.(nn.RecRewinder)

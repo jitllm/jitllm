@@ -662,6 +662,11 @@ type Stats struct {
 	// pages copied into them, made and appended, each layer's apart, and
 	// HistoryCopiesHeld the copies held now, one a block and session.
 	HistoryCopies, HistoryCopyPages, HistoryCopiesHeld int
+	// HostCopyPages counts the pages of a copy of a history the CPU device
+	// writes that its rows were written into here, and HostReadPages the
+	// pages read from here into the CPU device's copy of a history this
+	// device writes (histhost.go), each layer's apart.
+	HostCopyPages, HostReadPages int
 	// RecPointsKept and RecPointsLoaded count a linear block's restore
 	// points copied into a snapshot on the card and back (recshare.go).
 	RecPointsKept, RecPointsLoaded int
@@ -983,6 +988,8 @@ func (s *Stats) add(o Stats) {
 	s.HistoryCopies += o.HistoryCopies
 	s.HistoryCopyPages += o.HistoryCopyPages
 	s.HistoryCopiesHeld += o.HistoryCopiesHeld
+	s.HostCopyPages += o.HostCopyPages
+	s.HostReadPages += o.HostReadPages
 	s.RecPointsKept += o.RecPointsKept
 	s.RecPointsLoaded += o.RecPointsLoaded
 	s.KVStreamPasses += o.KVStreamPasses
@@ -1286,6 +1293,14 @@ type devShared struct {
 	// block placed here reads it -- and copyN how many (histcopy.go).
 	histCopies map[int]map[uint64]bool
 	copyN      atomic.Int32
+	// hostOf is, per block, the sessions whose copy of its history here is
+	// the CPU's -- the session runs the block on the CPU device -- written
+	// from the CPU's rows (histhost.go), hostRows the positions of each
+	// sequence such a copy holds, and hostPage the page of host floats a
+	// write of one or a read for the CPU's builds.
+	hostOf   map[int]map[uint64]bool
+	hostRows map[int]map[seqID]int
+	hostPage []float32
 	// copyHost is the host buffer a copy's append goes through between two
 	// backends (copyRun).
 	copyHost []byte

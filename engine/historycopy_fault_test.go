@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -42,6 +43,32 @@ func TestAHistoryReadAcrossCardsDiscriminates(t *testing.T) {
 					if out == 0 {
 						t.Fatal("copies left as they were made stood inside the band: the gate cannot see a copy that is not appended")
 					}
+				})
+			}
+		})
+	}
+}
+
+// TestAHistoryReadAcrossTheCPUDiscriminates runs TestAHistoryReadAcrossTheCPU's
+// placement with the readers on the card and the card's copies of the CPU
+// device's history taking none of its rows (gpu.Faults.SetPagedFault
+// "copystale"): the readers attend over a copy nothing was written into.
+// The logits must leave the band the gate holds them to, or the gate cannot
+// see a card's copy that is not appended.
+func TestAHistoryReadAcrossTheCPUDiscriminates(t *testing.T) {
+	for _, f := range []struct {
+		name string
+		open func(*testing.T, string) (*model.Model, *c6Golden, []Option)
+	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n}} {
+		t.Run(f.name, func(t *testing.T) {
+			m, _, io := f.open(t, f.name)
+			defer m.Close()
+			for _, dev := range testdevices.Specs("cuda:0", "vulkan:0") {
+				t.Run(dev, func(t *testing.T) {
+					var fs gpu.Faults
+					defer fs.SetPagedFault("")
+					got, band := historyAcrossTheCPU(t, m, io, dev, false, func(*Instance) { fs.SetPagedFault("copystale") }, gpu.WithFaults(&fs))
+					crossOutside(t, got, band, "the card's copies taking no rows")
 				})
 			}
 		})

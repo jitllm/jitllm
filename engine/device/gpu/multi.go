@@ -2246,7 +2246,10 @@ func (g *GPU) publishKV(sid uint64, li, page int, key string) bool {
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	if d == nil || !d.publishKVs(sid, li, page, key) {
+	if d == nil {
+		return g.shareHostCopy(sid, li, page, key, -1)
+	}
+	if !d.publishKVs(sid, li, page, key) {
 		return false
 	}
 	g.shareCopies(sid, li, page, key, -1)
@@ -2262,7 +2265,7 @@ func (g *GPU) kvPageOf(sid uint64, li int) int {
 	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
-		return 0
+		return g.hostCopyPage(sid, li)
 	}
 	return d.kvPageOf(sid, li)
 }
@@ -2271,7 +2274,10 @@ func (g *GPU) mapKV(sid uint64, li, page int, key string, end int) bool {
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	return d != nil && d.mapKVs(sid, li, page, key, end) && g.shareCopies(sid, li, page, key, end)
+	if d == nil {
+		return g.shareHostCopy(sid, li, page, key, end)
+	}
+	return d.mapKVs(sid, li, page, key, end) && g.shareCopies(sid, li, page, key, end)
 }
 
 // MigrateKV is migrateKV for the zero session: a caller that never attached.

@@ -100,12 +100,22 @@ type Instance struct {
 	histMore [][]graph.HistoryRead
 	kvGroup  []int
 	winOf    []blockWindow
+	// readsAcross says a block reads another block's history in place of
+	// its own, crossOK whose groups may part across the CPU and a card
+	// (crossGroups), and crossK and crossV the rows a copy of such a
+	// history crosses through (histcross.go). crossStale is the gate's
+	// violation: the CPU device's copies take no rows once made.
+	readsAcross    bool
+	crossOK        []bool
+	crossK, crossV []float32
+	crossStale     bool
 	// mu is held by a call running on the instance: sessions leasing it run
 	// one call at a time, or together as one step's rows (StepRuns).
 	mu sync.Mutex
 	// fnDevAt, fnRecAt and fnEndsAt are s's methods a session's cache asks
 	// through, made once so binding a session (use) allocates nothing.
 	fnDevAt  func(li int) nn.KVShareDevice
+	fnCopyAt func(li int) nn.KVShareDevice
 	fnRecAt  func(pos int) bool
 	fnEndsAt func(c int) [kvEndSeats]uint8
 	// readout is the device reading an embedding model's pooled row, nil on a
@@ -637,6 +647,10 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.own.on = s
 	s.histOf, s.histMore = historySources(m, hi)
 	s.kvGroup = historyGroups(s.histOf, s.histMore)
+	s.crossOK = crossGroups(m, s.histOf, s.histMore, s.kvGroup)
+	for li, src := range s.histOf {
+		s.readsAcross = s.readsAcross || src != li
+	}
 	s.winOf = attendWindows(m, lo, hi)
 	if err := m.BindDense(fr, &s.dense); err != nil {
 		return nil, err
@@ -2451,10 +2465,14 @@ func (s *Instance) reclaim(pos int) {
 		if !was {
 			continue
 		}
-		// A KV-sharing group comes back whole (kvSpan), as it left.
-		// Every block of the span the offer placed carries its history up,
-		// moved here or brought home with its group (fixKVGroups).
+		// A KV-sharing group comes back whole (kvSpan), as it left, where it
+		// may not part across the CPU and a card (crossable). Every block of
+		// the span the offer placed carries its history up, moved here or
+		// brought home with its group (fixKVGroups).
 		lo, hi := s.kvSpan(li)
+		if s.crossable(li) {
+			lo, hi = li, li+1
+		}
 		was := make([]bool, hi-lo)
 		for b := lo; b < hi; b++ {
 			was[b-lo] = s.devAt(b)
@@ -3179,6 +3197,9 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			unhide = s.rows.hiddenOf(fold)
 		}
 		if err := s.openRun(r); err != nil {
+			return nil, err
+		}
+		if err := s.crossRun(s.Session, s.routeOf(li), li, hi, 0, s.pos, s.pos+1); err != nil {
 			return nil, err
 		}
 		s.cutFor(r, hi-1, 1)

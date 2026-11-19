@@ -141,7 +141,7 @@ func (s *Instance) use(sess *Session) error {
 		return err
 	}
 	if s.kv.devAt != nil {
-		s.kv.devAt = s.devAtFn()
+		s.kv.devAt, s.kv.copyAt = s.devAtFn()
 	}
 	if s.kv.recAt != nil {
 		s.kv.recAt, s.kv.endsAt = s.recFns()
@@ -229,6 +229,7 @@ func (s *Instance) comeBack() error {
 		}
 	}
 	sess.away = false
+	s.crossSettle()
 	return nil
 }
 
@@ -346,11 +347,11 @@ func (s *Instance) ownDeviceOf(li int) (string, bool) {
 
 // devAtFn and recFns are s's methods a session's cache asks through, made
 // once per instance so binding a session allocates nothing.
-func (s *Instance) devAtFn() func(int) nn.KVShareDevice {
+func (s *Instance) devAtFn() (func(int) nn.KVShareDevice, func(int) nn.KVShareDevice) {
 	if s.fnDevAt == nil {
-		s.fnDevAt = s.kvDevAt
+		s.fnDevAt, s.fnCopyAt = s.kvDevAt, s.kvCopyAt
 	}
-	return s.fnDevAt
+	return s.fnDevAt, s.fnCopyAt
 }
 
 func (s *Instance) recFns() (func(int) bool, func(int) [kvEndSeats]uint8) {

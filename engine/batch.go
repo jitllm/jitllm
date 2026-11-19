@@ -63,6 +63,9 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 		if err := s.openRows(r, seq, pos, tokens); err != nil {
 			return nil, err
 		}
+		if err := s.crossRows(k, li, hi, pos, slot); err != nil {
+			return nil, err
+		}
 		withHead := headOnDev && hi == s.hi
 		s.cutFor(r, hi-1, n)
 		var err error
