@@ -782,10 +782,11 @@ func TestComposedBlocksServe(t *testing.T) {
 								// panel's longest left a shorter prompt's blocks the room to
 								// stay resident.
 								sopts := map[int][]gpu.Option{}
+								var near uint64
 								soptsOf := func(p prompt) []gpu.Option {
 									n := len(p.ids) + len(p.toks)
 									if _, ok := sopts[n]; !ok {
-										sopts[n] = streamOpts(t, m, dev, a.stream, parts, noGraph, p.ids, p.toks, io...)
+										sopts[n] = streamOpts(t, m, dev, a.stream, parts, noGraph, &near, p.ids, p.toks, io...)
 									}
 									return sopts[n]
 								}

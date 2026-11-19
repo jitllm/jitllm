@@ -704,11 +704,15 @@ const (
 // the room (synth-ernie45moe's longest prompt both banks at position 257,
 // placed resident), and a budget too low for even that sends a block home
 // mid-run and its steps past the composer (188 of 192 block steps). The arm
-// reserves the narrowest prompt width, which has nothing left to halve. A
+// reserves the narrowest prompt width, which has nothing left to halve. The
+// search starts at *near, the budget the previous prompt found, and leaves
+// this prompt's there: the panel's prompts land within a grain of each other
+// (olmoe's eight on one budget), where nine halvings a prompt of a 10.5 GB
+// model (DeepSeek-V2-Lite) were the slowest arm of the serving gate. A
 // fixture's banks are kilobytes, where the card's allocation pieces can make
 // a streamed block cost what a resident one does, which no budget then tells
 // apart.
-func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.Parts, noGraph bool, ids, toks []int32, io ...Option) []gpu.Option {
+func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.Parts, noGraph bool, near *uint64, ids, toks []int32, io ...Option) []gpu.Option {
 	t.Helper()
 	switch a {
 	case streamBudget:
@@ -801,8 +805,10 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 		// The highest such budget, to a sixteenth of a bank: lower ones page
 		// whole blocks through the card as well (synth-glm4moe at 2.2 MB
 		// against 3.9 MB resident).
-		for hi-lo > saving/16 {
-			b := lo + (hi-lo)/2
+		grain := max(saving/16, 1)
+		// probe narrows [lo, hi) by a try at b, and reports whether b
+		// streamed nothing: above the highest such budget.
+		probe := func(b uint64) bool {
 			st, n, k, kept := try(b, false)
 			tries = append(tries, fmt.Sprintf("%d bytes place %d of %d blocks, %d streamed, and the run keeps them and its history %v",
 				b, n, m.Cfg.NLayer, k, kept))
@@ -811,10 +817,26 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 				lo = b
 			case k == 0:
 				hi = b
+				return true
 			default:
 				budget, at, streams = b, st, k
 				lo = b
 			}
+			return false
+		}
+		// From the previous prompt's budget, a grain at a time and doubling,
+		// down while above it and up while not, to a step on each side.
+		if g := *near; g > lo && g < hi {
+			if probe(g) {
+				for d := grain; hi-lo > grain && g-lo > d && probe(g-d); d *= 2 {
+				}
+			} else {
+				for d := grain; hi-lo > grain && hi-g > d && !probe(g+d); d *= 2 {
+				}
+			}
+		}
+		for hi-lo > grain {
+			probe(lo + (hi-lo)/2)
 		}
 		if budget == 0 {
 			t.Fatalf("no budget under %d bytes streams a block with every block on the card and the run's history beside it: %s",
@@ -822,6 +844,7 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 		}
 		t.Logf("experts under a budget: %d bytes resident (scratch %d, composed %d, KV pool %d), %d streamed over %d mixture blocks, %d of slack; "+
 			"the budget %d streams %d block(s) and %d fills (%d tries)", resident, rs.ScratchBytes, rs.ComposedBytes, rs.KVPoolBytes, streamed, mixed, rs.Slack, budget, streams, at.StreamFills, len(tries))
+		*near = budget
 		return []gpu.Option{gpu.WithBudget(budget), width}
 	case streamCache:
 		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
