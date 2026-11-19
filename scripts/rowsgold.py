@@ -4,7 +4,7 @@ cannot run, from the fixture's own transformers class (the user's decision for
 such fixtures: the model's reference, not llama.cpp, not jitllm's CPU path).
 -> testdata/golden/rows/<gguf name>.json
 
-  $JITLLM_HF_PY scripts/rowsgold.py <transformers dir> <gguf name> [experts|serve] [q8]
+  $JITLLM_HF_PY scripts/rowsgold.py <transformers dir> <gguf name> [experts|serve] [q8] [seqs=FILE]
 
 The gate's sequences, as engine/cpurows_test.go builds them: its text's ids,
 a prompt of each length with the decode tokens after it, and a batch of three
@@ -28,6 +28,11 @@ the logits: its panel's prompts, read from engine/servepanel_test.go and
 engine/composed_test.go, each encoded after the BOS and followed by the
 teacher-forced ids engine/composed_test.go's trainedToks picks, as many as the
 gate decodes after it. -> <gguf name>.serve.json
+With seqs=FILE as well, the sequences are FILE's ("seqs", each its "ids" and
+"toks", as a golden holds them): the panel as the engine encodes it, where
+the GGUF tokenizes otherwise than tokenizer.json. bitnet-b1.58-2B-4T-i2_s.gguf
+states no pre-tokenizer, so its ids are the default split's ("'s" two tokens,
+"\n\n" two); its golden is regenerated from itself.
 
 With "q8" as well, the class runs as the engine's numbers do on the fixture's
 @q8 container (the user's decision for the mixture gates' reference): every
@@ -169,7 +174,7 @@ def serve_seqs(tok, cfg, embed):
     return out
 
 
-def main(d, name, experts=False, q8=False, serve=False):
+def main(d, name, experts=False, q8=False, serve=False, seqs_file=None):
     tok = Tokenizer.from_file(os.path.join(d, "tokenizer.json"))
     ids = tok.encode(TEXT).ids
     cfg = AutoConfig.from_pretrained(d, experts_implementation="eager")
@@ -190,6 +195,8 @@ def main(d, name, experts=False, q8=False, serve=False):
         seqs += [(p, steps) for p in (ids[:7], ids[40:73], ids[100:150])]
     if serve:
         seqs = serve_seqs(tok, cfg, m.get_input_embeddings().weight.detach())
+    if seqs_file:
+        seqs = [(q["ids"], q["toks"]) for q in json.load(open(seqs_file))["seqs"]]
     out = []
     for p, t in seqs:
         with torch.no_grad():
@@ -206,4 +213,5 @@ def main(d, name, experts=False, q8=False, serve=False):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], "experts" in sys.argv[3:], "q8" in sys.argv[3:], "serve" in sys.argv[3:])
+    seqs_file = next((a[len("seqs="):] for a in sys.argv[3:] if a.startswith("seqs=")), None)
+    main(sys.argv[1], sys.argv[2], "experts" in sys.argv[3:], "q8" in sys.argv[3:], "serve" in sys.argv[3:], seqs_file)

@@ -364,15 +364,24 @@ const bandRatio, bandWorst = 1.5, 4.0
 // (jit's flashTail).
 func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 22) }
 
-// serveGolden is the serving gate's numerical reference for a q8 fixture the
-// GGUF oracle runs as another model, "" for any other: its transformers class
-// run as the container's Q8_0 runs over the gate's panel (scripts/rowsgold.py
-// serve q8, the class from the GGUF by scripts/llama4hf.py). The oracle
-// hardcodes Llama 4's attention chunk at 8192, and synth-llama4-q8's is 4.
+// serveGolden is the serving gate's numerical reference for a model the GGUF
+// oracle runs as another model, "" for any other: its transformers class over
+// the gate's panel (scripts/rowsgold.py serve). The oracle hardcodes Llama 4's
+// attention chunk at 8192, and synth-llama4-q8's is 4: its class runs as the
+// container's Q8_0 runs (serve q8, the class from the GGUF by
+// scripts/llama4hf.py). The oracle quantizes BitNet b1.58's activations per
+// 256-element block, where the release's class quantizes each token's row
+// whole (docs/divergences.md): its two arms sat 5.72e-05 from the float
+// reference at their worst, and the composed arms a median 11.8 times that;
+// the class itself sits 0.0376 away at its worst, and the composed arms a
+// median 0.854 of its distance. Its GGUF states no pre-tokenizer, so the
+// golden runs the panel as the engine encodes it (rowsgold.py seqs=).
 func serveGolden(file string) string {
 	switch file {
 	case "synth-llama4-q8.gguf":
 		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.q8.json")
+	case "bitnet-b1.58-2B-4T-i2_s.gguf":
+		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.json")
 	}
 	return ""
 }
