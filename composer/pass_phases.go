@@ -41,6 +41,11 @@ func (p Phases) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if j > i && ks[j].readsRowTable() && !ks[i].readsRowTable() {
 				break
 			}
+			// So are a bank's pages for the selection the launches before its
+			// first reader wrote (acrossPages).
+			if j > i && acrossPages(ks[i], ks[j]) {
+				break
+			}
 			reads, writes = reads || r, writes || w
 			for _, b := range ks[j].Bufs {
 				if b.Kind != BufShared {

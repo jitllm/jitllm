@@ -39,7 +39,7 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for pi := ci - 1; pi >= 0; pi-- {
 			p := out[pi]
 			var m *Kernel
-			if p.Unfused || c.Unfused || p.Folds || p.Sweep != c.Sweep {
+			if p.Unfused || c.Unfused || p.Folds || p.Sweep != c.Sweep || acrossPages(p, c) {
 				if conflicts(p, c) {
 					break
 				}
@@ -79,6 +79,16 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 	}
 	return out, nil
+}
+
+// acrossPages says one of p and c reads a bank in pages and the other does
+// not. A kernel over the bank reads a selection a kernel before it wrote, and
+// the card reads it between the two to fault the pages in (Request.Paged): a
+// kernel over the bank fuses only with another over it. Held apart, every
+// kernel over Qwen3-MoE's banks wrote its sub-block dots out at a prompt's
+// rows, 79.5 MB of arena on Vulkan against the 22 MB bank it streamed.
+func acrossPages(p, c *Kernel) bool {
+	return p.readsTable(TableExperts) != c.readsTable(TableExperts)
 }
 
 // joinsThen finds what p stores after its loops, for every call alike,

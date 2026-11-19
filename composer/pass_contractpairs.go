@@ -73,7 +73,7 @@ func (p ContractPairs) merge(ks []*Kernel, a, b, m *Kernel, w []bool) *Kernel {
 // twinWeights marks b's nodes that reach a weight of its own, where a and b
 // are one reduction node for node but for their weights; nil where not.
 func twinWeights(a, b *Kernel) []bool {
-	if a.Work || b.Work || a.Kind != b.Kind || a.Kind != PrimReduce && a.Kind != PrimContract || a.Unfused || b.Unfused || len(a.Stores) != 1 || len(b.Stores) != 1 ||
+	if a.Work || b.Work || a.Kind != b.Kind || a.Kind != PrimReduce && a.Kind != PrimContract || a.Unfused || b.Unfused || acrossPages(a, b) || len(a.Stores) != 1 || len(b.Stores) != 1 ||
 		a.Positions != nil || a.Heads != nil || a.Quarter != nil || a.Rows != 0 || a.Clamp != 0 || a.Capacity != 0 || a.Seq != nil ||
 		len(a.Args) > 0 || len(a.Ptrs) > 0 || a.Part != b.Part || a.Of != b.Of || a.Group != b.Group || !sameSpace(a, b) ||
 		len(a.Nodes) != len(b.Nodes) || len(a.Bufs) != len(b.Bufs) || !reflect.DeepEqual(a.Loops, b.Loops) {

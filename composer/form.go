@@ -218,10 +218,6 @@ func (r *Registry) formWith(req Request, prof Profile, untailed map[KernelAt]boo
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
 			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored, k.Unstreamed, k.Unsplit = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.at()], sp.uncursored[k.Of], sp.unstreamed[k.at()], sp.unsplit[k.Of]
-			// A kernel over a bank in pages reads a selection a kernel before
-			// it wrote: the card reads it between the two to fault the pages
-			// in (Request.Paged), so nothing is fused into it.
-			k.Unfused = k.Unfused || k.readsTable(TableExperts)
 			k.Crowded, k.Folds, k.Unvector, k.Uninit = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of], sp.uninit[k.at()]
 			k.Sweep = p.Sweep
 			k.Unrolls = sp.unrolls[k.at()]
