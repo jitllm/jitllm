@@ -176,6 +176,82 @@ func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b, hea
 		len(prompts), gen, worst, stepped, historyAppends(g)-pages)
 }
 
+// TestAHistoryCopyRepages: a block reading another block's history on
+// another card reads a copy of it there although the two cards' pools page
+// apart -- the readers' card was given its pool at the longest page by an
+// instance of a long context placed there first, the source's card at a
+// shorter one by this instance's -- the copy re-paged as rows on the way
+// (copyRepaged). The prompt and every token after it are held to the CPU's
+// logits for the prompt alone, and the copies held are the reads across the
+// cards.
+func TestAHistoryCopyRepages(t *testing.T) {
+	for _, f := range []struct {
+		name string
+		open func(*testing.T, string) (*model.Model, *c6Golden, []Option)
+	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n}} {
+		t.Run(f.name, func(t *testing.T) {
+			m, _, io := f.open(t, f.name)
+			defer m.Close()
+			pairs := historyCopyPairs(t)
+			if len(pairs) == 0 {
+				noDevice(t, "two cards", nil)
+			}
+			for _, p := range pairs {
+				t.Run(p[0]+","+p[1], func(t *testing.T) { historyCopyRepages(t, m, io, p[0], p[1]) })
+			}
+		})
+	}
+}
+
+// historyCopyRepages is TestAHistoryCopyRepages over cards a, the source's,
+// and b, the readers'.
+func historyCopyRepages(t *testing.T, m *model.Model, io []Option, a, b string) {
+	nl := m.Cfg.NLayer
+	src, cut := historyCut(t, m)
+	const n, ntok = 100, 14
+	maxSeq := n + ntok + 4
+	prompt := crossPrompt(m, n, 0)
+	want, ids := crossWant(t, m, io, prompt, ntok, maxSeq)
+	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, a+","+b, err)
+	}
+	defer g.Close()
+	distinctCards(t, g)
+	long := testInstance(t, m, 4*maxSeq, append(append([]Option(nil), io...),
+		WithPlacement(Placement{Rest: &Place{On: b}, Strict: true}))...)
+	defer long.Close()
+	if err := long.SetDevice(g); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := long.Prefill(prompt[:8]); err != nil {
+		t.Fatal(err)
+	}
+	st := testInstance(t, m, maxSeq, append(append([]Option(nil), io...), crossPlace(nl, cut, a, b))...)
+	defer st.Close()
+	if err := st.SetDevice(g); err != nil {
+		t.Fatalf("blocks [0,%d) on %s and [%d,%d) on %s: %v (%s)", cut, a, cut, nl, b, err, g.Err())
+	}
+	pa, pb := st.ld.(nn.KVShareDevice).SharePage(src), long.ld.(nn.KVShareDevice).SharePage(src)
+	if pa == pb || pa == 0 || pb == 0 {
+		t.Fatalf("block %d's history pages %d positions on %s and %d on %s: the gate selected no pools paging apart", src, pa, a, pb, b)
+	}
+	if held, need := historyCopiesHeld(g), crossCardReads(st, m); need == 0 || held != need {
+		t.Fatalf("the cards hold %d history copies where %d are read (%s)", held, need, crossWhere(st, nl))
+	}
+	pages := historyAppends(g)
+	got := crossRunSteps(t, st, prompt, ids, want, true, nil)
+	for i, e := range got {
+		if !(e <= 1e-4) {
+			t.Errorf("step %d: NMSE %.3e from the CPU's", i, e)
+		}
+	}
+	if historyAppends(g) == pages {
+		t.Fatal("no page reached a history copy: the gate read no history across the cards")
+	}
+	t.Logf("pools paging %d and %d positions: NMSE from the CPU's %.2e; %d history pages copied", pa, pb, got, historyAppends(g)-pages)
+}
+
 // historyCopyPairs is the pairs of selected devices the gate splits a model
 // over: the first two of each backend, and the first CUDA device with a
 // Vulkan device of another card.

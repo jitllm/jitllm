@@ -949,7 +949,7 @@ bug	engine/device/gpu/histcopy.go	"block %d's history %d has no copy on %s"
 bug	engine/device/gpu/histcopy.go	"block %d's history %d is laid out %+v on %s and %+v on %s"
 context	engine/device/gpu/histcopy.go	"block %d's history copy on %s: %v"
 bug	engine/device/gpu/histcopy.go	"block %d's history has no pool on one of the devices"
-refusal	engine/device/gpu/histcopy.go	"block %d's history pages %d positions on %s and %d on %s: a copy is the pages as they are"	a copy is the source's pages as they are, and each device sizes its pages from its own reserve (kvPage): a card that already pages the session's histories at another size takes no copy until a copy re-pages them
+refusal	engine/device/gpu/histcopy.go	"block %d's histories page %d positions on %s and %d on %s: a history past a block's rows is copied as its pages are"	a copy between pools that page apart is re-paged as rows (copyRepaged), and the rows of a history past a block's rows are entries each period positions, which nothing re-pages yet: no model reading another block's history keeps one
 bug	engine/device/gpu/histcopy.go	"no copy of block %d's history"
 context	engine/device/gpu/histcopy.go	"tier: a copy of block %d's history on %s: %w"
 bug	engine/device/gpu/histhost.go	"%d positions of %d floats do not fit the rows' %d/%d"

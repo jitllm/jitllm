@@ -28,8 +28,10 @@ import (
 //
 // The copy pages as any history on its device: grown, sent home and read
 // back in passes, released behind a window. Its pages are copied whole and
-// raw, so the two pools must page alike: the same positions a page and the
-// same layout; a pair that does not is refused when the copy would be made.
+// raw where the two pools page alike, the same positions a page, and as rows
+// re-paged where they do not (copyRepaged); a history past a block's rows
+// is copied only between pools that page alike, and the layouts must be the
+// same.
 
 // readsOf is the blocks whose histories a block li of graph g reads beside or
 // in place of its own, appended to dst.
@@ -147,8 +149,8 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 		dv.kvp = newKVPool(fkp.p, dv.maxBuffer())
 	}
 	dkp := dv.kvp
-	if dkp.p != fkp.p {
-		return fmt.Errorf("block %d's history pages %d positions on %s and %d on %s: a copy is the pages as they are",
+	if dkp.p != fkp.p && fkp.blockHists(src) > 1 {
+		return fmt.Errorf("block %d's histories page %d positions on %s and %d on %s: a history past a block's rows is copied as its pages are",
 			src, fkp.p, label(o.dev, o.ord), dkp.p, label(d.dev, d.ord))
 	}
 	for h := range fkp.blockHists(src) {
@@ -272,6 +274,16 @@ func copySeqPages(sv, dv *devTier, s seqID, src, j0, j1, from int) error {
 		}
 	}
 	P := fkp.p
+	if P != dkp.p {
+		end := 0
+		if fl := fkp.layers[src]; fl != nil {
+			end = len(fl.owned[s]) * P
+		}
+		if j1 >= 0 {
+			end = min(end, j1*P)
+		}
+		return copyRepaged(sv, dv, s, src, j0*P, from, end)
+	}
 	pages := 0
 	for h := range fkp.blockHists(src) {
 		key := histKey(src, h)
@@ -644,12 +656,20 @@ func (g *GPU) shareCopies(sid uint64, li, page int, key string, end int) bool {
 	return true
 }
 
-// shareCopy is shareCopies on one copy. Callers hold both locks.
+// shareCopy is shareCopies on one copy. Callers hold both locks. A copy
+// whose pool pages apart from its source's names nothing: a mapped page's
+// rows are copied into it.
 func shareCopy(sv, dv *devTier, s seqID, li, page int, key string, end int) error {
 	kp := dv.kvp
 	l := kp.layers[li]
 	if l == nil {
 		return fmt.Errorf("no copy of block %d's history", li)
+	}
+	if kp.p != sv.kvp.p {
+		if end < 0 {
+			return nil
+		}
+		return copySeqPages(sv, dv, s, li, page, page+1, -1)
 	}
 	if end < 0 {
 		dv.publishKV(kp, l, s, page, key)

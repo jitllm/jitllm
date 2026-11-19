@@ -1301,6 +1301,9 @@ type devShared struct {
 	hostOf   map[int]map[uint64]bool
 	hostRows map[int]map[seqID]int
 	hostPage []float32
+	// rowsK and rowsV are the rows a copy between two cards whose pools page
+	// apart crosses through (copyRepaged).
+	rowsK, rowsV []float32
 	// copyHost is the host buffer a copy's append goes through between two
 	// backends (copyRun).
 	copyHost []byte

@@ -287,6 +287,29 @@ func (g *devTier) writeRows(s seqID, src, from, start, to int, k, v []float32) (
 	return pages, nil
 }
 
+// copyRepaged is copySeqPages between two devices whose pools page apart:
+// positions [from, to) of sequence s of block src's history read as rows
+// from sv's pages and written into dv's, from the start of dv's page from
+// falls in. start is copySeqPages' from. Callers hold both locks.
+func copyRepaged(sv, dv *devTier, s seqID, src, from, start, to int) error {
+	from = from / dv.kvp.p * dv.kvp.p
+	if to <= from {
+		return nil
+	}
+	n := (to - from) * sv.kvp.layers[src].geom.kvRow
+	if len(dv.rowsK) < n {
+		n2 := max(n, 2*len(dv.rowsK))
+		dv.rowsK, dv.rowsV = make([]float32, n2), make([]float32, n2)
+	}
+	k, v := dv.rowsK[:n], dv.rowsV[:n]
+	if err := sv.readRows(s, src, from, to, k, v); err != nil {
+		return err
+	}
+	pages, err := dv.writeRows(s, src, from, start, to, k, v)
+	dv.HistoryCopyPages += pages
+	return err
+}
+
 // readHostRows reads positions [from, to) of session sid's sequence at base
 // of block src's history, which the session runs here, into k and v
 // [to-from][kvRow] floats: a page at a time through the layer's read

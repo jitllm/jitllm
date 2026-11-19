@@ -5087,6 +5087,17 @@ gpu.Faults "copystale": 3.3e-2 to 1.5e-1), TestDecodeDoesNotAllocateAcrossTheCPU
 (0 allocations over 64 tokens both ways), and TestAHistoryReadAcrossCards,
 whose source now moves to the CPU with its readers left on the card.
 
+Between two cards a copy was the pages as they are, and a pair of pools
+paging apart refused it. The rows the CPU copies cross through re-page it
+now (copyRepaged): read from the source's card and written as whole pages of
+the copy's. A history past a block's rows is still copied only between pools
+that page alike: nothing reading another block's history keeps one.
+TestAHistoryCopyRepages holds the readers' card at a 256-position page (an
+instance of a longer context placed there first) and the source's at 128:
+NMSE 6.2e-6 and below from the CPU's on every pair, where the commit before
+refused the placement, "block 2's history pages 128 positions on ... and 256
+on ...: a copy is the pages as they are".
+
 ## One pool spent by two devices
 
 One card listed as cuda:N and vulkan:N is one physical device under two
