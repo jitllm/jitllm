@@ -964,15 +964,21 @@ func TestComposedBlocksServe(t *testing.T) {
 								// decoded here is told its shift, so among the decoded
 								// rows a uniform shift moves only the few prompt keys --
 								// 16 past read a median 1.22 to 1.36 on Qwen2.5-VL-3B,
-								// inside the band. Twice the position and 16 past moves
-								// every distance. The M-RoPE gate holds its tables to
+								// inside the band. A multiple of the position moves every
+								// distance, and it is 64 and not 2: a rotary turns its
+								// slow pairs by little at the panel's positions, and on
+								// Qwen3.5-0.8B, whose few attention blocks among its
+								// linear ones turn part of each head, twice the position
+								// and 16 past read a median 1.04 of the tier's distance
+								// on CUDA, inside the band, and 64 times 6.59 (4096 times
+								// 15.5). The M-RoPE gate holds its tables to
 								// transformers itself, with no tier between, and one
 								// position is seen there. A model whose attention
 								// applies no positional encoding (FlagNoPosEnc,
 								// Kimi-Linear's latent attention) reads no position:
 								// there is nothing for the violation to move.
 								if a.parts&nn.ComposedTable != 0 && !m.Container.Config().Flags.Has(jlm.FlagNoPosEnc) {
-									violated("every row's table at twice its position and 16 past", nn.ComposedTable, nil, gpu.WithRopeFault(2, 16))
+									violated("every row's table at 64 times its position and 16 past", nn.ComposedTable, nil, gpu.WithRopeFault(64, 16))
 								}
 								if ne, _ := st0.ServedPart(nn.ComposedEmbed); ne > 0 {
 									violated("every row gathered at the next token's", nn.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
