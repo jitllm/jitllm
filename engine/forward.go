@@ -1348,38 +1348,71 @@ func (s *Instance) placeHead() {
 // budget, the head's read at home (placeHead). It reports the block, or false
 // where none is left to stream or the device takes it neither way.
 func (s *Instance) streamForHead(budget *uint64) (int, bool) {
+	li := s.residentMixtureBelow(s.hi)
+	if li < 0 || s.m.ExpertReadBytes(li) > *budget {
+		return 0, false
+	}
+	if !s.streamResident(li) {
+		return 0, false
+	}
+	*budget -= s.m.ExpertReadBytes(li)
+	return li, true
+}
+
+// streamBelow streams the highest resident mixture block on the card below
+// block li, for li's room (offerRange). It reports the block, or false where
+// none is left or the device takes it neither way.
+func (s *Instance) streamBelow(li int) (int, bool) {
+	lj := s.residentMixtureBelow(li)
+	if lj < 0 || !s.streamResident(lj) {
+		return 0, false
+	}
+	return lj, true
+}
+
+// residentMixtureBelow is the highest block under hi on the card resident
+// with a routed bank and not pinned, -1 for none or where that block holds
+// no bank.
+func (s *Instance) residentMixtureBelow(hi int) int {
+	for li := hi - 1; li >= s.lo; li-- {
+		if !s.devAt(li) || !s.c.MoEAt(li) || s.streamedAt(li) || s.pinnedOnDev(li) {
+			continue
+		}
+		if _, bank := s.m.BlockBytes(li); bank == 0 {
+			return -1
+		}
+		return li
+	}
+	return -1
+}
+
+// streamResident offers resident block li again streamed (nn.AutoStreamer):
+// its base stays on the card, its routed experts are sent per token. With no
+// history yet to carry: a block given back mid-sequence takes its history
+// home first. It reports false, the block resident again, where the device
+// takes it neither way.
+func (s *Instance) streamResident(li int) bool {
 	// Asked of the shared tier, the block offered through this instance's view,
 	// as placement does (offerRange).
 	as, ok := s.ldCand.(nn.AutoStreamer)
 	if !ok || s.pos > 0 {
-		return 0, false
+		return false
 	}
 	c := s.c
-	for li := s.hi - 1; li >= s.lo; li-- {
-		if !s.devAt(li) || !c.MoEAt(li) || s.streamedAt(li) || s.pinnedOnDev(li) {
-			continue
-		}
-		total, bank := s.m.BlockBytes(li)
-		cost := s.m.ExpertReadBytes(li)
-		if bank == 0 || cost > *budget {
-			return 0, false
-		}
-		s.ld.ReleaseLayers(li, li+1)
-		s.unmarkOnDev(li)
-		if as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.MeanBase()) && s.offerAgain(li) {
-			s.autoStreamed++
-			s.markStreamed(li, true)
-			*budget -= cost
-			return li, true
-		}
-		s.unstream(li)
-		return 0, false
+	total, bank := s.m.BlockBytes(li)
+	s.ld.ReleaseLayers(li, li+1)
+	s.unmarkOnDev(li)
+	if as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.MeanBase()) && s.offerAgain(li) {
+		s.autoStreamed++
+		s.markStreamed(li, true)
+		return true
 	}
-	return 0, false
+	s.unstream(li)
+	return false
 }
 
-// residentAgain puts the blocks streamForHead streamed back resident, the
-// head not having fitted.
+// residentAgain puts the blocks streamResident streamed back resident, what
+// they were streamed for not having fitted.
 func (s *Instance) residentAgain(streamed []int) {
 	for _, li := range slices.Backward(streamed) {
 		s.ld.ReleaseLayers(li, li+1)
@@ -1677,6 +1710,9 @@ func (s *Instance) offerRange(lo, hi int) {
 	// A group the device took part of (a decline mid-group) comes home whole.
 	defer s.fixKVGroups()
 	c := s.c
+	// Streaming the blocks below a block that fits neither way was tried and
+	// did not make its room: the next block finds no more (streamBelow).
+	belowFailed := false
 	for li := lo; li < hi; li++ {
 		// A block already on a device keeps its place: offering it again
 		// would read its page for nothing and prepare it a second time.
@@ -1804,6 +1840,29 @@ func (s *Instance) offerRange(lo, hi int) {
 					if took, err = s.prepOffered(adm, li, &plan, &w); err != nil {
 						s.placeErr = err
 						return
+					}
+					// Streamed alone it can still miss: the first streamed block
+					// pays the streamed banks' shared one by itself. The resident
+					// mixture blocks below it stream, the highest first, until it
+					// fits, rather than the block going to the CPU where every
+					// block streamed fits: synth-ernie45moe 32 KB past what all
+					// its blocks streamed take held 3 of its 4 blocks
+					// (TestAMixtureBlockStreamsTheBlocksBelowIt).
+					var below []int
+					for !took && !belowFailed && s.placing && !named {
+						lj, ok := s.streamBelow(li)
+						if !ok {
+							break
+						}
+						below = append(below, lj)
+						if took, err = s.prepOffered(adm, li, &plan, &w); err != nil {
+							s.placeErr = err
+							return
+						}
+					}
+					if !took && len(below) > 0 {
+						belowFailed = true
+						s.residentAgain(below)
 					}
 					if took {
 						s.autoStreamed++
