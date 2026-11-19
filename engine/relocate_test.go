@@ -159,8 +159,9 @@ func TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt(t *testing.T) {
 	}
 }
 
-// refusing is a tier made to answer the way the FIRST of two cards does: its
-// refusals name blocks [0, len(firstCard)) whatever the card actually holds.
+// refusing is a tier made to answer the way the FIRST of two cards does: when
+// the session's view refused, its refusals name blocks [0, len(firstCard))
+// whatever the card actually holds.
 // One card is enough to exercise what two would, and it runs on every host.
 type refusing struct {
 	*gpu.GPU
@@ -181,7 +182,8 @@ type refusingView struct {
 }
 
 func (v *refusingView) Refused() []int {
-	if len(v.r.GPU.Refused()) == 0 {
+	r, ok := v.LayerDevice.(nn.RefusalReporter)
+	if !ok || len(r.Refused()) == 0 {
 		return nil
 	}
 	return v.r.firstCard
