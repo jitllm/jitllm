@@ -686,57 +686,90 @@ const (
 	streamCache
 )
 
-// streamOpts is the tier options of arm a for mixture m on dev: for the
-// budget, what m's blocks take placed as the arm places them -- its parts,
-// graph setting, prompt width and context ctx -- and the slack the card keeps
-// free beside every allocation (Stats.Slack), less half of what streaming one
-// mixture block saves on the card, measured: the blocks placed resident and
-// placed streamed with no expert cache, the difference over the mixture
-// blocks. Without the slack a fixture's budget (a cut of 87 KB against 448 KB
-// of slack on synth-deepseek-lite) held its last block neither resident nor
-// streamed.
-// Placement keeps the blocks that fit resident and streams the rest, the
-// last first, so a deeper cut leaves that block home; and a fixture's banks
-// are kilobytes, where the card's allocation pieces can make a streamed
-// block cost what a resident one does, which no budget then tells apart.
-// The head is placed after the blocks, so the probes leave it home: a cut it
-// covered would land on it, and the arm runs it at home.
-func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.Parts, noGraph bool, ctx int, io ...Option) []gpu.Option {
+// streamOpts is the tier options of arm a for mixture m on dev. For the
+// budget it is found on the arm's own run -- its graph setting, the prompt
+// ids prefilled and toks decoded a token at a time -- with the head home,
+// where the arm keeps it: a budget, found by bisection, under which placement
+// streams a mixture block, every block stays on the card with the run's
+// history beside it, and the composer runs every step's blocks. Found rather
+// than priced from the resident and the streamed placements, because several
+// things give way to a budget before a block streams and each was a cut that
+// streamed nothing: the KV pools' prewarm and a growth with room take
+// doublings (524 KB on synth-ernie45moe against a cut of 87 KB); the reserved
+// prompt width halves where a block's composed part does not fit, and that
+// part (380 KB a block there) is wider than what streaming the bank saves
+// (173 KB); a budget measured at the panel's longest context left a shorter
+// prompt's blocks room to stay resident; and the history still to come is
+// room to placement, so a budget that left it none sent a block home
+// mid-run and its steps past the composer (188 of 192 block steps). The arm
+// reserves the narrowest prompt width, which has nothing left to halve. A
+// fixture's banks are kilobytes, where the card's allocation pieces can make
+// a streamed block cost what a resident one does, which no budget then tells
+// apart.
+func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.Parts, noGraph bool, ids, toks []int32, io ...Option) []gpu.Option {
 	t.Helper()
 	switch a {
 	case streamBudget:
-		probe := func(stream bool) gpu.Stats {
-			g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		// The narrowest width the tier reserves: its row grain.
+		const rows = 32
+		width := gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = rows })
+		// try places the blocks under budget b, none for 0, streamed whole
+		// with no expert cache or as placement decides, and runs the prompt as
+		// the arm does: the stats once its history is in, how many blocks
+		// placement put on the card and streamed, and whether every block
+		// stayed there and the composer ran every step's.
+		try := func(b uint64, stream bool) (st gpu.Stats, placed, streamed int, kept bool) {
+			opts := []gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 				gpu.WithConfig(func(c *gpu.Config) {
-					c.NoGraph, c.PromptRows = noGraph, 64
-					// Streamed at its floor: no cache, each block's plain bank
-					// of the selection's sheets. With no budget the caches
-					// sizeAutoCaches gives would take the card's whole room,
-					// every expert on Qwen3-MOE-4x0.6B; under the arm's budget
-					// they take what the budget leaves.
+					c.NoGraph = noGraph
 					if stream {
 						c.StreamExperts, c.StreamCacheSlots = true, -1
 					}
-				})},
-				testTierOpts(t)...)...)
+				}), width}
+			if b > 0 {
+				opts = append(opts, gpu.WithBudget(b))
+			}
+			g, err := openGPU(t, append(opts, testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}
 			defer g.Close()
-			s := testInstance(t, m, ctx, append(append([]Option(nil), io...), WithHeadPlacement(false))...)
+			s := testInstance(t, m, len(ids)+len(toks)+4, append(append([]Option(nil), io...), WithHeadPlacement(false))...)
 			defer s.Close()
 			s.SetDeviceFallback(false)
 			if err := s.SetDevice(g); err != nil {
 				t.Fatal(err)
 			}
-			st := g.Stats()
-			if s.GPULayers() != m.Cfg.NLayer || stream && st.StreamBlocks == 0 {
-				t.Fatalf("%s holds %d of %d blocks, %d streamed: %s", dev, s.GPULayers(), m.Cfg.NLayer, st.StreamBlocks, g.Err())
+			placed = s.GPULayers()
+			for li := range m.Cfg.NLayer {
+				if s.streamedAt(li) {
+					streamed++
+				}
 			}
-			return st
+			if placed == m.Cfg.NLayer {
+				if _, err := s.Prefill(ids); err != nil {
+					t.Fatal(err)
+				}
+				for _, tok := range toks {
+					if _, err := s.Forward(tok); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			st = g.Stats()
+			if st.ReservedPrompt != rows {
+				t.Fatalf("%s reserved a prompt of %d rows, not the %d asked", dev, st.ReservedPrompt, rows)
+			}
+			blocks, _ := st.ServedPart(nn.ComposedBlock)
+			kept = s.GPULayers() == m.Cfg.NLayer && st.KVEvictions == 0 && blocks+st.ReplayedPart(nn.ComposedBlock) == len(toks)*m.Cfg.NLayer
+			return st, placed, streamed, kept
 		}
 		mixed := mixtureBlocks(m)
-		rs, ss := probe(false), probe(true)
+		rs, rn, _, _ := try(0, false)
+		ss, sn, _, _ := try(0, true)
+		if rn != m.Cfg.NLayer || sn != m.Cfg.NLayer || ss.StreamBlocks == 0 {
+			t.Fatalf("%s holds %d of %d blocks resident and %d streamed (%d of them streamed)", dev, rn, m.Cfg.NLayer, sn, ss.StreamBlocks)
+		}
 		resident, streamed := rs.BudgetUsed, ss.BudgetUsed
 		if mixed == 0 || streamed >= resident {
 			t.Fatalf("streaming saves the card nothing here, so no budget tells the two apart: %d bytes resident (scratch %d, composed %d, KV pool %d, rounding %d), "+
@@ -744,10 +777,47 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 				resident, rs.ScratchBytes, rs.ComposedBytes, rs.KVPoolBytes, rs.RoundingBytes,
 				streamed, ss.ScratchBytes, ss.ComposedBytes, ss.KVPoolBytes, ss.RoundingBytes, ss.CacheBytes, ss.StreamBlocks)
 		}
-		cut := (resident - streamed) / uint64(mixed) / 2
-		budget := resident + rs.Slack - cut
-		t.Logf("experts under a budget: %d bytes resident, %d streamed over %d mixture blocks, %d of slack; the budget %d", resident, streamed, mixed, rs.Slack, budget)
-		return []gpu.Option{gpu.WithBudget(budget)}
+		saving := (resident - streamed) / uint64(mixed)
+		// Under hi every block stays resident; low enough, placement leaves a
+		// block on the CPU. Under a budget the KV pools start smaller than
+		// these unbudgeted probes' (494 KB against 659 KB on
+		// synth-ernie45moe) and grow by what they need rather than by
+		// doublings, so the bisection starts from nothing rather than from the
+		// streamed probe. A budget that streams nothing goes lower, and so
+		// does one whose run sent a block or its history off the card: a
+		// lower budget streams more, and a streamed bank is the room the
+		// history takes (synth-ernie45moe's longest prompt kept its blocks
+		// resident and sent the last home at 4.70 to 4.97 MB).
+		lo, hi := rs.Slack, resident+rs.Slack
+		var budget uint64
+		var at gpu.Stats
+		var tries []string
+		streams := 0
+		// The highest such budget, to a sixteenth of a bank: lower ones page
+		// whole blocks through the card as well (synth-glm4moe at 2.2 MB
+		// against 3.9 MB resident).
+		for hi-lo > saving/16 {
+			b := lo + (hi-lo)/2
+			st, n, k, kept := try(b, false)
+			tries = append(tries, fmt.Sprintf("%d bytes place %d of %d blocks, %d streamed, and the run keeps them and its history %v",
+				b, n, m.Cfg.NLayer, k, kept))
+			switch {
+			case n != m.Cfg.NLayer:
+				lo = b
+			case k == 0 || !kept:
+				hi = b
+			default:
+				budget, at, streams = b, st, k
+				lo = b
+			}
+		}
+		if budget == 0 {
+			t.Fatalf("no budget under %d bytes streams a block with every block on the card and the run's history beside it: %s",
+				hi, strings.Join(tries, "; "))
+		}
+		t.Logf("experts under a budget: %d bytes resident (scratch %d, composed %d, KV pool %d), %d streamed over %d mixture blocks, %d of slack; "+
+			"the budget %d streams %d block(s) and %d fills (%d tries)", resident, rs.ScratchBytes, rs.ComposedBytes, rs.KVPoolBytes, streamed, mixed, rs.Slack, budget, streams, at.StreamFills, len(tries))
+		return []gpu.Option{gpu.WithBudget(budget), width}
 	case streamCache:
 		e, k := int(m.Cfg.NExpert), int(m.Cfg.NExpertUsed)
 		return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) {

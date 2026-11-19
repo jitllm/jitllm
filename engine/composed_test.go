@@ -761,18 +761,32 @@ func TestComposedBlocksServe(t *testing.T) {
 							t.Run(name, func(t *testing.T) {
 								parts := a.parts | nn.ComposedPrompt
 								tile := gpu.WithConfig(func(c *gpu.Config) { c.MatrixTile = a.tile })
-								ctx := 0
-								for _, p := range panel {
-									ctx = max(ctx, len(p.ids)+len(p.toks)+4)
+								// The budget is measured with the head home (streamOpts) and
+								// the arm keeps it there: a head placed under it buys its room
+								// by giving blocks to the CPU (placeHead).
+								io := instOpts
+								if a.stream == streamBudget {
+									io = append(slices.Clone(instOpts), WithHeadPlacement(false))
 								}
-								sopts := streamOpts(t, m, dev, a.stream, parts, noGraph, ctx, instOpts...)
+								// Measured on each prompt's own run: a block's composed part
+								// grows with the keys it bounds, and a budget measured at the
+								// panel's longest left a shorter prompt's blocks the room to
+								// stay resident.
+								sopts := map[int][]gpu.Option{}
+								soptsOf := func(p prompt) []gpu.Option {
+									n := len(p.ids) + len(p.toks)
+									if _, ok := sopts[n]; !ok {
+										sopts[n] = streamOpts(t, m, dev, a.stream, parts, noGraph, p.ids, p.toks, io...)
+									}
+									return sopts[n]
+								}
 								var band, offBand panelBand
 								var st0 gpu.Stats
 								var got0 [][]float32
 								for pi, p := range panel {
 									ids, toks := p.ids, p.toks
 									want, ref := runs[dev][g][pi].want, runs[dev][g][pi].ref
-									got, st, headOn := composedDecode(t, m, instOpts, dev, ids, toks, parts, noGraph, false, append([]gpu.Option{tile}, sopts...)...)
+									got, st, headOn := composedDecode(t, m, io, dev, ids, toks, parts, noGraph, false, append([]gpu.Option{tile}, soptsOf(p)...)...)
 									if pi == 0 {
 										st0, got0 = st, got
 									}
@@ -918,7 +932,7 @@ func TestComposedBlocksServe(t *testing.T) {
 									var bad panelBand
 									for pi, p := range panel {
 										ref := runs[dev][g][pi].ref
-										out, bst, _ := composedDecodeWith(t, m, instOpts, dev, p.ids, p.toks, parts, noGraph, false, after, slices.Concat(sopts, extra)...)
+										out, bst, _ := composedDecodeWith(t, m, io, dev, p.ids, p.toks, parts, noGraph, false, after, slices.Concat(soptsOf(p), extra)...)
 										if n, d := bst.ServedPart(k); n == 0 || d != 0 {
 											t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
 										}
@@ -972,7 +986,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.
 								if a.parts&nn.ComposedHead != 0 {
-									poisoned, _, _ := composedDecode(t, m, instOpts, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, slices.Concat([]gpu.Option{tile, gpu.WithPoisonScratch(true), gpu.WithPoisonKV(true)}, sopts)...)
+									poisoned, _, _ := composedDecode(t, m, io, dev, panel[0].ids, panel[0].toks, parts, noGraph, false, slices.Concat([]gpu.Option{tile, gpu.WithPoisonScratch(true), gpu.WithPoisonKV(true)}, soptsOf(panel[0]))...)
 									for i := range got0 {
 										if !slices.Equal(poisoned[i], got0[i]) {
 											t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)
