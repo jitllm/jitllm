@@ -432,8 +432,12 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	head := g.bs.head
 	// On a card its paged blocks fill a streamed block goes home for them,
 	// as for the projection itself: the step that needs them forms nothing.
+	// The room found is held for the window's buffers (winAhead): on a shared
+	// pool the other device would spend it before they are made.
 	if need := g.rowsHeadNeed(bs, head.nrows); need > 0 && !g.roomOrReclaim(need) {
 		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, head.nrows), need, g.used, g.limit))
+	} else if err := g.winAhead(need); err != nil {
+		return fail(fmt.Errorf("the logits of %d rows: %w", g.headRows(bs, head.nrows), err))
 	}
 	H := g.headRows(bs, head.nrows)
 	// The composer's head over rows serves any count of them at bs's width

@@ -4,13 +4,22 @@ import (
 	"testing"
 )
 
+// noPromptReserve builds no prompt width at placement. A paging pair's budgets
+// are measured on a device alone (cardFor), where a reserved width's window
+// is measured after its peak; in a shared pool the window holds its peak
+// (winTake) and settles narrower, and the budgets would hold more blocks
+// than they were sized for.
+func noPromptReserve() Option {
+	return WithConfig(func(c *Config) { c.NoScratchReserve = true })
+}
+
 // pooledPair is two fake devices spending one pool of poolBytes, as one card
 // under two backends does (planSlots), with budgets a and b.
-func pooledPair(t *testing.T, a, b, poolBytes uint64) (*GPU, *Pool, *fakeDev, *fakeDev) {
+func pooledPair(t *testing.T, a, b, poolBytes uint64, opt ...Option) (*GPU, *Pool, *fakeDev, *fakeDev) {
 	t.Helper()
 	pool := NewPool("one card", poolBytes)
 	fa, fb := &fakeDev{name: "a"}, &fakeDev{name: "b"}
-	g, err := New([]Slot{{Dev: fa, Name: "a", Bytes: a, Pool: pool}, {Dev: fb, Name: "b", Bytes: b, Pool: pool}}, WithDeviceTune(TuneOff))
+	g, err := New([]Slot{{Dev: fa, Name: "a", Bytes: a, Pool: pool}, {Dev: fb, Name: "b", Bytes: b, Pool: pool}}, append(opt, WithDeviceTune(TuneOff))...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +51,9 @@ func growAll(d *devTier, kp *kvPool, l *kvLayerPool) int {
 	return l.n - n
 }
 
-// poolHeld fails when the pool was charged past its limit, a hold was left
-// open, or the pool holds other than its devices' charges and kept slots.
+// poolHeld fails when the pool was charged past its limit (Stats.PoolOver,
+// Stats.ScratchOver), a hold was left open, or the pool holds other than its
+// devices' charges and kept slots.
 func poolHeld(t *testing.T, g *GPU, pool *Pool) {
 	t.Helper()
 	var held uint64
@@ -52,11 +62,17 @@ func poolHeld(t *testing.T, g *GPU, pool *Pool) {
 		if d.claimed != 0 {
 			t.Errorf("%s holds %d bytes of its pool no operation is open for", label(d.dev, d.ord), d.claimed)
 		}
+		if d.winHeld != 0 {
+			t.Errorf("%s holds %d bytes of its pool for a scratch window no longer open", label(d.dev, d.ord), d.winHeld)
+		}
 		held += d.used + d.swapHeld
 		d.mu.Unlock()
 	}
 	if over := g.Stats().PoolOver; over != 0 || pool.Used() > pool.Limit() {
 		t.Fatalf("%d charge(s) left the pool past its limit: %d of %d bytes used", over, pool.Used(), pool.Limit())
+	}
+	if over := g.Stats().ScratchOver; over != 0 {
+		t.Fatalf("%d scratch window(s) left the pool past its limit: %d of %d bytes used", over, pool.Used(), pool.Limit())
 	}
 	if pool.Used() != held {
 		t.Fatalf("the pool holds %d bytes and its devices %d", pool.Used(), held)
@@ -130,8 +146,8 @@ func inBlocks(d *devTier) int {
 func TestASwapSlotIsKeptFromTheOtherDevice(t *testing.T) {
 	const n = 4
 	p := pagePlan()
-	card := cardFor(t, p, 2)
-	g, pool, fa, _ := pooledPair(t, card, card, card+1<<16)
+	card := cardFor(t, p, 2, noPromptReserve())
+	g, pool, fa, _ := pooledPair(t, card, card, card+1<<16, noPromptReserve())
 	da, db := g.devs[0], g.devs[1]
 	streamedOn(t, g, n)
 	kpb, lb := historyOn(t, db)
@@ -180,9 +196,9 @@ func TestASwapSlotIsKeptFromTheOtherDevice(t *testing.T) {
 func TestAHistoryPagesOutTheOtherDevicesBlock(t *testing.T) {
 	const n = 4
 	p := pagePlan()
-	block, _ := blockAndScratch(t, p)
-	card := cardFor(t, p, 3)
-	g, pool, _, _ := pooledPair(t, card, card, card+block/2)
+	block, _ := blockAndScratch(t, p, noPromptReserve())
+	card := cardFor(t, p, 3, noPromptReserve())
+	g, pool, _, _ := pooledPair(t, card, card, card+block/2, noPromptReserve())
 	da, db := g.devs[0], g.devs[1]
 	streamedOn(t, g, n)
 	if !token(t, g, p, n, 0) {

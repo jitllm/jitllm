@@ -179,12 +179,14 @@ func (nt *rowTable) at(from int) *resident {
 }
 
 // rowSlots makes r hold n rows of rb bytes on the card, charged to the
-// budget. Callers hold g.mu.
+// budget, its room held in a shared pool before it is made (alloc).
+// Callers hold g.mu.
 func (g *devTier) rowSlots(r *rowRange, n, rb int) error {
 	if n <= r.slots {
 		return nil
 	}
-	b, err := g.dev.Alloc(n * rb)
+	defer g.scratchWin().close()
+	b, err := g.alloc(n * rb)
 	if err != nil {
 		return fmt.Errorf("%d rows of the row table: %w", n, err)
 	}

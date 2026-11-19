@@ -79,7 +79,7 @@ func (g *devTier) upHeadVecs(h *nn.Head, spec headSpec) ([]roleBuf, uint64, erro
 			return
 		}
 		var buf backend.Buf
-		if buf, err = g.dev.Alloc(len(v) * 4); err != nil {
+		if buf, err = g.alloc(len(v) * 4); err != nil {
 			return
 		}
 		if err = buf.Write(f32b(v)); err != nil {

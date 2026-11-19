@@ -73,14 +73,16 @@ func (g *devTier) placeMarks(sid uint64, slot int, block []uint32) error {
 }
 
 // growMarks makes the arena hold words words, word 0 its empty block: a
-// larger buffer with the old one's blocks copied in. Callers hold g.mu.
+// larger buffer with the old one's blocks copied in, its room held in a
+// shared pool before it is made (alloc). Callers hold g.mu.
 func (g *devTier) growMarks(words int) error {
 	a := &g.marks
 	if a.buf != nil && words <= a.size {
 		return nil
 	}
+	defer g.scratchWin().close()
 	size := max(words, 2*a.size, 1024)
-	b, err := g.dev.Alloc(4 * size)
+	b, err := g.alloc(4 * size)
 	if err != nil {
 		return err
 	}

@@ -671,7 +671,7 @@ func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
 		if ar.n[j] >= need {
 			continue
 		}
-		d, err := g.dev.Alloc(need)
+		d, err := g.alloc(need)
 		if err != nil {
 			return err
 		}
@@ -840,7 +840,7 @@ func (g *devTier) instanceOn(f *partForm, bs *blockScratch) (*partInst, error) {
 		if bs != nil && f.arenaAt[p] >= 0 {
 			continue
 		}
-		d, err := g.dev.Alloc(b.n)
+		d, err := g.alloc(b.n)
 		if err != nil {
 			// A driver's refusal inside the budget is no room either.
 			in.free()
@@ -1115,7 +1115,7 @@ func (g *devTier) everyRow() (backend.Buf, error) {
 	if g.everyRows != nil {
 		return g.everyRows, nil
 	}
-	b, err := g.dev.Alloc(4)
+	b, err := g.alloc(4)
 	if err != nil {
 		return nil, err
 	}

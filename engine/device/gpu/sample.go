@@ -37,7 +37,7 @@ func (g *devTier) sampleBufs(n int) bool {
 	sizes := [...]int{4 * n, 4 * len(nn.Penalties{}), 4 * len(nn.Head{}.WalkArgs)}
 	var bufs [len(sizes)]backend.Buf
 	for i, sz := range sizes {
-		b, err := g.dev.Alloc(sz)
+		b, err := g.alloc(sz)
 		if err != nil {
 			for _, f := range bufs[:i] {
 				f.Free()

@@ -510,7 +510,7 @@ func (g *devTier) stateHold(n uint64, keep *kvLayerPool) (uint64, error) {
 // holdFor is stateHold, asking keepsSlot only when slot is set: a block's
 // first pages are held to the slot by its admission (addKVLayer).
 func (g *devTier) holdFor(n uint64, keep *kvLayerPool, slot bool) (uint64, error) {
-	for g.kvCompact(n, keep) || g.roomOrReclaim(n) || g.fromPeers(n) {
+	for g.kvCompact(n, keep) || g.roomOrReclaim(n) || g.fromPeers(n, false) {
 		if slot && !g.keepsSlot(n) {
 			break
 		}
@@ -555,10 +555,12 @@ func (g *devTier) shortOf(n uint64) error {
 // reads, on a peer with nothing in flight, and never a peer's last one in
 // (keepOf). A peer whose lock is held is passed over rather than waited for:
 // this device holds its own, and that peer may be waiting for it
-// (lockPair). Callers hold g.mu.
-func (g *devTier) fromPeers(n uint64) bool {
+// (lockPair). n fits this device's budget and its pool (room), or the pool
+// alone where pool is set (a scratch window's hold, holdWin). Callers hold
+// g.mu.
+func (g *devTier) fromPeers(n uint64, pool bool) bool {
 	for _, p := range g.peers {
-		if g.room(n) {
+		if g.fitsFor(n, pool) {
 			return true
 		}
 		if !p.mu.TryLock() {
@@ -566,7 +568,7 @@ func (g *devTier) fromPeers(n uint64) bool {
 		}
 		pd := p.dv
 		if len(pd.tickets) == 0 && !pd.inSub && !pd.prologueHeld {
-			for !g.room(n) {
+			for !g.fitsFor(n, pool) {
 				v := pd.victim(-1, 0, 0, true)
 				if v < 0 || v == headSlot || pd.keepOf(v) > 0 {
 					break
@@ -577,6 +579,14 @@ func (g *devTier) fromPeers(n uint64) bool {
 			pd.Slots = pd.slots()
 		}
 		p.mu.Unlock()
+	}
+	return g.fitsFor(n, pool)
+}
+
+// fitsFor is room, or the pool's alone where pool is set (fromPeers).
+func (g *devTier) fitsFor(n uint64, pool bool) bool {
+	if pool {
+		return g.pool.room(n)
 	}
 	return g.room(n)
 }
@@ -710,7 +720,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// already held and is absent only after trim took it. Without room the
 	// page-in proceeds without it and packs on the host. Passing the bytes this
 	// block still owes keeps the staging from taking the page-in's room.
-	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
+	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) && !g.fromPeers(need, false) {
 		// reclaim's wait for a held victim lets g.mu go: another session may
 		// have paged this block in meanwhile, into the very room asked for.
 		if l.pg.in {
@@ -726,7 +736,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// spend it between the reclaim and the uploads.
 	before, held := g.claim(l.pg.bytes + l.pg.round + g.reserved() + g.slack())
 	if !held {
-		if g.reclaim(l.pg.bytes+l.pg.round, li, lo, hi) {
+		if need := l.pg.bytes + l.pg.round; g.reclaim(need, li, lo, hi) || g.fromPeers(need, false) {
 			before, held = g.claim(l.pg.bytes + l.pg.round + g.reserved() + g.slack())
 		}
 		if !held {

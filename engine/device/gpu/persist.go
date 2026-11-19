@@ -145,7 +145,7 @@ func (g *devTier) ensurePersist() bool {
 		t.ps = &persister{sig: make([]uint64, 0, 1024), args: make([]backend.Buf, 0, persistMaxBufs+1)}
 	}
 	if t.ps.sync == nil {
-		b, err := g.dev.Alloc(4 * ir.GridSyncWords)
+		b, err := g.alloc(4 * ir.GridSyncWords)
 		if err != nil {
 			g.PersistWhy = "sync buffer: " + err.Error()
 			return false
@@ -158,7 +158,7 @@ func (g *devTier) ensurePersist() bool {
 		t.ps.sync = b
 	}
 	if g.PersistDeps && t.ps.dep == nil {
-		b, err := g.dev.Alloc(4 * depWords)
+		b, err := g.alloc(4 * depWords)
 		if err != nil {
 			g.PersistWhy = "dep buffer: " + err.Error()
 			return false

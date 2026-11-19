@@ -131,14 +131,14 @@ func (g *devTier) newRecPool(l *layer, slots int, shared bool, filled []recSeat)
 			// A short convolution keeps no state beside its window, and an
 			// empty buffer is no buffer on every backend: four bytes it never
 			// reads stand in.
-			if p.s[i], err = g.dev.Alloc(max(sB, 4)); err != nil {
+			if p.s[i], err = g.alloc(max(sB, 4)); err != nil {
 				break
 			}
 			if err = zero(p.s[i], l.recS); err != nil {
 				break
 			}
 		}
-		if p.c[i], err = g.dev.Alloc(cB); err != nil {
+		if p.c[i], err = g.alloc(cB); err != nil {
 			break
 		}
 		err = zero(p.c[i], l.recC)
@@ -464,7 +464,7 @@ func (g *devTier) readSeat(st recSeat) (seatStates, error) {
 					continue
 				}
 				n := st.rows * b.w * 4
-				tmp, err := g.dev.Alloc(n)
+				tmp, err := g.alloc(n)
 				if err == nil {
 					err = g.dev.Copy(tmp, 0, b.buf[h], st.base*b.w*4, n)
 					g.RecCarryBytes += uint64(n)
@@ -786,12 +786,12 @@ func (g *devTier) markBufs(l *layer) bool {
 		return false
 	}
 	defer g.unclaim(before)
-	s, err := g.dev.Alloc(sB)
+	s, err := g.alloc(sB)
 	if err != nil {
 		g.LastErr = "recurrent mark: " + err.Error()
 		return false
 	}
-	c, err := g.dev.Alloc(cB)
+	c, err := g.alloc(cB)
 	if err != nil {
 		s.Free()
 		g.LastErr = "recurrent mark: " + err.Error()

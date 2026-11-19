@@ -44,8 +44,8 @@ func pageBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 
 // cardFor is a budget for fit blocks of p: their cost and the device's own
 // scratch, which it pays once beside them (scratch.go).
-func cardFor(t *testing.T, p *nn.LayerPlan, fit int) uint64 {
-	b, sc := blockAndScratch(t, p)
+func cardFor(t *testing.T, p *nn.LayerPlan, fit int, opt ...Option) uint64 {
+	b, sc := blockAndScratch(t, p, opt...)
 	return sc + b*uint64(fit)
 }
 
@@ -53,9 +53,9 @@ func cardFor(t *testing.T, p *nn.LayerPlan, fit int) uint64 {
 // as the second block placed costs over the first, and what the device pays
 // once beside its blocks: its scratch and the composed parts its blocks share
 // (a part is keyed by its graph, and every block here runs p's).
-func blockAndScratch(t *testing.T, p *nn.LayerPlan) (block, scratch uint64) {
+func blockAndScratch(t *testing.T, p *nn.LayerPlan, opt ...Option) (block, scratch uint64) {
 	t.Helper()
-	g, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 40}})
+	g, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 40}}, opt...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

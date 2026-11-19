@@ -40,7 +40,7 @@ func (g *devTier) pickBufs() bool {
 	}
 	var bufs [2]backend.Buf
 	for i := range bufs {
-		b, err := g.dev.Alloc(4 * pickMax)
+		b, err := g.alloc(4 * pickMax)
 		if err != nil {
 			if i > 0 {
 				bufs[0].Free()

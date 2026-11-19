@@ -172,7 +172,7 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 			continue
 		}
 		for len(pg.streamDesc[i]) < st.passes {
-			b, err := g.dev.Alloc(len(src) * 4)
+			b, err := g.alloc(len(src) * 4)
 			if err != nil {
 				return err
 			}
@@ -287,7 +287,7 @@ func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, er
 	}
 	pg.runN = 0
 	for i := range pg.run {
-		b, err := g.dev.Alloc(n * 4)
+		b, err := g.alloc(n * 4)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +328,7 @@ func (g *devTier) selBufs(bs *blockScratch, l *layer) error {
 	}
 	pg.selN = 0
 	for i := range pg.sel {
-		b, err := g.dev.Alloc(n * 4)
+		b, err := g.alloc(n * 4)
 		if err != nil {
 			return err
 		}

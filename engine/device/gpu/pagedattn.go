@@ -120,11 +120,11 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	pg := &pagedScratch{}
 	bs.pkv = pg
 	var err error
-	if pg.pRow, err = g.dev.Alloc(bs.rows * composer.RowWords * 4); err != nil {
+	if pg.pRow, err = g.alloc(bs.rows * composer.RowWords * 4); err != nil {
 		return err
 	}
 	if p.SWAWindow > 0 {
-		if pg.pRowW, err = g.dev.Alloc(bs.rows * composer.RowWords * 4); err != nil {
+		if pg.pRowW, err = g.alloc(bs.rows * composer.RowWords * 4); err != nil {
 			return err
 		}
 	}
@@ -906,7 +906,7 @@ func (g *devTier) readPages(l *kvLayerPool, src backend.Buf, ids []uint32, words
 		return nil, nil
 	}
 	out := make([]float32, len(ids)*words)
-	dst, err := g.dev.Alloc(len(ids) * words * 4)
+	dst, err := g.alloc(len(ids) * words * 4)
 	if err != nil {
 		if l.stage == nil {
 			return nil, err

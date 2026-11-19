@@ -5212,5 +5212,73 @@ again) 10 of 10. The race is gated on the fake devices above, where the other
 device grows at a chosen moment; the card's arm is the history's regression
 gate under the squeeze, 10 of 10 at 16 MiB and 8 of 8 at -96 MB after.
 
+The rest of the charges were still checked and charged after. The
+projection's placement (PrepHead) checked its room and charged its planes,
+vectors and logits after their allocations; the uploads of an ad hoc tensor
+(resident: the input rows' tables, the streamed projection's page, a rows
+part) did the same; the row tables (rowSlots) and the rotary marks
+(growMarks) charged after an unchecked allocation; and a scratch window,
+measured once allocated, charged the pool at its close. The projection now
+holds its room, its logits included, as an admission does; resident holds
+its tensor's room (roomHold), a no-op inside an admission or a page-in whose
+hold covers it; and on a shared pool every allocation inside a window holds
+first what the window will owe at its close (alloc, winTake: what it
+allocated since it opened, less its explicit charges and settled rounding,
+plus the new buffer), its charges spending that hold first and the rest
+given back at the close or when a room check finds it past what is owed
+(winTrim). The row tables and the marks open a window for their growth. A
+room check that found room for a window's buffers holds it ahead
+(winAhead: the rows' head, prepRowsHead and reserveRowsHead). The tower's
+k/v regrowth (towerKVAt) refunded the old pair to the pool and then claimed
+the new size; the old bytes now stay held through the free (refundTo). A
+window short of the pool pages out the other device's idle blocks, except a
+width placement probes (reserveScratch), which would evict them for a width
+it then drops; failing that it takes the bytes from the operation it runs
+in, which held room for what it allocates.
+
+Admission and page-in now page out the other device's idle streamed blocks
+as a history does (fromPeers, the same try-lock, idle-only and last-block
+rules): a block placed resident on the final pass before declining to the
+host, a streamed block after its own device's reclaim, a page-in after its
+own reclaim and again when the claim after it finds the pool spent.
+
+On fake devices, each gate run 20 times on the tree before, after, and with
+its change removed: TestAHeadHoldsItsRoomInItsPool (the other device grows at
+each allocation of the projection's placement), TestAScratchHoldsItsRoomInItsPool
+(at each allocation of a first placement's scratch), TestMarksAndRowTablesHoldTheirRoom,
+TestAnAdmissionPagesOutTheOtherDevicesBlock and TestAPageInPagesOutTheOtherDevicesBlock.
+Before, every one red 20 of 20: the projection 3 charges past the pool, the
+scratch 2, the marks and the row table 1 each, the admission declined to the
+host and the page-in found nothing to page out. After, all five green 20 of
+20, beside TestAHistoryGrowsInsideItsPool, TestASwapSlotIsKeptFromTheOtherDevice,
+TestAHistoryPagesOutTheOtherDevicesBlock and TestUnifiedDevicesShareOnePool,
+green 20 of 20 each. With the projection's hold, the marks' and row tables'
+windows and the admission's and page-in's peers removed at once, those four
+red 20 of 20 and the scratch gate green 20 of 20 (its control); with only the
+window's allocation hold removed, the scratch gate and the marks and row
+tables red 20 of 20 and the other three green. The scratch gate fires as
+PoolOver, not ScratchOver: what goes past the pool first is an explicit charge
+made inside the window.
+
+A window that holds its peak changes what a reserved width costs in a shared
+pool: an arena grown for a 512-row prompt instance is allocated beside the old
+one, and where a device alone measured the window after the old one was freed
+(its peak past the budget unseen), the shared pool refuses the peak and the
+width settles at 256. TestUnifiedDevicesShareOnePool sized its pool from a
+device alone with the 512-row width and asserted two blocks; under the hold
+its first device placed four within the pool (7204356 of 11885932 bytes), the
+second none. The gate is about the pool, not the widths: it now places no
+prompt width on either side (NoScratchReserve), and the paging pairs of the
+pool gates likewise (noPromptReserve), whose budgets are measured on a device
+alone.
+
+On a V100 as cuda:0 and vulkan:5, TestOneCardUnderTwoBackendsGrowsHistoryOnBoth,
+SpillsAndRelocates and IsOneBudget passed 9 of 9 each; the engine/device/gpu
+package passed on one card as cuda:0 and vulkan:4 (193 passed),
+TestEveryModelRunsOnACard (239) and TestDecodeDoesNotAllocate on one card,
+and on two cards TestKVEvictionRunsPastTheBudget, TestEvictedHistoryComesHome,
+TestAHistoryReadAcrossCards, TestBlocksMoveBetweenDevices,
+TestRelocatedBlocksComeBack and TestAFullCardSpillsABlockOntoTheNextOne.
+
 What is still open is in open-questions.md ("one pool spent by two
 devices").

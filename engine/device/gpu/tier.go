@@ -388,9 +388,8 @@ type Stats struct {
 	// the room this one had checked.
 	PoolOver int
 	// ScratchOver is how many scratch windows left the pool past its limit:
-	// a scratch is measured once allocated (scratchWin), and a placement
-	// probes widths and drops the one the room check after refuses
-	// (reserveScratch).
+	// a scratch is measured once allocated (scratchWin), past what the
+	// window held for its buffers before they were made (winTake).
 	ScratchOver int
 	// PeerPageOuts is blocks of another device of the pool this device paged
 	// out for its history (fromPeers).
@@ -1174,6 +1173,7 @@ func (g *devTier) room(n uint64) bool {
 	// card, not yet to the budget: settled first, or a reclaim that pages
 	// blocks out never sees the room it made.
 	g.settleRounding()
+	g.winTrim()
 	n += g.reserved() + g.slack()
 	return g.used+n <= g.limit && g.pool.room(n-min(n, g.claimed))
 }
@@ -1203,13 +1203,122 @@ func (g *devTier) unclaim(before uint64) {
 	}
 }
 
-// poolTake charges n bytes to the pool, from this device's claim first.
+// poolTake charges n bytes to the pool, from the open scratch window's
+// hold first (the window held its buffers before they were made, winTake)
+// and this device's claim after it.
 func (g *devTier) poolTake(n uint64) {
-	c := min(n, g.claimed)
+	w := min(n, g.winHeld)
+	g.winHeld -= w
+	c := min(n-w, g.claimed)
 	g.claimed -= c
-	if !g.pool.take(n-c) && n > c {
+	if !g.pool.take(n-w-c) && n > w+c {
 		g.PoolOver++
 	}
+}
+
+// shared reports that another device spends this device's pool: one card
+// under two backends (planSlots).
+func (g *devTier) shared() bool { return g.pool != nil && g.pool.devs > 1 }
+
+// alloc is an n-byte buffer on the device. Inside a scratch window on a
+// shared pool its footprint is held first (winTake): the window charges what
+// it allocated only at its close, and the other device would spend the bytes
+// between.
+func (g *devTier) alloc(n int) (backend.Buf, error) {
+	if g.winDepth > 0 && g.shared() {
+		if err := g.winTake(g.footprint(n)); err != nil {
+			return nil, fmt.Errorf("%d bytes: %w", n, err)
+		}
+	}
+	return g.dev.Alloc(n)
+}
+
+// footIdle is what the device's buffers cost the card, less the free slots
+// of its pieces (settleRounding).
+func (g *devTier) footIdle() int64 {
+	if g.cnt == nil {
+		return 0
+	}
+	return int64(g.cnt.Footprint()) - int64(g.cnt.Idle())
+}
+
+// winOwed is what the open window owes the pool: what it allocated since
+// it opened less what was charged explicitly and the rounding settled, and
+// its slack once held. A buffer it freed counts against it, so a window that
+// frees and grows owes the growth alone.
+func (g *devTier) winOwed() int64 {
+	w := g.footIdle() - g.winFoot - (g.explicit - g.winX) - (int64(g.rounding) - int64(g.winRound))
+	if g.winSlack {
+		w += int64(g.slack())
+	}
+	return w
+}
+
+// winTake holds what the open window will owe once a buffer of fp bytes is
+// made, or what was held for it ahead (winUp). Callers hold g.mu.
+func (g *devTier) winTake(fp uint64) error {
+	want := g.winOwed() + int64(fp)
+	if !g.winSlack {
+		want += int64(g.slack())
+	}
+	want = max(want, int64(g.winUp))
+	if want > int64(g.winHeld) {
+		if err := g.holdWin(uint64(want) - g.winHeld); err != nil {
+			return err
+		}
+	}
+	g.winSlack = true
+	return nil
+}
+
+// winAhead holds n bytes for the window's buffers before the first is
+// made, at the room check that found them: the other device would spend
+// them between. Callers hold g.mu inside a window.
+func (g *devTier) winAhead(n uint64) error {
+	if !g.shared() || n == 0 {
+		return nil
+	}
+	up := uint64(max(g.winOwed(), 0)) + n
+	if up > g.winHeld {
+		if err := g.holdWin(up - g.winHeld); err != nil {
+			return err
+		}
+	}
+	g.winUp = max(g.winUp, up)
+	return nil
+}
+
+// winTrim gives the pool back what the open window holds past what it owes:
+// a buffer it freed (a width a placement probed and dropped) or a charge
+// made from the hold. Callers hold g.mu.
+func (g *devTier) winTrim() {
+	if g.winDepth == 0 || g.winHeld == 0 {
+		return
+	}
+	owed := uint64(max(g.winOwed(), int64(g.winUp), 0))
+	if owed < g.winHeld {
+		g.pool.give(g.winHeld - owed)
+		g.winHeld = owed
+	}
+}
+
+// holdWin holds n more bytes of a shared pool for the open window: from
+// the pool, from the other devices' idle blocks (fromPeers) unless the
+// window is a width placement probes (reserveScratch), or from the
+// operation the window runs in, which held room for what it allocates.
+// Callers hold g.mu inside a window.
+func (g *devTier) holdWin(n uint64) error {
+	if !g.shared() || n == 0 {
+		return nil
+	}
+	if !g.pool.claim(n) && !(!g.reserving && g.fromPeers(n, true) && g.pool.claim(n)) {
+		if g.claimed < n {
+			return g.shortOf(n)
+		}
+		g.claimed -= n
+	}
+	g.winHeld += n
+	return nil
 }
 
 // roomSeat is room for a session's history on a block that has live sessions
@@ -1236,7 +1345,12 @@ func (g *devTier) charge(n uint64) {
 
 // refund gives n bytes back to both accounts, which ReleaseLayers must do or
 // the card leaks budget on every migration.
-func (g *devTier) refund(n uint64) {
+func (g *devTier) refund(n uint64) { g.refundTo(n, false) }
+
+// refundTo is refund, the bytes kept as this device's hold (claimed) when
+// held is set: a buffer freed to be made again at another size, which the
+// other device of a shared pool would spend between the free and the claim.
+func (g *devTier) refundTo(n uint64, held bool) {
 	if n > 0 {
 		g.roomGen.Add(1)
 	}
@@ -1254,7 +1368,11 @@ func (g *devTier) refund(n uint64) {
 	} else {
 		g.swapHeld += k
 	}
-	g.pool.give(n - k)
+	if held {
+		g.claimed += n - k
+	} else {
+		g.pool.give(n - k)
+	}
 	g.settleRounding()
 }
 
@@ -1560,6 +1678,16 @@ type devShared struct {
 	// (keepOf). slotNeed is the hold an operation paging into the slot asks
 	// for (openSlot), and keepBack what the page-out under way keeps.
 	swapHeld, slotNeed, keepBack uint64
+	// winHeld is the pool's bytes the open scratch windows hold for what
+	// they allocate (winTake): spent by the window's charges and given back
+	// at its close; winUp is what was held ahead of the buffers (winAhead).
+	// winFoot, winX and winRound are the footprint, explicit charges and
+	// rounding at the outermost window's open, and winSlack says the window
+	// holds the device's slack already.
+	winHeld, winUp uint64
+	winFoot, winX  int64
+	winRound       uint64
+	winSlack       bool
 	// peers are the other devices spending this device's pool (fromPeers).
 	peers []*devShared
 	// why is where limit came from, in words, for the report.
@@ -2360,7 +2488,7 @@ func (g *devTier) importPacked(r *resident, p *Packed) bool {
 		if len(v) == 0 {
 			// The kernel still takes the parameter. A word of device memory is
 			// cheaper than refusing the whole import over an absent array.
-			b, err := g.dev.Alloc(4)
+			b, err := g.alloc(4)
 			if err != nil {
 				ok = false
 				break
@@ -2440,11 +2568,13 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 	// there is no host span of the whole bank, and gathering one would hold a
 	// layer's every expert in host memory at once.
 	if pre != nil && pre.Sheet != nil {
-		if !g.room(foot) {
+		before, held := g.roomHold(foot)
+		if !held {
 			g.Declined++
 			g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, foot, g.used, g.limit)
 			return r
 		}
+		defer g.unclaim(before)
 		tu := time.Now()
 		ok := g.residentSheets(r, q, nrows, k, pre)
 		g.TUpload += time.Since(tu)
@@ -2482,12 +2612,16 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 			pk = p // the wrap was refused; upload these same bytes instead
 		}
 	}
-	if !g.room(foot) {
+	// The room is held to the charge (roomHold): inside an admission or a
+	// page-in their own hold covers it already.
+	before, held := g.roomHold(foot)
+	if !held {
 		g.Declined++
 		g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used (pool %s: %d of %d)",
 			q, nrows, k, foot, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit())
 		return r // declines from here on; the CPU keeps this tensor
 	}
+	defer g.unclaim(before)
 	// A converted container skips every path below: its bytes are already what
 	// the kernel reads (packed once, offline), so there is nothing to pack or
 	// unpack and no arena entry, and the spans go straight to the driver.
@@ -2571,7 +2705,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 			// The kernel still takes the parameter, so hand it a word.
 			v = []uint32{0}
 		}
-		b, err := g.dev.Alloc(len(v) * 4)
+		b, err := g.alloc(len(v) * 4)
 		if err != nil {
 			return nil
 		}
@@ -2627,7 +2761,7 @@ func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre 
 		}
 	}
 	for i, n := range per {
-		b, err := g.dev.Alloc(max((n*pre.Sheets+3)/4*4, 4))
+		b, err := g.alloc(max((n*pre.Sheets+3)/4*4, 4))
 		if err != nil {
 			free()
 			return false
@@ -2738,7 +2872,7 @@ func (g *devTier) allocBytes(v []byte) (backend.Buf, error) {
 	if len(v) == 0 {
 		v = make([]byte, 4)
 	}
-	b, err := g.dev.Alloc(len(v))
+	b, err := g.alloc(len(v))
 	if err != nil {
 		return nil, err
 	}
@@ -2795,7 +2929,7 @@ func (g *devTier) regrow(dst *backend.Buf, have *int, n, unit int, drop, poison 
 	}
 	*have = 0
 	alloc := func(n int) bool {
-		b, err := g.dev.Alloc(n * unit)
+		b, err := g.alloc(n * unit)
 		if err != nil {
 			g.LastErr = err.Error()
 			return false
@@ -3139,7 +3273,7 @@ func (g *devTier) residentCompact(q layout.Quant, rows, k, slots int) (*resident
 		} else {
 			n *= slots
 		}
-		b, e := g.dev.Alloc(n)
+		b, e := g.alloc(n)
 		if e != nil {
 			for _, x := range bufs {
 				if x != nil {

@@ -733,7 +733,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 		return fail()
 	}
 	if l0.argmaxOut != nil {
-		b, err := g.dev.Alloc(4)
+		b, err := g.alloc(4)
 		if err != nil {
 			g.LastErr = "a lane's argmax word: " + err.Error()
 			return fail()
@@ -756,7 +756,7 @@ func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.headShared = true
 	n := src.mvHead.rows
 	var err error
-	if dst.logits, err = g.dev.Alloc(n * 4); err != nil {
+	if dst.logits, err = g.alloc(n * 4); err != nil {
 		g.LastErr = "a lane's logits: " + err.Error()
 		return false
 	}

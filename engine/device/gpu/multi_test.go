@@ -307,7 +307,11 @@ func TestFasterDeviceGoesFirst(t *testing.T) {
 func TestUnifiedDevicesShareOnePool(t *testing.T) {
 	p := fakePlan()
 	ws := blocks(p, 4)
-	two := twoBlockBytes(t, p)
+	// The pools are under test, not the prompt widths: a reserved width's
+	// window holds its peak in a shared pool (winTake), an arena's growth
+	// beside the old one, where a device alone measures it after.
+	noPrompt := WithConfig(func(c *Config) { c.NoScratchReserve = true })
+	two := twoBlockBytes(t, p, noPrompt)
 
 	slots := poolsFor([]backend.Device{
 		&fakeDev{unified: true}, &fakeDev{}, &fakeDev{unified: true},
@@ -324,7 +328,7 @@ func TestUnifiedDevicesShareOnePool(t *testing.T) {
 
 	// Two unified devices, one pool with room for two blocks. Four blocks
 	// offered: two land, two do not, because the bytes are the same bytes.
-	g, err := New(poolsFor([]backend.Device{&fakeDev{unified: true}, &fakeDev{unified: true}}, two))
+	g, err := New(poolsFor([]backend.Device{&fakeDev{unified: true}, &fakeDev{unified: true}}, two), noPrompt)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

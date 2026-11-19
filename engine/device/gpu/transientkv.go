@@ -38,8 +38,8 @@ func (g *devTier) transientKV(p *nn.LayerPlan) *kvPair {
 	defer g.unclaim(before)
 	kvp := &kvPair{shared: true, bytes: need}
 	var err error
-	if kvp.kc, err = g.dev.Alloc(cache); err == nil && vcache > 0 {
-		kvp.vc, err = g.dev.Alloc(vcache)
+	if kvp.kc, err = g.alloc(cache); err == nil && vcache > 0 {
+		kvp.vc, err = g.alloc(vcache)
 	}
 	if err != nil {
 		if kvp.kc != nil {

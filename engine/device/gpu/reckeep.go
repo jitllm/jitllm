@@ -166,12 +166,12 @@ func (g *devTier) growKept(rows int) error {
 	for _, li := range lis {
 		l := g.layers[li]
 		sB, cB := keptBytes(l)
-		s, err := g.dev.Alloc(sB)
+		s, err := g.alloc(sB)
 		if err != nil {
 			g.freeKeptBufs(k)
 			return fmt.Errorf("tier: block %d's kept states: %w", li, err)
 		}
-		c, err := g.dev.Alloc(cB)
+		c, err := g.alloc(cB)
 		if err != nil {
 			s.Free()
 			g.freeKeptBufs(k)

@@ -1078,7 +1078,7 @@ func (g *devTier) ensureRecNext(rows int) bool {
 			return fail(why)
 		}
 		defer g.unclaim(before)
-		b, err := g.dev.Alloc(int(bytes))
+		b, err := g.alloc(int(bytes))
 		if err != nil {
 			return fail(err)
 		}
@@ -1142,8 +1142,8 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	kvp := &kvPair{}
 	var err error
 	// One allocation under MLA, where vcache is zero; see kvPair.value.
-	if kvp.kc, err = g.dev.Alloc(cache); err == nil && vcache > 0 {
-		kvp.vc, err = g.dev.Alloc(vcache)
+	if kvp.kc, err = g.alloc(cache); err == nil && vcache > 0 {
+		kvp.vc, err = g.alloc(vcache)
 	}
 	if err != nil {
 		if kvp.kc != nil {
@@ -1678,8 +1678,14 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if g.stream[li] {
 		defer g.closeSlot(g.openSlot(need + g.reserved() + g.slack()))
 	}
-	// The KV pools' free pages go first: they hold nothing.
+	// The KV pools' free pages go first: they hold nothing. A block placed
+	// resident takes the other device's idle streamed blocks next, on the
+	// final pass, as a history does (fromPeers): they page back in through
+	// the slot that device keeps.
 	g.kvCompact(need, nil)
+	if !g.room(need) && mayPage && !g.stream[li] {
+		g.fromPeers(need, false)
+	}
 	if !g.room(need) {
 		// A block that does not fit pages another one out rather than falling to
 		// the host. Below minSlots there is nowhere to swap through, so it
@@ -1716,7 +1722,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// At load the scan ascends from here, so the victim is the block just
 		// behind this one and a resident prefix remains: the set the run-time
 		// policy settles on, so the first token starts warm. See victim().
-		if !g.reclaim(need, li, 0, li+1) {
+		if !g.reclaim(need, li, 0, li+1) && !g.fromPeers(need, false) {
 			g.Declined++
 			g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used)",
 				li, need, g.used, g.limit)
@@ -1729,6 +1735,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// What was found room for is held until the block's last charge, as a
 	// page-in holds it (pageInHold).
 	before, held := g.claim(need + g.reserved() + g.slack())
+	if !held && mayPage && g.fromPeers(need, false) {
+		before, held = g.claim(need + g.reserved() + g.slack())
+	}
 	if !held {
 		g.Declined++
 		g.LastErr = fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
@@ -1840,7 +1849,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		f := v
 		var b backend.Buf
-		if b, err = g.dev.Alloc(len(f) * 4); err != nil {
+		if b, err = g.alloc(len(f) * 4); err != nil {
 			return
 		}
 		err = b.Write(f32b(f))
@@ -1935,7 +1944,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				n = vcache
 			}
 			if err == nil && n > 0 {
-				*dst, err = g.dev.Alloc(n)
+				*dst, err = g.alloc(n)
 			}
 		}
 		if l.kv == nil {
@@ -2070,7 +2079,7 @@ func (g *devTier) initRopePlanes(bs *blockScratch, p *nn.LayerPlan, rows int) er
 		return nil
 	}
 	up := func(dst *backend.Buf, v []float32) error {
-		b, err := g.dev.Alloc(len(v) * 4)
+		b, err := g.alloc(len(v) * 4)
 		if err != nil {
 			return err
 		}
@@ -2105,7 +2114,7 @@ func (g *devTier) initRopeRows(bs *blockScratch, p *nn.LayerPlan, rows int) erro
 	if gridded(p) || p.NRot <= 0 || bs.cs == nil {
 		return nil
 	}
-	b, err := g.dev.Alloc((1 + 2*rows) * 4)
+	b, err := g.alloc((1 + 2*rows) * 4)
 	if err != nil {
 		return err
 	}
@@ -2116,7 +2125,7 @@ func (g *devTier) initRopeRows(bs *blockScratch, p *nn.LayerPlan, rows int) erro
 // initRowPos holds the rows' positions a block reads (rowPosWords), staged
 // every call.
 func (g *devTier) initRowPos(bs *blockScratch, rows int) error {
-	b, err := g.dev.Alloc((1 + rows) * 4)
+	b, err := g.alloc((1 + rows) * 4)
 	if err != nil {
 		return err
 	}
@@ -2177,7 +2186,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		}
 		// The device refusing scratch is the card being full, the same as a
 		// refused weight upload: counted as NoRoom.
-		if *dst, err = g.dev.Alloc(n); err != nil {
+		if *dst, err = g.alloc(n); err != nil {
 			g.NoRoom++
 		}
 		// RULE 13: zero is the identity for a sum, so a form reading scratch it
@@ -2560,6 +2569,19 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 			foot, rows, g.used, g.limit)
 		return false
 	}
+	// What was found room for is held until the head's last charge, its
+	// logits included, as a block's admission holds it (prepLayer).
+	hold := foot + rows + g.footprint(h.W.Rows*4) + g.reserved() + g.slack()
+	before, held := g.claim(hold)
+	if !held && g.fromPeers(hold-g.reserved()-g.slack(), false) {
+		before, held = g.claim(hold)
+	}
+	if !held {
+		g.Declined++
+		g.LastErr = "the output projection: " + g.shortOf(hold).Error()
+		return false
+	}
+	defer g.unclaim(before)
 	// -1: the output projection is not a block, so it is not released with
 	// one. Read into the card's own frames unless a copy is held already.
 	w := h.W
@@ -2581,7 +2603,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.LastErr = "the head's vectors: " + err.Error()
 		return false
 	}
-	if bs.logits, err = g.dev.Alloc(h.W.Rows * 4); err != nil {
+	if bs.logits, err = g.alloc(h.W.Rows * 4); err != nil {
 		return false
 	}
 	bs.hRaw = make([]byte, h.W.Rows*4)
@@ -2617,7 +2639,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// caller gets its logits, so a failure is not one.
 	if g.argmaxOut == nil && h.Sample != nil {
 		w := g.scratchWin() // the device's own word (scratch.go)
-		if b, e := g.dev.Alloc(4); e == nil {
+		if b, e := g.alloc(4); e == nil {
 			g.argmaxOut = b
 		}
 		w.close()
@@ -5008,7 +5030,7 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 				if st.base == 0 {
 					return b.Read(f32b(v))
 				}
-				tmp, err := g.dev.Alloc(len(v) * 4)
+				tmp, err := g.alloc(len(v) * 4)
 				if err != nil {
 					return err
 				}
@@ -5734,7 +5756,7 @@ func (g *devTier) foldReqBuf(hb *blockScratch) error {
 	}
 	w := g.scratchWin() // the scratch's own words (scratch.go)
 	defer w.close()
-	b, err := g.dev.Alloc(4 * (composer.RequestRows + 1))
+	b, err := g.alloc(4 * (composer.RequestRows + 1))
 	if err != nil {
 		return err
 	}
@@ -5782,7 +5804,7 @@ func (g *devTier) cutScratch(bs *blockScratch, n int) error {
 		bs.cut.Free()
 		bs.cut, bs.cutBytes = nil, 0
 	}
-	b, err := g.dev.Alloc(n)
+	b, err := g.alloc(n)
 	if err != nil {
 		g.NoRoom++
 		return fmt.Errorf("tier: a cut block's rows: %w", err)

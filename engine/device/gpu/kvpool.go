@@ -274,7 +274,7 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 	if l.k, l.v, err = g.allocLayerPool(geom, kp.p, n); err != nil {
 		return err
 	}
-	if l.tab, err = g.dev.Alloc(kp.tabWords * 4); err == nil {
+	if l.tab, err = g.alloc(kp.tabWords * 4); err == nil {
 		err = l.tab.Write(make([]byte, kp.tabWords*4))
 	}
 	if err == nil {
@@ -299,7 +299,7 @@ func kvStageBytes(geom kvGeom, p int) uint64 {
 // nothing. Callers hold g.mu.
 func (g *devTier) makeStage(l *kvLayerPool, p int) error {
 	var err error
-	l.stage, err = g.dev.Alloc(max(l.geom.kWords(p), l.geom.vWords(p)) * 4)
+	l.stage, err = g.alloc(max(l.geom.kWords(p), l.geom.vWords(p)) * 4)
 	return err
 }
 
@@ -316,11 +316,11 @@ func (g *devTier) maxBuffer() uint64 {
 // dummy page is read as history by an empty row, and zero is finite.
 func (g *devTier) allocLayerPool(geom kvGeom, p, n int) (k, v backend.Buf, err error) {
 	kw, vw := geom.kWords(p)*n, geom.vWords(p)*n
-	if k, err = g.dev.Alloc(kw * 4); err != nil {
+	if k, err = g.alloc(kw * 4); err != nil {
 		return nil, nil, err
 	}
 	if err = g.zeroBuf(k, kw*4); err == nil && vw > 0 {
-		if v, err = g.dev.Alloc(vw * 4); err == nil {
+		if v, err = g.alloc(vw * 4); err == nil {
 			err = g.zeroBuf(v, vw*4)
 		}
 	}
@@ -613,7 +613,7 @@ func (g *devTier) growTables(kp *kvPool, words int) error {
 		for s, ids := range l.owned {
 			copy(host[kp.ranges[s].off:], ids)
 		}
-		tab, err := g.dev.Alloc(words * 4)
+		tab, err := g.alloc(words * 4)
 		if err == nil {
 			if err = tab.Write(u32view(host)); err != nil {
 				tab.Free()

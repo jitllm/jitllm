@@ -226,7 +226,7 @@ func (g *devTier) rowsBufs(in, out, req, pos int) error {
 			(*b.buf).Free()
 			*b.buf = nil
 		}
-		nb, err := g.dev.Alloc(b.want)
+		nb, err := g.alloc(b.want)
 		if err != nil {
 			return err
 		}

@@ -657,17 +657,21 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 				*b = nil
 			}
 		}
-		g.refund(kvp.bytes)
+		// The pair's bytes stay held for its new size (refundTo): given to
+		// the pool, the other device of a shared one spends them before the
+		// claim.
+		before := g.claimed
+		g.refundTo(kvp.bytes, true)
 		g.KVBytes -= min(g.KVBytes, kvp.bytes)
 		kvp.bytes = 0
-		before, held := g.claim(uint64(cache + vcache))
-		if !held {
+		if _, held := g.claim(before + uint64(cache+vcache)); !held {
+			g.unclaim(before)
 			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, g.shortOf(uint64(cache+vcache)))
 			return false
 		}
 		var err error
-		if kvp.kc, err = g.dev.Alloc(cache); err == nil && vcache > 0 {
-			kvp.vc, err = g.dev.Alloc(vcache)
+		if kvp.kc, err = g.alloc(cache); err == nil && vcache > 0 {
+			kvp.vc, err = g.alloc(vcache)
 		}
 		if err != nil {
 			g.unclaim(before)

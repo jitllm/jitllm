@@ -105,12 +105,14 @@ func (g *devTier) settleRounding() {
 // scratchWin opens a window, closed by the mark it returns: what the device
 // allocated or freed in between, less the explicit charges, is charged to (or
 // refunded from) the scratch. Windows nest; only the outermost measures.
-// Callers hold g.mu.
+// On a shared pool what the window allocates is held before it is made
+// (alloc, winTake) and the close spends the hold. Callers hold g.mu.
 func (g *devTier) scratchWin() scratchMark {
 	g.winDepth++
 	if g.winDepth > 1 {
 		return scratchMark{g: g, inner: true}
 	}
+	g.winFoot, g.winX, g.winRound = g.footIdle(), g.explicit, g.rounding
 	return scratchMark{g: g, a: g.allocated(), x: g.explicit}
 }
 
@@ -131,6 +133,8 @@ func (m scratchMark) close() {
 	}
 	g.settleScratch(g.allocated() - m.a - (g.explicit - m.x))
 	g.settleRounding()
+	g.pool.give(g.winHeld)
+	g.winHeld, g.winUp, g.winSlack = 0, 0, false
 }
 
 // settleScratch moves d bytes into (or out of) the scratch's share of both
@@ -140,7 +144,9 @@ func (g *devTier) settleScratch(d int64) {
 	case d > 0:
 		g.scratch += uint64(d)
 		g.used += uint64(d)
-		if !g.pool.take(uint64(d)) {
+		w := min(uint64(d), g.winHeld)
+		g.winHeld -= w
+		if !g.pool.take(uint64(d)-w) && uint64(d) > w {
 			g.ScratchOver++
 		}
 	case d < 0:
@@ -372,11 +378,14 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 	if p.Vocab <= 0 || bs.ragLogits != nil {
 		return true
 	}
+	defer g.scratchWin().close()
 	if need := g.ragOutBytes(bs, p.Vocab, p.NEmbd); !g.room(need) {
 		g.LastErr = fmt.Sprintf("rows: the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, p.Vocab), need, g.used, g.limit)
 		return false
+	} else if err := g.winAhead(need); err != nil {
+		g.LastErr = fmt.Sprintf("rows: the logits of %d rows: %v", g.headRows(bs, p.Vocab), err)
+		return false
 	}
-	defer g.scratchWin().close()
 	if err := g.allocRagOut(bs, p.Vocab, p.NEmbd); err != nil {
 		freeRagOut(bs)
 		g.LastErr = "rows: " + err.Error()
@@ -401,19 +410,19 @@ func (g *devTier) headRows(bs *blockScratch, vocab int) int {
 func (g *devTier) allocRagOut(bs *blockScratch, vocab, nembd int) error {
 	n := g.headRows(bs, vocab)
 	var err error
-	if bs.ragLogits, err = g.dev.Alloc(n * vocab * 4); err != nil {
+	if bs.ragLogits, err = g.alloc(n * vocab * 4); err != nil {
 		return err
 	}
 	bs.ragVocab, bs.ragRows = vocab, n
-	if bs.ragTok, err = g.dev.Alloc(n * 4); err != nil {
+	if bs.ragTok, err = g.alloc(n * 4); err != nil {
 		return err
 	}
 	if n < bs.rows {
 		bs.headInPlanes = nil
-		if bs.headIn, err = g.dev.Alloc(n * nembd * bs.p.Streams() * 4); err != nil {
+		if bs.headIn, err = g.alloc(n * nembd * bs.p.Streams() * 4); err != nil {
 			return err
 		}
-		bs.headReq, err = g.dev.Alloc(4 * (composer.RequestRows + n))
+		bs.headReq, err = g.alloc(4 * (composer.RequestRows + n))
 	}
 	return err
 }

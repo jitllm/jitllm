@@ -293,7 +293,7 @@ func (g *devTier) embedBufs(bs *blockScratch) bool {
 		if *b.buf != nil {
 			continue
 		}
-		nb, err := g.dev.Alloc(b.words * 4)
+		nb, err := g.alloc(b.words * 4)
 		if err != nil {
 			g.LastErr = err.Error()
 			return false
@@ -433,7 +433,7 @@ func (g *devTier) materializeComposed(pe *embPend) bool {
 			g.Steps.Decline(pe.kind, partNoRoom)
 			return false
 		}
-		nb, err := g.dev.Alloc(b.words * 4)
+		nb, err := g.alloc(b.words * 4)
 		if err != nil {
 			g.LastErr = err.Error()
 			return false

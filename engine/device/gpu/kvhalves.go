@@ -64,10 +64,10 @@ func (g *devTier) newPageHalves(w, rows int) (*pageHalves, error) {
 	if c.widen, err = g.servedHalves(w, rows, true); err != nil {
 		return nil, err
 	}
-	if c.f, err = g.dev.Alloc(c.fBytes); err != nil {
+	if c.f, err = g.alloc(c.fBytes); err != nil {
 		return nil, err
 	}
-	if c.h, err = g.dev.Alloc(c.hBytes); err != nil {
+	if c.h, err = g.alloc(c.hBytes); err != nil {
 		c.f.Free()
 		return nil, err
 	}
