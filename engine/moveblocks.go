@@ -79,7 +79,8 @@ type PendingMove struct {
 // Forward of this Instance. Blocks already on to are left alone, and a block the
 // target refuses stays where it was and is reported. When no block of this
 // Instance is left on the device holding the output projection, the projection
-// follows them; a move to the CPU brings it to the CPU with them.
+// follows them; a move to the CPU brings it to the CPU with them, and the next
+// move to a card takes it there.
 //
 // A pinned block refuses the call before anything moves. A block of a
 // KV-sharing group moves alone: a block reading a history on another card
@@ -144,6 +145,11 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	mv.KVBytes += dm.KVBytes
 	mv.RecBytes += dm.RecBytes
 	mv.Path, mv.Copied, mv.Head = dm.Path, dm.Copied, dm.Head
+	if err == nil && len(mv.Moved) > 0 {
+		back, berr := s.headBack(to)
+		mv.Head = mv.Head || back
+		err = berr
+	}
 	mv.Staged, mv.Prepare = dm.Staged, dm.Prepare
 	mv.Pause = dm.Pause + placing
 	return mv, err
@@ -413,7 +419,29 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 			return mv, err
 		}
 	}
+	if len(mv.Moved) > 0 {
+		back, err := s.headBack(p.to)
+		mv.Head = mv.Head || back
+		if err != nil {
+			return mv, err
+		}
+	}
 	return mv, nil
+}
+
+// headBack places the projection a move to the CPU took home (headHome) on
+// to, the card a move brings blocks back to.
+func (s *Instance) headBack(to string) (bool, error) {
+	nd, ok := s.ld.(nn.NamedDevice)
+	if !s.headHome || s.head != nil || !ok {
+		return false, nil
+	}
+	h := s.newHead()
+	took, err := nd.PrepHeadOn(to, h)
+	if took {
+		s.head, s.headReady, s.headHome = h, h, false
+	}
+	return took, err
 }
 
 // slowerPath is the slower of two history paths, "" being none.

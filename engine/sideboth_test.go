@@ -38,7 +38,7 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 				if withTaps {
 					m.Cfg.DeepTaps = taps
 					defer restated(m, tapsFirst(taps*m.Cfg.NEmbd))()
-				defer rowsTapsFirst(m, taps*m.Cfg.NEmbd)()
+					defer rowsTapsFirst(m, taps*m.Cfg.NEmbd)()
 					if w := m.Cfg.SideWidth(); w != taps*m.Cfg.NEmbd+m.Cfg.PleWidth() {
 						t.Fatalf("a side row of %d, want the taps' %d and the per-layer inputs' %d", w,
 							taps*m.Cfg.NEmbd, m.Cfg.PleWidth())

@@ -1343,6 +1343,11 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x []float32, cs nn.RopeT
 	g.mu.Unlock()
 	if hd != nil {
 		hd.dropEmbedOf(sid)
+		if ok && head != nil {
+			hd.mu.Lock()
+			hd.Heads++
+			hd.mu.Unlock()
+		}
 	}
 	return ok
 }

@@ -111,13 +111,25 @@ func (s *Instance) moveOffCards(lo, hi int) (mv BlockMove, err error) {
 	}
 	t0 := time.Now()
 	defer func() { mv.Pause = time.Since(t0) }()
+	// The projection stays on its card while a block of this instance is
+	// left beside it, as a move between cards leaves it (Commit). With the
+	// last of them it comes to the CPU, and the next move to a card takes it
+	// there (headHome). Asked once fixKVGroups has brought every group home.
+	nd, named := s.ld.(nn.NamedDevice)
+	headWas, beside := "", false
+	if named && s.head != nil {
+		var on bool
+		headWas, on = nd.HeadDeviceName()
+		beside = on && s.anyBlockOn(nd, headWas)
+	}
+	defer func() {
+		if s.head != nil && (!named || beside && !s.anyBlockOn(nd, headWas)) {
+			s.head, s.headHome, mv.Head = nil, true, true
+		}
+	}()
 	defer s.followSystem()
 	defer s.fixKVGroups()
 	s.moved = nil
-	// The head goes first, as SetGPULayers sends it: it rides the last
-	// placed block's submission, and that block may be one of these.
-	mv.Head = s.head != nil
-	s.head, s.headReady = nil, nil
 	for _, li := range on {
 		if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 			return mv, fmt.Errorf("model: block %d's history would not come home", li)

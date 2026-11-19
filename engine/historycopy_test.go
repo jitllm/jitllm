@@ -29,8 +29,9 @@ import (
 // from the source's whole history. Each move is held to the logits of the
 // token after it.
 //
-// The projection is named on the second card, beside the readers: on
-// synth-gemma4-e that card holds no block of the model's home geometry set.
+// The projection is named on the second card, beside the readers, and is
+// there after every move: on synth-gemma4-e that card holds no block of the
+// model's home geometry set.
 // The step arms split two instances so on one tier and step their rows
 // together (historyStepAcrossCards), the projection on either card, and
 // again split at block 2, where no block reads a history across the cards.
@@ -493,9 +494,13 @@ func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 			if held, need := historyCopiesHeld(g), crossCardReads(st, m); held != need {
 				t.Fatalf("token %d: after blocks [%d,%d) went to %s the cards hold %d history copies where %d are read (%s)", i, s.lo, s.hi, s.to, held, need, where())
 			}
+			headOn(t, st, b)
 			t.Logf("token %d: [%d,%d) to %s: moved %v, %d KV bytes by %q; %s", i, s.lo, s.hi, s.to, mv.Moved, mv.KVBytes, mv.Path, where())
 		}
 	})
+	if arm == nil {
+		headOn(t, st, b)
+	}
 	if arm == nil && historyAppends(g) == appended {
 		t.Fatal("no source's rows reached a copy on another card: the gate ran no copy")
 	}

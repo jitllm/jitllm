@@ -214,3 +214,144 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	t.Logf("%d tokens, %d blocks moved %s -> cpu -> %s -> half cpu -> %s; worst %.3e NMSE (logit %.4g), median %.3e, from the CPU control; unmoved %.3e",
 		ntok, n, a, b, a, nmseAll, worstAll, median(es), stillAll)
 }
+
+// TestTheProjectionComesBackFromTheCPU: the projection on a card stays there
+// while a block moves to the CPU and back, comes to the CPU only with the last
+// block it sat beside, and goes back with the next move to a card. Two arms:
+// the projection named beside the blocks on the first card, and named on the
+// second, which holds no block and keeps it through every move. Teacher-forced
+// on a CPU control's tokens, each token is counted on the card the tier ran
+// its projection on (Stats.Heads), and on none where the CPU projects, and its
+// logits are held to the control's inside three times what the same placement
+// reads never moved.
+//
+// VIOLATION SIGNATURE. Take the projection off its card at every move to the
+// CPU (moveOffCards, as it once did) and the token after the first move counts
+// no projection on the card.
+func TestTheProjectionComesBackFromTheCPU(t *testing.T) {
+	m, err := model.Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	a, b := moveDevices(t)
+	t.Run("beside", func(t *testing.T) { projectionComesBack(t, m, a, b, a) })
+	t.Run("apart", func(t *testing.T) { projectionComesBack(t, m, a, b, b) })
+}
+
+func projectionComesBack(t *testing.T, m *model.Model, a, b, head string) {
+	n := m.Cfg.NLayer
+	const ntok = 12
+	prompt := m.Vocab.Encode("The capital of France is a city that", true)
+	io := []Option{WithKVF16(false)}
+	cpu := testInstance(t, m, len(prompt)+ntok+1, io...)
+	lg, err := cpu.Prefill(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]float32{append([]float32(nil), lg...)}
+	var ids []int32
+	for range ntok {
+		ids = append(ids, Greedy(lg))
+		if lg, err = cpu.Forward(ids[len(ids)-1]); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, append([]float32(nil), lg...))
+	}
+	cpu.Close()
+
+	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, a+","+b, err)
+	}
+	defer g.Close()
+	distinctCards(t, g)
+	cards := g.Hardware()
+	type step struct {
+		lo, hi int
+		to     string
+	}
+	moves := map[int]step{2: {n - 1, n, nn.CPU}, 4: {n - 1, n, a}, 6: {0, n, nn.CPU}, 8: {0, n, a}}
+	run := func(moved bool) []float64 {
+		st := testInstance(t, m, len(prompt)+ntok+1,
+			append(append([]Option(nil), io...), WithPlacement(Placement{Rest: &Place{On: a}, Head: &Place{On: head}, Strict: true}))...)
+		defer st.Close()
+		if err := st.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		for li := range n {
+			if at, _ := st.DeviceOf(li); at != a {
+				t.Fatalf("block %d is on %q, placed on %s", li, at, a)
+			}
+		}
+		headOn(t, st, head)
+		lg, err := st.Prefill(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, _ := nmseOf(lg, want[0])
+		got := []float64{e}
+		on := head
+		for i, id := range ids {
+			if s, ok := moves[i]; ok && moved {
+				mv, err := st.MoveBlocks(s.lo, s.hi, s.to)
+				if err != nil {
+					t.Fatalf("token %d: blocks %d..%d to %s: %v (%s)", i, s.lo, s.hi-1, s.to, err, g.Err())
+				}
+				for li := s.lo; li < s.hi; li++ {
+					if at := st.WhereIs(li); at != nn.DeviceName(s.to) {
+						t.Fatalf("token %d: block %d is on %q, moved to %s", i, li, at, s.to)
+					}
+				}
+				was := on
+				if head == a {
+					// Beside the blocks: it leaves its card with the last of
+					// them, and comes back with them.
+					switch {
+					case s.to == nn.CPU && s.lo == 0:
+						on = nn.CPU
+					case s.to != nn.CPU:
+						on = s.to
+					}
+				}
+				if mv.Head != (on != was) {
+					t.Errorf("token %d: the move reports the projection moved %v, from %s to %s", i, mv.Head, was, on)
+				}
+			}
+			before := g.DevStats()
+			if lg, err = st.Forward(id); err != nil {
+				t.Fatalf("token %d: %v", i, err)
+			}
+			for d, ds := range g.DevStats() {
+				w := 0
+				if cards[d].Name == on {
+					w = 1
+				}
+				if ran := ds.Heads - before[d].Heads; ran != w {
+					t.Fatalf("token %d: %s ran the projection %d time(s), want %d: the projection is on %s", i, cards[d].Name, ran, w, on)
+				}
+			}
+			if on == nn.CPU {
+				if st.HeadOnDevice() {
+					t.Fatalf("token %d: the instance projects on a card, where its projection came to the CPU", i)
+				}
+			} else {
+				headOn(t, st, on)
+			}
+			e, _ := nmseOf(lg, want[i+1])
+			if math.IsNaN(e) {
+				t.Fatalf("token %d: a non-finite logit", i)
+			}
+			got = append(got, e)
+		}
+		return got
+	}
+	still := run(false)
+	got := run(true)
+	for i := range got {
+		if bound := max(3*still[i], 1e-6); got[i] > bound {
+			t.Errorf("step %d: NMSE %.3e from the CPU's, above %.3e (unmoved %.3e)", i, got[i], bound, still[i])
+		}
+	}
+	t.Logf("projection on %s: NMSE from the CPU's, moved %.2e; unmoved %.2e", head, got, still)
+}

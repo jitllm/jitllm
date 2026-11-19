@@ -5098,6 +5098,43 @@ NMSE 6.2e-6 and below from the CPU's on every pair, where the commit before
 refused the placement, "block 2's history pages 128 positions on ... and 256
 on ...: a copy is the pages as they are".
 
+## The projection after a block moves to the CPU
+
+A block moved to the CPU (moveOffCards) took the instance's projection off its
+card with it, whichever block it was and whichever card the projection sat
+on, and no later move to a card placed it again: the card still held it
+(HeadDeviceName named it) while the instance projected on the CPU for the rest
+of its life. The comment said the head went first "as SetGPULayers sends it:
+it rides the last placed block's submission", but a projection on a card
+whose last block runs elsewhere is a submission of its own there (the partial
+seam's empty block range with a head), which a move between cards already
+leaves in place. TestAHistoryReadAcrossCards checked the projection's card only
+before its moves for this reason.
+
+A move to the CPU now leaves the projection where it is while a block of the
+instance is left beside it on its card, as a move between cards does; a
+projection named on a card holding no block keeps it through every move. With
+the last block beside it the projection comes to the CPU (headHome), and the
+next move to a card places it there (headBack, MoveBlocks and
+PendingMove.Commit), so it comes back with the move that undoes it and names
+the move's card as its destination. A placement decides it again (placeHead
+clears headHome).
+
+The tier counts where it ran: gpu.Stats.Heads, per card, the calls whose
+projection the card ran, riding the blocks' submission or one of its own.
+
+Gates: engine.TestTheProjectionComesBackFromTheCPU (Llama-3.2-1B, two cards:
+the projection beside the blocks on the first card, the last block to the CPU
+and back, every block to the CPU and back; and named on the second card, which
+holds no block, through the same moves; every token counted on the card the
+projection is on and on none where the CPU projects, the move's Head report
+asked, and the logits held to a CPU control inside three times the unmoved
+placement's NMSE. With the fix left out the beside arm fails at the token after
+the first move: the card ran the projection 0 times, want 1), and
+TestAHistoryReadAcrossCards, which now asks for the projection on the second
+card after every move (synth-gemma4-e and synth-gemma3n: the second card keeps
+a block through the source's move to the CPU).
+
 ## One pool spent by two devices
 
 One card listed as cuda:N and vulkan:N is one physical device under two

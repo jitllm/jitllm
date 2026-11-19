@@ -760,6 +760,9 @@ type Stats struct {
 	// own and read back (materializeLocked): a head on another card than
 	// block 0's hands its rows over this way.
 	EmbedReadBacks int
+	// Heads counts the calls whose output projection the device ran,
+	// riding the blocks' submission or one of its own (GPU.layersFor).
+	Heads int
 	// HeadFolds counts batched chunks that ran the output projection on
 	// their last row inside their own submission.
 	HeadFolds int
@@ -1016,6 +1019,7 @@ func (s *Stats) add(o Stats) {
 	s.KVZeroCopies += o.KVZeroCopies
 	s.EmbedLaunches += o.EmbedLaunches
 	s.EmbedReadBacks += o.EmbedReadBacks
+	s.Heads += o.Heads
 	s.HeadFolds += o.HeadFolds
 	s.TowerChunked += o.TowerChunked
 	s.TowerPhases += o.TowerPhases

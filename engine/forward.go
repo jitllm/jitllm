@@ -440,6 +440,10 @@ type Instance struct {
 	// headReady is what head is set back to by SetHeadOnDevice.
 	head      *nn.Head
 	headReady *nn.Head
+	// headHome says a move to the CPU took the projection home with the last
+	// block beside it (moveOffCards), and the next move to a card takes it
+	// there (PendingMove.Commit). A placement decides it again.
+	headHome bool
 	// PickIDs asks a prefill whose head runs on the host to project the
 	// listed vocabulary rows alone into PickVals (pickOnHost), the
 	// host's half of the label pick a device head does (nn.Head.Pick);
@@ -1226,6 +1230,7 @@ const seamCrossBytes = 2 << 20
 // read a fraction of the time. Releasing from the end keeps the placed blocks a
 // contiguous prefix, and a trailing block is the cheapest to give up.
 func (s *Instance) placeHead() {
+	s.headHome = false
 	// WithHeadPlacement(false) leaves the projection on the host -- the other
 	// arm of the placement comparison, and the way to bisect a divergence to it.
 	// A tower's run has no output head: the projection is the text model's,
