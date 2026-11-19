@@ -282,6 +282,7 @@ func (g *devTier) releaseModel() {
 	g.kvCap, g.maxSeqAsked, g.paged = 0, 0, false
 	g.widest = 0
 	g.pinned, g.stream = nil, nil
+	g.dropSwap()
 	// The scratch sets went with dropAllScratch; which one is in use and the
 	// non-causal set's widths are the next model's to state.
 	g.geoCur = geoKey{}

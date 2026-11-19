@@ -162,6 +162,7 @@ func (g *devTier) headHold(cur, lo, hi int, wait bool) bool {
 		g.quiesce()
 	}
 	if !hp.in {
+		defer g.closeSlot(g.openSlot(hp.foot))
 		if !g.headRoom(hp, cur, lo, hi, wait) {
 			if wait {
 				g.LastErr = fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
@@ -172,6 +173,12 @@ func (g *devTier) headHold(cur, lo, hi int, wait bool) bool {
 		}
 		if g.headPg != hp {
 			return true
+		}
+		if _, held := g.claim(hp.foot); !held && !hp.in {
+			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and its pool %s has %d of %d used by its devices",
+				hp.foot, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+			g.noteCause(nn.FailRoom)
+			return false
 		}
 		if !hp.in && !g.pageInHead(hp) {
 			return false

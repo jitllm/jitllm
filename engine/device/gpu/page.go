@@ -129,7 +129,7 @@ func (g *devTier) slots() int {
 	if pl := g.pool.Limit(); pl > 0 {
 		// What the pool would allow, plus what this device's own slots already
 		// hold -- those bytes come back to the pool when a page goes out.
-		free := g.pageBytes + g.claimed
+		free := g.pageBytes + g.claimed + g.swapHeld
 		if u := g.pool.Used(); pl > u {
 			free += pl - u
 		}
@@ -169,7 +169,7 @@ func (g *devTier) slotsIfPerm(n uint64) int {
 		avail = g.limit - perm
 	}
 	if pl := g.pool.Limit(); pl > 0 {
-		free := g.pageBytes + g.claimed
+		free := g.pageBytes + g.claimed + g.swapHeld
 		if u := g.pool.Used(); pl > u+n {
 			free += pl - u - n
 		}
@@ -326,7 +326,9 @@ func (g *devTier) pageOut(li int) uint64 {
 	// A recording names device addresses, which stop meaning anything once
 	// these buffers are freed. See dropGraph.
 	g.dropGraph()
+	g.keepBack = g.keepOf(li)
 	freed := g.dropTensors(l)
+	g.keepBack = 0
 	l.pg.in = false
 	g.pagesIn--
 	g.pageBytes -= min(g.pageBytes, freed+l.pg.round)
@@ -495,6 +497,144 @@ func (g *devTier) stateFits(n uint64, keep *kvLayerPool) bool {
 	return (g.kvCompact(n, keep) || g.roomOrReclaim(n)) && g.keepsSlot(n)
 }
 
+// stateHold is stateFits with the room held (claim) for the charges the
+// caller is about to make: another device of the pool runs beside this one
+// (GPU.pipeline) and spent the room found between the check and the charge.
+// The room is made again when the other took it first. It returns the hold
+// to restore (unclaim) once the charges are made, or why there is no room.
+// Callers hold g.mu.
+func (g *devTier) stateHold(n uint64, keep *kvLayerPool) (uint64, error) {
+	return g.holdFor(n, keep, true)
+}
+
+// holdFor is stateHold, asking keepsSlot only when slot is set: a block's
+// first pages are held to the slot by its admission (addKVLayer).
+func (g *devTier) holdFor(n uint64, keep *kvLayerPool, slot bool) (uint64, error) {
+	for g.kvCompact(n, keep) || g.roomOrReclaim(n) || g.fromPeers(n) {
+		if slot && !g.keepsSlot(n) {
+			break
+		}
+		if before, ok := g.claim(n); ok {
+			return before, nil
+		}
+	}
+	return g.claimed, g.shortOf(n)
+}
+
+// roomHold is room with the pool's bytes taken in the same step (claim).
+// Callers hold g.mu.
+func (g *devTier) roomHold(n uint64) (uint64, bool) {
+	if !g.room(n) {
+		return g.claimed, false
+	}
+	return g.claim(n)
+}
+
+// seatHold is a session's seat's room (roomSeat), or the room made as for a
+// history growing, held (stateHold). Callers hold g.mu.
+func (g *devTier) seatHold(need uint64, live int, hist uint64) (uint64, error) {
+	if g.roomSeat(need, live, hist) {
+		if before, ok := g.claim(need); ok {
+			return before, nil
+		}
+	}
+	return g.stateHold(need, nil)
+}
+
+// shortOf says why n bytes do not fit: the pool this device's memory comes
+// from, or its own budget.
+func (g *devTier) shortOf(n uint64) error {
+	if g.pool != nil && g.pool.Limit() > 0 && g.pool.Used()+n > g.pool.Limit() {
+		return fmt.Errorf("its pool %s has %d of %d bytes used by its devices", g.pool.Name(), g.pool.Used(), g.pool.Limit())
+	}
+	return fmt.Errorf("%d of %d bytes used", g.used, g.limit)
+}
+
+// fromPeers pages out the other devices' streamed blocks of this device's
+// pool until n fits, and reports whether it does: a block no submission
+// reads, on a peer with nothing in flight, and never a peer's last one in
+// (keepOf). A peer whose lock is held is passed over rather than waited for:
+// this device holds its own, and that peer may be waiting for it
+// (lockPair). Callers hold g.mu.
+func (g *devTier) fromPeers(n uint64) bool {
+	for _, p := range g.peers {
+		if g.room(n) {
+			return true
+		}
+		if !p.mu.TryLock() {
+			continue
+		}
+		pd := p.dv
+		if len(pd.tickets) == 0 && !pd.inSub && !pd.prologueHeld {
+			for !g.room(n) {
+				v := pd.victim(-1, 0, 0, true)
+				if v < 0 || v == headSlot || pd.keepOf(v) > 0 {
+					break
+				}
+				pd.pageOut(v)
+				g.PeerPageOuts++
+			}
+			pd.Slots = pd.slots()
+		}
+		p.mu.Unlock()
+	}
+	return g.room(n)
+}
+
+// keepOf is what the page-out of block li keeps in the pool rather than
+// giving it back: an operation paging into the slot (openSlot) keeps what
+// it asked for, and a device that streams keeps its slot, the widest
+// streamed block, while no other streamed block fills it. Only in a pool
+// another device spends (one card under two backends): on its own a device
+// keeps its slot in its budget (keepsSlot). Nothing is kept past a budget
+// lowered under the device (trim). Callers hold g.mu.
+func (g *devTier) keepOf(li int) uint64 {
+	if g.pool == nil || g.pool.devs < 2 || g.over() {
+		return 0
+	}
+	if g.slotNeed > 0 {
+		return g.slotNeed - min(g.slotNeed, g.claimed)
+	}
+	var w uint64
+	for s := range g.stream {
+		l := g.layers[s]
+		if l == nil || l.pg == nil {
+			continue
+		}
+		if s != li && l.pg.in {
+			return 0
+		}
+		w = max(w, l.pg.bytes)
+	}
+	return w - min(w, g.swapHeld)
+}
+
+// openSlot begins an operation paging into the swap slot: the slot kept
+// since the last page-out (swapHeld) becomes its hold, and its page-outs
+// keep up to need there rather than giving the bytes to the pool, where
+// another device would spend them before the uploads. It returns the hold
+// closeSlot restores. Callers hold g.mu.
+func (g *devTier) openSlot(need uint64) uint64 {
+	open := g.claimed
+	g.claimed += g.swapHeld
+	g.swapHeld = 0
+	g.slotNeed = need
+	return open
+}
+
+// closeSlot ends what openSlot began, giving the pool back what the
+// operation did not spend. Callers hold g.mu.
+func (g *devTier) closeSlot(open uint64) {
+	g.slotNeed = 0
+	g.unclaim(open)
+}
+
+// dropSwap gives the pool the slot this device kept. Callers hold g.mu.
+func (g *devTier) dropSwap() {
+	g.pool.give(g.swapHeld)
+	g.swapHeld = 0
+}
+
 // over reports that this device is holding more than it is allowed to, which
 // only SetBudget (or prepLayer's unchecked permanent charges) can make true.
 // Callers hold g.mu.
@@ -517,6 +657,7 @@ func (g *devTier) trim() {
 	// Expert caches before blocks: a cache is copies of host pages, and its
 	// block keeps running on the plain bank without it.
 	if g.over() {
+		g.dropSwap()
 		g.dropCaches(0)
 	}
 	for g.over() && g.pagesIn > 0 {
@@ -564,6 +705,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	if l.pg.in {
 		return g.holdPages(li, li+1)
 	}
+	defer g.closeSlot(g.openSlot(l.pg.bytes + l.pg.round + g.reserved() + g.slack()))
 	// The staging is asked for before the reclaim, best-effort: it is normally
 	// already held and is absent only after trim took it. Without room the
 	// page-in proceeds without it and packs on the host. Passing the bytes this

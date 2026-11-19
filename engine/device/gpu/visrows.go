@@ -660,16 +660,23 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 		g.refund(kvp.bytes)
 		g.KVBytes -= min(g.KVBytes, kvp.bytes)
 		kvp.bytes = 0
+		before, held := g.claim(uint64(cache + vcache))
+		if !held {
+			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, g.shortOf(uint64(cache+vcache)))
+			return false
+		}
 		var err error
 		if kvp.kc, err = g.dev.Alloc(cache); err == nil && vcache > 0 {
 			kvp.vc, err = g.dev.Alloc(vcache)
 		}
 		if err != nil {
+			g.unclaim(before)
 			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, err)
 			return false
 		}
 		kvp.bytes = uint64(cache + vcache)
 		g.charge(kvp.bytes)
+		g.unclaim(before)
 		g.KVBytes += kvp.bytes
 	}
 	for _, l := range g.layers {

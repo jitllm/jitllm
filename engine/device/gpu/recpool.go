@@ -233,8 +233,13 @@ func (g *devTier) recResize(slots int, shared bool) error {
 		ob, nb := l.recBytes, uint64(slots)*g.recSlotBytes(l, shared)
 		old.free()
 		l.pool = np
-		g.refund(ob)
-		g.charge(nb)
+		// The difference only: a refund and a charge after it give the bytes
+		// to the pool between, for another device of it to spend.
+		if nb >= ob {
+			g.charge(nb - ob)
+		} else {
+			g.refund(ob - nb)
+		}
 		g.RecBytes += nb - ob
 		l.recBytes = nb
 		if shared {
@@ -397,14 +402,17 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 			extra = want - g.recNextBytes
 		}
 	}
-	if need+extra > 0 && !g.stateFits(need+extra, nil) {
-		g.LastErr = fmt.Sprintf("rows: a batch's recurrent states do not fit in this device's budget: "+
-			"%d sequences want %.1f MiB (%.1f MiB doubled), %.1f MiB used of %.1f",
-			rows, float64(uint64(rows)*g.recPoolsSlotBytes(true))/(1<<20),
-			float64(uint64(rows)*g.recPoolsSlotBytes(false))/(1<<20),
-			float64(g.used)/(1<<20), float64(g.limit)/(1<<20))
-		restore()
-		return false
+	if need+extra > 0 {
+		before, why := g.stateHold(need+extra, nil)
+		if why != nil {
+			g.LastErr = fmt.Sprintf("rows: a batch's recurrent states do not fit: "+
+				"%d sequences want %.1f MiB (%.1f MiB doubled); %v",
+				rows, float64(uint64(rows)*g.recPoolsSlotBytes(true))/(1<<20),
+				float64(uint64(rows)*g.recPoolsSlotBytes(false))/(1<<20), why)
+			restore()
+			return false
+		}
+		defer g.unclaim(before)
 	}
 	if slots != g.recSlots || shared != g.recShared {
 		if err := g.recResize(slots, shared); err != nil {
@@ -772,10 +780,12 @@ func (g *devTier) markBufs(l *layer) bool {
 		return true
 	}
 	sB, cB := max(l.recS, 1)*4, max(l.recC, 1)*4
-	if !g.stateFits(uint64(sB+cB), nil) {
-		g.LastErr = "recurrent mark: no room for a copy of a marked state"
+	before, why := g.stateHold(uint64(sB+cB), nil)
+	if why != nil {
+		g.LastErr = fmt.Sprintf("recurrent mark: no room for a copy of a marked state: %v", why)
 		return false
 	}
+	defer g.unclaim(before)
 	s, err := g.dev.Alloc(sB)
 	if err != nil {
 		g.LastErr = "recurrent mark: " + err.Error()

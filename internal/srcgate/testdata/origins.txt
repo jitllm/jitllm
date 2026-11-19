@@ -967,6 +967,7 @@ context	engine/device/gpu/headplanes.go	"tier: plane %d of the head's staging ro
 bug	engine/device/gpu/headnorm.go	"the head's %v is %d wide, and its graph reads %d"
 bug	engine/device/gpu/headnorm.go	"the head resident on this device is another projection of the same shape"
 context	engine/device/gpu/headnorm.go	"the head's second vectors: %v"
+limit	engine/device/gpu/headpage.go	"the output projection needs %d bytes and its pool %s has %d of %d used by its devices"	a card's memory under two backends: one pool both devices spend, sized at the larger of their caps (planSlots), and what the other device holds stays its own
 limit	engine/device/gpu/headpage.go	"the output projection needs %d bytes and no streamed block can be paged out for it"
 context	engine/device/gpu/headpage.go	"the output projection: %v"
 bug	engine/device/gpu/inflight.go	"tier: a submission began while a quiesce waited"
@@ -977,9 +978,9 @@ context	engine/device/gpu/kvevict.go	"block %d: bringing page %d's home copy bac
 context	engine/device/gpu/kvevict.go	"evicting block %d's page %d: %w"
 context	engine/device/gpu/kvpool.go	"%w: %d page(s) wanted, %d free once the room was made"
 context	engine/device/gpu/kvpool.go	"%w: %d page(s) wanted, the backend's buffer limit allows %d"
-context	engine/device/gpu/kvpool.go	"%w: a layer's %d more page(s) need %d bytes"
-context	engine/device/gpu/kvpool.go	"%w: a layer's %d page(s) and table need %d bytes"
-context	engine/device/gpu/kvpool.go	"%w: the page tables need %d more bytes a layer"
+context	engine/device/gpu/kvpool.go	"%w: a layer's %d more page(s) need %d bytes: %v"
+context	engine/device/gpu/kvpool.go	"%w: a layer's %d page(s) and table need %d bytes: %v"
+context	engine/device/gpu/kvpool.go	"%w: the page tables need %d more bytes a layer: %v"
 context	engine/device/gpu/kvpool.go	"KV growth: %v"
 context	engine/device/gpu/kvpool.go	"tier: a KV layer could not grow to %d pages (it keeps its %d): %w"
 context	engine/device/gpu/kvpool.go	"tier: a KV layer freed for compaction could not be made again: %w"
@@ -1008,8 +1009,8 @@ bug	engine/device/gpu/layer.go	"a batched submission of %d rows %d wide with a h
 limit	engine/device/gpu/layer.go	"a bidirectional chunk this device has no batched scratch for"	the batched scratch does not fit
 limit	engine/device/gpu/layer.go	"a chunk of a centred convolution this device has no batched scratch for"	the batched scratch does not fit
 bug	engine/device/gpu/layer.go	"a chunked attention of a different shape from the one this tier was built for"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
-limit	engine/device/gpu/layer.go	"a second session's KV cache does not fit in this device's budget"
-limit	engine/device/gpu/layer.go	"a session's recurrent state does not fit in this device's budget"
+context	engine/device/gpu/layer.go	"a second session's KV cache does not fit: %v"
+context	engine/device/gpu/layer.go	"a session's recurrent state does not fit: %v"
 bug	engine/device/gpu/layer.go	"a sliding window of %d keys on a tier built for %d"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
 bug	engine/device/gpu/layer.go	"a submission that must run alone was prepared to run beside others"
 bug	engine/device/gpu/layer.go	"an empty block range [%d,%d) with no head"
@@ -1113,9 +1114,11 @@ input	engine/device/gpu/open.go	"tier: -devices %q: metal opens the system defau
 input	engine/device/gpu/open.go	"tier: WithSlots and WithDevices(%q) both name the devices; pass one of them"
 input	engine/device/gpu/open.go	"tier: no GPU backend on this host"
 bug	engine/device/gpu/owner.go	"this tier holds model %d's blocks, and a tier serves one model: model %d's %s stays on the CPU until model %d releases them (its Close)"	every model is placed on a tier of its own over the devices (ForModel, which SetDevice resolves; TestTwoModelsShareACardThroughTheRegistry)
+limit	engine/device/gpu/page.go	"%d of %d bytes used"	a device's memory: its own budget
 bug	engine/device/gpu/page.go	"%s (%s %dx%d): %v"
 input	engine/device/gpu/page.go	"%s is %s, which the device layout does not hold"
 limit	engine/device/gpu/page.go	"block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))"
+limit	engine/device/gpu/page.go	"its pool %s has %d of %d bytes used by its devices"	a card's memory under two backends: one pool both devices spend, sized at the larger of their caps (planSlots), and what the other device holds stays its own
 bug	engine/device/gpu/page.go	"block %d page-in: %v"
 bug	engine/device/gpu/page.go	"block %d page-in: tensor %d not resident"
 bug	engine/device/gpu/page.go	"block %d page-in: tensor %d refreshed as %v %dx%d of %d bytes, admitted as %v %dx%d of %d"
@@ -1148,7 +1151,7 @@ context	engine/device/gpu/picrows.go	"the composed picture rows: %v"
 bug	engine/device/gpu/picrows.go	"the rows read %v, which the model hands no tensor of"
 context	engine/device/gpu/reckeep.go	"recurrent restore: %v"
 bug	engine/device/gpu/reckeep.go	"recurrent restore: block %d kept no row %d"
-limit	engine/device/gpu/reckeep.go	"tier: %d kept rows of %d linear blocks want %.1f MiB, which this device's budget does not hold"
+context	engine/device/gpu/reckeep.go	"tier: %d kept rows of %d linear blocks want %.1f MiB: %v"
 limit	engine/device/gpu/reckeep.go	"tier: a step keeping its rows runs at the reserved prompt width, which this device holds no scratch for (%s)"
 context	engine/device/gpu/reckeep.go	"tier: block %d's keep form on a lane: %w"
 context	engine/device/gpu/reckeep.go	"tier: block %d's keep form: %w"
@@ -1158,7 +1161,7 @@ bug	engine/device/gpu/reckeep.go	"tier: session %d is not on this device"
 bug	engine/device/gpu/recpool.go	"a shared recurrent pool does not go back to two halves while a session holds it"
 fault	engine/device/gpu/recpool.go	"no room for the kept zeros (roomFault)"	fault injection, under the jitllmfault tag
 context	engine/device/gpu/recpool.go	"recurrent mark: %v"
-limit	engine/device/gpu/recpool.go	"recurrent mark: no room for a copy of a marked state"	a device's memory: the mark keeps no copy, and a rewind that needs it says it cannot rewind (rewindable)
+context	engine/device/gpu/recpool.go	"recurrent mark: no room for a copy of a marked state: %v"	the mark keeps no copy, and a rewind that needs it says it cannot rewind (rewindable)
 context	engine/device/gpu/recpool.go	"recurrent pools did not shrink: %v"
 bug	engine/device/gpu/recpool.go	"recurrent rewind: %d step(s) since the mark, shared form %v"
 context	engine/device/gpu/recpool.go	"recurrent rewind: %v"
@@ -1166,7 +1169,7 @@ bug	engine/device/gpu/recpool.go	"recurrent rewind: a linear block with no mark"
 bug	engine/device/gpu/recpool.go	"row %d's sequence starts at slot %d, not a multiple of the %d positions a sequence spans"
 bug	engine/device/gpu/recpool.go	"rows %d and %d of one sequence are at positions %d and %d: a sequence's rows in one step are consecutive positions"
 context	engine/device/gpu/recpool.go	"rows: %v"
-limit	engine/device/gpu/recpool.go	"rows: a batch's recurrent states do not fit in this device's budget: %d sequences want %.1f MiB (%.1f MiB doubled), %.1f MiB used of %.1f"
+context	engine/device/gpu/recpool.go	"rows: a batch's recurrent states do not fit: %d sequences want %.1f MiB (%.1f MiB doubled); %v"
 context	engine/device/gpu/recpool.go	"sessions: %v"
 bug	engine/device/gpu/recpool.go	"sessions: block %d holds no recurrent state for session %d"
 bug	engine/device/gpu/recpool.go	"sessions: session %d holds %d recurrent state(s) here; a step across sessions takes one a session"

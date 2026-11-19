@@ -387,6 +387,14 @@ type Stats struct {
 	// charge no claim covered, made after another device of the pool spent
 	// the room this one had checked.
 	PoolOver int
+	// ScratchOver is how many scratch windows left the pool past its limit:
+	// a scratch is measured once allocated (scratchWin), and a placement
+	// probes widths and drops the one the room check after refuses
+	// (reserveScratch).
+	ScratchOver int
+	// PeerPageOuts is blocks of another device of the pool this device paged
+	// out for its history (fromPeers).
+	PeerPageOuts int
 	// SessionDeclines is blocks a session could not take because its history
 	// did not fit beside the sessions already there (see Config.Sessions).
 	SessionDeclines int
@@ -885,6 +893,8 @@ func (s *Stats) add(o Stats) {
 	s.ConvBlocks += o.ConvBlocks
 	s.NoRoom += o.NoRoom
 	s.PoolOver += o.PoolOver
+	s.ScratchOver += o.ScratchOver
+	s.PeerPageOuts += o.PeerPageOuts
 	s.SessionDeclines += o.SessionDeclines
 	s.RopeTableUploads += o.RopeTableUploads
 	s.Prepacked += o.Prepacked
@@ -1050,6 +1060,10 @@ type Pool struct {
 	name  string
 	used  uint64
 	limit uint64
+	// devs is how many devices spend this pool: more than one is one card
+	// under several backends (planSlots), each keeping its swap slot in it
+	// (devTier.keepOf).
+	devs int
 	// host marks the pool whose bytes are the host's own memory; its used
 	// bytes are what GPU.HostReserved reads, and so what the host's weight
 	// budget is reduced by.
@@ -1222,7 +1236,14 @@ func (g *devTier) refund(n uint64) {
 	}
 	g.used -= n
 	g.explicit -= int64(n)
-	g.pool.give(n)
+	k := min(n, g.keepBack)
+	g.keepBack -= k
+	if g.slotNeed > 0 {
+		g.claimed += k
+	} else {
+		g.swapHeld += k
+	}
+	g.pool.give(n - k)
 	g.settleRounding()
 }
 
@@ -1507,9 +1528,18 @@ type devShared struct {
 	used      uint64
 	limit     uint64
 	// claimed is what this device took from its pool ahead of the charges
-	// an admission or a page-in is about to make (claim): spent by them first,
-	// the rest given back when the operation ends.
+	// an admission, a page-in or a history's growth is about to make
+	// (claim): spent by them first, the rest given back when the operation
+	// ends.
 	claimed uint64
+	// swapHeld is the pool's bytes this device keeps for its swap slot while
+	// no streamed block of its fills the slot, so another device of a shared
+	// pool does not grow into it between a page-out and the next page-in
+	// (keepOf). slotNeed is the hold an operation paging into the slot asks
+	// for (openSlot), and keepBack what the page-out under way keeps.
+	swapHeld, slotNeed, keepBack uint64
+	// peers are the other devices spending this device's pool (fromPeers).
+	peers []*devShared
 	// why is where limit came from, in words, for the report.
 	why string
 
@@ -1821,6 +1851,7 @@ func (g *GPU) addSlot(i int, s Slot) {
 	if pool == nil {
 		pool = NewPool(s.Dev.Name(), limit)
 	}
+	pool.devs++
 	why := s.Why
 	if why == "" {
 		why = "the caller set it"
@@ -1855,6 +1886,13 @@ func (g *GPU) addSlot(i int, s Slot) {
 	}
 	if pool.Host() {
 		g.hostPool = pool
+	}
+	d := g.devs[len(g.devs)-1]
+	for _, o := range g.devs[:len(g.devs)-1] {
+		if o.pool == pool {
+			o.peers = append(o.peers, d.devShared)
+			d.peers = append(d.peers, o.devShared)
+		}
 	}
 }
 

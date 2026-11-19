@@ -94,6 +94,9 @@ type fakeDev struct {
 	reads, readBytes  int
 	writeBytes        int
 	copies, copyBytes int
+	// onAlloc and onFree run at every Alloc and Free: another device of a
+	// shared pool spending it at that moment (pooldevs_test.go).
+	onAlloc, onFree func()
 }
 
 // Identity satisfies backend.Identified. An empty uuid reports unknown rather
@@ -162,6 +165,9 @@ func (b *fakeBuf) Free() {
 		return
 	}
 	b.gone = true
+	if b.d.onFree != nil {
+		b.d.onFree()
+	}
 	b.d.freed++
 	b.d.freedBytes += b.n
 	delete(b.d.liveBufs, b.id)
@@ -227,6 +233,9 @@ func (d *fakeDev) Footprint() uint64 {
 func (d *fakeDev) Alloc(n int) (backend.Buf, error) {
 	if d.inSession > 0 {
 		panic("fake: Alloc inside a Session -- on CUDA this deadlocks the owner goroutine")
+	}
+	if d.onAlloc != nil {
+		d.onAlloc()
 	}
 	if d.allocMax > 0 && n > d.allocMax {
 		return nil, fmt.Errorf("fake: out of memory: %d bytes", n)

@@ -121,6 +121,11 @@ func (g *devTier) recSnapSlot(li int) *recSnap {
 			return sn
 		}
 	}
+	before, why := g.stateHold(uint64(max(l.recC, 1)+l.recS)*4, nil)
+	if why != nil {
+		return nil
+	}
+	defer g.unclaim(before)
 	c, err := g.dev.Alloc(max(l.recC, 1) * 4)
 	if err != nil {
 		return nil

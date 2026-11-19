@@ -265,9 +265,11 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 	}
 	l.reserveFences()
 	need := kp.pageBytes(l)*uint64(n) + uint64(kp.tabWords)*4 + kvStageBytes(geom, kp.p)
-	if !g.kvCompact(need, nil) && !g.roomOrReclaim(need) {
-		return fmt.Errorf("%w: a layer's %d page(s) and table need %d bytes", ErrKVCapacity, n, need)
+	before, why := g.holdFor(need, nil, false)
+	if why != nil {
+		return fmt.Errorf("%w: a layer's %d page(s) and table need %d bytes: %v", ErrKVCapacity, n, need, why)
 	}
+	defer g.unclaim(before)
 	var err error
 	if l.k, l.v, err = g.allocLayerPool(geom, kp.p, n); err != nil {
 		return err
@@ -481,7 +483,7 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 	// writing a row into the old ones would be lost.
 	g.quiesce()
 	pb := kp.pageBytes(l)
-	fits := func(n uint64) bool { return g.stateFits(n, l) }
+	var last error
 	// A doubling stops at what a scheduler promised (PromiseKV): the pages in
 	// use and the promise's, with one spare. The budget past it is left to
 	// the batched scratches the admitted rows' steps run in, which a pool
@@ -496,21 +498,25 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 		}
 		var k, v backend.Buf
 		var err error
-		switch {
-		case fits(pb * uint64(n)):
+		// The room is held to the charge: the peak while copying on the
+		// device, both pairs, or the growth through the host.
+		before, why := g.stateHold(pb*uint64(n), l)
+		if why == nil {
 			// Copied on the device: the old buffers are live until the copy is
 			// done, so the peak is both pairs.
 			if k, v, err = g.allocLayerPool(l.geom, kp.p, n); err != nil {
+				g.unclaim(before)
 				return err
 			}
 			kw, vw := l.geom.kWords(kp.p)*l.n, l.geom.vWords(kp.p)*l.n
 			if !g.restride(l.k, k, 1, kw, kw, kw) || vw > 0 && !g.restride(l.v, v, 1, vw, vw, vw) {
 				freeKV2(k, v)
+				g.unclaim(before)
 				return fmt.Errorf("tier: carrying a KV layer across a resize failed: %s", g.LastErr)
 			}
 			g.dropGraph()
 			freeKV2(l.k, l.v)
-		case fits(pb * uint64(n-l.n)):
+		} else if before, why = g.stateHold(pb*uint64(n-l.n), l); why == nil {
 			// Only the grown layer fits, not both: through the host, the old
 			// pair freed before the new one is made (compactViaHost).
 			order := make([]uint32, l.n)
@@ -518,9 +524,11 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 				order[i] = uint32(i)
 			}
 			if k, v, err = g.compactViaHost(kp, l, order, n); err != nil {
+				g.unclaim(before)
 				return err
 			}
-		default:
+		} else {
+			last = why
 			continue
 		}
 		l.k, l.v = k, v
@@ -529,13 +537,14 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 		}
 		delta := pb * uint64(n-l.n)
 		g.charge(delta)
+		g.unclaim(before)
 		l.charged += delta
 		l.n = n
 		l.reserveFences()
 		g.KVGrows++
 		return nil
 	}
-	return fmt.Errorf("%w: a layer's %d more page(s) need %d bytes", ErrKVCapacity, want-l.n, pb*uint64(want-l.n))
+	return fmt.Errorf("%w: a layer's %d more page(s) need %d bytes: %v", ErrKVCapacity, want-l.n, pb*uint64(want-l.n), last)
 }
 
 // ensureRange gives sequence s a run of at least pages words in every layer's
@@ -593,9 +602,11 @@ func (g *devTier) growTables(kp *kvPool, words int) error {
 		return err
 	}
 	extra := uint64(words-kp.tabWords) * 4
-	if !g.stateFits(extra*uint64(len(kp.layers)), nil) {
-		return fmt.Errorf("%w: the page tables need %d more bytes a layer", ErrKVCapacity, extra)
+	before, why := g.stateHold(extra*uint64(len(kp.layers)), nil)
+	if why != nil {
+		return fmt.Errorf("%w: the page tables need %d more bytes a layer: %v", ErrKVCapacity, extra, why)
 	}
+	defer g.unclaim(before)
 	host := make([]uint32, words)
 	for _, l := range kp.layers {
 		clear(host)
@@ -759,7 +770,8 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 		order = residentIDs(order, l.owned[s])
 	}
 	var k, v backend.Buf
-	if g.room(pb * uint64(n)) {
+	if before, held := g.roomHold(pb * uint64(n)); held {
+		defer g.unclaim(before)
 		var err error
 		if k, v, err = g.allocLayerPool(l.geom, kp.p, n); err != nil {
 			return err

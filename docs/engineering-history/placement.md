@@ -5024,5 +5024,63 @@ bytes between the two. Instrumented, a page-in of block 0 on cuda:0 found
 318 of its 354 MB used and was declined at its first upload with the pool at
 980 of 985 MB; once the pool reached 994 of 985. Red 5 of 24 loops on one
 card before the claim, 40 of 40 green after, and 2 of 16 red with the claim
-made a no-op. What is still open is in open-questions.md ("one pool spent
-by two devices").
+made a no-op.
+
+The history's half was the same race. A history's or a state's growth --
+a KV layer's pages and tables, a session's own cache or recurrent seat, a
+batch's seats, the mark and kept copies, a served instance's buffers --
+found its room (stateFits, roomOrReclaim, roomSeat) and charged the pool
+after its allocations. Each now holds the room first (stateHold, seatHold,
+roomHold: the claim admission and page-in take), the room made again where
+the other device took it between, and a refusal names the pool when the
+pool is what is short. A growth inside an admission rides the admission's
+hold (a claim covers what it is asked for, not more on top), and a scratch
+window, measured once allocated, no longer spends a hold: it took the bytes
+an admission held for its weights. On fake devices the other device grows
+its history at the first allocation of this one's growth
+(TestAHistoryGrowsInsideItsPool): red 20 of 20 before, the pool at 1361920
+of 1048576 bytes; green 20 of 20 after; red 20 of 20 with the KV layer's
+hold made a check again, which is Stats.PoolOver firing.
+
+A device paging through its slot gave the slot's bytes back to the pool at
+each page-out, and the other device grew into them before the next page-in,
+which found nothing to page out. A page-out now keeps them (keepOf): inside a
+page-in, a streamed block's admission or the projection's page-in, as that
+operation's hold (openSlot); between two, as the device's slot (swapHeld),
+while no other streamed block of it is in. Only in a pool two devices spend:
+a device alone keeps its slot in its own budget (keepsSlot), as before.
+TestASwapSlotIsKeptFromTheOtherDevice: red 20 of 20 before ("block 0 needs
+552960 bytes and nothing can be paged out"), green 20 of 20 after, red 20 of
+20 with nothing kept.
+
+A device short of room paged out only its own blocks. The limit named for it
+was a lock order: the other device's block is paged out under that device's
+lock, taken while this one holds its own, and the other may be waiting for
+this one (lockPair takes two locks in ordinal order). That is this code's
+choice, not the card's (RULE 11e): the other's lock is tried and never waited
+for, and a device whose lock is held or that has a submission in flight is
+passed over, so no wait is taken holding a lock. A block a submission reads
+is not a victim (page.uses), and the other device's last streamed block in is
+never taken, so it keeps a slot (keepOf). A history asks it after its own
+compaction and reclaim (fromPeers, Stats.PeerPageOuts).
+TestAHistoryPagesOutTheOtherDevicesBlock: before, a history beside an idle
+719872-byte block of the other device grew to 742400 bytes and paged out
+nothing, red 20 of 20; after, 1291264 bytes with one of the other's blocks
+paged out and its token still run, green 20 of 20; red 20 of 20 with every
+peer passed over.
+
+On the card (a V100 as cuda:0 and vulkan:4),
+TestOneCardUnderTwoBackendsGrowsHistoryOnBoth runs the spill gate's prompt
+pipelined through both devices, the pool sized to what a first run held
+(JITLLM_SQUEEZE_SLACK past it, 16 MiB by default) and both devices holding
+history; it asks no charge past the pool, no demotion and the host's tokens.
+It does not discriminate the race on this card: the tree before the holds
+passed 10 of 10 at 16 MiB and 8 of 8 each at 0, -32 MB and -96 MB, where the
+engine answers the squeeze by relocating blocks home (up to three), with no
+charge past the pool, as did the violation tree (the KV layer's hold a check
+again) 10 of 10. The race is gated on the fake devices above, where the other
+device grows at a chosen moment; the card's arm is the history's regression
+gate under the squeeze, 10 of 10 at 16 MiB and 8 of 8 at -96 MB after.
+
+What is still open is in open-questions.md ("one pool spent by two
+devices").

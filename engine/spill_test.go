@@ -139,6 +139,9 @@ func fullCardSpills(t *testing.T, devs []string, card func(testing.TB, *gpu.GPU)
 			defer st.Close()
 			t.Logf("placed %v, %d spill(s), %d relocation(s), %d demotion(s), %d/%d blocks, %d charge(s) past the pool", g.Placed(),
 				st.Spills(), st.Relocations(), st.DeviceDemotions(), st.GPULayers(), m.Cfg.NLayer, g.Stats().PoolOver)
+			if over := g.Stats().PoolOver; over != 0 {
+				t.Fatalf("%d charge(s) left a pool past its limit", over)
+			}
 			if c.spill && formed != 0 {
 				t.Fatalf("the spill composed %d block(s) on the CPU while the tokens ran", formed)
 			}

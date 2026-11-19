@@ -157,10 +157,12 @@ func (g *devTier) growKept(rows int) error {
 		need += uint64(sB + cB)
 	}
 	g.freeKeptBufs(k)
-	if !g.stateFits(need, nil) {
-		return fmt.Errorf("tier: %d kept rows of %d linear blocks want %.1f MiB, which this device's budget does not hold",
-			rows, len(lis), float64(need)/(1<<20))
+	before, why := g.stateHold(need, nil)
+	if why != nil {
+		return fmt.Errorf("tier: %d kept rows of %d linear blocks want %.1f MiB: %v",
+			rows, len(lis), float64(need)/(1<<20), why)
 	}
+	defer g.unclaim(before)
 	for _, li := range lis {
 		l := g.layers[li]
 		sB, cB := keptBytes(l)

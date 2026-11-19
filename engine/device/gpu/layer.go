@@ -1009,10 +1009,14 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	}
 	// A card its pages fill makes room for the state as for a history
 	// growing (stateFits): a page goes home before a session is refused.
-	if cost > 0 && !g.roomSeat(cost, len(l.rec), need) && !g.stateFits(cost, nil) {
-		g.LastErr = "a session's recurrent state does not fit in this device's budget"
-		g.SessionDeclines++
-		return false
+	if cost > 0 {
+		before, why := g.seatHold(cost, len(l.rec), need)
+		if why != nil {
+			g.LastErr = fmt.Sprintf("a session's recurrent state does not fit: %v", why)
+			g.SessionDeclines++
+			return false
+		}
+		defer g.unclaim(before)
 	}
 	fail := func(err error) bool { g.LastErr = err.Error(); return false }
 	if slots != g.recSlots || shared != g.recShared {
@@ -1064,6 +1068,11 @@ func (g *devTier) ensureRecNext(rows int) bool {
 		return true // a short convolution keeps no state beside its window
 	}
 	if bytes := uint64(rows * g.recS * 4); g.recNextBytes < bytes {
+		before, why := g.stateHold(bytes-g.recNextBytes, nil)
+		if why != nil {
+			return fail(why)
+		}
+		defer g.unclaim(before)
 		b, err := g.dev.Alloc(int(bytes))
 		if err != nil {
 			return fail(err)
@@ -1073,10 +1082,9 @@ func (g *devTier) ensureRecNext(rows int) bool {
 		g.dropGraph()
 		if g.recNext != nil {
 			g.recNext.Free()
-			g.refund(g.recNextBytes)
 		}
+		g.charge(bytes - g.recNextBytes)
 		g.recNext, g.recNextBytes = b, bytes
-		g.charge(bytes)
 	}
 	return true
 }
@@ -1118,12 +1126,14 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	cp := g.capped(p)
 	cache, vcache := g.kvCacheBytes(p, cp.MaxSeq)
 	need := uint64(cache + vcache)
-	if !g.roomSeat(need, len(l.kv), need) && !g.stateFits(need, nil) {
-		g.LastErr = "a second session's KV cache does not fit in this device's budget"
+	before, why := g.seatHold(need, len(l.kv), need)
+	if why != nil {
+		g.LastErr = fmt.Sprintf("a second session's KV cache does not fit: %v", why)
 		g.SessionDeclines++
 		return false
 	}
 	g.charge(need)
+	g.unclaim(before)
 	kvp := &kvPair{}
 	var err error
 	// One allocation under MLA, where vcache is zero; see kvPair.value.
@@ -1659,6 +1669,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// hold both takes a block fewer -- or a narrower chunk -- rather than
 	// refusing the prompt later (scratch.go).
 	g.reserveScratch(sp, need)
+	// A streamed block is admitted into the swap slot (openSlot).
+	if g.stream[li] {
+		defer g.closeSlot(g.openSlot(need + g.reserved() + g.slack()))
+	}
 	// The KV pools' free pages go first: they hold nothing.
 	g.kvCompact(need, nil)
 	if !g.room(need) {

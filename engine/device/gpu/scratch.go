@@ -140,7 +140,9 @@ func (g *devTier) settleScratch(d int64) {
 	case d > 0:
 		g.scratch += uint64(d)
 		g.used += uint64(d)
-		g.poolTake(uint64(d))
+		if !g.pool.take(uint64(d)) {
+			g.ScratchOver++
+		}
 	case d < 0:
 		n := min(uint64(-d), g.scratch, g.used)
 		g.scratch -= n
