@@ -4926,16 +4926,65 @@ Two things the gate found on the way:
   as well ("the head is on cpu, not cuda:0"): a card holding no block's last
   run takes the tail card's home set's plan (prepHeadOn), and the tail held
   none. It takes any card's home set's plan now.
-- A card holding only blocks of a set of another geometry (geomsets.go) has
-  no home set, and the projection named there is refused with no reason
+- A card holding only blocks of a set of another geometry (geomsets.go) had
+  no home set, and the projection named there was refused with no reason
   (PrepHead on a nil scratch): synth-gemma4-e's [4,6) hold none of the home
   set, so "the head is on cpu, not cuda:1". Building the home set there from
-  another card's plan (headScratch, as prepHeadOn does for a card holding no
-  block) placed it, and a 40-row prompt then failed on the card: "the
-  composed copy at 512 rows was not formed at placement", the head riding
-  the last run's set and folded into a home set with no prompt width. The
-  change was taken back and the gates name the projection on the first card;
-  the refusal is open (open-questions.md).
+  another card's plan (headScratch) placed it, and a 40-row prompt then
+  failed on the card: "the composed copy at 512 rows was not formed at
+  placement". That copy is the folded head's row take: a chunk of a block in
+  a set of its own folds its last row into the home set's decode scratch,
+  and the take is formed at placement at the home set's widths
+  (prewarmHeadKernels), where a home set built for the projection alone had
+  none. Its prompt width was never reserved: a block's placement reserves
+  its set's (reserveScratch), and headScratch built the decode scratch
+  only. It is "A projection on a card holding no home geometry set" below.
+
+### A projection on a card holding no home geometry set; two instances stepping over two cards
+
+Two refusals left open above, closed together.
+
+The projection named on a card holding no home-set block (synth-gemma4-e's
+[4,6) on the second card): prepHeadOn built the home set's scratch only for
+a card that was not the tail, from the first card holding a decode scratch
+in whatever set it had in use, and the tail with no home set went straight
+to PrepHead over a nil scratch. Every card the projection is offered to now
+takes the home set's plan (homePlan: the first card whose home set,
+homeScratch, holds one), the tail included, and the default PrepHead does
+the same. headScratch then reserves the home set's prompt width there as a
+block's placement reserves its set's (reserveScratch), so everything the
+head is asked for over rows is formed with the head: the folded head's row
+take at that width, which the other set's chunk runs at (the take is formed
+at the home set's widths alone: a set narrowed below the home set's width
+would fold at a width no take was formed for, and no gate reaches that
+yet), the input rows at the
+reserved width (embedRowsAt picks it; with no width held it asked for the
+prompt's own 40 rows, "the composed input rows at 40 rows was not formed at
+placement"), and the per-row head a step's rows take ("the composed head at
+32 rows was not formed at placement", where the home set had no reserved
+width and the step's own width was asked for). The cost is that width's
+batched scratch on a card holding the projection and no home-set block, as
+on a card holding one.
+
+The second refusal had two faces. Two synth-gemma4-e instances split [0,2) /
+[2,6), the projection on the first card, no history split: the second
+instance's 40-row prompt was declined, "the composed input rows at 40 rows
+was not formed at placement". Blocks 0 and 1 hold none of the home set
+either, so the first card's home set was the projection's alone, built by
+headScratch with no reserved width; the reservation above closes it.
+
+Split [0,4) / [4,6) with the projection on the first card, the two did not
+step together: the first joint step took all six of the
+first instance's blocks to the CPU (Relocations 6, the projection still
+named on a card, "the head is not on a device" from then on). roomRuns asks
+each card for the step's room (GPU.rowsRoom), and a card asked stepRoom in
+the set in use, its home set: the second card holds no home-set block, so
+its home set had no decode scratch and it answered no room with no error,
+and relocateUntil moved blocks home one at a time until no card held one.
+Each card now answers per set (devTier.setsRoom): stepRoom in each geometry
+set its blocks run in, from the set's first block, as layersRows runs them,
+and the head's in the home set, riding the home set's blocks or a call of
+its own.
 
 Across the CPU and a card no copy is kept: a group a move to the CPU splits
 comes home whole, and comes back to a card whole (open-questions.md).
@@ -4946,9 +4995,11 @@ backend and a CUDA card with a Vulkan card of another; the prompt and 14
 teacher-forced tokens against the CPU, inside three times one card's band,
 with the CPU's greedy pick; the source moved beside its readers, back, to the
 CPU and back, and the readers moved to the second card alone; the copies held
-equal to the cross-card reads after every move; and two synth-gemma3n
-instances split so on one tier, their rows stepped together and alone,
-against the CPU's alone), TestAHistoryReadAcrossCardsDiscriminates (the
+equal to the cross-card reads after every move; the projection named on the
+second card; and two instances of each split so on one tier, the projection
+on either card, and split at block 2 with no history read across the cards,
+their rows stepped together and alone, against the CPU's alone, with no part
+met at a step that the placement did not form), TestAHistoryReadAcrossCardsDiscriminates (the
 copies not appended, gpu.Faults "copystale": the logits leave the band on
 every pair),
 TestDecodeDoesNotAllocate's two-card-history arms, and

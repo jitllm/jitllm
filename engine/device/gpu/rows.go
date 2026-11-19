@@ -803,20 +803,7 @@ func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) 
 			h = nil
 		}
 		v.mu.Lock()
-		lo, linear := -1, false
-		for li, l := range v.layers {
-			if l != nil && l.ok {
-				if lo < 0 {
-					lo = li
-				}
-				linear = linear || l.linear
-			}
-		}
-		ok, err := lo < 0 && h == nil, error(nil)
-		if !ok && v.bs != nil {
-			ok, err = v.stepRoom(lo, rows, h)
-			ok = ok && (!linear || v.growSeat(sid, seqs))
-		}
+		ok, err := v.setsRoom(sid, rows, seqs, h)
 		v.mu.Unlock()
 		v.done()
 		if err != nil {
@@ -827,6 +814,71 @@ func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) 
 		}
 	}
 	return true, nil
+}
+
+// setsRoom is rowsRoom for one device: stepRoom in each geometry set its
+// blocks run in, from the set's first block, as layersRows runs them, and
+// the head's in the home set, which holds it -- riding the home set's
+// blocks where the device holds any, a call of its own otherwise. Callers
+// hold g.mu.
+func (g *devTier) setsRoom(sid uint64, rows, seqs int, h *nn.Head) (bool, error) {
+	prev := g.geoCur
+	defer g.useGeom(prev)
+	held, linear, headDone := false, false, h == nil
+	for li, l := range g.layers {
+		if !g.stepsRows(l) {
+			continue
+		}
+		held = true
+		linear = linear || l.linear
+		k := g.rowsSet(l)
+		lowest := true
+		for oi, o := range g.layers {
+			if oi < li && g.stepsRows(o) && g.rowsSet(o) == k {
+				lowest = false
+				break
+			}
+		}
+		if !lowest {
+			continue
+		}
+		g.useGeom(k)
+		if g.bs == nil {
+			return false, nil
+		}
+		hk := (*nn.Head)(nil)
+		if k == (geoKey{}) {
+			hk, headDone = h, true
+		}
+		if ok, err := g.stepRoom(li, rows, hk); !ok || err != nil {
+			return ok, err
+		}
+	}
+	if !held && h == nil {
+		return true, nil
+	}
+	if !headDone {
+		g.useGeom(geoKey{})
+		if g.bs == nil {
+			return false, nil
+		}
+		if ok, err := g.stepRoom(-1, rows, h); !ok || err != nil {
+			return ok, err
+		}
+	}
+	return !linear || g.growSeat(sid, seqs), nil
+}
+
+// stepsRows says block l is placed here and a step's rows run it: a
+// non-causal segment (a tower) runs none.
+func (g *devTier) stepsRows(l *layer) bool { return l != nil && l.ok && !l.nonCausal }
+
+// rowsSet is the geometry set block l runs a step's rows in.
+func (g *devTier) rowsSet(l *layer) geoKey {
+	if g.geoUsed {
+		return l.geo
+	}
+	return geoKey{}
 }
 
 // errStepBuild is a ragged step's scratch that did not build: a kernel the

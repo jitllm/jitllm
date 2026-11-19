@@ -1181,28 +1181,10 @@ func (g *GPU) prepHeadOn(sid uint64, name string, h *nn.Head) (bool, error) {
 	}
 	defer done()
 	g.mu.Lock()
-	t := g.tail()
-	devs := slices.Clone(g.devs)
+	order := append([]*devTier{g.tail()}, g.devs...)
 	g.mu.Unlock()
-	if d != t && t != nil {
-		// The scratch the projection runs in is a home set's (geomsets.go):
-		// the tail's, or, where the tail holds only blocks of another
-		// geometry's set, any device's.
-		var plan *nn.LayerPlan
-		for _, o := range append([]*devTier{t}, devs...) {
-			o.mu.Lock()
-			if o.bs != nil {
-				p := o.bs.p
-				plan = &p
-			}
-			o.mu.Unlock()
-			if plan != nil {
-				break
-			}
-		}
-		if plan == nil || !d.headScratch(plan) {
-			return false, nil
-		}
+	if plan := homePlan(order); plan == nil || !d.headScratch(plan) {
+		return false, nil
 	}
 	if !d.PrepHead(h) {
 		return false, nil
@@ -2061,17 +2043,9 @@ func (g *GPU) prepHead(sid uint64, h *nn.Head) bool {
 		order = append(order, g.devs[:at]...)
 	}
 	g.mu.Unlock()
-	var plan *nn.LayerPlan
-	if t != nil {
-		t.mu.Lock()
-		if t.bs != nil {
-			p := t.bs.p
-			plan = &p
-		}
-		t.mu.Unlock()
-	}
+	plan := homePlan(order)
 	for _, d := range order {
-		if d != t && (plan == nil || !d.headScratch(plan)) {
+		if plan == nil || !d.headScratch(plan) {
 			continue
 		}
 		if d.PrepHead(h) {
@@ -2123,6 +2097,28 @@ func (g *GPU) embedRows(sid uint64, ids []int32, pos int, dst []float32) bool {
 		}
 	}
 	return true
+}
+
+// homePlan is the plan the projection's scratch is built from: the home
+// geometry set's (geomsets.go) of the first of ds holding one. A device
+// holding only blocks of another set's geometry has none.
+func homePlan(ds []*devTier) *nn.LayerPlan {
+	for _, d := range ds {
+		if d == nil {
+			continue
+		}
+		d.mu.Lock()
+		hb := d.homeScratch()
+		var p nn.LayerPlan
+		if hb != nil {
+			p = hb.p
+		}
+		d.mu.Unlock()
+		if hb != nil {
+			return &p
+		}
+	}
+	return nil
 }
 
 // tail is the device holding the highest-numbered block. Callers hold g.mu.

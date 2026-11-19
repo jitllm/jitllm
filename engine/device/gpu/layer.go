@@ -2365,9 +2365,9 @@ func (g *devTier) HeadResident() bool {
 	return g.headPlaced(g.bs)
 }
 
-// headScratch gives a device that holds no block the scratch the output
-// projection runs in, built from the plan of the device that holds the last
-// block (see GPU.PrepHead). A device that already has one keeps it.
+// headScratch gives a device holding no block of the home geometry set the
+// scratch the output projection runs in, the home set's, built from p, a
+// home set's plan (homePlan). A device that already has one keeps it.
 func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -2377,7 +2377,14 @@ func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 	g.initKVCap(p)
 	g.bs = g.initScratch(p, 1)
 	g.shapeChanged()
-	return g.bs != nil
+	if g.bs == nil {
+		return false
+	}
+	// A head over a chunk's or a step's rows runs in the home set's reserved
+	// width, reserved here as a block's placement reserves it, so its forms
+	// are made with the head's (prewarmComposedHead, prepRowsReserved).
+	g.reserveScratch(p, 0)
+	return true
 }
 
 // dropHeadScratch frees what PrepHead allocated around the projection -- the

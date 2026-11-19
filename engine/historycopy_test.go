@@ -29,12 +29,11 @@ import (
 // from the source's whole history. Each move is held to the logits of the
 // token after it.
 //
-// The step arm splits two instances so on one tier and steps their rows
-// together (historyStepAcrossCards), synth-gemma3n's: two instances of
-// synth-gemma4-e over two cards do not step together with no history split
-// either (open-questions.md). The projection stays on the first card:
-// synth-gemma4-e's upper blocks hold none of its home geometry set, and a
-// projection named on such a card is refused (open-questions.md).
+// The projection is named on the second card, beside the readers: on
+// synth-gemma4-e that card holds no block of the model's home geometry set.
+// The step arms split two instances so on one tier and step their rows
+// together (historyStepAcrossCards), the projection on either card, and
+// again split at block 2, where no block reads a history across the cards.
 //
 // Each pair of cards of one backend runs, and a CUDA card with a Vulkan card
 // of another card, whose copies go through the host.
@@ -52,23 +51,29 @@ func TestAHistoryReadAcrossCards(t *testing.T) {
 			}
 			for _, p := range pairs {
 				t.Run(p[0]+","+p[1], func(t *testing.T) { historyReadAcrossCards(t, m, io, p[0], p[1], nil) })
-				if f.name == "synth-gemma3n" {
-					t.Run(p[0]+","+p[1]+"/step", func(t *testing.T) { historyStepAcrossCards(t, m, io, p[0], p[1]) })
+				for _, head := range p {
+					t.Run(p[0]+","+p[1]+"/step-head-"+head, func(t *testing.T) { historyStepAcrossCards(t, m, io, p[0], p[1], head, -1) })
 				}
+				t.Run(p[0]+","+p[1]+"/step-unsplit", func(t *testing.T) { historyStepAcrossCards(t, m, io, p[0], p[1], p[0], 2) })
 			}
 		})
 	}
 }
 
 // historyStepAcrossCards is two instances split as the gate splits them on
-// one tier, their rows stepped together (StepRuns, the tier's rows path) and
+// one tier (or below block at, where at is not negative), the projection on
+// card head, their rows stepped together (StepRuns, the tier's rows path) and
 // a call each in turn: each row's copy of a history is its own session's,
 // appended from its own session's rows. Every token's logits are held to the
 // CPU's for that prompt alone, teacher-forced, and every card counts the
 // step's rows.
-func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b string) {
+func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b, head string, at int) {
 	nl := m.Cfg.NLayer
 	_, cut := historyCut(t, m)
+	split := at < 0
+	if !split {
+		cut = at
+	}
 	prompts := [][]int32{make([]int32, 40), make([]int32, 57)}
 	for i, p := range prompts {
 		for j := range p {
@@ -103,7 +108,7 @@ func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 		up[li] = Place{On: b}
 	}
 	opts := append(append([]Option(nil), io...),
-		WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: a}, Strict: true}))
+		WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: head}, Strict: true}))
 	insts := make([]*Instance, len(prompts))
 	last := make([][]float32, len(prompts))
 	for i, p := range prompts {
@@ -117,8 +122,9 @@ func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 			t.Fatal(err)
 		}
 		insts[i], last[i] = st, lg
+		headOn(t, st, head)
 	}
-	if held, need := historyCopiesHeld(g), len(prompts)*crossCardReads(insts[0], m); need == 0 || held != need {
+	if held, need := historyCopiesHeld(g), len(prompts)*crossCardReads(insts[0], m); split && need == 0 || held != need {
 		t.Fatalf("%d instances hold %d history copies where %d are read", len(prompts), held, need)
 	}
 	d0, pages := g.DevStats(), historyAppends(g)
@@ -156,14 +162,16 @@ func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 			t.Fatalf("device %d stepped %d row(s) across sessions, want %d: the step did not run on the cards (refusals %v, %v)", i, got, stepped, insts[0].StepRefusal(), insts[1].StepRefusal())
 		}
 	}
-	if historyAppends(g) == pages {
+	if split && historyAppends(g) == pages {
 		t.Fatal("no row reached a history copy: the step read no history across the cards")
 	}
 	for i, st := range insts {
 		if d := st.DeviceDemotions(); d > 0 {
 			t.Fatalf("instance %d left the cards %d time(s)", i, d)
 		}
+		headOn(t, st, head)
 	}
+	formedAtPlacement(t, g)
 	t.Logf("%d instances over %d tokens: worst NMSE %.3e from the CPU's alone; %d rows stepped together, %d history pages copied",
 		len(prompts), gen, worst, stepped, historyAppends(g)-pages)
 }
@@ -346,7 +354,7 @@ func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 		up[li] = Place{On: b}
 	}
 	opts := append(append([]Option(nil), io...),
-		WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: a}, Strict: true}))
+		WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: b}, Strict: true}))
 	st := testInstance(t, m, maxSeq, opts...)
 	defer st.Close()
 	if err := st.SetDevice(g); err != nil {
@@ -367,6 +375,7 @@ func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 		}
 		return strings.Join(w, " ")
 	}
+	headOn(t, st, b)
 	if held, need := historyCopiesHeld(g), crossCardReads(st, m); need == 0 || held != need {
 		t.Fatalf("block %d's readers run on %s and it on %s: the cards hold %d history copies where %d are read (%s)", src, b, a, held, need, where())
 	}
@@ -417,9 +426,28 @@ func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 				t.Errorf("step %d: NMSE %.3e from the CPU's, above %.3e (one card's %.3e)", i, got[i], bound, band[i])
 			}
 		}
+		formedAtPlacement(t, g)
 		t.Logf("NMSE from the CPU's, split: %.2e; one card: %.2e; %d history pages copied", got, band, historyAppends(g))
 	}
 	return got, band
+}
+
+// formedAtPlacement fails t where a card met a part at a step that its
+// placement did not form.
+func formedAtPlacement(t *testing.T, g *gpu.GPU) {
+	t.Helper()
+	if s := g.Stats(); s.UnformedAtStep != 0 {
+		t.Errorf("the cards met %d part(s) at a step that their placement did not form (%v): %s", s.UnformedAtStep, s.UnformedAtStepParts, g.Err())
+	}
+}
+
+// headOn fails t unless st's projection runs on card on.
+func headOn(t *testing.T, st *Instance, on string) {
+	t.Helper()
+	n, ok := st.ld.(nn.NamedDevice).HeadDeviceName()
+	if !st.HeadOnDevice() || !ok || n != on {
+		t.Fatalf("the projection is on %q (on a card: %v), named on %s", n, st.HeadOnDevice(), on)
+	}
 }
 
 // historyCopiesHeld is the history copies g's cards hold.
