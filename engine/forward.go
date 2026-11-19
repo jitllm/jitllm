@@ -1411,10 +1411,37 @@ func (s *Instance) residentMixtureBelow(hi int) int {
 // home first. It reports false, the block resident again, where the device
 // takes it neither way.
 func (s *Instance) streamResident(li int) bool {
+	if s.pos > 0 {
+		return false
+	}
+	return s.restream(li)
+}
+
+// streamForHistory streams the highest resident mixture block on the card
+// for the history the next step writes (relocateUntil), its own history
+// carried home before its weights go and back once they are placed again. It
+// reports whether a block moved: streamed, or sent to the CPU where the card
+// took it back neither way or without its history.
+func (s *Instance) streamForHistory() bool {
+	li := s.residentMixtureBelow(s.hi)
+	if li < 0 || !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
+		return false
+	}
+	streamed := s.restream(li)
+	if !s.devAt(li) || !s.migrateKV(li, s.pos, true) || !s.migrateRec(li, true) {
+		s.relocateOff(li)
+		return true
+	}
+	return streamed
+}
+
+// restream is streamResident with any history the block holds already
+// carried.
+func (s *Instance) restream(li int) bool {
 	// Asked of the shared tier, the block offered through this instance's view,
 	// as placement does (offerRange).
 	as, ok := s.ldCand.(nn.AutoStreamer)
-	if !ok || s.pos > 0 {
+	if !ok {
 		return false
 	}
 	c := s.c
@@ -2400,6 +2427,15 @@ func (s *Instance) relocateUntil(pos int, fits func() bool) {
 		// failure and returns it (refusal).
 		if s.devCause() == nn.FailBuild {
 			return
+		}
+		// A resident mixture block streams its routed experts before any
+		// block leaves the card: it stays there, its bank read per token,
+		// where the block sent home runs on the CPU. synth-ernie45moe's
+		// longest prompt sent a block home at position 257 under every budget
+		// that streamed one of its two banks, where streaming the other made
+		// the four pages its history needed.
+		if toCPU && s.streamForHistory() {
+			continue
 		}
 		li := s.relocationVictim()
 		if li < 0 {

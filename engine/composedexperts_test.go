@@ -700,7 +700,9 @@ const (
 // part (380 KB a block there) is wider than what streaming the bank saves
 // (173 KB); a budget measured at the panel's longest context left a shorter
 // prompt's blocks room to stay resident; and the history still to come is
-// room to placement, so a budget that left it none sent a block home
+// room to placement, so a run streams a block for it where its pages need
+// the room (synth-ernie45moe's longest prompt both banks at position 257,
+// placed resident), and a budget too low for even that sends a block home
 // mid-run and its steps past the composer (188 of 192 block steps). The arm
 // reserves the narrowest prompt width, which has nothing left to halve. A
 // fixture's banks are kilobytes, where the card's allocation pieces can make
@@ -716,8 +718,9 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 		// try places the blocks under budget b, none for 0, streamed whole
 		// with no expert cache or as placement decides, and runs the prompt as
 		// the arm does: the stats once its history is in, how many blocks
-		// placement put on the card and streamed, and whether every block
-		// stayed there and the composer ran every step's.
+		// placement put on the card, how many were streamed once the run
+		// ended, and whether every block stayed there and the composer ran
+		// every step's.
 		try := func(b uint64, stream bool) (st gpu.Stats, placed, streamed int, kept bool) {
 			opts := []gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 				gpu.WithConfig(func(c *gpu.Config) {
@@ -741,11 +744,6 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 				t.Fatal(err)
 			}
 			placed = s.GPULayers()
-			for li := range m.Cfg.NLayer {
-				if s.streamedAt(li) {
-					streamed++
-				}
-			}
 			if placed == m.Cfg.NLayer {
 				if _, err := s.Prefill(ids); err != nil {
 					t.Fatal(err)
@@ -754,6 +752,11 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 					if _, err := s.Forward(tok); err != nil {
 						t.Fatal(err)
 					}
+				}
+			}
+			for li := range m.Cfg.NLayer {
+				if s.streamedAt(li) {
+					streamed++
 				}
 			}
 			st = g.Stats()
@@ -783,11 +786,13 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 		// these unbudgeted probes' (494 KB against 659 KB on
 		// synth-ernie45moe) and grow by what they need rather than by
 		// doublings, so the bisection starts from nothing rather than from the
-		// streamed probe. A budget that streams nothing goes lower, and so
-		// does one whose run sent a block or its history off the card: a
-		// lower budget streams more, and a streamed bank is the room the
-		// history takes (synth-ernie45moe's longest prompt kept its blocks
-		// resident and sent the last home at 4.70 to 4.97 MB).
+		// streamed probe. A budget that streams nothing goes lower; one whose
+		// run sent a block or its history off the card goes higher, its
+		// banks streamed for the history and still short of its room:
+		// synth-ernie45moe's longest prompt takes a page in each of its four
+		// layers at position 257, 128 KB each on the card, which every
+		// budget that streams a bank at placement (4.50 MB and below) cannot
+		// give it, and which a bank streamed mid-run gives it at 4.97 MB.
 		lo, hi := rs.Slack, resident+rs.Slack
 		var budget uint64
 		var at gpu.Stats
@@ -802,9 +807,9 @@ func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.
 			tries = append(tries, fmt.Sprintf("%d bytes place %d of %d blocks, %d streamed, and the run keeps them and its history %v",
 				b, n, m.Cfg.NLayer, k, kept))
 			switch {
-			case n != m.Cfg.NLayer:
+			case n != m.Cfg.NLayer || !kept:
 				lo = b
-			case k == 0 || !kept:
+			case k == 0:
 				hi = b
 			default:
 				budget, at, streams = b, st, k
