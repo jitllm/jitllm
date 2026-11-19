@@ -1177,18 +1177,19 @@ func (kc *kvCache) recFloor(limit int) int {
 
 // covers reports whether layer li's stored pages decide how much of a prefix
 // restores: every attention layer but a windowed one, which keeps (and
-// stores) only what its window reaches. A range of blocks that is all
-// windowed has nothing else to decide by, and walks them as before.
+// stores) only what its window reaches, and one reading another block's
+// history, which keeps none. A range of blocks that is all windowed has
+// nothing else to decide by, and walks them as before.
 func (kc *kvCache) covers(li int) bool {
 	s := &kc.layers[li]
-	if s.p == 0 {
+	if s.p == 0 || kc.src[li] != li {
 		return false
 	}
 	if s.win == 0 || kc.walkWindow {
 		return true
 	}
 	for i := kc.lo; i < len(kc.layers); i++ {
-		if x := &kc.layers[i]; x.p > 0 && x.win == 0 {
+		if x := &kc.layers[i]; x.p > 0 && x.win == 0 && kc.src[i] == i {
 			return false
 		}
 	}
@@ -1204,7 +1205,7 @@ func (kc *kvCache) covers(li int) bool {
 func (kc *kvCache) restoreWin(n, cover int) (bool, error) {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
-		if s.p == 0 || kc.covers(li) || n <= 0 {
+		if s.p == 0 || kc.src[li] != li || kc.covers(li) || n <= 0 {
 			continue
 		}
 		first, last := s.keyStart(n)/s.p, (n-1)/s.p
