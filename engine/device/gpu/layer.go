@@ -4764,17 +4764,22 @@ func (g *devTier) afterRelease() {
 	g.dropIdleTower()
 	g.vs().warm = [2]int{}
 	g.dropIfEmpty()
-	// A decline is cached: resident() keeps a failed entry so a tensor is not
-	// re-priced every matvec, and that entry says no forever. Giving budget
-	// back is what clears those tombstones, or a seam grown after a shrink is
-	// silently refused. Only failures are dropped; a live entry is another
-	// block's weights.
+	g.forgetRefusals()
+	g.freeStale()
+}
+
+// forgetRefusals drops the failed entries resident() keeps so a tensor is
+// not re-priced every matvec, each of which says no forever. Room given back
+// -- a release, a raised budget -- is what clears those tombstones, or a seam
+// grown after a shrink, or a head after a raise, is silently refused. Only
+// failures are dropped; a live entry is another block's weights. Callers
+// hold g.mu.
+func (g *devTier) forgetRefusals() {
 	for k, r := range g.res {
 		if r != nil && !r.ok {
 			delete(g.res, k)
 		}
 	}
-	g.freeStale()
 }
 
 // ReserveKV is reserveKV for the zero session: a caller that never attached.

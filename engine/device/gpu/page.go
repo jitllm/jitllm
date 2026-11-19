@@ -926,6 +926,7 @@ func (g *devTier) SetBudget(bytes uint64) int {
 	defer g.mu.Unlock()
 	if bytes > g.limit {
 		g.roomGen.Add(1)
+		g.forgetRefusals()
 	}
 	lowered := bytes < g.limit
 	g.limit = bytes
