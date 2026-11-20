@@ -2967,7 +2967,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 		if (!ok || bbs == nil) && dbs == nil {
 			return false
 		}
-		if (!ok || bbs == nil) && bidirCheck(g.bidir, pos, 1) != "" && g.attendsIn(lo, hi) {
+		if (!ok || bbs == nil) && (bidirCheck(g.bidir, pos, 1) != "" || windowCheck(g.winRuns, g.winPerRow, pos, 1) != "") && g.attendsIn(lo, hi) {
 			// One row at a time cuts a bidirectional run the chunk holds,
 			// which attention cannot read row by row: refused before any
 			// block runs (nothing has advanced), so the chunk restarts on
@@ -3381,7 +3381,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	pn := append(g.subBytes.pn[:0], u32one(n)...)
 	if R == 1 {
 		n = uint32(pos + 1)
-		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && !g.rangeNoRuns(lo, hi) {
+		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && (!g.rangeNoRuns(lo, hi) || g.winPerRow) {
 			n = uint32(e)
 		}
 		pn = binary.LittleEndian.AppendUint32(pn[:0], n)
@@ -3395,8 +3395,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	// A call with no attention block in it (the head alone, or a hybrid's
 	// linear blocks, which scan their rows in order) cuts no run: a run is
 	// a key count, and only attention reads one.
-	if len(g.bidir) > 0 && !p.NonCausal && g.runPhase == 0 && g.attendsIn(lo, hi) {
-		if why := bidirCheck(g.bidir, pos, nrow); why != "" {
+	if (len(g.bidir) > 0 || g.winPerRow) && !p.NonCausal && g.runPhase == 0 && g.attendsIn(lo, hi) {
+		why := bidirCheck(g.bidir, pos, nrow)
+		if why == "" {
+			why = windowCheck(g.winRuns, g.winPerRow, pos, nrow)
+		}
+		if why != "" {
 			return refuse("rows [%d,%d): %s", pos, pos+nrow, why)
 		}
 	}
@@ -3428,7 +3432,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 			} else if r < nrow {
 				// A row of a bidirectional run counts keys to the run's end
 				// (bidir.go); bidirCheck has kept the run inside these rows.
-				if e := g.runEnd(pos+r, pos+nrow); e > 0 && !noRuns {
+				if e := g.runEnd(pos+r, pos+nrow); e > 0 && (!noRuns || g.winPerRow) {
 					n = e
 				}
 			}

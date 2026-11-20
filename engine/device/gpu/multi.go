@@ -1645,15 +1645,22 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTa
 }
 
 // piecesCutRun reports whether a piece w rows wide of rows [pos, pos+n) of
-// session sid would end inside one of its bidirectional runs.
+// session sid would end inside one of its bidirectional runs, or before the
+// end of a window one of its rows reads (SetRowWindows).
 func (d *devTier) piecesCutRun(sid uint64, pos, n, w int) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, r := range d.sessOf(sid).bidir {
+	ss := d.sessOf(sid)
+	for _, r := range ss.bidir {
 		for b := pos + w; b < pos+n; b += w {
 			if r.Lo < b && r.Hi > b {
 				return true
 			}
+		}
+	}
+	for lo := pos; lo < pos+n; lo += w {
+		if windowCheck(ss.winRuns, ss.winPerRow, lo, min(w, pos+n-lo)) != "" {
+			return true
 		}
 	}
 	return false

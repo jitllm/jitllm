@@ -1131,13 +1131,18 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 	live := x.op(OpMax, U, x.load(1, x.u(0)), x.u(1))
 	r := x.op(OpMin, U, x.coord(0), x.op(OpSub, U, live, x.u(1)))
 	// A row's taps stay inside the live rows, or inside its window, the
-	// rows its descriptor states (RowWindows).
+	// rows its descriptor states (RowWindows). The window is in positions
+	// and the taps in the call's rows: the call's first row is at position
+	// rowWrite-r, which a piece of a run past its first (gpu.GPU.phased)
+	// does not start at 0.
 	lo, hi := x.u(0), live
 	if o.Attr.RowWindows {
 		in = append(in, TableWindows.op())
 		facts.Extents[2] = R * rowWords
 		at := func(w int) int { return x.load(2, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))) }
-		lo, hi = at(rowStart), x.op(OpMin, U, at(rowEnd), live)
+		first := x.op(OpSub, U, at(rowWrite), r)
+		rowOf := func(w int) int { return x.op(OpSub, U, x.op(OpMax, U, at(w), first), first) }
+		lo, hi = rowOf(rowStart), x.op(OpMin, U, rowOf(rowEnd), live)
 	}
 	w, err := weightElement(&x, wo, C, T, &in, &facts, ch, t)
 	if err != nil {

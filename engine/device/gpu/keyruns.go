@@ -74,7 +74,8 @@ func bidirCount(runs []nn.KeyRun, at int) int {
 }
 
 // runEnd is the key count of row at, in a call whose rows end at end, under
-// the session's runs: its run's end, 0 where it reads to itself -- in no
+// the session's runs: its own window's end where the session has one a row
+// (SetRowWindows), else its run's end, 0 where it reads to itself -- in no
 // run, or in a run's first phase, which reads only keys written (GPU.phased).
 // The "runcut" fault ends a second phase's runs at the call's rows: the run
 // cut at the submission.
@@ -83,10 +84,38 @@ func (g *devTier) runEnd(at, end int) int {
 		return 0
 	}
 	e := bidirCount(g.bidir, at)
+	if w, ok := g.rowWindow(at); ok {
+		e = w.Hi
+	}
 	if g.runPhase == 2 && e > end && g.rowsFaulted("runcut") {
 		e = end
 	}
 	return e
+}
+
+// rowWindow is the window the session handed row at (SetRowWindows), false
+// where it handed none for it. A causal block's row reads inside it in place
+// of a run, as the CPU device's does (cpudev.Lanes.Rows).
+func (g *devTier) rowWindow(at int) (nn.KeyRun, bool) {
+	if !g.winPerRow || at < 0 || at >= len(g.winRuns) {
+		return nn.KeyRun{}, false
+	}
+	return g.winRuns[at], true
+}
+
+// windowCheck refuses a call of a causal block whose rows [pos, pos+nrow)
+// read keys of a window past them, which no call has written yet: such rows
+// go in phases, as a cut run's do (GPU.phased).
+func windowCheck(wins []nn.KeyRun, perRow bool, pos, nrow int) string {
+	if !perRow {
+		return ""
+	}
+	for at := pos; at < min(pos+nrow, len(wins)); at++ {
+		if wins[at].Hi > pos+nrow {
+			return "a row's window reads past this call's rows"
+		}
+	}
+	return ""
 }
 
 // bidirCheck refuses a call whose rows [pos, pos+nrow) cut a run: the engine

@@ -21,6 +21,14 @@ import (
 // the gate restates one.
 func centredModel(t *testing.T) *model.Model {
 	t.Helper()
+	return centredModelAs(t, 0)
+}
+
+// centredModelAs is centredModel restated with flags2 too: with
+// jlm.Flag2MediaPrefix its attention and its convolutions read each row's
+// window (graph.Attrs.RowWindows), as d1-omni's trunk does.
+func centredModelAs(t *testing.T, flags2 jlm.Flags2) *model.Model {
+	t.Helper()
 	src := testmodels.Path("lfm2/LFM2-350M-Q4_K_M.gguf")
 	if !sourcePresent(src) {
 		testmodels.Missing(t, "MODEL MISSING: %s (see docs/testing.md) -- this gate proved nothing", src)
@@ -29,22 +37,30 @@ func centredModel(t *testing.T) *model.Model {
 	m := statedModel(t, src, func(s *jlm.Source) {
 		was = s.Config.Flags.Has(jlm.FlagNonCausal)
 		s.Config.Flags |= jlm.FlagNonCausal
+		s.Config.Flags2 |= flags2
 	})
 	if was {
 		m.Close()
 		t.Fatal("LFM2 350M states itself non-causal already: the gate would restate nothing")
 	}
-	centred := 0
+	centred, windowed := 0, map[graph.OpKind]int{}
 	for _, g := range m.FrontGraphs().Blocks {
 		for _, o := range g.Ops {
 			if o.Kind == graph.OpRowConv {
 				centred++
+			}
+			if o.Attr.RowWindows {
+				windowed[o.Kind]++
 			}
 		}
 	}
 	if centred == 0 {
 		m.Close()
 		t.Fatal("the restated model convolves nothing centred: the gate would hold no halo")
+	}
+	if flags2.Has(jlm.Flag2MediaPrefix) && (windowed[graph.OpRowConv] == 0 || windowed[graph.OpAttend] == 0) {
+		m.Close()
+		t.Fatalf("the restated model reads windows in %v: the gate would window nothing", windowed)
 	}
 	return m
 }

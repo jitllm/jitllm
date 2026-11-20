@@ -407,12 +407,17 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow,
 		end := uint32(r.pos + 1)
 		// A row of a bidirectional run attends to the run's end (bidir.go);
 		// its window still starts from its own position, as the reference's
-		// does, which the start word here carries apart from the end.
-		last := end
-		if e := g.runEnd(r.pos, callEnd); e > 0 && !noRuns {
+		// does, which the start word here carries apart from the end. A row
+		// with a window of its own (SetRowWindows) reads inside it.
+		last, first := end, uint32(0)
+		win, own := g.rowWindow(r.pos)
+		if e := g.runEnd(r.pos, callEnd); e > 0 && (!noRuns || own) {
 			last = uint32(e)
 		}
-		pg.desc = append(pg.desc, o, 0, last, uint32(r.pos))
+		if own {
+			first = uint32(min(win.Lo, r.pos))
+		}
+		pg.desc = append(pg.desc, o, first, last, uint32(r.pos))
 		if p.SWAWindow > 0 {
 			// The window as a start: the last W keys, or a chunk of W aligned
 			// keys.
@@ -422,7 +427,7 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow,
 			} else {
 				lo = end - min(end, w)
 			}
-			pg.descW = append(pg.descW, o, lo, last, uint32(r.pos))
+			pg.descW = append(pg.descW, o, max(lo, first), last, uint32(r.pos))
 		}
 	}
 }
