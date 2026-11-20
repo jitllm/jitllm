@@ -63,22 +63,6 @@ type pageHalves struct {
 	fn             func(backend.Session)
 }
 
-// newPageHalves stages a page of rows positions of w floats.
-func (g *devTier) newPageHalves(w, rows int) (*pageHalves, error) {
-	c := &pageHalves{g: g, fBytes: rows * w * 4, hBytes: rows * w * 2}
-	var err error
-	if c.narrow, err = g.servedHalves(w, rows, false); err != nil {
-		return nil, err
-	}
-	if c.widen, err = g.servedHalves(w, rows, true); err != nil {
-		return nil, err
-	}
-	if err := c.stage(); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
 // stage makes the page's staging on the card.
 func (c *pageHalves) stage() error {
 	var err error
@@ -101,10 +85,10 @@ func (c *pageHalves) close() {
 	}
 }
 
-// formHalves forms, at a placement, the page conversions a history copy runs
-// at rows positions of w floats (keptHalves): the device's, held on a lane
-// of their own and run under g.mu, their staging made at their first run.
-// Callers hold g.mu.
+// formHalves forms, at a placement, the page conversions a history copy or
+// a move runs at rows positions of w floats (keptHalves): the device's,
+// held on a lane of their own and run under g.mu, their staging made at
+// their first run. Callers hold g.mu.
 func (g *devTier) formHalves(w, rows int) error {
 	key := [2]int{w, rows}
 	if g.halves[key] != nil {
@@ -130,7 +114,8 @@ func (g *devTier) formHalves(w, rows int) error {
 	return nil
 }
 
-// keptHalves is the conversions formHalves formed, staged at the first call.
+// keptHalves is the conversions formHalves formed, staged at the first call
+// and charged to the pool as the device's own buffers (scratchWin).
 // Callers hold g.mu.
 func (g *devTier) keptHalves(w, rows int) (*pageHalves, error) {
 	c := g.halves[[2]int{w, rows}]
@@ -138,15 +123,20 @@ func (g *devTier) keptHalves(w, rows int) (*pageHalves, error) {
 		return nil, fmt.Errorf("a history page's halves of %d floats at %d rows were not formed at placement", w, rows)
 	}
 	if c.f == nil {
-		if err := c.stage(); err != nil {
+		win := g.scratchWin()
+		err := c.stage()
+		win.close()
+		if err != nil {
 			return nil, err
 		}
 	}
 	return c, nil
 }
 
-// freeHalves frees what formHalves formed. Callers hold g.mu.
+// freeHalves frees what formHalves formed, its charge given back. Callers
+// hold g.mu.
 func (g *devTier) freeHalves() {
+	defer g.scratchWin().close()
 	for key, c := range g.halves {
 		c.close()
 		c.g.dropLaneParts(c.g.lane)

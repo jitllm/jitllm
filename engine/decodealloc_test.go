@@ -59,58 +59,66 @@ func TestDecodeDoesNotAllocateAcrossCards(t *testing.T) {
 
 // TestDecodeDoesNotAllocateAcrossTheCPU holds a warm decode token at zero
 // allocations with Gemma 4's and Gemma 3n's KV-sharing blocks split across
-// the CPU device and a card, both ways: the readers on the card, whose copy
-// of the CPU's history takes the source's row every token, and the readers
-// on the CPU device, whose copy takes it from the card's. The card's pool
-// holds floats and binary16, whose pages the card narrows and widens.
+// the CPU device and a CUDA or a Vulkan card, both ways: the readers on the
+// card, whose copy of the CPU's history takes the source's row every token,
+// and the readers on the CPU device, whose copy takes it from the card's.
+// The card's pool holds floats and binary16, whose pages the card narrows
+// and widens.
 // synth-gemma3n restated to keep each block's history past its rows
 // (pastTheRows) copies entries, and a block reading two others' histories
-// past its own (readsTwoFixture) copies those.
+// past its own (readsTwoFixture) copies those. Every byte the card holds
+// after an arm is in its ledger, the copies' staging included.
 func TestDecodeDoesNotAllocateAcrossTheCPU(t *testing.T) {
 	resident := WithPageBudget(1 << 40)
 	for _, name := range []string{"synth-gemma4-e.gguf", "synth-gemma3n.gguf", "synth-gemma3n.gguf@past", readsTwoFixture} {
 		for _, c := range []struct{ readersUp, f16 bool }{{true, false}, {false, false}, {true, true}, {false, true}} {
-			readersUp := c.readersUp
-			t.Run(fmt.Sprintf("%s/readers-on-the-card-%t/card-f16-%t", name, readersUp, c.f16), func(t *testing.T) {
-				past := strings.HasSuffix(name, "@past")
-				p := testmodels.Path(strings.TrimSuffix(name, "@past"))
-				d := testdevices.One("cuda:0")
-				g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d), gpu.WithConfig(func(cf *gpu.Config) { cf.KVF16 = c.f16 })}, testTierOpts(t)...)...)
-				if err != nil || g == nil {
-					noDevice(t, d, err)
-				}
-				defer g.Close()
-				m, err := model.Open(jlmOf(t, p))
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer m.Close()
-				if past {
-					f := m.FrontGraphs()
-					for li := range f.Blocks {
-						f.Blocks[li] = pastTheRows(f.Blocks[li], 1)
+			for _, d := range testdevices.Specs("cuda:0", "vulkan:0") {
+				readersUp := c.readersUp
+				t.Run(fmt.Sprintf("%s/readers-on-the-card-%t/card-f16-%t/%s", name, readersUp, c.f16, d), func(t *testing.T) {
+					past := strings.HasSuffix(name, "@past")
+					p := testmodels.Path(strings.TrimSuffix(name, "@past"))
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d), gpu.WithConfig(func(cf *gpu.Config) { cf.KVF16 = c.f16 })}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, d, err)
 					}
-				}
-				_, cut := historyCut(t, m)
-				lower, upper := d, nn.CPU
-				if readersUp {
-					lower, upper = nn.CPU, d
-				}
-				r0 := g.Stats()
-				decodeAllocs(t, m, g, WithStreamTrial(false), resident, crossPlace(m.Cfg.NLayer, cut, lower, upper))
-				s := g.Stats()
-				if readersUp && s.HostCopyPages == r0.HostCopyPages || !readersUp && s.HostReadPages == r0.HostReadPages {
-					t.Fatalf("no page crossed to a copy (%d to the card's, %d to the CPU's): the arm read no history across the CPU and the card",
-						s.HostCopyPages-r0.HostCopyPages, s.HostReadPages-r0.HostReadPages)
-				}
-				n0, _ := r0.ServedPart(nn.ConvertedHalves)
-				n1, _ := s.ServedPart(nn.ConvertedHalves)
-				// A history past the rows' is held at f32 on the card: no
-				// conversion crosses it.
-				if want := c.f16 && !past; want != (n1 > n0) {
-					t.Fatalf("%d binary16 page conversions with the card's pool binary16 %t: the arm did not hold the pool it names", n1-n0, c.f16)
-				}
-			})
+					defer g.Close()
+					m, err := model.Open(jlmOf(t, p))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer m.Close()
+					if past {
+						f := m.FrontGraphs()
+						for li := range f.Blocks {
+							f.Blocks[li] = pastTheRows(f.Blocks[li], 1)
+						}
+					}
+					_, cut := historyCut(t, m)
+					lower, upper := d, nn.CPU
+					if readersUp {
+						lower, upper = nn.CPU, d
+					}
+					r0 := g.Stats()
+					decodeAllocs(t, m, g, WithStreamTrial(false), resident, crossPlace(m.Cfg.NLayer, cut, lower, upper))
+					s := g.Stats()
+					if readersUp && s.HostCopyPages == r0.HostCopyPages || !readersUp && s.HostReadPages == r0.HostReadPages {
+						t.Fatalf("no page crossed to a copy (%d to the card's, %d to the CPU's): the arm read no history across the CPU and the card",
+							s.HostCopyPages-r0.HostCopyPages, s.HostReadPages-r0.HostReadPages)
+					}
+					if s.Allocated > s.BudgetUsed {
+						t.Fatalf("after the arm the card holds %d bytes and its ledger charges %d (%d of them its scratch): a buffer the copies made was not charged to the pool",
+							s.Allocated, s.BudgetUsed, s.ScratchBytes)
+					}
+					t.Logf("after the arm the card holds %d bytes, its ledger charges %d (%d its scratch, %d rounding)", s.Allocated, s.BudgetUsed, s.ScratchBytes, s.RoundingBytes)
+					n0, _ := r0.ServedPart(nn.ConvertedHalves)
+					n1, _ := s.ServedPart(nn.ConvertedHalves)
+					// A history past the rows' is held at f32 on the card: no
+					// conversion crosses it.
+					if want := c.f16 && !past; want != (n1 > n0) {
+						t.Fatalf("%d binary16 page conversions with the card's pool binary16 %t: the arm did not hold the pool it names", n1-n0, c.f16)
+					}
+				})
+			}
 		}
 	}
 }

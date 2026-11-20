@@ -5105,6 +5105,20 @@ device (formHalves), their staging made at their first run and kept with
 the page of halves read to host memory and the submission's closure:
 TestDecodeDoesNotAllocateAcrossTheCPU's binary16 arms, both ways, at 0.
 
+That staging, two buffers of a page's floats and halves, was made outside
+any charge and held until the device closed: the card held bytes its
+ledger did not, and a move's conversions (pagedMigrate) made and freed
+staging of their own every move, outside the charge too. The staging is
+made in a scratch window now (keptHalves), charged to the pool as the
+device's own buffers and given back when the device frees them, and a move
+runs the same conversions the copies run, formed with the block
+(pagedLayer), where it formed its own at the step. TestDecodeDoesNotAllocateAcrossTheCPU
+holds every byte the card holds after an arm to its ledger (Stats.Allocated
+against BudgetUsed): red at the commit before on every
+binary16 arm reading the rows' history, the card holding 49152 to
+98304 bytes where its ledger charged 32768, on CUDA and Vulkan; every arm
+holds them charged now, as its scratch.
+
 A group whose readers read a history past the one they bind (ReadsMore),
 or whose source keeps one past its rows, came home whole across the CPU
 (crossGroups), and between two cards a history past a block's rows was

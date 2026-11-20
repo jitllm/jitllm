@@ -502,20 +502,11 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 		return err
 	}
 	// A binary16 V pool's pages are narrowed and widened on the card when a
-	// history moves (migrateKV): their forms at the pool's page are formed
-	// here, with the block, and a move only runs them.
+	// history moves (migrateKV), and when a block on the CPU device reading
+	// this one's history reads it a page at a time (readRows): their forms
+	// at the pool's page are formed here, with the block, and a move or a
+	// read only runs them.
 	if geom := kp.layers[li].geom; geom.f16 && geom.vWords(kp.p) > 0 {
-		was := g.prewarming
-		g.prewarming = true
-		for _, widen := range []bool{false, true} {
-			if _, err := g.servedHalves(geom.kvRow, kp.p, widen); err != nil {
-				g.prewarming = was
-				return err
-			}
-		}
-		g.prewarming = was
-		// A block on the CPU device reading this one's history reads it a
-		// page at a time through them (readRows).
 		if err := g.formHalves(geom.kvRow, kp.p); err != nil {
 			return err
 		}
@@ -789,14 +780,14 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return fmt.Errorf("the sequence holds %d page(s) and %d positions need %d", len(ids), pos, npages)
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
-	// A binary16 V pool's pages are narrowed and widened on the card.
+	// A binary16 V pool's pages are narrowed and widened on the card,
+	// through the conversions formed with the block (pagedLayer).
 	var hv *pageHalves
 	if pl.geom.f16 && vw > 0 {
 		var err error
-		if hv, err = g.newPageHalves(kvRow, P); err != nil {
+		if hv, err = g.keptHalves(kvRow, P); err != nil {
 			return err
 		}
-		defer hv.close()
 	}
 	if toDevice {
 		kPage := make([]float32, kw)
