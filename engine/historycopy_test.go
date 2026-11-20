@@ -38,11 +38,17 @@ import (
 //
 // Each pair of cards of one backend runs, and a CUDA card with a Vulkan card
 // of another card, whose copies go through the host.
+//
+// A block reading two others' histories past its own (readsTwoFixture)
+// carries no rows beside the residual's one stream, and its 600-row prompt
+// is pipelined over the two cards (GPU.pipeline), the readers' card taking
+// each piece's copy before the source's card runs the next.
 func TestAHistoryReadAcrossCards(t *testing.T) {
 	for _, f := range []struct {
-		name string
-		open func(*testing.T, string) (*model.Model, *c6Golden, []Option)
-	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n}} {
+		name  string
+		open  func(*testing.T, string) (*model.Model, *c6Golden, []Option)
+		piped bool
+	}{{"synth-gemma4-e", openGemma4, false}, {"synth-gemma3n", openGemma3n, false}, {"synth-seedoss-readstwo", openReadsTwo, true}} {
 		t.Run(f.name, func(t *testing.T) {
 			m, _, io := f.open(t, f.name)
 			defer m.Close()
@@ -51,7 +57,7 @@ func TestAHistoryReadAcrossCards(t *testing.T) {
 				noDevice(t, "two cards", nil)
 			}
 			for _, p := range pairs {
-				t.Run(p[0]+","+p[1], func(t *testing.T) { historyReadAcrossCards(t, m, io, p[0], p[1], nil) })
+				t.Run(p[0]+","+p[1], func(t *testing.T) { historyReadAcrossCards(t, m, io, p[0], p[1], f.piped, nil) })
 				for _, head := range p {
 					t.Run(p[0]+","+p[1]+"/step-head-"+head, func(t *testing.T) { historyStepAcrossCards(t, m, io, p[0], p[1], head, -1) })
 				}
@@ -371,7 +377,7 @@ func crossCardReads(st *Instance, m *model.Model) int {
 // historyReadAcrossCards runs m split over cards a and b against the CPU.
 // arm, when set, arms a violation once the placement is made, on the split
 // tier tier opens; the moves are left out and the bounds are the caller's.
-func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b string, arm func(), tier ...gpu.Option) ([]float64, []float64) {
+func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b string, piped bool, arm func(), tier ...gpu.Option) ([]float64, []float64) {
 	nl := m.Cfg.NLayer
 	src, cut := historyCut(t, m)
 	const n, ntok = 600, 14
@@ -490,7 +496,21 @@ func historyReadAcrossCards(t *testing.T, m *model.Model, io []Option, a, b stri
 		steps = nil
 	}
 	appended := historyAppends(g)
+	pieces := func() (piped, inTurn int) {
+		for _, d := range g.DevStats() {
+			piped += d.PipelinePieces
+			inTurn += d.SplitPieces
+		}
+		return piped, inTurn
+	}
+	p0, s0 := pieces()
 	got := run(st, func(i int) {
+		if i == 0 && piped {
+			p1, s1 := pieces()
+			if p1 == p0 || s1 != s0 {
+				t.Errorf("the %d-row prompt over a copy went %d piece(s) pipelined and %d in turn: the readers' copy kept it from the pipeline", n, p1-p0, s1-s0)
+			}
+		}
 		for _, s := range steps {
 			if s.at != i {
 				continue

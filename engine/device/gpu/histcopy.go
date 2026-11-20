@@ -724,22 +724,16 @@ func (g *devTier) copiesRead(sid uint64, lo, hi int, dst []int) []int {
 	return dst
 }
 
-// readsCopies reports that a run of rs reads a copy session sid holds of a
+// runReadsCopies reports that run r reads a copy session sid holds of a
 // history another device writes.
-func (g *GPU) readsCopies(sid uint64, rs []run) bool {
-	for _, r := range rs {
-		if r.dev.copyN.Load() == 0 {
-			continue
-		}
-		var buf [copiesStack]int
-		r.dev.mu.Lock()
-		n := len(r.dev.copiesRead(sid, r.lo, r.hi, buf[:0]))
-		r.dev.mu.Unlock()
-		if n > 0 {
-			return true
-		}
+func (g *GPU) runReadsCopies(sid uint64, r run) bool {
+	if r.dev.copyN.Load() == 0 {
+		return false
 	}
-	return false
+	var buf [copiesStack]int
+	r.dev.mu.Lock()
+	defer r.dev.mu.Unlock()
+	return len(r.dev.copiesRead(sid, r.lo, r.hi, buf[:0])) > 0
 }
 
 // copiesStack is the copies a run reads that appendSeq holds on the stack:

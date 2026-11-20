@@ -4919,9 +4919,16 @@ Two things the gate found on the way:
   submission after it (headOfLast) took the last row of one stream. Such a
   chunk now goes in pieces (GPU.carriesRows, GPU.pieces), and the projection
   takes the last row of every stream: 6.95e-7 against one card's 6.74e-7
-  (TestAWidePromptOfStreamsGoesInPieces). A call whose runs read a copy goes
-  in pieces too: pipelined, the writer's next piece may release the pages
-  behind its window before the reader's piece has copied them.
+  (TestAWidePromptOfStreamsGoesInPieces). A call whose runs read a copy
+  went in pieces too: pipelined, the writer's next piece may release the
+  pages behind its window before the reader's piece has copied them. It is
+  pipelined now, each run reading a copy telling the runs before it that it
+  has taken a piece's rows (GPU.pipeline's took), and a run starts its next
+  piece only once every run after it reading a copy has taken the last:
+  TestAHistoryReadAcrossCards with a block reading two others' histories
+  (readsTwoFixture), whose 600-row prompt over two cards went
+  0 pieces pipelined and 4 in turn at the commit before, on CUDA and
+  Vulkan, and goes pipelined now with none in turn.
 - The projection named on the first card, beside the source, was refused
   as well ("the head is on cpu, not cuda:0"): a card holding no block's last
   run takes the tail card's home set's plan (prepHeadOn), and the tail held

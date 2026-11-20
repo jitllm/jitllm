@@ -1567,6 +1567,11 @@ func (d *devTier) nonCausalAt(li int) bool {
 // Each piece's rows are their own slice of x, and a run takes its pieces in
 // order, so every piece finds the history of the pieces before it on its
 // device. The head rides the last piece through the last run.
+//
+// A run reading a copy of a history a run before it writes (histcopy.go)
+// takes each piece's rows into its copy before that run starts its next
+// piece, which may release the pages behind its window: took[i][j] is how
+// run i hears that run j has.
 func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTables, tail *nn.Head) bool {
 	e := len(x) / n
 	pieces := (n + batchWidth - 1) / batchWidth
@@ -1578,10 +1583,29 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x []float32, cs nn.Rope
 	for range pieces {
 		next[0] <- true
 	}
+	took := make([][]chan struct{}, len(rs))
+	for j, rn := range rs {
+		if !g.runReadsCopies(sid, rn) {
+			continue
+		}
+		for i := range j {
+			if took[i] == nil {
+				took[i] = make([]chan struct{}, len(rs))
+			}
+			took[i][j] = make(chan struct{}, pieces)
+		}
+	}
 	for i, rn := range rs {
 		go func() {
 			for k := range pieces {
 				ok := <-next[i]
+				if k > 0 {
+					for _, c := range took[i] {
+						if c != nil {
+							<-c
+						}
+					}
+				}
 				if ok {
 					lo := k * batchWidth
 					cnt := min(batchWidth, n-lo)
@@ -1589,13 +1613,16 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x []float32, cs nn.Rope
 					if i == len(rs)-1 && k == pieces-1 {
 						h = tail
 					}
-					ok = g.appendCopies(sid, rn.dev, rn.lo, rn.hi, pos+lo, cnt) &&
-						rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], rn.tables(cs.Rows(lo, lo+cnt, n)), h)
+					ok = g.appendCopies(sid, rn.dev, rn.lo, rn.hi, pos+lo, cnt)
+					tookPiece(took, i)
+					ok = ok && rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], rn.tables(cs.Rows(lo, lo+cnt, n)), h)
 					if ok {
 						rn.dev.mu.Lock()
 						rn.dev.Stats.PipelinePieces++
 						rn.dev.mu.Unlock()
 					}
+				} else {
+					tookPiece(took, i)
 				}
 				next[i+1] <- ok
 			}
@@ -1606,6 +1633,16 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x []float32, cs nn.Rope
 		ok = <-next[len(rs)] && ok
 	}
 	return ok
+}
+
+// tookPiece tells every run before run j waiting on it (took) that j has
+// taken a piece into its copies.
+func tookPiece(took [][]chan struct{}, j int) {
+	for i := range j {
+		if c := took[i]; c != nil && c[j] != nil {
+			c[j] <- struct{}{}
+		}
+	}
 }
 
 // pieces is pipeline in order: each batchWidth piece of the chunk through
@@ -1928,15 +1965,12 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.Rope
 		}
 		return true
 	}
-	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs) || g.carriesRows(sid, rs) || g.readsCopies(sid, rs)) {
+	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && (g.split || sharesDevice(rs) || g.carriesRows(sid, rs)) {
 		// The pieces go one after another: two runs of one device -- at two
 		// geometries, or either side of another device's after a block
 		// spilled past a full card -- share that device's tier, which the
 		// pipeline would drive from two goroutines at once. So does a chunk
-		// carrying rows the pipeline does not cut per piece (carriesRows),
-		// and a run reading a copy of a history another run writes:
-		// pipelined, the writer's next piece may release the pages behind
-		// its window before the reader's copy has taken them (histcopy.go).
+		// carrying rows the pipeline does not cut per piece (carriesRows).
 		if !g.pieces(sid, rs, pos, n, x, cs, tail) {
 			return false
 		}

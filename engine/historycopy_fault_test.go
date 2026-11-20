@@ -32,7 +32,7 @@ func TestAHistoryReadAcrossCardsDiscriminates(t *testing.T) {
 				t.Run(p[0]+","+p[1], func(t *testing.T) {
 					var fs gpu.Faults
 					defer fs.SetPagedFault("")
-					got, band := historyReadAcrossCards(t, m, io, p[0], p[1], func() { fs.SetPagedFault("copystale") }, gpu.WithFaults(&fs))
+					got, band := historyReadAcrossCards(t, m, io, p[0], p[1], false, func() { fs.SetPagedFault("copystale") }, gpu.WithFaults(&fs))
 					out := 0
 					for i := range got {
 						if got[i] > max(3*band[i], 1e-6) {
