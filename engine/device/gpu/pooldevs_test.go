@@ -4,11 +4,8 @@ import (
 	"testing"
 )
 
-// noPromptReserve builds no prompt width at placement. A paging pair's budgets
-// are measured on a device alone (cardFor), where a reserved width's window
-// is measured after its peak; in a shared pool the window holds its peak
-// (winTake) and settles narrower, and the budgets would hold more blocks
-// than they were sized for.
+// noPromptReserve builds no prompt width at placement: the paging pairs are
+// about the pool, and their budgets (cardFor) are sized in blocks.
 func noPromptReserve() Option {
 	return WithConfig(func(c *Config) { c.NoScratchReserve = true })
 }

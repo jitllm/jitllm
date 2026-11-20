@@ -5489,5 +5489,64 @@ and on two cards TestKVEvictionRunsPastTheBudget, TestEvictedHistoryComesHome,
 TestAHistoryReadAcrossCards, TestBlocksMoveBetweenDevices,
 TestRelocatedBlocksComeBack and TestAFullCardSpillsABlockOntoTheNextOne.
 
+Two instances on one tier whose first device is capped (fill-first) ran
+the first instance's block at the first device's edge on the CPU, the
+composer refusing it ("its graph binds attn_q, which the block does not
+hold"). The spill mark (GPU.spillFrom) was the tier's one mark: the second
+instance armed a spill of that block (SpillAfter), and the first
+instance's offer of it, a plan-only offer sharing what the device holds
+(heldOnOffer), followed the mark to the second device as a block of no
+weights, which the composer refused; its full offer then followed it too,
+and the block left the device it was on. The mark is the session's that
+armed it now, and only an offer that carries weights follows it.
+TestTwoInstancesShareACappedFirstDevice (the second instance's mark armed
+and the first's offer made before the spill's own, as two instances placing
+at once do) on a V100 as cuda:0 and vulkan:5: red 2 of 2 at HEAD, the
+first instance's block 3 on vulkan:5 with that refusal, green 3 of 3 after;
+TestASpillMarkIsItsSessions on fake devices red (the offer refused), green
+after. Without the forced order, the gate with the second device capped at
+1.6 GB went red once in four at HEAD and once in two on the fixed tree,
+each a block of the second instance sent home by relocation under the
+squeeze: timing, not this, and the gate leaves the second device uncapped.
+
+The leftovers, each on fake devices before and after:
+
+- A peer whose lock was held or that had a submission in flight was passed
+  over. That was this code's choice (RULE 11e): a peer after the device in
+  lockPair's order is now waited for, its lock and then its submissions in
+  flight (drain, a quiesce asked from outside): whoever holds it waits for
+  nothing this device holds. A peer before it is still passed over and
+  counted (Stats.PeerPassed): a pair taken lower first may hold it while it
+  waits for this device, and its submission ends under its lock.
+  TestAPeerInFlightIsWaitedFor: the peer's ticket in flight 50 ms, a block
+  placed resident beside its idle streamed blocks; red with the wait
+  removed (declined to the host, one pass over the peer), green after (one
+  of the peer's blocks paged out); the peer before it passed over, counted.
+- "A width placement probes pages out nothing of the other device" was not
+  so: the width's instances hold their room through stateHold, which pages
+  out the other device's idle blocks; only the window's own hold of their
+  buffers skips them (holdWin). TestAReservedWidthPagesOutTheOtherDevicesBlock,
+  a pool short of the width by a block while the other device's streamed
+  blocks sat idle: 512 rows, as alone, 3 of the other's blocks paged out,
+  green before and after. Not a defect.
+- A window that took bytes from its operation gave what it did not spend to
+  the pool at its close; the other device grew into them and the
+  operation's own charge went past the pool. It goes back to the operation
+  now while the hold it came from is open (winOp, winOpAt).
+  TestAWindowGivesItsOperationBackWhatItTook: red PoolOver 1 (1 MiB taken,
+  128 pages grown by the other device), green after.
+- A window held its peak because growArena made an arena's wider buffer
+  beside the old one and freed the old after: the room was priced at the
+  growth alone (partArena.needs), and a device alone went past its budget
+  by the old buffer unseen. It frees the old first, making it again at its
+  old size if the wider one is refused. TestASharedPoolReservesTheWidthADeviceAloneDoes
+  at the bytes a 512-row width placed in alone: 256 rows in a shared pool
+  before, 512 after. A 2600-position prompt at 256 rows is 11 submissions,
+  at 512 rows 6.
+- towerKVAt's freed bytes stay in the device's hold (refundTo held) from the
+  refund to the claim under one lock, with no allocation between: another
+  device of the pool claims through the pool, which those bytes never
+  reach. Not a defect, by construction.
+
 What is still open is in open-questions.md ("one pool spent by two
 devices").

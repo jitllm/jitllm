@@ -307,9 +307,8 @@ func TestFasterDeviceGoesFirst(t *testing.T) {
 func TestUnifiedDevicesShareOnePool(t *testing.T) {
 	p := fakePlan()
 	ws := blocks(p, 4)
-	// The pools are under test, not the prompt widths: a reserved width's
-	// window holds its peak in a shared pool (winTake), an arena's growth
-	// beside the old one, where a device alone measures it after.
+	// The pools are under test, not the prompt widths
+	// (TestASharedPoolReservesTheWidthADeviceAloneDoes).
 	noPrompt := WithConfig(func(c *Config) { c.NoScratchReserve = true })
 	two := twoBlockBytes(t, p, noPrompt)
 
@@ -861,10 +860,10 @@ func TestAPlannedModelThatFitsIsSpreadOverTheDevices(t *testing.T) {
 
 // TestASpillThatFindsNoRoomStaysASpill is GPU.SpillAfter when no later device
 // has room: every offer of the block in that attempt goes to the later
-// devices only, and refuses. The model offers a held block twice (the
-// plan-only offer, then the full one); a mark the first refusal cleared sent
-// the second back onto the card it was leaving, the model read that as a
-// spill, and relocateUntil spun on one block until the test timed out.
+// devices only, and refuses. The model can offer one block twice in an
+// attempt; a mark the first refusal cleared sent the second back onto the
+// card it was leaving, the model read that as a spill, and relocateUntil
+// spun on one block until the test timed out.
 func TestASpillThatFindsNoRoomStaysASpill(t *testing.T) {
 	p := fakePlan()
 	sc, blk := onceAndBlock(t, p)
