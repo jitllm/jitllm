@@ -748,18 +748,38 @@ func (g *GPU) spillAfter(li int, sid uint64) bool {
 // no longer a victim. It reports whether any device is attached.
 func (g *GPU) Stream(li int, on bool) bool {
 	for _, d := range g.devs {
-		d.mu.Lock()
-		if d.stream == nil {
-			d.stream = map[int]bool{}
-		}
-		if on {
-			d.stream[li] = true
-		} else {
-			delete(d.stream, li)
-		}
-		d.mu.Unlock()
+		d.markStream(li, on)
 	}
 	return len(g.devs) > 0
+}
+
+// StreamOn is Stream on the named device alone: a block offered by name is
+// decided there, and another device's mark for the block is another
+// placement's -- one card under two backends, an instance streaming every
+// block through the first device and another holding them resident on the
+// second, had the second's placement clear the first's marks, and the
+// first's blocks stopped being victims of its own streamed page-ins.
+func (g *GPU) StreamOn(name string, li int, on bool) error {
+	d, err := g.device(name)
+	if err != nil {
+		return err
+	}
+	d.markStream(li, on)
+	return nil
+}
+
+// markStream sets or clears block li's stream mark on this device.
+func (g *devTier) markStream(li int, on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stream == nil {
+		g.stream = map[int]bool{}
+	}
+	if on {
+		g.stream[li] = true
+	} else {
+		delete(g.stream, li)
+	}
 }
 
 // DeclineSize refuses a block whose resident bytes exceed every device's

@@ -1886,7 +1886,12 @@ func (s *Instance) offerRange(lo, hi int) {
 			}
 			// Marked before the offer: admission is where a streamed block
 			// that does not fit pages others out instead of being declined.
-			po.Stream(li, place.Stream)
+			// The named device alone: the others may hold the block for
+			// another instance, under its own mark.
+			if err := po.StreamOn(place.On, li, place.Stream); err != nil {
+				s.placeErr = err
+				return
+			}
 			var err error
 			if took, err = po.PrepLayerOn(place.On, li, &plan, &w); err != nil {
 				s.placeErr = err
@@ -1895,6 +1900,7 @@ func (s *Instance) offerRange(lo, hi int) {
 			if !took && !s.opt.place.Strict {
 				s.noteDecline(fmt.Sprintf("%s declined block %d, which the placement names; "+
 					"the engine placed it instead", place.On, li))
+				po.Stream(li, place.Stream)
 				took = adm.PrepLayer(li, &plan, &w)
 			}
 		} else if took, err = s.prepOffered(adm, li, &plan, &w); err != nil {

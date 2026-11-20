@@ -1221,6 +1221,9 @@ type NamedDevice interface {
 	// rather than staying resident, before it is offered; false when no
 	// device is attached.
 	Stream(li int, on bool) bool
+	// StreamOn is Stream on the named device alone, for a block offered to
+	// it by name (PrepLayerOn); an error when no such device is attached.
+	StreamOn(name string, li int, on bool) error
 }
 
 // The optional capabilities a LayerDevice may have, asked for by type

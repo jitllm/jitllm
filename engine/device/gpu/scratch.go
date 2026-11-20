@@ -97,7 +97,7 @@ func (g *devTier) settleRounding() {
 		n := min(uint64(-d), g.rounding, g.used)
 		g.rounding -= n
 		g.used -= n
-		g.pool.give(n)
+		g.pool.give(n - g.keepFreed(n))
 		g.roomGen.Add(1)
 	}
 }

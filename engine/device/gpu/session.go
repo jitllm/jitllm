@@ -379,6 +379,9 @@ func (s *gpuSession) DeviceOf(li int) (string, bool) { return s.g.deviceOf(s.sid
 func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.headDeviceName(s.sid) }
 func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.pin(s.sid, li, on) }
 func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
+func (s *gpuSession) StreamOn(name string, li int, on bool) error {
+	return s.g.StreamOn(name, li, on)
+}
 
 // HoldsExperts forwards to the tier (nn.ExpertHolder), ReleasesHostPage
 // (nn.HostPageReleaser) and FramesOf (nn.FramesHolder) likewise.

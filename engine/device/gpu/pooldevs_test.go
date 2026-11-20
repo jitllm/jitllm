@@ -2,6 +2,9 @@ package gpu
 
 import (
 	"testing"
+
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // noPromptReserve builds no prompt width at placement: the paging pairs are
@@ -200,6 +203,56 @@ func TestASwapSlotIsKeptFromTheOtherDevice(t *testing.T) {
 	}
 	poolHeld(t, g, pool)
 	t.Logf("%d page-out(s) beside the other device's growth; its history %d pages", da.stats().PageOuts-outs, lb.n)
+}
+
+// TestASwapSlotHoldsTheWidestPage: the slot a streaming device keeps is what
+// a page-in of its widest streamed block asks, not the bytes of the last page
+// out. Block 0 is wider than the others (Q8_0 to their Q4_0); every streamed
+// block goes out, a narrow one last, the other device grows its history into
+// the pool, and the next token pages block 0 in. Kept at the narrow page's
+// bytes, the slot was short of block 0 and the token was declined.
+func TestASwapSlotHoldsTheWidestPage(t *testing.T) {
+	const n = 4
+	p := pagePlan()
+	block, _ := blockAndScratch(t, p, noPromptReserve())
+	card := cardFor(t, p, 3, noPromptReserve()) + block
+	g, pool, _, _ := pooledPair(t, card, card, card+1<<16, noPromptReserve())
+	da, db := g.devs[0], g.devs[1]
+	streamBlocks(g, n)
+	ws := pageBlocks(p, n)
+	ws[0] = denseWeights(p, func(rows, k int) nn.Weight {
+		return nn.Weight{T: quant.Q8_0, Data: make([]byte, rows*(k/32)*34), Rows: rows, K: k}
+	})
+	for li := 0; li < n; li++ {
+		if ok, err := g.PrepLayerOn("a", li, p, ws[li]); !ok || err != nil {
+			t.Fatalf("block %d declined: %v %s", li, err, g.Err())
+		}
+	}
+	if !token(t, g, p, n, 0) {
+		t.Fatalf("token 0: %s", g.Err())
+	}
+	poolHeld(t, g, pool)
+	da.mu.Lock()
+	wide, narrow := da.layers[0].pg.bytes, da.layers[n-1].pg.bytes
+	for _, li := range []int{0, 1, 2, 3} {
+		if l := da.layers[li]; l != nil && l.pg != nil && l.pg.in {
+			da.pageOut(li)
+		}
+	}
+	da.mu.Unlock()
+	if wide <= narrow || inBlocks(da) != 0 {
+		t.Fatalf("block 0 is %d bytes and the last %d, %d block(s) in: the gate proves nothing", wide, narrow, inBlocks(da))
+	}
+	kpb, lb := historyOn(t, db)
+	growAll(db, kpb, lb)
+	if pool.Used()+wide-narrow <= pool.Limit() {
+		t.Fatalf("the pool has %d of %d bytes used: the history left room for the wide page, the gate proves nothing", pool.Used(), pool.Limit())
+	}
+	if !token(t, g, p, n, 1) {
+		t.Fatalf("block 0, %d bytes, found the slot a %d-byte page left: %s", wide, narrow, g.Err())
+	}
+	poolHeld(t, g, pool)
+	t.Logf("block 0 %d bytes, the last page out %d; the other device's history %d pages", wide, narrow, lb.n)
 }
 
 // TestAHistoryPagesOutTheOtherDevicesBlock: a device whose history finds its

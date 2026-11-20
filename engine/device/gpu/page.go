@@ -328,6 +328,11 @@ func (g *devTier) pageOut(li int) uint64 {
 	g.dropGraph()
 	g.keepBack = g.keepOf(li)
 	freed := g.dropTensors(l)
+	// A page narrower than the slot leaves it short: the rest is taken from
+	// the pool while it is free.
+	if g.keepBack > 0 && g.pool.claim(g.keepBack) {
+		g.keepFreed(g.keepBack)
+	}
 	g.keepBack = 0
 	l.pg.in = false
 	g.pagesIn--
@@ -632,30 +637,52 @@ func (g *devTier) fitsFor(n uint64, pool bool) bool {
 
 // keepOf is what the page-out of block li keeps in the pool rather than
 // giving it back: an operation paging into the slot (openSlot) keeps what
-// it asked for, and a device that streams keeps its slot, the widest
-// streamed block, while no other streamed block fills it. Only in a pool
-// another device spends (one card under two backends): on its own a device
-// keeps its slot in its budget (keepsSlot). Nothing is kept past a budget
-// lowered under the device (trim). Callers hold g.mu.
+// it asked for and the slot past it, and a device that streams keeps its
+// slot (slotKeep). Only in a pool another device spends (one card under two
+// backends): on its own a device keeps its slot in its budget (keepsSlot).
+// Nothing is kept past a budget lowered under the device (trim). Callers
+// hold g.mu.
 func (g *devTier) keepOf(li int) uint64 {
 	if g.pool == nil || g.pool.devs < 2 || g.over() {
 		return 0
 	}
+	k := g.slotKeep(li)
 	if g.slotNeed > 0 {
-		return g.slotNeed - min(g.slotNeed, g.claimed)
+		// The page coming in fills the slot as far as it is wide.
+		k -= min(k, g.slotNeed-min(g.slotNeed, g.reserved()+g.slack()))
+		k += g.slotNeed
+		return k - min(k, g.claimed)
 	}
-	var w uint64
+	return k - min(k, g.swapHeld)
+}
+
+// slotKeep is what a device that streams keeps of its pool (swapHeld) for
+// its next page-in, with block li paged out: what a page-in of its widest
+// streamed block asks (pageInHold's openSlot), less the streamed pages in,
+// which give theirs back when they go. The bytes of the last page out were
+// not it: a narrow page out left a wide one's page-in short, and neither
+// held the rounding and slack the page-in asks. Callers hold g.mu.
+func (g *devTier) slotKeep(li int) uint64 {
+	if g.pool == nil || g.pool.devs < 2 || g.over() {
+		return 0
+	}
+	var w, in uint64
 	for s := range g.stream {
 		l := g.layers[s]
 		if l == nil || l.pg == nil {
 			continue
 		}
+		b := l.pg.bytes + l.pg.round
+		w = max(w, b)
 		if s != li && l.pg.in {
-			return 0
+			in += b
 		}
-		w = max(w, l.pg.bytes)
 	}
-	return w - min(w, g.swapHeld)
+	if w == 0 {
+		return 0
+	}
+	w += g.reserved() + g.slack()
+	return w - min(w, in)
 }
 
 // openSlot begins an operation paging into the swap slot: the slot kept
@@ -671,10 +698,16 @@ func (g *devTier) openSlot(need uint64) uint64 {
 	return open
 }
 
-// closeSlot ends what openSlot began, giving the pool back what the
-// operation did not spend. Callers hold g.mu.
+// closeSlot ends what openSlot began, keeping the slot (slotKeep) of what
+// the operation did not spend and giving the pool back the rest. Callers
+// hold g.mu.
 func (g *devTier) closeSlot(open uint64) {
 	g.slotNeed = 0
+	if k := g.slotKeep(-1); k > g.swapHeld && g.claimed > open {
+		m := min(k-g.swapHeld, g.claimed-open)
+		g.claimed -= m
+		g.swapHeld += m
+	}
 	g.unclaim(open)
 }
 

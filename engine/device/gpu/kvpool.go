@@ -504,6 +504,15 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 	// writing a row into the old ones would be lost.
 	g.quiesce()
 	pb := kp.pageBytes(l)
+	// What the driver rounds a pair of n pages up to, beyond its bytes.
+	round := func(n int) uint64 {
+		kb := l.geom.kWords(kp.p) * n * 4
+		r := g.footprint(kb) - uint64(kb)
+		if vb := l.geom.vWords(kp.p) * n * 4; vb > 0 {
+			r += g.footprint(vb) - uint64(vb)
+		}
+		return r
+	}
 	var last error
 	// A doubling stops at what a scheduler promised (PromiseKV): the pages in
 	// use and the promise's, with one spare. The budget past it is left to
@@ -521,7 +530,7 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 		var err error
 		// The room is held to the charge: the peak while copying on the
 		// device, both pairs, or the growth through the host.
-		before, why := g.stateHold(pb*uint64(n), l)
+		before, why := g.stateHold(pb*uint64(n)+round(n), l)
 		if why == nil {
 			// Copied on the device: the old buffers are live until the copy is
 			// done, so the peak is both pairs.
@@ -537,7 +546,7 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 			}
 			g.dropGraph()
 			freeKV2(l.k, l.v)
-		} else if before, why = g.stateHold(pb*uint64(n-l.n), l); why == nil {
+		} else if before, why = g.stateHold(pb*uint64(n-l.n)+round(n), l); why == nil {
 			// Only the grown layer fits, not both: through the host, the old
 			// pair freed before the new one is made (compactViaHost).
 			order := make([]uint32, l.n)

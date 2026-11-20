@@ -1412,6 +1412,19 @@ func (g *devTier) refundTo(n uint64, held bool) {
 	}
 	g.used -= n
 	g.explicit -= int64(n)
+	k := g.keepFreed(n)
+	if held {
+		g.claimed += n - k
+	} else {
+		g.pool.give(n - k)
+	}
+	g.settleRounding()
+}
+
+// keepFreed takes what the page-out under way keeps (keepBack) of n bytes it
+// freed: the hold of the operation paging into the slot (slotNeed), or the
+// slot itself (swapHeld). It returns the bytes kept. Callers hold g.mu.
+func (g *devTier) keepFreed(n uint64) uint64 {
 	k := min(n, g.keepBack)
 	g.keepBack -= k
 	if g.slotNeed > 0 {
@@ -1419,12 +1432,7 @@ func (g *devTier) refundTo(n uint64, held bool) {
 	} else {
 		g.swapHeld += k
 	}
-	if held {
-		g.claimed += n - k
-	} else {
-		g.pool.give(n - k)
-	}
-	g.settleRounding()
+	return k
 }
 
 // devShared is what one device's tier holds for every session: everything

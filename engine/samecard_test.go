@@ -272,12 +272,17 @@ func TestOneCardUnderTwoBackendsGrowsHistoryOnBoth(t *testing.T) {
 // TestOneCardUnderTwoBackendsWaitsForABusyDevice: two instances on one card
 // listed under two backends, one streaming every block through the first
 // device and decoding without pause, the other holding every block resident
-// on the second. The pool is what the second holds once placed, the first's
-// whole budget and JITLLM_PEER_SLACK bytes (90 MB, what the streaming
-// instance's logits rows and buffers take), so the second's history, past
-// what its placement reserved, asks the first for its idle streamed blocks
-// (fromPeers) while the first is busy. The first is before the second in
-// the lock order: busy, it was passed over (Stats.PeerPassed).
+// on the second. The pool is what the second holds once placed and the
+// first's whole budget, no more (JITLLM_PEER_SLACK bytes more where set), so
+// the second's history, past what its placement reserved, asks the first for
+// its idle streamed blocks (fromPeers) while the first is busy. The first is
+// before the second in the lock order: busy, it was passed over
+// (Stats.PeerPassed). The streaming instance pages through the slot its
+// device keeps (slotKeep). It was declined for room: the second's placement
+// cleared its blocks' stream marks, the slot was the bytes of the last page
+// out, short of the widest page-in's price, and a history's growth held its
+// bytes and not the driver's rounding, which went past the pool (90 MB of
+// slack hid all three).
 func TestOneCardUnderTwoBackendsWaitsForABusyDevice(t *testing.T) {
 	devs := sameCardPair(t)
 	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
@@ -387,7 +392,7 @@ func TestOneCardUnderTwoBackendsWaitsForABusyDevice(t *testing.T) {
 	probe := open(0)
 	_, placed, _ := both(probe)
 	probe.Close()
-	slack := int64(90_000_000)
+	var slack int64
 	if v, err := strconv.ParseInt(os.Getenv("JITLLM_PEER_SLACK"), 10, 64); err == nil {
 		slack = v
 	}

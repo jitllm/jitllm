@@ -5610,6 +5610,41 @@ after, the prompt 10.3 to 12.1 s before and 10.5 to 11.4 s after, beside
 devices never met a busy peer at any squeeze from 20 to 96 MB (0 passes,
 0 waits, both trees).
 
+The 90 MB was slack the streaming instance needed only because it was
+declined for room the pool could make. At no slack the gate was red in 12
+of 12 runs: 6 declines of the streaming instance ("the device declined
+block 0") and 6 charges past the pool. Three causes, each read off the
+device's state at the refusal:
+
+- The Vulkan instance's placement cleared cuda:0's stream marks. A named
+  placement marked the block (Place.Stream) on every device of the tier,
+  so placing block li resident on Vulkan unmarked li on cuda:0, where the
+  other instance streams it: 2 of cuda:0's 16 blocks were still marked,
+  block 0 was in and unmarked, and block 1's page-in, a streamed one, may
+  take only streamed victims. The named device alone is marked now
+  (StreamOn); the engine's own placement after a named device declines
+  marks every device as before.
+- The slot a streaming device keeps (keepOf) was the bytes of the last
+  page out, never more: a 34209792-byte page out left 38944768 + 16384 of
+  rounding + 458752 of slack for block 15's page-in, with 860160 bytes of
+  the pool free. The slot is now what a page-in of the widest streamed
+  block asks, less the streamed pages in (slotKeep): a page-out keeps
+  that, taking from the pool what the page did not free while it is free,
+  and a page-in keeps what it did not spend up to it (closeSlot).
+- A history's growth held its pages' bytes and not the driver's rounding
+  of the new pair: a relocation's history move charged 3145728 bytes of
+  rounding past its hold and the pool (Stats.PoolOver), and a device past
+  its pool keeps no slot. The hold now carries the rounding.
+
+The gate runs at no slack now: 4 of 4 green, on four V100s each listed as
+cuda:0 and its own Vulkan ordinal. Violations: the named mark on every device again, 3 of 3
+red; the growth's hold without the rounding, 1 of 3. On fake devices,
+TestASwapSlotHoldsTheWidestPage (a wide block 0, a narrow page out last,
+the other device's history filling the pool) is red at HEAD's keepOf and
+green after. The decline's text named another session's refusal: LastErr
+is the device's, the last writer's, and the streaming instance's own
+reason was in none of the 6 declines' messages.
+
 ## A typed history's bytes on a card
 
 A card held a quantized or bfloat16 history as floats carrying the type's
