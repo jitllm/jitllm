@@ -92,13 +92,18 @@ func TestGenerationIsTheModelsOwn(t *testing.T) {
 // file states temperature 0, top-k 1 and top-p 1, the greedy draw;
 // Gemma 4's states temperature 1, top-k 64 and top-p 0.95, which reach the
 // container as the decimals written, not their f32 neighbours; Llama 3.2's
-// states none.
+// states none. synth-sampling's states every key the converter writes, min-p
+// and the repetition penalty among them, as scripts/samplinggold.py's
+// generation_config.json states them.
 func TestGGUFGenerationReadsItsSamplingKeys(t *testing.T) {
 	ref := jlm.ReferenceGeneration()
 	gemma := ref
 	gemma.DoSample, gemma.Temperature, gemma.TopK, gemma.TopP = true, 1, 64, 0.95
 	hy := ref
 	hy.Temperature, hy.TopK = 0, 1
+	every := ref
+	every.DoSample, every.Temperature, every.TopK, every.TopP = true, 0.6, 20, 0.95
+	every.MinP, every.RepetitionPenalty = 0.05, 1.1
 	for _, c := range []struct {
 		name string
 		want jlm.Generation
@@ -106,6 +111,7 @@ func TestGGUFGenerationReadsItsSamplingKeys(t *testing.T) {
 		{"hunyuanvl/HunyuanOCR-Q8_0", hy},
 		{"gemma4/gemma-4-31B-it-Q4_K_M", gemma},
 		{"Llama-3.2-1B-Instruct-Q4_K_M", ref},
+		{"synth-sampling", every},
 	} {
 		t.Run(filepath.Base(c.name), func(t *testing.T) {
 			p := testmodels.Path(c.name + ".gguf")

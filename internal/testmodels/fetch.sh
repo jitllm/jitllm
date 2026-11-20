@@ -62,6 +62,9 @@
 #
 #   tiny-qwen3moe-f32.gguf -- scripts/tiny-moe-gguf.py, from tiny-qwen3moe-hf/.
 #
+#   synth-sampling.gguf -- scripts/samplinggold.py, llama.cpp's own converter
+#     (LCPP_SRC) on synth-qwen2/ with a generation_config.json stating a draw.
+#
 #   synth-kimilinear-f32.gguf -- scripts/kimilineargguf.py, llama.cpp's own
 #     converter (LCPP_SRC) on synth-kimilinear/ in Moonshot's checkpoint layout.
 #
