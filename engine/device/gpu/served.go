@@ -654,7 +654,10 @@ type partArena struct {
 
 // grow widens the arena to hold form f's passing buffers, charging what it
 // adds, and binds every instance of bs (in among them) whose buffers moved.
-// Callers hold g.mu, outside any submission.
+// A buffer is freed before its wider one is made: it holds nothing between
+// calls, and the growth is what the room was found for (needs), not the old
+// and the new side by side. A wider one the card refuses is made again at
+// the old size. Callers hold g.mu, outside any submission.
 func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
 	if bs.arena == nil {
 		bs.arena = &partArena{}
@@ -671,14 +674,24 @@ func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
 		if ar.n[j] >= need {
 			continue
 		}
-		d, err := g.alloc(need)
-		if err != nil {
-			return err
-		}
-		g.poisonBuf(d, need)
 		if ar.bufs[j] != nil {
 			ar.bufs[j].Free()
 		}
+		d, err := g.alloc(need)
+		if err != nil {
+			if ar.bufs[j] == nil {
+				return err
+			}
+			var again error
+			if ar.bufs[j], again = g.alloc(ar.n[j]); again != nil {
+				g.loseArenaBuf(bs, j)
+				return err
+			}
+			g.poisonBuf(ar.bufs[j], ar.n[j])
+			bindArena(bs, ar)
+			return err
+		}
+		g.poisonBuf(d, need)
 		add := uint64(need - ar.n[j])
 		ar.bufs[j], ar.n[j] = d, need
 		g.charge(add)
@@ -686,20 +699,43 @@ func (g *devTier) growArena(bs *blockScratch, f *partForm, in *partInst) error {
 		g.arenaBytes += add
 		moved = true
 	}
-	bind := func(f *partForm, in *partInst) {
-		for i, p := range f.slot {
-			if j := f.arenaAt[p]; j >= 0 {
-				in.bufs[i] = ar.bufs[j]
-			}
-		}
-	}
-	bind(f, in)
+	bindArenaOf(f, in, ar)
 	if moved {
-		for pf, pi := range bs.prompt {
-			bind(pf, pi)
-		}
+		bindArena(bs, ar)
 	}
 	return nil
+}
+
+// bindArenaOf binds instance in of form f to arena ar's buffers.
+func bindArenaOf(f *partForm, in *partInst, ar *partArena) {
+	for i, p := range f.slot {
+		if j := f.arenaAt[p]; j >= 0 {
+			in.bufs[i] = ar.bufs[j]
+		}
+	}
+}
+
+// bindArena binds every prompt instance of bs to its arena's buffers.
+func bindArena(bs *blockScratch, ar *partArena) {
+	for pf, pi := range bs.prompt {
+		bindArenaOf(pf, pi, ar)
+	}
+}
+
+// loseArenaBuf is arena buffer j freed and not made again: the card
+// refused even its old size. What it charged goes back, and the prompt
+// instances laid on it go, a later prompt forming them again. Callers hold
+// g.mu.
+func (g *devTier) loseArenaBuf(bs *blockScratch, j int) {
+	ar := bs.arena
+	n := uint64(ar.n[j])
+	ar.bufs[j], ar.n[j] = nil, 0
+	g.refund(n)
+	g.instBytes -= n
+	g.arenaBytes -= n
+	for pf := range bs.prompt {
+		g.dropPromptInst(bs, pf)
+	}
 }
 
 // needs is what the arena must add to hold form f's passing buffers, each
