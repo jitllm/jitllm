@@ -206,11 +206,19 @@ func convertPair(path, mmproj string) (string, error) {
 		}
 		return convertDir(real, q8)
 	}
-	dst := strings.TrimSuffix(path, filepath.Ext(path)) + jlm.Ext
+	// A restated fixture (statedSuffixes) converts with its restatement, to
+	// a container named for it.
+	var opts []convert.Option
+	tag := ""
+	if src, sf, ok := statedSource(path); ok {
+		path, tag = src, "-"+strings.TrimPrefix(sf, "@")
+		opts = append(opts, convert.WithStatedSource(statedSuffixes()[sf]))
+	}
+	dst := strings.TrimSuffix(path, filepath.Ext(path)) + tag + jlm.Ext
 	if mmproj != "" {
 		// A distinct destination: the merged container is not the text-only one
 		// and must not be served from its cache.
-		dst = strings.TrimSuffix(path, filepath.Ext(path)) + "-vlm" + jlm.Ext
+		dst = strings.TrimSuffix(path, filepath.Ext(path)) + tag + "-vlm" + jlm.Ext
 	}
 	if !sourcePresent(path, mmproj) {
 		return containerAlone(dst, path)
@@ -233,7 +241,7 @@ func convertPair(path, mmproj string) (string, error) {
 		return "", err
 	}
 	sweepServedCopies(dst)
-	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, ggufOptions(path)...); err != nil {
+	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, append(ggufOptions(path), opts...)...); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}

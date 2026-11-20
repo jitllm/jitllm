@@ -59,13 +59,19 @@ func censusGaps(t *testing.T, ms []auditModel) (features, projectors []string) {
 	carried := map[string]bool{}
 	for _, m := range ms {
 		var opts []convert.Option
-		if c := ModelConfigForTest(m.path); c != "" {
+		path := m.path
+		if src, sf, ok := statedSource(m.path); ok {
+			// A restated fixture takes what its restatement states.
+			path = src
+			opts = append(opts, convert.WithStatedSource(statedSuffixes()[sf]))
+		}
+		if c := ModelConfigForTest(path); c != "" {
 			opts = append(opts, convert.WithModelConfig(c))
 		}
 		if tpl, ok := censusTemplates()[modelRel(m.path)]; ok {
 			opts = append(opts, convert.WithChatTemplate(testmodels.Path(tpl)))
 		}
-		fs, err := convert.FeaturesOf(m.path, m.mmproj, opts...)
+		fs, err := convert.FeaturesOf(path, m.mmproj, opts...)
 		if errors.Is(err, convert.ErrPart) {
 			// A part takes its features joined to the trunk it was exported
 			// beside, as `jitllm convert -head` converts it.

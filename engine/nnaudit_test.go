@@ -961,6 +961,19 @@ func auditList(t *testing.T, towers bool) []auditModel {
 			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", d.rel, dir)
 		}
 	}
+	// The restated fixtures (censusRestated), each with its fixture's tower.
+	if !towers {
+		for _, rel := range censusRestated() {
+			p := testmodels.Path(rel)
+			size, ok := restatedSize(p)
+			if !ok {
+				missing("%s: MODEL MISSING: the fixture it restates is not in %s", rel, testmodels.Dir())
+				continue
+			}
+			src, _, _ := statedSource(p)
+			out = append(out, auditModel{name: rel, path: p, size: size, mmproj: towerOf(src)})
+		}
+	}
 	return out
 }
 
