@@ -608,3 +608,135 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 		})
 	}
 }
+
+// TestAStagedBlockWaitsForItsCommit: a block staged on a card for a move
+// (PrepareMove) is not the session's there until the move commits. Every
+// block moved to the second card and the projection named on the first, the
+// blocks are prepared back onto the first while the sequence decodes on: its
+// tokens run the projection alone on the first card, and take no page for a
+// staged block there nor check one, so the first card holds no more of the
+// sequence's history (Stats.KVBytes) until the commit copies it. Every block
+// is staged, every token runs the projection on the first card, and the
+// logits are an unmoved control's, teacher-forced, bit for bit between two
+// cards running the same kernels and inside the band between two backends.
+//
+// VIOLATION SIGNATURE. Count a staged block as one the session runs
+// (heldLayers without stagedFor) and the token after the staging takes the
+// sequence's pages for every staged block on the first card. Its
+// intermittent form was a step refused between taking its pages and checking
+// them, a staging landing between: "paged attention: block 0: sequence {2 0}
+// holds 0 page(s) and writes position 19".
+func TestAStagedBlockWaitsForItsCommit(t *testing.T) {
+	m, err := model.Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	a, b := moveDevices(t)
+	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, a+","+b, err)
+	}
+	defer g.Close()
+	distinctCards(t, g)
+	ia := -1
+	for d, c := range g.Hardware() {
+		if c.Name == a {
+			ia = d
+		}
+	}
+	if ia < 0 {
+		t.Fatalf("no card is named %s", a)
+	}
+	n := m.Cfg.NLayer
+	const ntok, away, stage, commit = 10, 2, 4, 7
+	prompt := m.Vocab.Encode("The capital of France is a city that", true)
+	run := func(ids []int32, move bool) ([]int32, [][]float32) {
+		st := testInstance(t, m, len(prompt)+ntok+1, WithPlacement(Placement{Rest: &Place{On: a}, Head: &Place{On: a}, Strict: true}))
+		defer st.Close()
+		if err := st.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		headOn(t, st, a)
+		lg, err := st.Prefill(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []int32
+		var all [][]float32
+		var pm *PendingMove
+		for i := range ntok {
+			all = append(all, append([]float32(nil), lg...))
+			next := Greedy(lg)
+			if ids != nil {
+				next = ids[i]
+			}
+			out = append(out, next)
+			staged := move && pm != nil
+			switch {
+			case move && i == away:
+				if _, err := st.MoveBlocks(0, n, b); err != nil || st.placedOn(b) == nil || len(st.placedOn(b)) != n {
+					t.Fatalf("blocks 0..%d to %s: %v (%s)", n-1, b, err, g.Err())
+				}
+				headOn(t, st, a)
+			case move && i == stage:
+				if pm, err = st.PrepareMove(0, n, a); err != nil {
+					t.Fatalf("blocks 0..%d back to %s: %v", n-1, a, err)
+				}
+				<-pm.done
+				for j, ok := range pm.staged {
+					if !ok {
+						t.Fatalf("block %d was not staged on %s: %s", pm.blocks[j], a, g.Err())
+					}
+				}
+				if len(pm.staged) != n {
+					t.Fatalf("%d of %d blocks to stage", len(pm.staged), n)
+				}
+				staged = true
+			case move && i == commit:
+				mv, err := pm.Commit()
+				if err != nil || len(mv.Moved) != n || mv.Staged != n {
+					t.Fatalf("the move back to %s: %d moved, %d staged: %v (%s)", a, len(mv.Moved), mv.Staged, err, g.Err())
+				}
+				pm, staged = nil, false
+				if kv := g.DevStats()[ia].KVBytes; kv == 0 {
+					t.Fatalf("the move back to %s copied no history there", a)
+				}
+			}
+			before := g.DevStats()[ia]
+			if lg, err = st.Forward(next); err != nil {
+				t.Fatalf("token %d: %v", i, err)
+			}
+			after := g.DevStats()[ia]
+			if ran := after.Heads - before.Heads; ran != 1 {
+				t.Fatalf("token %d: %s ran the projection %d time(s)", i, a, ran)
+			}
+			if staged && after.KVBytes != before.KVBytes {
+				t.Fatalf("token %d: %s holds %d bytes of history beside blocks staged for the sequence, %d before the token: a staged block took its pages",
+					i, a, after.KVBytes, before.KVBytes)
+			}
+			if staged {
+				t.Logf("token %d: %d staged blocks on %s, which holds %d bytes of history", i, n, a, after.KVBytes)
+			}
+		}
+		return out, all
+	}
+	ctl, want := run(nil, false)
+	_, got := run(ctl, true)
+	same := strings.SplitN(a, ":", 2)[0] == strings.SplitN(b, ":", 2)[0]
+	var band float64
+	for i := range want {
+		var worst float64
+		for j, v := range want[i] {
+			worst = max(worst, math.Abs(float64(v-got[i][j])))
+		}
+		switch {
+		case math.IsNaN(worst):
+			t.Fatalf("token %d: a non-finite logit", i)
+		case same && worst != 0, worst > 2.5:
+			t.Fatalf("token %d: the moved logits are %g from the control's", i, worst)
+		}
+		band = max(band, worst)
+	}
+	t.Logf("largest logit difference from the control: %g", band)
+}

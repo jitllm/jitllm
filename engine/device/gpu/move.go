@@ -67,7 +67,9 @@ func (g *GPU) settle() { g.retiring.Wait() }
 // routing the block there, so a move's commit (moveBlock) has only the
 // history left to copy. It runs while the session keeps stepping on the
 // block's current device, which is why it takes no call lock: it is refused
-// unless the target routes no block at all, so no step reads anything it
+// unless the target routes no block at all, and the session's steps there --
+// a projection the target runs for it -- leave the staged block out until the
+// commit routes it (devShared.stagedFor), so no step reads anything it
 // changes. False means it was not staged; the commit then prepares the block
 // itself.
 func (g *GPU) stageBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.LayerWeights, positions int) bool {
@@ -88,7 +90,16 @@ func (g *GPU) stageBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.L
 		return false
 	}
 	defer done()
+	d.mu.Lock()
+	if d.stagedFor == nil {
+		d.stagedFor = map[int]uint64{}
+	}
+	d.stagedFor[li] = sid
+	d.mu.Unlock()
 	if !d.prepLayer(sid, li, p, w, false) {
+		d.mu.Lock()
+		delete(d.stagedFor, li)
+		d.mu.Unlock()
 		return false
 	}
 	// The history's pages, grown ahead (the pool's growth copies and drops
@@ -189,9 +200,12 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 	g.mu.Lock()
 	src, staged := g.at(sid, li), g.staged[li] == d
 	g.mu.Unlock()
+	// The commit runs between the session's tokens: the staged block is the
+	// session's from here, whatever the move then does with it.
 	if staged {
 		d.mu.Lock()
 		staged = d.layers[li] != nil
+		delete(d.stagedFor, li)
 		d.mu.Unlock()
 	}
 	if !staged && w == nil {

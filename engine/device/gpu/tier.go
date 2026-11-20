@@ -1425,6 +1425,12 @@ type devShared struct {
 	// block placed here reads it -- and copyN how many (histcopy.go).
 	histCopies map[int]map[uint64]bool
 	copyN      atomic.Int32
+	// stagedFor is, per block, the session a move staged it here for
+	// (GPU.stageBlock) while that session's steps still run it on another
+	// device: until the commit routes it here (GPU.moveBlock) the session's
+	// steps here -- a projection this device runs for it -- neither take
+	// pages for it nor check them (heldLayers).
+	stagedFor map[int]uint64
 	// hostOf is, per block, the sessions whose copy of its history here is
 	// the CPU's -- the session runs the block on the CPU device -- written
 	// from the CPU's rows (histhost.go), hostRows the positions of each

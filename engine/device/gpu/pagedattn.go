@@ -185,12 +185,18 @@ func seqEnds(dst []seqEnd, rows []pagedRow) []seqEnd {
 
 // heldLayers calls f for every pool layer session sid holds history
 // on: a session takes pages only where it runs, and where a block reads a
-// copy of its history (histcopy.go).
+// copy of its history (histcopy.go). A block staged here for the session's
+// move is not yet one it runs (stagedFor): its history structures are made
+// beside the session's steps, and a step taking its pages before they were
+// made and checking them after would refuse.
 func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) error {
 	if g.kvp == nil {
 		return nil
 	}
 	for li, l := range g.kvp.layers {
+		if s, ok := g.stagedFor[keyBlock(li)]; ok && s == sid {
+			continue
+		}
 		held := g.histCopies[keyBlock(li)][sid]
 		if bl := g.layers[keyBlock(li)]; bl != nil && !held {
 			if kvp := bl.kv[sid]; kvp != nil && kvp.paged {

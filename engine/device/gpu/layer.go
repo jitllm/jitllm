@@ -4696,6 +4696,7 @@ func (g *devTier) graphBeside(l *layer) bool {
 // hold g.mu and drop the graph.
 func (g *devTier) releaseBlock(li int) {
 	l := g.layers[li]
+	delete(g.stagedFor, li)
 	g.freeRecSnaps(li)
 	if l == nil {
 		return

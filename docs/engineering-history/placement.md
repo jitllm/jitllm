@@ -5257,6 +5257,37 @@ staying, with MoveHead to the CPU and back), TestTwoInstancesRunABlockOnTwoCards
 (the second instance's named projection stays through its blocks' move and
 moves with MoveHead), and the two head gates above.
 
+## A staged block waits for its commit
+
+TestBlocksMoveBetweenDevices/Llama-3.2-1B/composed-cpu failed once in a full
+pass: "the device declined block 0: paged attention: block 0: sequence {2 0}
+holds 0 page(s) and writes position 19", and passed alone. The arm moves every
+block to the second card with the projection named on the first, where it
+stays, and prepares the move back (PrepareMove) while the sequence decodes:
+each token runs the projection alone on the first card. stageBlock made the
+staged block's history structures for the session there (prepLayer), and
+heldLayers counted the block as one the session runs, though its steps still
+ran it on the second card. A token's submission takes its pages
+(pagedAppendRows) and checks them later under the lock again (pagedPrep); a
+staging landing between them left a layer held with no page, and the step was
+refused. Where the staging landed before the token, the token took the
+sequence's pages for every staged block on the first card instead: 4,194,304
+bytes of history for Llama-3.2-1B, which the commit's copy then wrote over.
+
+stageBlock's comment said it is refused unless the target routes no block, so
+no step reads what it changes; a projection on the target is such a step. The
+staged block is now not the session's on its target until the commit
+(devShared.stagedFor): heldLayers leaves it out, moveBlock takes it at the
+commit, between the session's tokens, and a release forgets it. The staging
+itself is unchanged: every block is still prepared beside the steps.
+
+Gate: engine.TestAStagedBlockWaitsForItsCommit (Llama-3.2-1B, the projection
+named on the first card, every block moved to the second and prepared back:
+each staged token runs the projection on the first card and leaves its
+history at 0 bytes, all 16 blocks staged and committed, the logits the
+control's bit for bit). Counting a staged block as held takes 4,194,304 bytes
+at the first staged token.
+
 ## One pool spent by two devices
 
 One card listed as cuda:N and vulkan:N is one physical device under two
