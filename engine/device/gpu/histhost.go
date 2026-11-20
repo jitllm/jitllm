@@ -763,7 +763,7 @@ func (g *devTier) readRows(s seqID, src, from, to int, k, v []float32) error {
 // none answers to key.
 func (g *GPU) shareHostCopy(sid uint64, li, page int, key string, end int) bool {
 	var buf [ownersStack]*devTier
-	ds := g.hostCopies(sid, li, buf[:0])
+	ds := g.hostCopies(sid, keyBlock(li), buf[:0])
 	if len(ds) == 0 || key == "" {
 		return false
 	}
@@ -773,7 +773,7 @@ func (g *GPU) shareHostCopy(sid uint64, li, page int, key string, end int) bool 
 		dv.mu.Lock()
 		ok, err := dv.shareHostPage(s, li, page, key, end)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", li, label(d.dev, d.ord), err)
+			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", keyBlock(li), label(d.dev, d.ord), err)
 		}
 		dv.mu.Unlock()
 		if !ok {
@@ -818,7 +818,7 @@ func (g *devTier) shareHostPage(s seqID, li, page int, key string, end int) (boo
 // history holds on a device holding it as the CPU's, 0 where none does.
 func (g *GPU) hostCopyPage(sid uint64, li int) int {
 	var buf [ownersStack]*devTier
-	for _, d := range g.hostCopies(sid, li, buf[:0]) {
+	for _, d := range g.hostCopies(sid, keyBlock(li), buf[:0]) {
 		d.mu.Lock()
 		p := 0
 		if d.kvp != nil {

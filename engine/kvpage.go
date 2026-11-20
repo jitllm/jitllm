@@ -207,6 +207,10 @@ type kvPages struct {
 	// and sent how many the card's copies of the block's own pages hold.
 	copy         bool
 	copied, sent map[int]int
+	// bound says the copy is held for a CPU device binding of the block
+	// alone, no block there reading it (lanesRead): no copy is written to
+	// it, and a page of it a restore let go is a fresh one, not a fault.
+	bound bool
 	// copySealed is the first page of the copy not yet offered to the shared
 	// store (kvCache.publishCopies).
 	copySealed int
@@ -470,16 +474,21 @@ type kvCache struct {
 	// pages are to be given, sent in one call (flushPublish).
 	pubLi, pubPage []int32
 	pubKey         []string
-	// devAt is the device a block's history lives on when it names its
-	// pages (Instance.kvDevAt), set by ShareKV; mapEnd is the position a page
-	// mapped there is written to, and mapped counts the planes mapped.
-	devAt  func(li int) nn.KVShareDevice
+	// devAt is the device a history lives on when it names its pages
+	// (Instance.kvDevAt), by its name there (nn.HistoryKey), set by ShareKV;
+	// mapEnd is the position a page mapped there is written to, and mapped
+	// counts the planes mapped.
+	devAt  func(key int) nn.KVShareDevice
 	mapEnd int
 	mapped int64
-	// copyAt is the device holding a copy of block li's history for a block
-	// on it reading it, where li runs on the CPU device (Instance.kvCopyAt),
-	// set with devAt.
-	copyAt func(li int) nn.KVShareDevice
+	// copyAt is the device holding a copy of a history for a block on it
+	// reading it, where the history's block runs on the CPU device
+	// (Instance.kvCopyAt), by the history's name there, set with devAt.
+	copyAt func(key int) nn.KVShareDevice
+	// keys is each slot's name on a device (nn.HistoryKey): a block's its own
+	// index, a history past a block's rows its block's and its index, so it
+	// is named and mapped where its block runs (dev, key).
+	keys []int
 	// chunked is how far aliasChunks has named this sequence's shared pages.
 	chunked int
 	// endsAt is Instance.endsAt, the prompt ends kept past a chunk boundary,
@@ -595,8 +604,10 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 	}
 	kc := &kvCache{id: id, store: store, layers: make([]kvPages, n), lo: lo, kvl: l, cfg: c,
 		bh: map[int][]string{}, geom: geomDigest(c, nseq, l, wins), view: view, pool: pool, src: make([]int, n), hs: make([][]int, hi), hb: make([][]nn.HistTable, hi)}
+	kc.keys = make([]int, n)
 	for li := range kc.src {
 		kc.src[li] = li
+		kc.keys[li] = li
 		if li < hi && li < len(hsrc) {
 			kc.src[li] = hsrc[li]
 		}
@@ -631,6 +642,7 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 			kc.hs[e.block] = append(kc.hs[e.block], 0)
 		}
 		kc.hs[e.block][e.hist-1] = hi + i
+		kc.keys[hi+i] = nn.HistoryKey(e.block, e.hist)
 		if b.p == 0 {
 			continue
 		}
@@ -828,6 +840,11 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 	}
 	if toDevice && s.kv.share != nil {
 		s.kv.nameMoved(li, pos)
+		for h := 1; h <= s.kv.nHist(li); h++ {
+			if e := s.kv.histSlot(li, h); e > 0 {
+				s.kv.nameMoved(e, pos)
+			}
+		}
 	}
 	return true
 }
@@ -1757,7 +1774,7 @@ func (kc *kvCache) seal(pos int) {
 			continue
 		}
 		cur, _ := s.page(pos)
-		if kc.share != nil && kc.devAt(li) != nil {
+		if kc.share != nil && kc.dev(li) != nil {
 			// On the card: every page the position has passed is named there
 			// -- at the card's page where it cuts the history apart from this
 			// cache (nameApart) -- and held once on the host too where the
@@ -2013,16 +2030,32 @@ func (kc *kvCache) queuePublish(li, n int, key string) {
 	if key == "" || kc.cardPage(li) == nil && kc.apartAt(li) == 0 {
 		return
 	}
-	kc.pubLi = append(kc.pubLi, int32(li))
+	kc.pubLi = append(kc.pubLi, int32(kc.key(li)))
 	kc.pubPage = append(kc.pubPage, int32(n))
 	kc.pubKey = append(kc.pubKey, key)
 }
+
+// key is slot li's name on a device: the block's own index, or a history
+// past a block's rows by its block and index (nn.HistoryKey).
+func (kc *kvCache) key(li int) int {
+	if li < len(kc.keys) {
+		return kc.keys[li]
+	}
+	return li
+}
+
+// dev is devAt for slot li: a history past a block's rows is where its
+// block runs.
+func (kc *kvCache) dev(li int) nn.KVShareDevice { return kc.devAt(kc.key(li)) }
+
+// copyDev is copyAt for slot li.
+func (kc *kvCache) copyDev(li int) nn.KVShareDevice { return kc.copyAt(kc.key(li)) }
 
 // cardPage is the device holding block li's history where it cuts the
 // history into pages as this cache does, so a page key names the same
 // positions there; nil where it does not, or where the block is on the CPU.
 func (kc *kvCache) cardPage(li int) nn.KVShareDevice {
-	if d := kc.devAt(li); d != nil && d.SharePage(li) == kc.layers[li].p {
+	if d := kc.dev(li); d != nil && d.SharePage(kc.key(li)) == kc.layers[li].p {
 		return d
 	}
 	return nil
@@ -2071,7 +2104,7 @@ func (kc *kvCache) publishTail(pos int, cardOnly bool) int {
 			continue
 		}
 		cur := pos / s.p
-		if d := kc.devAt(li); d != nil {
+		if d := kc.dev(li); d != nil {
 			// On the card, named where it lives, at the card's page.
 			p := kc.namedPage(li)
 			if c, f := pos/p, pos%p; f > 0 {
@@ -2133,7 +2166,7 @@ func (kc *kvCache) aliasPage(li, n int, key string) bool {
 	if key == "" {
 		return false
 	}
-	if d := kc.devAt(li); d != nil {
+	if d := kc.dev(li); d != nil {
 		kc.queuePublish(li, n, key) // one more name for the page on the card
 		return d != nil
 	}
@@ -2317,6 +2350,10 @@ func (w *sliceWriter) Write(p []byte) (int, error) {
 func (kv *kvCache) faultIn(li, page int) bool {
 	pg := &kv.layers[li]
 	if page < pg.mem.Len() && pg.mem.K(page) != nil {
+		return true
+	}
+	if pg.bound {
+		pg.grow(page)
 		return true
 	}
 	fault := kv.fault

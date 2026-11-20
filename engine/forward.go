@@ -114,8 +114,8 @@ type Instance struct {
 	mu sync.Mutex
 	// fnDevAt, fnRecAt and fnEndsAt are s's methods a session's cache asks
 	// through, made once so binding a session (use) allocates nothing.
-	fnDevAt  func(li int) nn.KVShareDevice
-	fnCopyAt func(li int) nn.KVShareDevice
+	fnDevAt  func(key int) nn.KVShareDevice
+	fnCopyAt func(key int) nn.KVShareDevice
 	fnRecAt  func(pos int) bool
 	fnEndsAt func(c int) [kvEndSeats]uint8
 	// readout is the device reading an embedding model's pooled row, nil on a

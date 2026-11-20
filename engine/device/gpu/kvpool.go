@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/backend"
 )
@@ -58,12 +59,12 @@ func (k kvGeom) kWords(p int) int {
 
 // histShift places a history's index above its block's in a pool key:
 // histKey(li, h) is block li's history h, histKey(li, 0) == li its rows',
-// keyBlock the block a key is of.
-const histShift = 24
+// keyBlock the block a key is of: nn.HistoryKey, the engine's name for it.
+const histShift = nn.HistoryShift
 
-func histKey(li, h int) int { return li | h<<histShift }
+func histKey(li, h int) int { return nn.HistoryKey(li, h) }
 
-func keyBlock(key int) int { return key & (1<<histShift - 1) }
+func keyBlock(key int) int { return nn.HistoryBlock(key) }
 
 // layerOf is kp's pool layer of key, nil where kp is or it holds none.
 func (kp *kvPool) layerOf(key int) *kvLayerPool {

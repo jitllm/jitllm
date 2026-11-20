@@ -72,11 +72,10 @@ func (s *Instance) readsHist(b, src, h int) bool {
 	return false
 }
 
-// cardReads reports that a block on a card reads block src's rows'
-// history.
-func (s *Instance) cardReads(src int) bool {
+// cardReads reports that a block on a card reads block src's history h.
+func (s *Instance) cardReads(src, h int) bool {
 	for b := src + 1; b < s.hi; b++ {
-		if s.devAt(b) && s.readsHist(b, src, 0) {
+		if s.devAt(b) && s.readsHist(b, src, h) {
 			return true
 		}
 	}
@@ -89,6 +88,17 @@ func (s *Instance) cardReads(src int) bool {
 func (s *Instance) lanesRead(src, h int) bool {
 	for b := src + 1; b < s.hi; b++ {
 		if !s.devAt(b) && (s.histSrc(b) == src || s.readsHist(b, src, h)) {
+			return true
+		}
+	}
+	return false
+}
+
+// lanesReadByOp reports that a block on the CPU device reads block src's
+// history h by an op of its own, not by binding src's histories alone.
+func (s *Instance) lanesReadByOp(src, h int) bool {
+	for b := src + 1; b < s.hi; b++ {
+		if !s.devAt(b) && s.readsHist(b, src, h) {
 			return true
 		}
 	}
@@ -226,6 +236,7 @@ func (s *Instance) crossEntries(sess *Session, src, h int, toCard bool, base, st
 		if !ok {
 			return fmt.Errorf("model: no card holds the copy of block %d's history %d a block on it reads", src, h)
 		}
+		from = s.crossMap(sess, sl, from, end)
 		if from >= end {
 			return nil
 		}
@@ -243,6 +254,9 @@ func (s *Instance) crossEntries(sess *Session, src, h int, toCard bool, base, st
 		return nil
 	}
 	from := min(pg.copied[base], start)
+	if base == 0 {
+		from = s.crossAlias(sess, sl, from, end)
+	}
 	if from >= end {
 		pg.copy = true
 		return nil
@@ -344,30 +358,30 @@ func (s *Instance) crossRows(k, lo, hi int, pos, slot []int) error {
 	return nil
 }
 
-// crossMap maps, into the card's copy of block src's history from position
+// crossMap maps, into the card's copy of the history in slot src -- a
+// block's rows, or a history past them (kvCache.histSlot) -- from position
 // from, the pages of it the prefix cache shares that the card names: a
 // copy another session holds of the prefix there. It is where the rows the
 // copy still lacks start.
 func (s *Instance) crossMap(sess *Session, src, from, end int) int {
 	kv := sess.kv
 	pg := &kv.layers[src]
-	d := kv.copyAt
-	if kv.share == nil || d == nil {
+	if kv.share == nil || kv.copyAt == nil {
 		return from
 	}
-	dev := d(src)
+	dev, dk := kv.copyDev(src), kv.key(src)
 	if dev == nil {
 		return from
 	}
-	if pc := dev.SharePage(src); pc > 0 && pc != pg.p {
+	if pc := dev.SharePage(dk); pc > 0 && pc != pg.p {
 		return crossMapApart(kv, dev, src, pc, from, end)
 	}
-	if from%pg.p != 0 || dev.SharePage(src) != pg.p {
+	if from%pg.p != 0 || dev.SharePage(dk) != pg.p {
 		return from
 	}
 	for j := from / pg.p; (j+1)*pg.p <= end && pg.isShared(j); j++ {
 		key := kv.pageKey(src, j)
-		if key == "" || !dev.MapKV(src, j, key, (j+1)*pg.p) {
+		if key == "" || !dev.MapKV(dk, j, key, (j+1)*pg.p) {
 			break
 		}
 		from = (j + 1) * pg.p
@@ -387,7 +401,7 @@ func crossMapApart(kv *kvCache, dev nn.KVShareDevice, src, pc, from, end int) in
 	pg := &kv.layers[src]
 	for j := from / pc; (j+1)*pc <= end && pg.isShared(((j+1)*pc-1)/pg.p); j++ {
 		key := kv.pageKeyP(pc, j)
-		if key == "" || !dev.MapKV(src, j, key, (j+1)*pc) {
+		if key == "" || !dev.MapKV(kv.key(src), j, key, (j+1)*pc) {
 			break
 		}
 		from = (j + 1) * pc
@@ -462,6 +476,7 @@ func (s *Instance) crossSettle() {
 				pg.dropResident()
 				pg.copy = false
 			}
+			pg.bound = pg.copy && !s.lanesReadByOp(li, h)
 		}
 	}
 }

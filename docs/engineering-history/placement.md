@@ -5215,6 +5215,39 @@ block 2 (openKeepsTwo): at the commit before, strict placement
 refused block 2 with the readers on the card ("binds pages.1, which the
 part's call site does not provide") on CUDA and Vulkan; every arm passes now.
 
+A history past a block's rows lives in a slot of the cache past the blocks
+(kvCache.hs), and the prefix cache asked a device for a slot by its index:
+past the blocks no device held one, so such a history was never named on a
+card, nor mapped there, and two sessions sharing a prefix held it twice on
+the card and restored none of it from there. The cache names every slot to
+a device as nn.HistoryKey (the block, and the history's index above it),
+the key a card's pool already keeps it under (histKey), and asks the
+device holding the block (kvCache.dev, key); the card looks its block up
+by keyBlock. A move to the card names a block's histories past its rows
+with its rows (nameMoved), and a card's copy of a CPU block's history past
+its rows is named and mapped as its rows' copy is (crossMap), read by a
+block there reading that history (cardReads per history: a reader of the
+history past the rows alone read none of the rows). The CPU device's copy
+of a card block's history past its rows aliases the store's pages as the
+rows' copy does (crossAlias). A block on the CPU device bound to a source
+on a card binds every history of the source, read or not (lanesRead), and
+no copy is written to one no block there reads: its pages are fresh ones.
+A restored prefix let them go, and the binding's window then faulted one
+from a store that never held it ("no such kv page", the restated
+synth-gemma3n's readers on the CPU once their restore worked). Such a copy
+is marked (kvPages.bound) and a page of it it lacks is a fresh one again.
+Writing it as a read copy instead was tried and refused:
+TestDecodeDoesNotAllocateAcrossTheCPU's past-the-rows arm then converted
+448 binary16 pages over 64 tokens for rows no op reads. Gate: TestAHistoryReadAcrossTheCPU's shared
+arms on the restated synth-gemma3n and synth-seedoss-keepstwo. At the
+commit before, on CUDA and Vulkan: synth-gemma3n's readers on the card
+mapped none of the first session's pages there, its readers on the CPU
+restored 0 of the shared 256 (160 apart); synth-seedoss-keepstwo's readers
+on the CPU held 4 and 5 pages twice on the host and answered at NMSE
+1.6e-1 to 6.4e-1 from the CPU's. After: every shared arm on both: synth-gemma3n's readers
+on the card restore 256 (160 apart) and map 8 (4) pages there, its readers
+on the CPU 43 (34); synth-seedoss-keepstwo's 16 (10) and 8 (6).
+
 ## The projection after a block moves to the CPU
 
 A block moved to the CPU (moveOffCards) took the instance's projection off its

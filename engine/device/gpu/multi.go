@@ -2285,13 +2285,14 @@ func (g *GPU) PublishKVs(lis, pages []int32, keys []string) bool {
 }
 
 // ownerOf is the device session sid runs every block of lis on, nil when
-// they are spread over more than one (or one is on the CPU).
+// they are spread over more than one (or one is on the CPU). Each of lis
+// is a history key (histKey), of the block holding it.
 func (g *GPU) ownerOf(sid uint64, lis []int32) *devTier {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var d *devTier
 	for _, li := range lis {
-		o := g.at(sid, int(li))
+		o := g.at(sid, keyBlock(int(li)))
 		if o == nil || d != nil && o != d {
 			return nil
 		}
@@ -2340,7 +2341,7 @@ func (g *GPU) recShare(sid uint64, li int, key string, op int) bool {
 
 func (g *GPU) publishKV(sid uint64, li, page int, key string) bool {
 	g.mu.Lock()
-	d := g.at(sid, li)
+	d := g.at(sid, keyBlock(li))
 	g.mu.Unlock()
 	if d == nil {
 		return g.shareHostCopy(sid, li, page, key, -1)
@@ -2358,7 +2359,7 @@ func (g *GPU) SharePage(li int) int { return g.kvPageOf(0, li) }
 
 func (g *GPU) kvPageOf(sid uint64, li int) int {
 	g.mu.Lock()
-	d := g.at(sid, li)
+	d := g.at(sid, keyBlock(li))
 	g.mu.Unlock()
 	if d == nil {
 		return g.hostCopyPage(sid, li)
@@ -2368,7 +2369,7 @@ func (g *GPU) kvPageOf(sid uint64, li int) int {
 
 func (g *GPU) mapKV(sid uint64, li, page int, key string, end int) bool {
 	g.mu.Lock()
-	d := g.at(sid, li)
+	d := g.at(sid, keyBlock(li))
 	g.mu.Unlock()
 	if d == nil {
 		return g.shareHostCopy(sid, li, page, key, end)

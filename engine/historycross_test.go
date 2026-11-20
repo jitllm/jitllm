@@ -49,17 +49,16 @@ import (
 // past its own (readsTwoFixture). Two blocks on the card reading two
 // histories of one block on the CPU device, the lower the history past its
 // rows alone (openKeepsTwo), read each from the card's copy, the copy
-// widened to the second as its reader is placed. The restated synth-gemma3n runs no shared
-// arm: a card names no page of a history past a block's rows for the prefix
-// cache (open-questions.md).
+// widened to the second as its reader is placed. A history past a block's
+// rows is named for the prefix cache where its block runs, the card's pages
+// of it on the card, so the restated fixtures run the shared arms too.
 func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 	for _, f := range []struct {
-		name    string
-		open    func(*testing.T, string) (*model.Model, *c6Golden, []Option)
-		noShare bool
-	}{{"synth-gemma4-e", openGemma4, false}, {"synth-gemma3n", openGemma3n, false},
-		{"synth-gemma3n-past-the-rows", openPastTheRows(openGemma3n, "synth-gemma3n", 1), true}, {"synth-seedoss-readstwo", openReadsTwo, false},
-		{"synth-seedoss-keepstwo", openKeepsTwo, true}} {
+		name string
+		open func(*testing.T, string) (*model.Model, *c6Golden, []Option)
+	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n},
+		{"synth-gemma3n-past-the-rows", openPastTheRows(openGemma3n, "synth-gemma3n", 1)}, {"synth-seedoss-readstwo", openReadsTwo},
+		{"synth-seedoss-keepstwo", openKeepsTwo}} {
 		t.Run(f.name, func(t *testing.T) {
 			m, _, io := f.open(t, f.name)
 			defer m.Close()
@@ -74,9 +73,6 @@ func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 					t.Run(fmt.Sprintf("%s/step-readers-on-the-card-%t", dev, readersUp), func(t *testing.T) {
 						historyStepAcrossTheCPU(t, m, io, dev, readersUp)
 					})
-					if f.noShare {
-						continue
-					}
 					t.Run(fmt.Sprintf("%s/shared-readers-on-the-card-%t", dev, readersUp), func(t *testing.T) {
 						historySharedAcrossTheCPU(t, m, io, dev, readersUp, 0)
 					})

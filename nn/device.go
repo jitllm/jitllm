@@ -1081,12 +1081,22 @@ type RowsRoomer interface {
 	RowsRoom(rows, seqs int, head *Head) (bool, error)
 }
 
+// HistoryKey names block li's history h on a device: history 0 is its
+// rows', HistoryKey(li, 0) == li, and a history past them is held where the
+// block runs. HistoryBlock is the block a key is of.
+const HistoryShift = 24
+
+func HistoryKey(li, h int) int { return li | h<<HistoryShift }
+
+func HistoryBlock(key int) int { return key & (1<<HistoryShift - 1) }
+
 // KVShareDevice is a device whose KV pages the prefix cache can name and map
 // (engine/device/gpu/kvshare.go): PublishKV names the session's page of block li
 // by key, held by the session; MapKV puts the page key names into the
 // session's page, the sequence then written to end at least, no byte moved,
 // and is false when no page answers to key. A write into a named page copies
-// it first.
+// it first. Each li is a HistoryKey: a history past a block's rows is named
+// on the device holding the block.
 type KVShareDevice interface {
 	PublishKV(li, page int, key string) bool
 	MapKV(li, page int, key string, end int) bool

@@ -476,7 +476,7 @@ func (s *kvPages) sharedBytes() uint64 {
 // copy, or the store's existing copy replaces it and the session's buffers go
 // back to its pool.
 func (kc *kvCache) publishSealed(li, n int, key string) {
-	if kc.devAt(li) != nil {
+	if kc.dev(li) != nil {
 		kc.queuePublish(li, n, key) // named where it lives, on the card
 		return
 	}
@@ -485,8 +485,8 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	if kc.copyAt == nil {
 		return
 	}
-	if d := kc.copyAt(li); d != nil && d.SharePage(li) == kc.layers[li].p {
-		d.PublishKV(li, n, key)
+	if d := kc.copyDev(li); d != nil && d.SharePage(kc.key(li)) == kc.layers[li].p {
+		d.PublishKV(kc.key(li), n, key)
 	}
 }
 
@@ -567,7 +567,7 @@ func (kc *kvCache) publishHost(li, n int, key string) {
 func (kc *kvCache) nameMoved(li, pos int) {
 	d := kc.cardPage(li)
 	s := &kc.layers[li]
-	if d == nil && s.p > 0 && kc.devAt(li) != nil {
+	if d == nil && s.p > 0 && kc.dev(li) != nil {
 		s.apartSealed = 0
 		kc.nameApart(li, pos)
 	}
@@ -579,7 +579,7 @@ func (kc *kvCache) nameMoved(li, pos int) {
 		if key == "" {
 			break
 		}
-		if !d.MapKV(li, n, key, pos) {
+		if !d.MapKV(kc.key(li), n, key, pos) {
 			kc.queuePublish(li, n, key)
 		}
 		if s.isShared(n) {
@@ -600,11 +600,11 @@ func (kc *kvCache) nameMoved(li, pos int) {
 // before a window lets it go.
 func (kc *kvCache) nameApart(li, pos int) {
 	s := &kc.layers[li]
-	d := kc.devAt(li)
+	d := kc.dev(li)
 	if d == nil || kc.ns == "" {
 		return
 	}
-	pc := d.SharePage(li)
+	pc := d.SharePage(kc.key(li))
 	if pc <= 0 {
 		return
 	}
@@ -616,7 +616,7 @@ func (kc *kvCache) nameApart(li, pos int) {
 		if key == "" {
 			return
 		}
-		d.PublishKV(li, s.apartSealed, key)
+		d.PublishKV(kc.key(li), s.apartSealed, key)
 	}
 }
 
@@ -631,11 +631,11 @@ func (kc *kvCache) nameCopyApart(li, pos int) {
 	if kc.share == nil || kc.copyAt == nil || kc.ns == "" || s.p == 0 {
 		return
 	}
-	d := kc.copyAt(li)
+	d := kc.copyDev(li)
 	if d == nil {
 		return
 	}
-	pc := d.SharePage(li)
+	pc := d.SharePage(kc.key(li))
 	if pc <= 0 || pc == s.p {
 		return
 	}
@@ -644,7 +644,7 @@ func (kc *kvCache) nameCopyApart(li, pos int) {
 	}
 	for ; (s.copyApartSealed+1)*pc <= pos; s.copyApartSealed++ {
 		key := kc.pageKeyP(pc, s.copyApartSealed)
-		if key == "" || !d.PublishKV(li, s.copyApartSealed, key) {
+		if key == "" || !d.PublishKV(kc.key(li), s.copyApartSealed, key) {
 			return
 		}
 	}
@@ -657,11 +657,11 @@ func (kc *kvCache) apartAt(li int) int {
 	if kc.share == nil || kc.layers[li].p == 0 {
 		return 0
 	}
-	d := kc.devAt(li)
+	d := kc.dev(li)
 	if d == nil {
 		return 0
 	}
-	if pc := d.SharePage(li); pc > 0 && pc != kc.layers[li].p {
+	if pc := d.SharePage(kc.key(li)); pc > 0 && pc != kc.layers[li].p {
 		return pc
 	}
 	return 0
@@ -689,8 +689,8 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 		if !kc.walksApart(li) {
 			continue
 		}
-		d := kc.devAt(li)
-		p := d.SharePage(li)
+		d := kc.dev(li)
+		p := d.SharePage(kc.key(li))
 		if pc != 0 && p != pc {
 			return 0, 0
 		}
@@ -701,7 +701,7 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 		n := 0
 		for !kc.recurrent || (n+1)*pc <= limit {
 			key := kc.pageKeyP(pc, n)
-			if key == "" || !d.MapKV(li, n, key, (n+1)*pc) {
+			if key == "" || !d.MapKV(kc.key(li), n, key, (n+1)*pc) {
 				break
 			}
 			n++
@@ -722,12 +722,12 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 			if f%kvChunk == 0 && pc%kvChunk == 0 {
 				key = kc.chunkKey(best + f)
 			}
-			if key == "" || !kc.devAt(first).MapKV(first, j, key, best+f) {
+			if key == "" || !kc.dev(first).MapKV(kc.key(first), j, key, best+f) {
 				continue
 			}
 			tail = f
 			for li := first + 1; li < len(kc.layers) && tail > 0; li++ {
-				if kc.walksApart(li) && !kc.devAt(li).MapKV(li, j, key, best+f) {
+				if kc.walksApart(li) && !kc.dev(li).MapKV(kc.key(li), j, key, best+f) {
 					tail = 0
 				}
 			}
@@ -751,11 +751,11 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 // the card names by no key.
 func (kc *kvCache) mapApart(li, n, cover int) bool {
 	s := &kc.layers[li]
-	d := kc.devAt(li)
+	d := kc.dev(li)
 	if d == nil || n <= 0 {
 		return false
 	}
-	pc := d.SharePage(li)
+	pc := d.SharePage(kc.key(li))
 	if pc <= 0 {
 		return false
 	}
@@ -769,7 +769,7 @@ func (kc *kvCache) mapApart(li, n, cover int) bool {
 		default:
 			key = kc.pageKeyFillP(pc, j, fill)
 		}
-		if key == "" || !d.MapKV(li, j, key, n) {
+		if key == "" || !d.MapKV(kc.key(li), j, key, n) {
 			return false
 		}
 	}
@@ -782,8 +782,8 @@ func (kc *kvCache) faultShared(li, n int, key string) error {
 	// A block on a device holds its history there: the page key names is
 	// put into the session's table on the card (nn.KVShareDevice.MapKV), no
 	// byte moved.
-	if d := kc.devAt(li); d != nil {
-		if kc.cardPage(li) == nil || !d.MapKV(li, n, key, kc.mapEnd) {
+	if d := kc.dev(li); d != nil {
+		if kc.cardPage(li) == nil || !d.MapKV(kc.key(li), n, key, kc.mapEnd) {
 			return ErrNoPage
 		}
 		kc.mapped += 2
@@ -866,21 +866,22 @@ func (s *Instance) kvShareDevice() bool {
 	return ok
 }
 
-// kvCopyAt is the device holding a copy of block li's history for a block on
-// it reading it when it names its pages, where block li runs on the CPU
-// device (histcross.go); nil otherwise.
-func (s *Instance) kvCopyAt(li int) nn.KVShareDevice {
-	if s.devAt(li) || !s.cardReads(li) {
+// kvCopyAt is the device holding a copy of the history key names
+// (nn.HistoryKey) for a block on it reading it when it names its pages,
+// where the history's block runs on the CPU device (histcross.go); nil
+// otherwise.
+func (s *Instance) kvCopyAt(key int) nn.KVShareDevice {
+	if src := nn.HistoryBlock(key); s.devAt(src) || !s.cardReads(src, key>>nn.HistoryShift) {
 		return nil
 	}
 	d, _ := s.ld.(nn.KVShareDevice)
 	return d
 }
 
-// kvDevAt is the device holding block li's history when it names its pages
-// (nn.KVShareDevice), nil when the block is on the CPU.
-func (s *Instance) kvDevAt(li int) nn.KVShareDevice {
-	if !s.devAt(li) {
+// kvDevAt is the device holding the history key names (nn.HistoryKey) when
+// it names its pages (nn.KVShareDevice), nil when its block is on the CPU.
+func (s *Instance) kvDevAt(key int) nn.KVShareDevice {
+	if !s.devAt(nn.HistoryBlock(key)) {
 		return nil
 	}
 	d, _ := s.ld.(nn.KVShareDevice)

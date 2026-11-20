@@ -657,7 +657,7 @@ func (g *GPU) shareCopies(sid uint64, li, page int, key string, end int) bool {
 		return true
 	}
 	g.mu.Lock()
-	o := g.at(sid, li)
+	o := g.at(sid, keyBlock(li))
 	devs := slices.Clone(g.devs)
 	g.mu.Unlock()
 	if o == nil {
@@ -668,7 +668,7 @@ func (g *GPU) shareCopies(sid uint64, li, page int, key string, end int) bool {
 			continue
 		}
 		d.mu.Lock()
-		has := d.histCopies[li][sid]
+		has := d.histCopies[keyBlock(li)][sid]
 		d.mu.Unlock()
 		if !has {
 			continue
@@ -677,7 +677,7 @@ func (g *GPU) shareCopies(sid uint64, li, page int, key string, end int) bool {
 		lockPair(sv, dv)
 		err := shareCopy(sv, dv, seqID{sid, 0}, li, page, key, end)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", li, label(d.dev, d.ord), err)
+			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", keyBlock(li), label(d.dev, d.ord), err)
 		}
 		unlockPair(sv, dv)
 		if err != nil {
@@ -694,13 +694,13 @@ func shareCopy(sv, dv *devTier, s seqID, li, page int, key string, end int) erro
 	kp := dv.kvp
 	l := kp.layers[li]
 	if l == nil {
-		return fmt.Errorf("no copy of block %d's history", li)
+		return fmt.Errorf("no copy of block %d's history", keyBlock(li))
 	}
 	if kp.p != sv.kvp.p {
 		if end < 0 {
 			return nil
 		}
-		return copySeqPages(sv, dv, s, li, page, page+1, -1)
+		return copySeqPages(sv, dv, s, keyBlock(li), page, page+1, -1)
 	}
 	if end < 0 {
 		dv.publishKV(kp, l, s, page, key)
@@ -711,7 +711,7 @@ func shareCopy(sv, dv *devTier, s seqID, li, page int, key string, end int) erro
 		return err
 	}
 	if !ok {
-		if err := copySeqPages(sv, dv, s, li, page, page+1, -1); err != nil {
+		if err := copySeqPages(sv, dv, s, keyBlock(li), page, page+1, -1); err != nil {
 			return err
 		}
 		dv.publishKV(kp, l, s, page, key)
