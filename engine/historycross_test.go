@@ -46,7 +46,10 @@ import (
 // device (historySharedAcrossTheCPU). synth-gemma3n restated to keep each
 // block's history past its rows (pastTheRows) parts its groups so too, the
 // copies its entries, and so does a block reading two others' histories
-// past its own (readsTwoFixture). The restated synth-gemma3n runs no shared
+// past its own (readsTwoFixture). Two blocks on the card reading two
+// histories of one block on the CPU device, the lower the history past its
+// rows alone (openKeepsTwo), read each from the card's copy, the copy
+// widened to the second as its reader is placed. The restated synth-gemma3n runs no shared
 // arm: a card names no page of a history past a block's rows for the prefix
 // cache (open-questions.md).
 func TestAHistoryReadAcrossTheCPU(t *testing.T) {
@@ -55,7 +58,8 @@ func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 		open    func(*testing.T, string) (*model.Model, *c6Golden, []Option)
 		noShare bool
 	}{{"synth-gemma4-e", openGemma4, false}, {"synth-gemma3n", openGemma3n, false},
-		{"synth-gemma3n-past-the-rows", openPastTheRows(openGemma3n, "synth-gemma3n", 1), true}, {"synth-seedoss-readstwo", openReadsTwo, false}} {
+		{"synth-gemma3n-past-the-rows", openPastTheRows(openGemma3n, "synth-gemma3n", 1), true}, {"synth-seedoss-readstwo", openReadsTwo, false},
+		{"synth-seedoss-keepstwo", openKeepsTwo, true}} {
 		t.Run(f.name, func(t *testing.T) {
 			m, _, io := f.open(t, f.name)
 			defer m.Close()

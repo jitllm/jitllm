@@ -106,6 +106,15 @@ func copyContainer(src, dst string) error {
 // the rows' history of each block of reads, the same queries, heads and
 // scale, the attentions added before anything reads the first.
 func readsTwo(g *graph.Graph, reads []int) (*graph.Graph, error) {
+	hs := make([]graph.HistoryRead, len(reads))
+	for i, n := range reads {
+		hs[i] = graph.HistoryRead{Block: n}
+	}
+	return readsHists(g, hs)
+}
+
+// readsHists is readsTwo over each history of reads, by (block, index).
+func readsHists(g *graph.Graph, reads []graph.HistoryRead) (*graph.Graph, error) {
 	if g == nil {
 		return nil, fmt.Errorf("the block states no graph")
 	}
@@ -117,16 +126,19 @@ func readsTwo(g *graph.Graph, reads []int) (*graph.Graph, error) {
 		y := o.Out[0]
 		sum := y
 		var ops []graph.Op
-		for _, n := range reads {
+		for _, r := range reads {
+			n := r.Block
 			if n >= g.Block {
 				return nil, fmt.Errorf("block %d reads block %d's history, which is not below it", g.Block, n)
 			}
 			v := out.Values[y]
-			v.Name = fmt.Sprintf("%s.of%d", v.Name, n)
+			v.Name = fmt.Sprintf("%s.of%d.%d", v.Name, n, r.Hist)
 			a := graph.ValueID(len(out.Values))
 			out.Values = append(out.Values, v)
+			ref := graph.SharedHistory(n)
+			ref.Hist = uint8(r.Hist)
 			ops = append(ops, graph.Op{Kind: graph.OpAttend, In: slices.Clone(o.In), Out: []graph.ValueID{a},
-				Weight: slices.Clone(o.Weight), Reads: []graph.StateRef{graph.SharedHistory(n)}, Attr: o.Attr})
+				Weight: slices.Clone(o.Weight), Reads: []graph.StateRef{ref}, Attr: o.Attr})
 			v.Name += ".sum"
 			s := graph.ValueID(len(out.Values))
 			out.Values = append(out.Values, v)
@@ -138,6 +150,66 @@ func readsTwo(g *graph.Graph, reads []int) (*graph.Graph, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("block %d states no attention over its own rows", g.Block)
+}
+
+// keepsTwice is g with its rows appended a second time as its history h,
+// kept beside the rows: the same keys and values, read by no op of g.
+func keepsTwice(g *graph.Graph, h uint8) (*graph.Graph, error) {
+	out := cloned(g)
+	for i, o := range out.Ops {
+		if o.Kind != graph.OpKVAppend || len(o.Writes) != 1 || o.Writes[0].State != graph.StateKV || o.Writes[0].From != 0 || o.Writes[0].Hist != 0 {
+			continue
+		}
+		c := o
+		c.In = slices.Clone(o.In)
+		c.Reads = []graph.StateRef{{State: graph.StateKV, Hist: h}}
+		c.Writes = []graph.StateRef{{State: graph.StateKV, Version: 1, Hist: h}}
+		out.Ops = slices.Insert(out.Ops, i+1, c)
+		if out.Routed != (graph.Region{}) && out.Routed.Lo > i {
+			out.Routed.Lo, out.Routed.Hi = out.Routed.Lo+1, out.Routed.Hi+1
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("block %d appends to no rows of its own", g.Block)
+}
+
+// openKeepsTwo opens synth-seedoss with block 0 keeping its rows a second
+// time as its history 1 (keepsTwice), block n-2 reading that history and
+// block n-1 its rows (readsHists): two readers of one block reading two of
+// its histories, the lower one the history past the rows alone.
+func openKeepsTwo(t *testing.T, _ string) (*model.Model, *c6Golden, []Option) {
+	t.Helper()
+	m, err := model.Open(jlmOf(t, testmodels.Path("synth-seedoss.gguf")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nl := m.Cfg.NLayer
+	f := m.FrontGraphs()
+	k, err := keepsTwice(m.Composing().BlockGraph(0), 1)
+	if err != nil {
+		m.Close()
+		t.Fatal(err)
+	}
+	lo, err := readsHists(m.Composing().BlockGraph(nl-2), []graph.HistoryRead{{Block: 0, Hist: 1}})
+	if err != nil {
+		m.Close()
+		t.Fatal(err)
+	}
+	hi, err := readsHists(m.Composing().BlockGraph(nl-1), []graph.HistoryRead{{Block: 0}})
+	if err != nil {
+		m.Close()
+		t.Fatal(err)
+	}
+	f.Blocks[0], f.Blocks[nl-2], f.Blocks[nl-1] = k, lo, hi
+	if kept := m.Composing().BlockGraph(0).KeptHistories(); len(kept) != 1 || kept[0].Hist != 1 {
+		m.Close()
+		t.Fatalf("block 0 keeps %v past its rows: the restatement selected nothing", kept)
+	}
+	if got := m.Composing().BlockGraph(nl - 2).ReadsMore(); !slices.Equal(got, []graph.HistoryRead{{Block: 0, Hist: 1}}) {
+		m.Close()
+		t.Fatalf("block %d reads %v past its own: the restatement selected nothing", nl-2, got)
+	}
+	return m, nil, []Option{WithKVF16(false)}
 }
 
 // readsAnother says a block of m reads another block's history, as its

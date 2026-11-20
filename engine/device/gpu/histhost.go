@@ -79,13 +79,27 @@ func (g *devTier) hostHistsOf(dst []hostHist, l *layer, src int) []hostHist {
 	return hostHists(dst, src, l.kvSrc, l.rgeom, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound, g.KVF16)
 }
 
+// lacksHists reports that this device holds no pool layer of one of the
+// histories hs of block src. Callers hold g.mu.
+func (g *devTier) lacksHists(src int, hs []hostHist) bool {
+	for _, x := range hs {
+		if g.kvp == nil || g.kvp.layers[histKey(src, x.h)] == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // makeHostCopy gives d a copy of session sid's histories hs of block src,
 // which the session runs on the CPU device: empty, for the engine to write.
-// p is the reading block's plan, nil once it is placed.
+// A copy d holds already is widened by the histories of hs it lacks, each
+// written from the sequence's start (hostCopyFrom). p is the reading
+// block's plan, nil once it is placed.
 func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, hs []hostHist, p *nn.LayerPlan) error {
 	dv := d.bareView(sid)
 	dv.mu.Lock()
 	defer dv.mu.Unlock()
+	widen := dv.histCopies[src][sid] && dv.hostOf[src][sid]
 	if p != nil {
 		dv.initKVCap(p)
 	}
@@ -115,26 +129,30 @@ func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, hs []hostHist, p *nn
 			}
 		}
 	}
-	if dv.histCopies == nil {
-		dv.histCopies = map[int]map[uint64]bool{}
+	if !widen {
+		if dv.histCopies == nil {
+			dv.histCopies = map[int]map[uint64]bool{}
+		}
+		if dv.histCopies[src] == nil {
+			dv.histCopies[src] = map[uint64]bool{}
+		}
+		if dv.hostOf == nil {
+			dv.hostOf = map[int]map[uint64]bool{}
+		}
+		if dv.hostOf[src] == nil {
+			dv.hostOf[src] = map[uint64]bool{}
+		}
+		dv.histCopies[src][sid] = true
+		dv.hostOf[src][sid] = true
+		dv.copyN.Add(1)
 	}
-	if dv.histCopies[src] == nil {
-		dv.histCopies[src] = map[uint64]bool{}
-	}
-	if dv.hostOf == nil {
-		dv.hostOf = map[int]map[uint64]bool{}
-	}
-	if dv.hostOf[src] == nil {
-		dv.hostOf[src] = map[uint64]bool{}
-	}
-	dv.histCopies[src][sid] = true
-	dv.hostOf[src][sid] = true
-	dv.copyN.Add(1)
 	if err := dv.copySeat(kp, src); err != nil {
 		dv.forgetCopy(sid, src)
 		return err
 	}
-	dv.HistoryCopies++
+	if !widen {
+		dv.HistoryCopies++
+	}
 	return nil
 }
 

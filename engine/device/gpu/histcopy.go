@@ -464,16 +464,7 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 		if o == d {
 			continue
 		}
-		d.mu.Lock()
-		have, host := d.histCopies[src][sid], d.hostOf[src][sid]
-		if have && host != (o == nil) {
-			d.forgetCopy(sid, src)
-			have = false
-		}
-		d.mu.Unlock()
-		if have {
-			continue
-		}
+		var hs []hostHist
 		if o == nil {
 			win, chunked := p.Graph.AttendWindow()
 			kvSrc := p.Graph.ReadsHistoryOf()
@@ -481,12 +472,29 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 			if p.Spec != nil {
 				kept, bound = p.Spec.Hists, p.Spec.Bound
 			}
-			hs := hostHists(nil, src, kvSrc, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), kept, p.Graph.ReadsMore(), bound, d.KVF16)
+			hs = hostHists(nil, src, kvSrc, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), kept, p.Graph.ReadsMore(), bound, d.KVF16)
+		}
+		d.mu.Lock()
+		have, host := d.histCopies[src][sid], d.hostOf[src][sid]
+		if have && host != (o == nil) {
+			d.forgetCopy(sid, src)
+			have = false
+		}
+		// A copy as the CPU's made for a reader placed before this one is
+		// widened by the histories this one reads that it lacks.
+		widen := have && o == nil && d.lacksHists(src, hs)
+		d.mu.Unlock()
+		if have && !widen {
+			continue
+		}
+		if o == nil {
 			if err := g.makeHostCopy(sid, src, d, hs, p); err != nil {
 				g.dropCopies(sid, d, made)
 				return nil, err
 			}
-			made = append(made, src)
+			if !widen {
+				made = append(made, src)
+			}
 			continue
 		}
 		if err := g.makeHistCopy(sid, src, o, d, p); err != nil {
@@ -561,7 +569,11 @@ func (g *GPU) settleCopies(sid uint64) error {
 				continue
 			}
 			if o, ok := want[src]; ok && (o == nil) == d.hostOf[src][sid] {
-				delete(want, src)
+				// A copy as the CPU's lacking a history a block here reads
+				// is widened (makeHostCopy).
+				if o != nil || !d.lacksHists(src, by[src]) {
+					delete(want, src)
+				}
 				continue
 			}
 			drop = append(drop, hcopy{d: d, src: src})

@@ -5180,6 +5180,18 @@ NMSE 6.2e-6 and below from the CPU's on every pair, where the commit before
 refused the placement, "block 2's history pages 128 positions on ... and 256
 on ...: a copy is the pages as they are".
 
+A card's copy of a block on the CPU device was made with the histories its
+first reader there read (hostHists), and a later reader there reading
+another history of the same block was not given it: copiesFor and
+settleCopies kept the copy they found. A copy lacking a history a reader
+reads is widened now (lacksHists, makeHostCopy), the new history written
+from the sequence's start (hostCopyFrom finds none of it held).
+TestAHistoryReadAcrossTheCPU's synth-seedoss restated so block 0 keeps its
+rows a second time as history 1, read by block 1 alone and its rows by
+block 2 (openKeepsTwo): at the commit before, strict placement
+refused block 2 with the readers on the card ("binds pages.1, which the
+part's call site does not provide") on CUDA and Vulkan; every arm passes now.
+
 ## The projection after a block moves to the CPU
 
 A block moved to the CPU (moveOffCards) took the instance's projection off its
