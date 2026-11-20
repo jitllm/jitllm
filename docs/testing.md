@@ -141,6 +141,8 @@ Made rather than fetched -- the script's header has the commands:
 - `embed/synth-gemma-embedding.gguf`: `scripts/embedfixture.py`, its checkpoint
   in `$CV_HF`, then `scripts/embedgold.py synth-gemma-embedding` for its golden;
 - `tiny-qwen3moe-f32.gguf`: `scripts/tiny-moe-gguf.py`, from `tiny-qwen3moe-hf/`;
+- `fusedqkv/phitiny/{split,fused}.gguf`: `scripts/fuseqkv.py`, Phi-tiny-MoE's
+  first two blocks with q, k and v apart and joined into attn_qkv;
 - `synth-kimilinear-f32.gguf`: `scripts/kimilineargguf.py`, llama.cpp's converter
   (`LCPP_SRC`) on `synth-kimilinear/` restated in Moonshot's checkpoint layout;
 - `synth-llama4-q8-hf/`: `scripts/llama4hf.py`, `synth-llama4-q8.gguf` read back

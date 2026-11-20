@@ -163,49 +163,79 @@ func localAxes(c *Config) error {
 }
 
 // headsOfProjections is the head width of a file that states no
-// attention.key_length where its q projection is not its heads at
+// attention.key_length where its projections are not its heads at
 // embedding/heads (Phi-tiny-MoE's sixteen heads of 128 on a 4096-wide
-// model): q's rows over the heads, which k's rows over the kv heads agree
-// with, and v's at attention.value_length where the file states one. The
-// value and rotary widths the file leaves to the head follow it. A rotary
-// stated at embedding/heads is the same quotient the file's writer took for
-// the head, so it is the head's whole width only where the class turns the
-// whole head; elsewhere the file does not say which of the two it means. A
-// gated q projection carries the gate's rows beside the heads', and its
-// files state key_length.
+// model). Apart, it is q's rows over the heads, which k's rows over the kv
+// heads agree with, and v's at attention.value_length where the file states
+// one. Fused, where attn_qkv holds other rows than the statement cuts it
+// into, it is the rows over the heads and the kv heads twice (or once, past
+// a stated value width), and the statement cuts it at that width. The value
+// and rotary widths the file leaves to the head follow it. A rotary stated at
+// embedding/heads is the same quotient the file's writer took for the head,
+// so it is the head's whole width only where the class turns the whole head;
+// elsewhere the file does not say which of the two it means. A gated q
+// projection carries the gate's rows beside the heads', and its files state
+// key_length.
 func headsOfProjections(f *meta.File, c *Config) error {
 	if _, ok := f.Key("attention.key_length"); ok || c.Flags.Has(jlm.FlagAttnOutGate) || c.NHead == 0 {
-		return nil
-	}
-	q, ok := f.Layer(0, "attn_q.weight")
-	if !ok || len(q.Dims) != 2 || q.Dims[1] == uint64(c.NHead)*uint64(c.HeadDim) {
 		return nil
 	}
 	_, perKV, err := layerCount(f, "attention.head_count_kv", c.NHead)
 	if err != nil {
 		return err
 	}
-	nkv := uint64(c.NKVHead)
+	nh, nkv := uint64(c.NHead), uint64(c.NKVHead)
 	if perKV != nil {
 		nkv = uint64(perKV[0])
 	}
-	w := q.Dims[1] / uint64(c.NHead)
-	if q.Dims[1]%uint64(c.NHead) != 0 || w == 0 {
-		return fmt.Errorf("blk.0.attn_q.weight has %d rows, not whole heads of %d, and the file states no "+
-			"attention.key_length: %w", q.Dims[1], c.NHead, ErrBadInput)
-	}
-	vw := f.UintKey("attention.value_length", w)
-	k, kok := f.Layer(0, "attn_k.weight")
-	v, vok := f.Layer(0, "attn_v.weight")
-	if !kok || !vok || len(k.Dims) != 2 || len(v.Dims) != 2 || nkv == 0 {
-		return fmt.Errorf("blk.0.attn_q.weight is %d heads of %d, not of embedding/heads %d, and the file "+
-			"states no attention.key_length and no blk.0 k and v projection to hold them to: %w",
-			c.NHead, w, c.HeadDim, ErrBadInput)
-	}
-	if k.Dims[1] != nkv*w || v.Dims[1] != nkv*vw {
-		return fmt.Errorf("blk.0.attn_q.weight is %d heads of %d, and blk.0.attn_k.weight's %d rows and "+
-			"blk.0.attn_v.weight's %d are not %d kv heads of %d and %d: %w",
-			c.NHead, w, k.Dims[1], v.Dims[1], nkv, w, vw, ErrBadInput)
+	_, vstated := f.Key("attention.value_length")
+	vl := f.UintKey("attention.value_length", 0)
+	var w, vw uint64
+	by := "blk.0.attn_q.weight"
+	if qkv, ok := f.Layer(0, "attn_qkv.weight"); ok && len(qkv.Dims) == 2 {
+		if nkv == 0 || len(c.LayerKinds) > 0 && c.LayerKinds[0] == jlm.LayerLinearAttn {
+			return nil
+		}
+		cut, stated, err := statedQKVRows(f, c)
+		if err != nil || !stated || cut == qkv.Dims[1] {
+			return err
+		}
+		by = "blk.0.attn_qkv.weight"
+		r := qkv.Dims[1]
+		switch {
+		case vstated && r > nkv*vl && (r-nkv*vl)%(nh+nkv) == 0:
+			w, vw = (r-nkv*vl)/(nh+nkv), vl
+		case !vstated && r%(nh+2*nkv) == 0:
+			w = r / (nh + 2*nkv)
+			vw = w
+		}
+		if w == 0 {
+			return fmt.Errorf("%s has %d rows, not the %d its statement cuts and not %d heads and %d kv heads "+
+				"of one width, and the file states no attention.key_length: %w", by, r, cut, nh, nkv, ErrBadInput)
+		}
+	} else {
+		q, ok := f.Layer(0, "attn_q.weight")
+		if !ok || len(q.Dims) != 2 || q.Dims[1] == nh*uint64(c.HeadDim) {
+			return nil
+		}
+		w = q.Dims[1] / nh
+		if q.Dims[1]%nh != 0 || w == 0 {
+			return fmt.Errorf("blk.0.attn_q.weight has %d rows, not whole heads of %d, and the file states no "+
+				"attention.key_length: %w", q.Dims[1], c.NHead, ErrBadInput)
+		}
+		vw = f.UintKey("attention.value_length", w)
+		k, kok := f.Layer(0, "attn_k.weight")
+		v, vok := f.Layer(0, "attn_v.weight")
+		if !kok || !vok || len(k.Dims) != 2 || len(v.Dims) != 2 || nkv == 0 {
+			return fmt.Errorf("blk.0.attn_q.weight is %d heads of %d, not of embedding/heads %d, and the file "+
+				"states no attention.key_length and no blk.0 k and v projection to hold them to: %w",
+				c.NHead, w, c.HeadDim, ErrBadInput)
+		}
+		if k.Dims[1] != nkv*w || v.Dims[1] != nkv*vw {
+			return fmt.Errorf("blk.0.attn_q.weight is %d heads of %d, and blk.0.attn_k.weight's %d rows and "+
+				"blk.0.attn_v.weight's %d are not %d kv heads of %d and %d: %w",
+				c.NHead, w, k.Dims[1], v.Dims[1], nkv, w, vw, ErrBadInput)
+		}
 	}
 	quot := c.HeadDim
 	c.HeadDim, c.HeadDimV = uint32(w), 0
@@ -215,10 +245,50 @@ func headsOfProjections(f *meta.File, c *Config) error {
 	if _, ok := f.Key("rope.dimension_count"); !ok || c.NRot == quot && c.Stated.wholeRotary != "" {
 		c.NRot = c.HeadDim
 	} else if c.NRot == quot {
-		return fmt.Errorf("rope.dimension_count %d is embedding/heads, and blk.0.attn_q.weight is %d heads of "+
-			"%d: the file does not say whether its rotary turns the whole head: %w", quot, c.NHead, w, ErrBadInput)
+		return fmt.Errorf("rope.dimension_count %d is embedding/heads, and %s is %d heads of %d: the file "+
+			"does not say whether its rotary turns the whole head: %w", quot, by, c.NHead, w, ErrBadInput)
+	}
+	if by != "blk.0.attn_qkv.weight" {
+		return nil
+	}
+	for n, e := range map[string]string{
+		"q": fmt.Sprintf("at(attention.head_count, block) * %d", w),
+		"k": fmt.Sprintf("at(attention.head_count_kv ?? (attention.head_count), block) * %d", w),
+		"v": fmt.Sprintf("at(attention.head_count_kv ?? (attention.head_count), block) * %d", vw),
+	} {
+		if c.Stated.sizes[n], err = parseExpr(e); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// statedQKVRows is how many rows the statement cuts block 0's fused attn_qkv
+// into, its sizes read off the file's keys; false where it cuts none.
+func statedQKVRows(f *meta.File, c *Config) (uint64, bool, error) {
+	if c.Stated.blockTensors["attn_qkv.weight"] == nil {
+		return 0, false, nil
+	}
+	env := ggufEnv(f)
+	at0 := func(p string) any {
+		if p == "block" {
+			return 0.0
+		}
+		return env(p)
+	}
+	var rows float64
+	for _, n := range []string{"q", "k", "v"} {
+		x, ok := c.Stated.sizes[n]
+		if !ok {
+			return 0, false, nil
+		}
+		v, err := evalNum(x, at0)
+		if err != nil {
+			return 0, false, fmt.Errorf("size.%s: %w", n, err)
+		}
+		rows += v
+	}
+	return uint64(rows), true, nil
 }
 
 // configOfFile is configOf for every file but the ones read through a view
