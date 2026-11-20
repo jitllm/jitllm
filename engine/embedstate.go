@@ -150,7 +150,8 @@ func (s *Instance) embedPrefill(ids []int32, out []float32, raw bool, norm int) 
 	}
 	s.Reset()
 	clear(out)
-	s.emb = &embedMode{bidir: c.NonCausal, pool: c.Pooling, total: len(ids), out: out, raw: raw, norm: float32(norm)}
+	s.mark = embedMode{bidir: c.NonCausal, pool: c.Pooling, total: len(ids), out: out, raw: raw, norm: float32(norm)}
+	s.emb = &s.mark
 	defer func() { s.emb = nil }()
 	_, err := s.Prefill(ids)
 	return err

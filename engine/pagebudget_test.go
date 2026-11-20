@@ -14,6 +14,8 @@ import (
 // budget actually binds before comparing tokens, since a budget that did
 // nothing would give two identical fully-resident models.
 func TestOpenHonoursAPageBudget(t *testing.T) {
+	// Every embedding model's vectors (embedprinciples_test.go).
+	eachEmbedModel(t, embedOpenHonoursAPageBudget)
 	path, ok := models()["stories260K"]
 	if !ok {
 		t.Skip("no small model in the table")
@@ -122,6 +124,11 @@ func forwardBatchFaultsGate(t *testing.T, opts ...Option) {
 	// the map's.
 	for _, name := range append(principleFixtures(), principleMixtures()...) {
 		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, testmodels.Path(name), opts...) })
+	}
+	// An embedding model's batch of inputs, each on a session's lease
+	// (embedprinciples_test.go).
+	if len(opts) == 0 {
+		eachEmbedModel(t, embedLeaseFaultsItsBlocksIn)
 	}
 }
 

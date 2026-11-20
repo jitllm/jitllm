@@ -254,6 +254,9 @@ func TestRelocationTakesFromTheDeviceThatRefused(t *testing.T) {
 // a budget raised mid-sequence (the block returns at the next token and must
 // bring the history it built on the host).
 func TestRelocatedBlocksComeBack(t *testing.T) {
+	// Every encoder's readouts: the embedding models and Laya's fixture
+	// (embedprinciples_test.go).
+	eachEncoder(t, embedBlocksComeBack)
 	w := fusedRunsCheck(t, true)
 	defer w.done()
 	m, ids, used := relocationModel(t)

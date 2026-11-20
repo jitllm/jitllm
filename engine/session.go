@@ -80,8 +80,8 @@ type Session struct {
 	// view and its calls on the CPU device (lanes, bound by the instance it
 	// leases, bindLanes).
 	routes [2]route
-	// req is a marker head's request words (MarkScores), mark its readout's
-	// run.
+	// req is a marker head's request words (MarkScores), mark the run of its
+	// readout or of an embedding's (embedPrefill).
 	req      []uint32
 	mark     embedMode
 	ldRoom   nn.RoomReporter

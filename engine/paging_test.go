@@ -71,6 +71,8 @@ func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)))
 		})
 	}
+	// And every embedding model's vectors (embedprinciples_test.go).
+	eachEmbedModel(t, embedPagesWithTheSameAnswer)
 }
 
 // pagingDoesNotChangeTheAnswer is TestPagingDoesNotChangeTheAnswer on one model.

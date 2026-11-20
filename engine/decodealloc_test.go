@@ -158,6 +158,8 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 	// is a choice of this gate, not a second path: paging is gated elsewhere
 	// (TestPagingDoesNotChangeTheAnswer), and scripts/cap bounds what it holds.
 	resident := WithPageBudget(1 << 40)
+	// Every embedding model's warm call (embedprinciples_test.go).
+	eachEmbedModel(t, func(t *testing.T, path string) { embedDoesNotAllocate(t, path, specs) })
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			// jlmOf skips naming the model when neither it nor its container

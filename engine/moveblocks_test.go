@@ -63,6 +63,9 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 			blocksMoveBetweenDevices(t, path, moveWhole, composedParts)
 		})
 	}
+	// Every encoder's readouts: the embedding models and Laya's fixture
+	// (embedprinciples_test.go).
+	eachEncoder(t, embedBlocksMoveBetweenDevices)
 }
 
 // The arms of TestBlocksMoveBetweenDevices.

@@ -281,6 +281,9 @@ func TestLayerRelocatesToAnotherDevice(t *testing.T) {
 		path := jlmOf(t, testmodels.Path(name))
 		t.Run(name, func(t *testing.T) { layerRelocatesToAnotherDevice(t, path, composedParts, w) })
 	}
+	// Every encoder's readouts: the embedding models and Laya's fixture
+	// (embedprinciples_test.go).
+	eachEncoder(t, embedRelocatesToAnotherDevice)
 }
 
 // layerRelocatesToAnotherDevice is TestLayerRelocatesToAnotherDevice on one
