@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/gguf"
@@ -137,6 +138,30 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 		if err := headAlone(mustOpen(t, p), p); err != nil {
 			t.Errorf("%s reads as a head alone: %v", filepath.Base(p), err)
 		}
+	}
+	if _, err := FeaturesOf(head, ""); !errors.Is(err, ErrPart) {
+		t.Errorf("the head's features read alone: %v, want ErrPart", err)
+	}
+	if _, err := StreamGGUFs(openFileRemote(t, head), nil, filepath.Join(dir, "streamed.jlm"),
+		fp); !errors.Is(err, ErrPart) {
+		t.Errorf("the head streamed alone: %v, want ErrPart", err)
+	}
+	// The trunk with its head states what the model in one file does, and
+	// the features join the head as the conversion does: refusing it beside
+	// a file that carries its block already.
+	want, err := FeaturesOf(full, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := FeaturesOf(trunk, "", WithHead(head))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the trunk with its head takes %d features, the one-file model %d", len(got), len(want))
+	}
+	if _, err := FeaturesOf(full, "", WithHead(head)); err == nil {
+		t.Errorf("the features of a head joined to a file that carries its block already")
 	}
 }
 

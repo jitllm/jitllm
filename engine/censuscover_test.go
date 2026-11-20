@@ -1,11 +1,16 @@
 package engine
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestTheCensusCoversEveryFeature holds the census's models to what the
@@ -58,6 +63,21 @@ func censusGaps(t *testing.T, ms []auditModel) (features, projectors []string) {
 			opts = append(opts, convert.WithModelConfig(c))
 		}
 		fs, err := convert.FeaturesOf(m.path, m.mmproj, opts...)
+		if errors.Is(err, convert.ErrPart) {
+			// A part takes its features joined to the trunk it was exported
+			// beside, as `jitllm convert -head` converts it.
+			trunk := trunkOf(m.path)
+			if trunk == "" {
+				t.Errorf("%s is part of a model and no trunk is paired with it (trunkPairs): %v", m.name, err)
+				continue
+			}
+			fs, err = convert.FeaturesOf(trunk, m.mmproj, append(opts, convert.WithHead(m.path))...)
+			if err != nil {
+				t.Errorf("%s joined to %s: %v", m.name, filepath.Base(trunk), err)
+				continue
+			}
+			t.Logf("%s: a part, counted joined to %s", m.name, filepath.Base(trunk))
+		}
 		if err != nil {
 			// A file the converter refuses takes nothing; the gates that run
 			// every model hold it to its refusal.
@@ -109,4 +129,27 @@ func ggufProjector(t *testing.T, p string) string {
 		return v
 	}
 	return ggufKey(t, p, "clip.vision.projector_type")
+}
+
+// trunkOf is the trunk GGUF a prediction head published alone (convert.ErrPart)
+// joins, by trunkPairs; "" where none is paired or the box does not hold it.
+func trunkOf(p string) string {
+	rel := filepath.ToSlash(strings.TrimPrefix(p, testmodels.Dir()+string(filepath.Separator)))
+	t, ok := trunkPairs()[rel]
+	if !ok {
+		return ""
+	}
+	q := testmodels.Path(t)
+	if _, err := os.Stat(q); err != nil {
+		return ""
+	}
+	return q
+}
+
+// trunkPairs are the heads published alone, relative to the model directory,
+// and the trunk each was exported beside.
+func trunkPairs() map[string]string {
+	return map[string]string{
+		"synth-qwen4exp-mtp-head.gguf": "synth-qwen4exp-mtp-trunk.gguf",
+	}
 }

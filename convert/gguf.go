@@ -32,50 +32,63 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 	for _, fn := range opts {
 		fn(&o)
 	}
-	// Refused rather than ignored: a GGUF's weights are already quantized.
-	if o.q8 {
-		return nil, fmt.Errorf("convert: WithQ8 quantizes a safetensors model; %s is a GGUF", src)
-	}
-	f, err := gguf.Open(src)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if err := headAlone(f, src); err != nil && o.head == "" {
-		return nil, err
-	}
-	if o.head != "" {
-		h, err := gguf.Open(o.head)
-		if err != nil {
-			return nil, err
-		}
-		defer h.Close()
-		if f, err = withHead(f, h, src, o.head); err != nil {
-			return nil, err
-		}
-	}
-	var vf *meta.File
-	if mmproj != "" {
-		if vf, err = gguf.Open(mmproj); err != nil {
-			return nil, err
-		}
-		defer vf.Close()
-	}
-	s, err := buildGGUF(f, vf, src, mmproj, o)
-	if err != nil {
-		return nil, err
-	}
 	// Stamp which build wrote this: most of a container's content is converter
 	// decisions the format version cannot catch. See jlm.Fingerprint.Writer.
 	if fp.Writer == "" {
 		fp.Writer = jlm.WriterID()
 	}
-	return jlm.Write(dst, s, fp)
+	var h *jlm.Header
+	err := withGGUF(src, mmproj, o, func(_ *meta.File, s *jlm.Source) (err error) {
+		h, err = jlm.Write(dst, s, fp)
+		return err
+	})
+	return h, err
+}
+
+// withGGUF builds the container's source for the GGUF src, joined to the
+// head o names, and its tower mmproj, and hands it with the text file it was
+// built from to use while the files are open.
+func withGGUF(src, mmproj string, o options, use func(*meta.File, *jlm.Source) error) error {
+	// Refused rather than ignored: a GGUF's weights are already quantized.
+	if o.q8 {
+		return fmt.Errorf("convert: WithQ8 quantizes a safetensors model; %s is a GGUF", src)
+	}
+	f, err := gguf.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if o.head != "" {
+		h, err := gguf.Open(o.head)
+		if err != nil {
+			return err
+		}
+		defer h.Close()
+		if f, err = withHead(f, h, src, o.head); err != nil {
+			return err
+		}
+	}
+	var vf *meta.File
+	if mmproj != "" {
+		if vf, err = gguf.Open(mmproj); err != nil {
+			return err
+		}
+		defer vf.Close()
+	}
+	s, err := buildGGUF(f, vf, src, mmproj, o)
+	if err != nil {
+		return err
+	}
+	return use(f, s)
 }
 
 // buildGGUF is the container's source for a text model f and, when vf is
-// not nil, its vision tower, named src and mmproj in messages.
+// not nil, its vision tower, named src and mmproj in messages. A prediction
+// head alone is a part of a model, said before anything is read of it.
 func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, error) {
+	if err := headAlone(f, src); err != nil {
+		return nil, err
+	}
 	if err := o.stateAbsentKeys(f); err != nil {
 		return nil, err
 	}

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A feature is one thing a statement of the library states: an op of a
@@ -189,22 +189,12 @@ func FeaturesOf(src, mmproj string, opts ...Option) ([]string, error) {
 		}
 		arch = ha.name
 	} else {
-		f, err := gguf.Open(src)
-		if err != nil {
+		if err := withGGUF(src, mmproj, o, func(f *meta.File, _ *jlm.Source) error {
+			arch = f.Arch()
+			return nil
+		}); err != nil {
 			return nil, err
 		}
-		defer f.Close()
-		var vf *meta.File
-		if mmproj != "" {
-			if vf, err = gguf.Open(mmproj); err != nil {
-				return nil, err
-			}
-			defer vf.Close()
-		}
-		if _, err := buildGGUF(f, vf, src, mmproj, o); err != nil {
-			return nil, err
-		}
-		arch = f.Arch()
 	}
 	raw, err := rawContainers()
 	if err != nil {
