@@ -212,6 +212,13 @@ func (s *Instance) blockSpec(li int) nn.BlockSpec {
 // routed experts (cutBlock).
 func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	p := nn.BlockSpec{Rec: s.c.LayerKind(li).Recurrent()}
+	// The history's pool, which a card's pages hold too whether or not the
+	// CPU device composes the block.
+	p.F32 = s.kvl.fmt != nn.KVF16
+	if s.kvl.fmt.Quantized() {
+		p.KVRow, p.KVBlock = s.kvlAt(li).headDim, s.kvl.fmt.Block()
+	}
+	p.KVBF16 = s.kvl.fmt == nn.KVBF16
 	p.Why, p.Err = s.blockErr(li)
 	if p.Why != nn.DeclineServes {
 		return p
@@ -258,11 +265,6 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	// A block turns by the rotary its rope ops state, of the
 	// instance's (rotaries): each its own table, bound by instance.
 	p.Rotaries = s.rotaries()
-	p.F32 = s.kvl.fmt != nn.KVF16
-	if s.kvl.fmt.Quantized() {
-		p.KVRow, p.KVBlock = s.kvlAt(li).headDim, s.kvl.fmt.Block()
-	}
-	p.KVBF16 = s.kvl.fmt == nn.KVBF16
 	// A non-causal model's recurrent block reads both ways too: its
 	// convolution is centred over the whole run.
 	k := s.c.LayerKind(li)

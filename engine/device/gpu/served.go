@@ -1319,6 +1319,7 @@ type servedKey struct {
 	keys, page int
 	half       bool
 	latent     bool
+	pool       composer.Pool
 	t          jlm.Type
 	// held is the sheets a streamed block holds of its banks in pages, 0
 	// where they are whole.
@@ -3190,9 +3191,12 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 // poolHistory is how a pool layer of geometry k lays out its pages for the
 // composer: keys by dimension and values by position, binary16 where the
 // layer holds them so; a latent layer's one row a position, its value the
-// row itself.
+// row itself; a typed layer's rows by position as the type's words.
 func poolHistory(k kvGeom) composer.History {
-	if k.mla {
+	switch {
+	case k.typed():
+		return composer.History{Keys: k.pool, Values: k.pool, ValuesInKeys: k.mla}
+	case k.mla:
 		return composer.History{ValuesInKeys: true}
 	}
 	return composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: k.f16}}
@@ -3442,7 +3446,7 @@ func (g *devTier) blockKey(l *layer, pl *kvLayerPool, maxSeq, page, R, seqs int,
 	if k := g.kept; g.keeping && l.linear && k != nil && k.graphs[l] != nil {
 		bg = k.graphs[l]
 	}
-	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, half: geom.f16, latent: geom.mla, seqs: seqs,
+	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, half: geom.f16, latent: geom.mla, pool: geom.pool, seqs: seqs,
 		stream: stream, held: l.pagedHeld(), context: context}
 }
 

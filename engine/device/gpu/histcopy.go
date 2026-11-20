@@ -170,11 +170,11 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 		}
 		// Pools paging apart copy as rows (copyRepaged), through each
 		// side's page conversions.
-		if g := fl.geom; dkp.p != fkp.p && h == 0 && g.f16 && g.vWords(fkp.p) > 0 {
-			if err := sv.formHalves(g.kvRow, fkp.p); err != nil {
+		if dkp.p != fkp.p && h == 0 {
+			if err := sv.formGeomConv(fl.geom, fkp.p); err != nil {
 				return err
 			}
-			if err := dv.formHalves(g.kvRow, dkp.p); err != nil {
+			if err := dv.formGeomConv(fl.geom, dkp.p); err != nil {
 				return err
 			}
 		}

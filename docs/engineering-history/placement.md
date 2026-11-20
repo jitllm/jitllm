@@ -5550,3 +5550,54 @@ The leftovers, each on fake devices before and after:
 
 What is still open is in open-questions.md ("one pool spent by two
 devices").
+
+## A typed history's bytes on a card
+
+A card held a quantized or bfloat16 history as floats carrying the type's
+values: each append to a block's own history took the type's narrowing and
+widening first (a derived block graph, deviceGraph), so a block on the card
+answered as the type does and held what an f32 history holds. On Llama 3.2 1B
+at 191 positions every type's pool read 41959424 bytes, the f32 history's,
+on cuda:0 and vulkan:0 alike.
+
+The composer already read and wrote every typed layout (composer.Pool's
+Row, Block and BF16, the CPU device's pages); only the card's pool did not
+take one. A card's pool layer now holds the type's words, keys and values a
+position's row at a time as the CPU's pages do (kvGeom.pool, from the plan's
+BlockSpec KVRow, KVBlock and KVBF16), and its composed attention reads and
+appends them through that layout (poolHistory). The block's graph is the
+block's own for every type: the type is the pool's, not the graph's. Where a
+history's pages arrive and leave as floats -- a move, a copy read across the
+CPU, two cards paging apart, a page held at home -- the card narrows and
+widens them through composed forms (composer.Pool.ConvOps), the binary16 V
+pool's conversions made general (kvhalves.go): the keys of a typed page go
+through them as its values do. The planner counts the type's bytes for the
+history a placement leaves room for (planExtra).
+
+TestACardHoldsATypedHistorysBytes, every block on the card, against the f32
+history on the same card:
+
+| type | pool bytes | of f32 | the type's rows |
+|---|---|---|---|
+| q8_0 | 13123584 | 0.3128 | 0.3125 |
+| q4_0, iq4_nl | 5914624 | 0.1410 | 0.1406 |
+| q4_1 | 6569984 | 0.1566 | 0.1562 |
+| q5_0 | 7225344 | 0.1722 | 0.1719 |
+| q5_1 | 7880704 | 0.1878 | 0.1875 |
+| bf16 | 20987904 | 0.5002 | 0.5000 |
+
+The same on cuda:0 and vulkan:0 (the surplus is the table arena). The typed
+instance's log-probabilities were its reference's bit for bit on both
+cards, the reference being an f32 history whose rows take the type's
+narrowing before the append (historyReference); the gate's bound is 0.15 of
+the type's loss there. Run at the earlier commit, the gate reads 1.0000 for
+every type and goes red on the bytes while the answer passes: the float
+holding answers as the type does, which is why the bytes are asserted.
+
+A second instance of another history type offering a block a card holds was
+declined because a block has one graph; the graph is one now, and what
+declines it is the pool: one pool layer a block, one type each
+(kvPool.layers keyed by block). That is this code's choice, not a limit of
+the card, and the decline names it ("its history is held here as"); a pool
+layer a block and type is open-questions.md's "two history types in one
+block's pool on a card".

@@ -27,7 +27,10 @@ func (e tierError) Error() string { return string(e) }
 
 // kvGeom is what one attention layer's page holds: kvRow floats of K per
 // position (transposed within the page), and V beside it -- f32, binary16
-// packed two to a word, or none under MLA, where V is K's prefix.
+// packed two to a word, or none under MLA, where V is K's prefix. A typed
+// history's (pool set: q8 rows, GGUF blocks or bfloat16 halves) holds K and
+// V as the type's words a position's row at a time, as the CPU device's
+// pages do.
 type kvGeom struct {
 	kvRow int
 	f16   bool
@@ -36,12 +39,19 @@ type kvGeom struct {
 	// positions, a page holding its positions' and one spare slot
 	// (composer.History.Period).
 	period int
+	pool   composer.Pool
 }
+
+// typed is a geometry holding a quantized or bfloat16 history's words.
+func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.BF16 }
 
 // kWords and vWords are one page's K and V in 32-bit words.
 func (k kvGeom) kWords(p int) int {
-	if k.period > 1 {
+	switch {
+	case k.period > 1:
 		return composer.History{Period: k.period}.Slots(p) * k.kvRow
+	case k.typed():
+		return p * k.pool.Words(k.kvRow)
 	}
 	return p * k.kvRow
 }
@@ -55,6 +65,14 @@ func histKey(li, h int) int { return li | h<<histShift }
 
 func keyBlock(key int) int { return key & (1<<histShift - 1) }
 
+// layerOf is kp's pool layer of key, nil where kp is or it holds none.
+func (kp *kvPool) layerOf(key int) *kvLayerPool {
+	if kp == nil {
+		return nil
+	}
+	return kp.layers[key]
+}
+
 // blockHists bounds the indices of the histories key li's block keeps in
 // kp: its rows' and each past them its graph appends to, an index below it
 // with no pool layer one the block does not keep.
@@ -65,6 +83,8 @@ func (k kvGeom) vWords(p int) int {
 	switch {
 	case k.mla:
 		return 0
+	case k.typed():
+		return p * k.pool.Words(k.kvRow)
 	case k.f16:
 		return p * k.kvRow / 2
 	case k.period > 1:

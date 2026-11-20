@@ -10,7 +10,7 @@ import (
 )
 
 // cutHalf is the model.Model.DerivedBlockGraph key of a cut block's card
-// half, past every history format's (deviceGraph's keys).
+// half.
 const cutHalf = 1 << 8
 
 // expertsOnCPU says a placement's word for where a block's routed experts
@@ -32,18 +32,10 @@ func (s *Instance) cutBlock(li int) (first nn.LayerPlan, rest nn.BlockSpec, ok b
 	}
 	w := pre.Values[pre.Out[0]].Width
 	first = *s.planFor(li)
-	// The card's half writes the history as the instance's type
-	// (deviceGraph), and is one graph a model and type: a card shares a block
-	// only among the sessions that offer it the same graph. The CPU device's
-	// statement of it reads the block's own.
-	half, key := pre, cutHalf
-	if dg := s.deviceGraph(li); dg != g {
-		if half, _, err = graph.Cut(dg, dg.Routed); err != nil {
-			return first, rest, false, fmt.Errorf("engine: block %d's routed experts: %w", li, err)
-		}
-		key += int(s.kvFmt)
-	}
-	first.Graph = s.m.DerivedBlockGraph(li, key, func(*graph.Graph) *graph.Graph { return half })
+	// The card's half is one graph a model: a card shares a block only among
+	// the sessions that offer it the same graph, and the history's type is
+	// its pool's.
+	first.Graph = s.m.DerivedBlockGraph(li, cutHalf, func(*graph.Graph) *graph.Graph { return pre })
 	first.Cut = w
 	first.NExpert, first.NExpertUsed = 0, 0
 	if first.Spec != nil {

@@ -28,6 +28,22 @@ func (l Pool) rowWords() int {
 	return graph.Q8RowWords(l.Row)
 }
 
+// Words is the 32-bit words a position's row of width elements occupies.
+func (l Pool) Words(width int) int { return l.words(width) }
+
+// ConvOps is the ops that narrow rows of floats into l's words and widen
+// them back, and their attributes: GGUF blocks, q8 rows or halves.
+func (l Pool) ConvOps() (narrow, widen graph.OpKind, at graph.Attrs) {
+	at = graph.Attrs{Block: l.Block, BF16: l.BF16}
+	switch {
+	case l.Block != 0:
+		return graph.OpBlockRows, graph.OpWidenBlockRows, at
+	case l.Row > 0:
+		return graph.OpQ8Rows, graph.OpWidenQ8Rows, at
+	}
+	return graph.OpHalves, graph.OpWidenHalves, at
+}
+
 // words is the 32-bit words a position's row of width elements occupies.
 func (l Pool) words(width int) int {
 	switch {

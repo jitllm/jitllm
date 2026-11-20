@@ -2038,14 +2038,21 @@ func (s *Instance) blockWeights(li int) (nn.LayerWeights, error) {
 
 // planExtra is what a placement of blocks [0,hi) must leave room for besides
 // their weights (nn.BlockPlanner): the history this instance's context will hold
-// on its attention blocks, counted as float32 K and V (MLA's latent row), and
-// the output projection. A recurrent block's state is fixed and small.
+// on its attention blocks, counted as K and V (MLA's latent row) of float32 or
+// of the instance's typed history, which a card holds as the type's bytes,
+// and the output projection. A recurrent block's state is fixed and small.
 func (s *Instance) planExtra(hi int) uint64 {
 	c := s.c
+	row := func(w int) uint64 {
+		if f := s.kvFmt; f.Quantized() || f == nn.KVBF16 {
+			return uint64(nn.KVRowBytes(f, w))
+		}
+		return uint64(w) * 4
+	}
 	hdK, hdV := c.AttnWidths()
-	perPos := uint64(c.NKVHead*(hdK+hdV)) * 4
+	perPos := uint64(c.NKVHead) * (row(hdK) + row(hdV))
 	if c.KVLoraRank != 0 {
-		perPos = uint64(c.KVDim()) * 4
+		perPos = row(c.KVDim())
 	}
 	var n uint64
 	for li := 0; li < hi; li++ {
@@ -2077,9 +2084,9 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.HeadDim, plan.NKVHead, plan.NRot = c.HeadDimAt(li), c.NKVHeadAt(li), c.NRotAt(li)
 	plan.NHead = c.NHeadAt(li)
 	// The block as ops, from the container: what a device serving it whole
-	// forms (front.go), nil where the front end states none; its history
-	// written as the instance's type (deviceGraph).
-	plan.Graph = s.deviceGraph(li)
+	// forms (front.go), nil where the front end states none. Its history's
+	// type is the pool's (Spec's KVRow, KVBlock and KVBF16), not the graph's.
+	plan.Graph = s.m.Composing().BlockGraph(li)
 	// A marker head's blocks run in a set of their own at their geometry;
 	// the trunk's are of mixed geometry only where its blocks state their
 	// own.

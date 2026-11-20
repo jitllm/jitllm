@@ -101,7 +101,19 @@ func (g *devTier) pagedPlan(p *nn.LayerPlan) bool {
 // buffer: the value is the row's prefix.
 func (g *devTier) kvGeomOf(p *nn.LayerPlan) kvGeom {
 	latent := p.MLA()
-	return kvGeom{kvRow: p.KVRow(), f16: g.KVF16 && !latent, mla: latent}
+	pool := kvPoolOf(p)
+	return kvGeom{kvRow: p.KVRow(), f16: g.KVF16 && !latent && pool == (composer.Pool{}), mla: latent, pool: pool}
+}
+
+// kvPoolOf is the pool a plan's typed history holds its rows in, as the
+// CPU device's pages hold them (nn.BlockSpec's KVRow, KVBlock and KVBF16),
+// none for a history of floats.
+func kvPoolOf(p *nn.LayerPlan) composer.Pool {
+	if p.Spec == nil {
+		return composer.Pool{}
+	}
+	s := p.Spec
+	return composer.Pool{Row: s.KVRow, Block: s.KVBlock, Half: s.KVBF16, BF16: s.KVBF16}
 }
 
 // kvPages is the device's KV pool, made on first use. Callers hold g.mu.
@@ -498,16 +510,20 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 			seats++
 		}
 	}
-	if err := g.addKVLayer(kp, li, g.kvGeomOf(p), 1+seats); err != nil {
+	want := g.kvGeomOf(p)
+	if pl := kp.layers[li]; pl != nil && pl.geom != want {
+		return fmt.Errorf("block %d's history is held here as %+v, and this session's is %+v", li, pl.geom, want)
+	}
+	if err := g.addKVLayer(kp, li, want, 1+seats); err != nil {
 		return err
 	}
-	// A binary16 V pool's pages are narrowed and widened on the card when a
-	// history moves (migrateKV), and when a block on the CPU device reading
-	// this one's history reads it a page at a time (readRows): their forms
-	// at the pool's page are formed here, with the block, and a move or a
-	// read only runs them.
-	if geom := kp.layers[li].geom; geom.f16 && geom.vWords(kp.p) > 0 {
-		if err := g.formHalves(geom.kvRow, kp.p); err != nil {
+	// A binary16 V pool's and a typed history's pages are narrowed and
+	// widened on the card when a history moves (migrateKV), and when a block
+	// on the CPU device reading this one's history reads it a page at a time
+	// (readRows): their forms at the pool's page are formed here, with the
+	// block, and a move or a read only runs them.
+	if c, _, ok := kp.layers[li].geom.convOf(kp.p); ok {
+		if err := g.formConv(c); err != nil {
 			return err
 		}
 	}
@@ -780,49 +796,71 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return fmt.Errorf("the sequence holds %d page(s) and %d positions need %d", len(ids), pos, npages)
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
-	// A binary16 V pool's pages are narrowed and widened on the card,
-	// through the conversions formed with the block (pagedLayer).
-	var hv *pageHalves
-	if pl.geom.f16 && vw > 0 {
+	// A binary16 V pool's pages, and a typed history's keys and values, are
+	// narrowed and widened on the card, through the conversions formed with
+	// the block (pagedLayer). A typed page's keys are by position, as a
+	// latent page's are: kf is a page's keys as floats.
+	var hv *pageConv
+	conv, keys, convs := pl.geom.convOf(P)
+	if convs {
 		var err error
-		if hv, err = g.keptHalves(kvRow, P); err != nil {
+		if hv, err = g.keptConv(conv); err != nil {
 			return err
 		}
 	}
+	byPos, kf := pl.geom.mla || keys, kw
+	if keys {
+		kf = P * kvRow
+	}
 	if toDevice {
-		kPage := make([]float32, kw)
+		kPage := make([]float32, kf)
 		vPage := make([]float32, P*kvRow)
 		for j := 0; j < npages; j++ {
 			clear(kPage)
 			clear(vPage)
 			for t := j * P; t < min(pos, (j+1)*P); t++ {
-				if pl.geom.mla {
+				if byPos {
 					// MLA's row is row-major: the latent and its key, as the
 					// host holds them.
 					copy(kPage[(t%P)*kvRow:], k[t*kvRow:(t+1)*kvRow])
-					continue
+				} else {
+					for e := 0; e < kvRow; e++ {
+						kPage[e*P+t%P] = k[t*kvRow+e]
+					}
 				}
-				for e := 0; e < kvRow; e++ {
-					kPage[e*P+t%P] = k[t*kvRow+e]
+				if !pl.geom.mla {
+					copy(vPage[(t%P)*kvRow:], v[t*kvRow:(t+1)*kvRow])
 				}
-				copy(vPage[(t%P)*kvRow:], v[t*kvRow:(t+1)*kvRow])
 			}
 			if ids[j] == 0 {
 				if pl.home == nil {
 					pl.home = map[seqID][][]float32{}
 				}
+				page := make([]float32, 0, kw+vw)
+				if keys {
+					words, err := hv.narrowPage(kPage, nil, 0)
+					if err != nil {
+						return err
+					}
+					page = append(page, words...)
+				} else {
+					page = append(page, kPage...)
+				}
 				vWords := vPage[:vw] // MLA has none: the value is the key row's prefix
-				if hv != nil {
+				if hv != nil && vw > 0 {
 					var err error
 					if vWords, err = hv.narrowPage(vPage, nil, 0); err != nil {
 						return err
 					}
 				}
-				page := append(append(make([]float32, 0, kw+vw), kPage...), vWords...)
-				pl.home[s] = append(pl.home[s][:j], page)
+				pl.home[s] = append(pl.home[s][:j], append(page, vWords...))
 				continue
 			}
-			if err := pl.k.WriteAt(int(ids[j])*kw*4, f32b(kPage)); err != nil {
+			if keys {
+				if _, err := hv.narrowPage(kPage, pl.k, int(ids[j])*kw*4); err != nil {
+					return err
+				}
+			} else if err := pl.k.WriteAt(int(ids[j])*kw*4, f32b(kPage)); err != nil {
 				return err
 			}
 			if vw == 0 {
@@ -840,35 +878,49 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		}
 		return nil
 	}
-	kAll, err := g.readPages(pl, pl.k, ids[e:npages], kw)
+	// widened is one of the pools' pages widened on the card a page at a
+	// time, those in host memory too: the words of a page held at home from
+	// lo of it.
+	widened := func(pool backend.Buf, words, lo int) ([]float32, error) {
+		all := make([]float32, npages*P*kvRow)
+		for j := 0; j < npages; j++ {
+			out := all[j*P*kvRow : (j+1)*P*kvRow]
+			if j < e {
+				if page := pl.home[s][j]; page != nil {
+					if err := hv.widenPage(nil, 0, page[lo:lo+words], out); err != nil {
+						return nil, err
+					}
+				}
+				continue
+			}
+			if err := hv.widenPage(pool, int(ids[j])*words*4, nil, out); err != nil {
+				return nil, err
+			}
+		}
+		return all, nil
+	}
+	var kAll []float32
+	var err error
+	if keys {
+		kAll, err = widened(pl.k, kw, 0)
+	} else {
+		kAll, err = g.readPages(pl, pl.k, ids[e:npages], kw)
+	}
 	if err != nil {
 		return err
 	}
 	var vAll []float32
 	switch {
-	case hv != nil:
-		// Widened on the card a page at a time, those in host memory too.
-		vAll = make([]float32, npages*P*kvRow)
-		for j := 0; j < npages; j++ {
-			out := vAll[j*P*kvRow : (j+1)*P*kvRow]
-			if j < e {
-				if page := pl.home[s][j]; page != nil {
-					if err := hv.widenPage(nil, 0, page[kw:], out); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-			if err := hv.widenPage(pl.v, int(ids[j])*vw*4, nil, out); err != nil {
-				return err
-			}
+	case hv != nil && vw > 0:
+		if vAll, err = widened(pl.v, vw, kw); err != nil {
+			return err
 		}
 	case vw > 0:
 		if vAll, err = g.readPages(pl, pl.v, ids[e:npages], vw); err != nil {
 			return err
 		}
 	}
-	if e > 0 {
+	if e > 0 && hv == nil {
 		// The pages in host memory ahead of the ones read from the card. A windowed
 		// layer's page released behind its window has no copy: zeros, which
 		// nothing reads (the host trusts this history only from its window).
@@ -880,18 +932,30 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 			}
 			hk, hvs = append(hk, page[:kw]...), append(hvs, page[kw:]...)
 		}
-		kAll = append(hk, kAll...)
-		if hv == nil {
-			vAll = append(hvs, vAll...)
+		kAll, vAll = append(hk, kAll...), append(hvs, vAll...)
+	} else if e > 0 && !keys {
+		hk := make([]float32, 0, npages*kw)
+		for _, page := range pl.home[s][:e] {
+			if page == nil {
+				hk = append(hk, make([]float32, kw)...)
+				continue
+			}
+			hk = append(hk, page[:kw]...)
 		}
+		kAll = append(hk, kAll...)
 	}
 	for t := 0; t < pos; t++ {
 		j, o := t/P, t%P
-		if pl.geom.mla {
+		if byPos {
 			// Row-major, and the value is the row's prefix. The host's latent
 			// pages alias k and v and are written from both, so both carry
 			// the row: a v left zero overwrites the k just restored.
-			row := kAll[j*kw+o*kvRow : j*kw+(o+1)*kvRow]
+			row := kAll[j*kf+o*kvRow : j*kf+(o+1)*kvRow]
+			copy(k[t*kvRow:(t+1)*kvRow], row)
+			if !pl.geom.mla {
+				copy(v[t*kvRow:(t+1)*kvRow], vAll[j*P*kvRow+o*kvRow:j*P*kvRow+(o+1)*kvRow])
+				continue
+			}
 			copy(k[t*kvRow:(t+1)*kvRow], row)
 			copy(v[t*kvRow:(t+1)*kvRow], row)
 			continue

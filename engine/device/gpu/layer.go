@@ -1502,6 +1502,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			g.LastErr = fmt.Sprintf("block %d: offered with a graph other than the one this device holds for it", li)
 			return false
 		}
+		// The block's history is one pool of one type: a session holding
+		// another type's is declined before anything of it is taken.
+		if pl := g.kvp.layerOf(li); pl != nil && l.kvSrc == li && g.pagedPlan(p) && pl.geom != g.kvGeomOf(p) {
+			g.LastErr = fmt.Sprintf("block %d: its history is held here as %+v, and this session's is %+v", li, pl.geom, g.kvGeomOf(p))
+			return false
+		}
 		defer func() {
 			if placed {
 				l.join(sid)

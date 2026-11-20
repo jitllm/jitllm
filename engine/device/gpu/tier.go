@@ -1705,13 +1705,13 @@ type devShared struct {
 	// composerPasses is composer for forms over a history read in passes
 	// (composer.Registry.ForPasses).
 	composerPasses *composer.Registry
-	// halvesTo is where a history page's conversion launches (kvhalves.go),
-	// and halvesGraphs its graphs by width and direction.
-	halvesTo     launchTo
-	halvesGraphs map[halvesKey]*graph.Graph
-	// halves is the page conversions a history copy runs, by row width and
-	// page (formHalves).
-	halves map[[2]int]*pageHalves
+	// convTo is where a history page's conversion launches (kvhalves.go),
+	// and convGraphs its graphs by pool, width and direction.
+	convTo     launchTo
+	convGraphs map[convKey]*graph.Graph
+	// convs is the page conversions a history copy runs, by pool, row width
+	// and rows (formConv).
+	convs map[convPage]*pageConv
 	// embTo is the composer's gather made real on its own
 	// (materializeComposed).
 	embTo launchTo
@@ -2435,7 +2435,7 @@ func (g *devTier) Close() {
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
 	g.quiesce()
-	g.freeHalves()
+	g.freeConvs()
 	g.partsClose()
 	g.freeMarks()
 	for _, ds := range g.sess {

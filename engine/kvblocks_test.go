@@ -201,11 +201,12 @@ func TestPagingDoesNotChangeTheAnswerWithBlockHistories(t *testing.T) {
 // newest row unquantized, and the reference reading the history through
 // scales a fifth too large. On each listed card the reference runs with
 // every block placed, its loss held to the CPU's within the same 0.15, and
-// so does the typed instance, whose card writes its history as the type
-// does (deviceGraph): its steps the card's reference's bit for bit. So does
-// a typed instance moved to the card mid-sequence beside its reference
-// given its history, and both histories come home equal element for element:
-// the card's rows narrowed back are the type's values. On a seam of half
+// so does the typed instance, whose card holds its history as the type's
+// words: its steps within 0.15 of the type's loss there of the card's
+// reference's, which reads an f32 history by another form. So does a typed
+// instance moved to the card mid-sequence beside its reference given its
+// history, and the rows written before the move come home equal element for
+// element: the card's words widened back are the type's values. On a seam of half
 // the blocks the typed instance's loss is held to the CPU's within 0.15.
 func TestBlockHistoryFollowsItsReference(t *testing.T) {
 	dir := os.Getenv("JITLLM_LLAMACPP_CPU")
@@ -546,18 +547,18 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 					if !(math.Abs(cl-1) <= spread) || !(math.Abs(tl-1) <= spread) {
 						t.Errorf("%v on %s: the reference's loss is %.3f of the CPU's and the typed instance's %.3f, outside %.2f-%.2f", c.kt, dev, cl, tl, 1-spread, 1+spread)
 					}
-					if e := gap(tc, rc); e != 0 {
-						t.Errorf("%v on %s: the typed instance is %.3g from the card's reference: the card does not write its history as the type does", c.kt, dev, e)
+					if e := gap(tc, rc); !(e <= spread*gap(rc, cb)) {
+						t.Errorf("%v on %s: the typed instance is %.3g from the card's reference, past %.2f of the type's loss there: the card does not hold its history as the type does", c.kt, dev, e, spread)
 					}
 					rows, home := moved(t, c.kt, dev)
 					exact, total, first := sameHistory(home[0], home[1])
 					t.Logf("%v moved to %s mid-sequence: %.3g from its reference moved alike; home again, %d of %d history elements equal%s",
 						c.kt, dev, gap(rows[0], rows[1]), exact, total, first)
-					if e := gap(rows[0], rows[1]); e != 0 {
-						t.Errorf("%v moved to %s is %.3g from its reference moved alike", c.kt, dev, e)
+					if e := gap(rows[0], rows[1]); !(e <= spread*gap(rc, cb)) {
+						t.Errorf("%v moved to %s is %.3g from its reference moved alike, past %.2f of the type's loss there", c.kt, dev, e, spread)
 					}
-					if exact != total {
-						t.Errorf("%v: %d of %d history elements came home from %s other than the reference's%s", c.kt, total-exact, total, dev, first)
+					if bad := homeApart(home[0], home[1], nctx/2, nctx-1); bad != "" {
+						t.Errorf("%v: the history came home from %s other than the reference's: %s", c.kt, dev, bad)
 					}
 					half := layers / 2
 					sb, ok := seamBase[dev]
@@ -578,8 +579,8 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 }
 
 // historyReference has every block of m that appends to its own history
-// write each key and value row as kt holds it (typedAppends, the graph a
-// card is offered under kt): narrowed and widened by the ops the instance's
+// write each key and value row as kt holds it (typedAppends): narrowed and
+// widened by the ops the instance's
 // own conversions take for kt before the append, so an f32 history holds
 // kt's values from the moment each row is written. The quantizer is the
 // composed one kt's store runs, which TestCPUAttendsABlockHistory holds to
@@ -600,6 +601,226 @@ func historyReference(t *testing.T, m *model.Model, kt model.KVType) {
 	}
 	if n == 0 {
 		t.Fatalf("no block appends to its own history: there is no %v history to reference", kt)
+	}
+}
+
+// typedAppends is g with each append to the block's own history taking its
+// key and value through f's narrowing and widening first, g itself where it
+// appends to none. A row is narrowed a head of hd at a time, as the CPU
+// device's pages hold it, each head's last block zero past it: whole where a
+// head is whole blocks of 32, which narrows alike.
+func typedAppends(g *graph.Graph, f nn.KVFmt, hd int) *graph.Graph {
+	narrow, widen, at := kvConvOps(f)
+	b := &graph.Builder{G: &graph.Graph{Version: g.Version, Block: g.Block, Values: slices.Clone(g.Values), In: g.In, Out: g.Out, Routed: g.Routed}}
+	one := func(v graph.ValueID, name string) graph.ValueID {
+		w := b.G.Values[v].Width
+		h := b.Emit(narrow, []graph.ValueID{v}, []graph.Result{{Name: name + ".typed", Width: kvRowWords(f, w), Elem: graph.ElemU32}}, nil, at, nil, nil)[0]
+		return b.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: name + ".widened", Width: w}}, nil, at, nil, nil)[0]
+	}
+	typed := func(v graph.ValueID) graph.ValueID {
+		x := b.G.Values[v]
+		if !f.Quantized() || hd <= 0 || hd%32 == 0 || x.Width%hd != 0 || x.Width == hd {
+			return one(v, x.Name)
+		}
+		heads := make([]graph.ValueID, x.Width/hd)
+		for i := range heads {
+			name := fmt.Sprintf("%s.h%d", x.Name, i)
+			heads[i] = one(b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: hd}}, nil,
+				graph.Attrs{Offset: i * hd, Width: hd}, nil, nil)[0], name)
+		}
+		return b.Emit(graph.OpConcat, heads, []graph.Result{{Name: x.Name + ".widened", Width: x.Width}}, nil, graph.Attrs{}, nil, nil)[0]
+	}
+	n := 0
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && o.Writes[0].Hist == 0 {
+			lo := len(b.G.Ops)
+			in := slices.Clone(o.In)
+			for i, v := range o.In {
+				if i > 0 && v == o.In[0] {
+					in[i] = in[0]
+					continue
+				}
+				in[i] = typed(v)
+			}
+			o.In = in
+			if added := len(b.G.Ops) - lo; b.G.Routed.Hi > lo {
+				b.G.Routed.Hi += added
+				if b.G.Routed.Lo >= lo {
+					b.G.Routed.Lo += added
+				}
+			}
+			n++
+		}
+		b.G.Ops = append(b.G.Ops, o)
+	}
+	if n == 0 {
+		return g
+	}
+	return b.G
+}
+
+// typedHistoryTypes is every history type the CPU device holds as words
+// other than floats or binary16: q8_0, each GGUF block type, and bfloat16.
+func typedHistoryTypes() []model.KVType {
+	return append([]model.KVType{model.KVQ8_0}, blockKVTypes()...)
+}
+
+// TestACardHoldsATypedHistorysBytes holds, for each typed history the CPU
+// device takes (typedHistoryTypes), a card's history to the type's bytes
+// and its answer to the type's. Teacher-forced over a document on Llama
+// 3.2 1B with every block on each listed card, three arms run: the f32
+// history, the type's reference (historyReference: an f32 history holding
+// the type's values from the moment each row is written) and the typed
+// instance.
+//
+// The card's history pool (Stats.KVPoolBytes: every layer's pages, table
+// arena and read reserve) under the type is the f32 arm's times the type's
+// row bytes over a float row's (nn.KVRowBytes, q8_0 a quarter and its
+// scales), within 0.05 for the arena: a card holding the type as floats
+// reads 1. The typed instance's log-probabilities are apart from its
+// reference's on the same card by at most 0.15 of the type's loss there,
+// the reference against the f32 arm: a card that writes a row it does not
+// narrow, or reads the type's words through the wrong layout, moves the
+// answer as far as the type's loss. A second instance of another history
+// type offering the blocks the typed one holds is declined by name, and the
+// first instance's next step is its own without it.
+func TestACardHoldsATypedHistorysBytes(t *testing.T) {
+	const nctx = 192
+	gguf := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
+	if !fileExists(gguf) {
+		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
+	}
+	text, err := os.ReadFile("testdata/prompt-28k.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs := stepDevices()
+	if len(devs) == 0 {
+		t.Fatal("no card listed (JITLLM_TEST_DEVICES): the gate holds a card's history")
+	}
+	type arm struct {
+		lp    [][]float32
+		bytes uint64
+	}
+	// run is the scored half's log-probabilities of kt's history on dev,
+	// its reference's where ref says, every block on the card, and the
+	// card's history pool at the end; then, where other is set, a second
+	// instance of that history type offers the card the same blocks.
+	run := func(t *testing.T, dev string, kt model.KVType, ref bool, other *model.KVType) arm {
+		m, err := model.Open(jlmOf(t, gguf))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		if ref {
+			historyReference(t, m, kt)
+			kt = model.KVF32
+		}
+		tk := m.Vocab.Encode(string(text[:6000]), true)
+		if len(tk) < nctx {
+			t.Fatalf("the document is %d tokens, want %d", len(tk), nctx)
+		}
+		g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+		if err != nil || g == nil {
+			noDevice(t, dev, err)
+		}
+		defer g.Close()
+		s := testInstance(t, m, nctx, WithKVType(kt))
+		defer s.Close()
+		if s.KVType() != kt {
+			t.Fatalf("a %v cache was asked for and %v selected", kt, s.KVType())
+		}
+		s.SetDeviceFallback(false)
+		if err := s.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		if s.GPULayers() != m.Cfg.NLayer {
+			t.Fatalf("%s took %d of %d blocks: %s", dev, s.GPULayers(), m.Cfg.NLayer, g.Err())
+		}
+		var a arm
+		for i := 0; i < nctx-1; i++ {
+			lg, err := s.Forward(tk[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if i >= nctx/2 {
+				a.lp = append(a.lp, logSoftmax(lg))
+			}
+		}
+		a.bytes = g.Stats().KVPoolBytes
+		if other == nil {
+			return a
+		}
+		s2 := testInstance(t, m, nctx, WithKVType(*other))
+		defer s2.Close()
+		s2.SetDeviceFallback(false)
+		err = s2.SetDevice(g)
+		t.Logf("a %v instance offering %s the blocks a %v instance holds: %d placed, %v (%s)", *other, dev, kt, s2.GPULayers(), err, g.Err())
+		if s2.GPULayers() != 0 || !strings.Contains(g.Err(), "its history is held here as") {
+			t.Errorf("a %v instance offering %s the blocks a %v instance holds placed %d of them (%s): a block's pool holds one type", *other, dev, kt, s2.GPULayers(), g.Err())
+		}
+		lg, err := s.Forward(tk[nctx-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(lg, func(x float32) bool { return math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) }) {
+			t.Errorf("%v on %s: the step after the second instance's offer is not finite", kt, dev)
+		}
+		return a
+	}
+	gap := func(a, b [][]float32) float64 {
+		var sum float64
+		n := 0
+		for i := range a {
+			for j := range a[i] {
+				if math.IsInf(float64(a[i][j]), -1) || math.IsInf(float64(b[i][j]), -1) || a[i][j] < -15 && b[i][j] < -15 {
+					continue
+				}
+				d := float64(a[i][j] - b[i][j])
+				sum += d * d
+				n++
+			}
+		}
+		return math.Sqrt(sum / float64(n))
+	}
+	const spread, arena = 0.15, 0.05
+	for _, dev := range devs {
+		t.Run(dev, func(t *testing.T) {
+			base := run(t, dev, model.KVF32, false, nil)
+			if base.bytes == 0 {
+				t.Fatalf("%s holds no history pool after %d positions", dev, nctx-1)
+			}
+			hd := 0
+			func() {
+				m, err := model.Open(jlmOf(t, gguf))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				hd = m.Cfg.HeadDim
+			}()
+			for _, kt := range typedHistoryTypes() {
+				t.Run(kt.String(), func(t *testing.T) {
+					other := model.KVF32
+					ref := run(t, dev, kt, true, nil)
+					typed := run(t, dev, kt, false, &other)
+					want := float64(nn.KVRowBytes(kvFmtOf(kt), hd)) / float64(4*hd)
+					got := float64(typed.bytes) / float64(base.bytes)
+					t.Logf("%v on %s: the history pool %d bytes against the f32 history's %d, %.4f of it (the type's rows %.4f)", kt, dev, typed.bytes, base.bytes, got, want)
+					if !(math.Abs(got-want) <= arena) {
+						t.Errorf("%v on %s: the card's history pool is %.4f of the f32 history's, not the type's %.4f within %.2f: the card does not hold the type's bytes", kt, dev, got, want, arena)
+					}
+					loss, apart := gap(ref.lp, base.lp), gap(typed.lp, ref.lp)
+					t.Logf("%v on %s: the type's loss %.4f (the reference against f32), the typed instance %.4g from its reference, %.3f of the loss", kt, dev, loss, apart, apart/loss)
+					if !(loss > 0) {
+						t.Fatalf("%v on %s: the reference is %.3g from the f32 history: the type moves nothing to hold the card to", kt, dev, loss)
+					}
+					if !(apart <= spread*loss) {
+						t.Errorf("%v on %s: the typed instance is %.4g from its reference, past %.2f of the type's loss %.4f", kt, dev, apart, spread, loss)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -638,6 +859,26 @@ func typedRow(t *testing.T, kt model.KVType, row []float32, hd int) []float32 {
 		copy(out[h*hd:(h+1)*hd], deq)
 	}
 	return out
+}
+
+// homeApart names the first element of the first n of pos positions where
+// histories a and b, as histories gathers them, differ: the rows a move
+// carried, written before it, come home as they went. Empty where none does.
+func homeApart(a, b [][]float32, n, pos int) string {
+	if len(a) != len(b) {
+		return fmt.Sprintf("%d histories against %d", len(a), len(b))
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return fmt.Sprintf("attending block %d's %s: %d elements against %d", i/2, [2]string{"keys", "values"}[i%2], len(a[i]), len(b[i]))
+		}
+		for j := range len(a[i]) / pos * n {
+			if math.Float32bits(a[i][j]) != math.Float32bits(b[i][j]) {
+				return fmt.Sprintf("attending block %d's %s, element %d, %v against %v", i/2, [2]string{"keys", "values"}[i%2], j, a[i][j], b[i][j])
+			}
+		}
+	}
+	return ""
 }
 
 // setHistory writes h, every attending block's history as histories
