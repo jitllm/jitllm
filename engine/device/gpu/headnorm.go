@@ -175,22 +175,29 @@ func (g *devTier) freeAltVecs() {
 	g.altVecs = nil
 }
 
-// dropHead gives back the output projection a device holds once it holds no
-// block: the projection, its norm and logits, and the scratch they ran in.
-// A head that moved to another device left this copy behind with nothing to
-// run it -- the model's largest single tensor, charged to a card that serves
-// none of the model -- so the move frees it (GPU.PrepHeadOn). A device that
-// still holds a block keeps its head: the scratch is that block's too.
+// dropHead gives back the output projection a device holds once no session
+// runs it there: the projection, its norm and logits, and, where the device
+// holds no block, the scratch they ran in. A head that moved to another
+// device left this copy behind with nothing to run it -- the model's largest
+// single tensor, charged to a card that serves none of the model -- so the
+// move frees it (GPU.PrepHeadOn), as a release does (GPU.ReleaseHead). A
+// device that still holds a block keeps the scratch, which is that block's
+// too, and gives back the per-row logits the projection was admitted with
+// (dropRowsHead).
 func (g *devTier) dropHead() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	bs := g.bs
-	if bs == nil || bs.head == nil || len(g.layers) > 0 {
+	if bs == nil || bs.head == nil {
 		return
 	}
 	g.giveBackHead(bs)
-	g.dropAllScratch()
-	g.dropIfEmpty()
+	if len(g.layers) == 0 {
+		g.dropAllScratch()
+		g.dropIfEmpty()
+		return
+	}
+	g.dropRowsHead()
 }
 
 // giveBackHead frees the head PrepHead placed: the scratch around it and,

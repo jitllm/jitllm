@@ -1196,6 +1196,9 @@ type BlockMoved struct {
 type NamedDevice interface {
 	PrepLayerOn(name string, li int, p *LayerPlan, w *LayerWeights) (bool, error)
 	PrepHeadOn(name string, h *Head) (bool, error)
+	// ReleaseHead gives back the projection PrepHead or PrepHeadOn placed: the
+	// device frees it where no other session runs it.
+	ReleaseHead()
 	// DeviceOf is the name of the device holding block li, and whether one does.
 	DeviceOf(li int) (string, bool)
 	HeadDeviceName() (string, bool)

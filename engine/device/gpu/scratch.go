@@ -432,7 +432,7 @@ func (g *devTier) ragOutBytes(bs *blockScratch, vocab, nembd int) uint64 {
 	n := g.headRows(bs, vocab)
 	b := g.footprint(n*vocab*4) + g.footprint(n*4)
 	if n < bs.rows {
-		b += g.footprint(n*nembd*4) + g.footprint(4*(composer.RequestRows+n))
+		b += g.footprint(n*nembd*bs.p.Streams()*4) + g.footprint(4*(composer.RequestRows+n))
 	}
 	return b
 }

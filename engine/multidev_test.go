@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestTwoDevicesAgreeWithTheHost splits ONE model's blocks across TWO distinct
@@ -192,14 +193,56 @@ func TestTheSeamMovesAcrossTwoDevices(t *testing.T) {
 	}
 }
 
+// headBesideHalf is a budget a device of two takes half of m's blocks under
+// with the output projection beside them, from what one tier charges for the
+// whole model: its blocks with the projection on the CPU, then with it placed
+// -- the projection, its vectors and logits, and the reserved width's per-row
+// logits it is admitted with. The budget is a block over that half, and below
+// the whole model, so every block spreads over two devices and the tail takes
+// the projection.
+func headBesideHalf(t *testing.T, m *model.Model, devs string, opts []Option) uint64 {
+	t.Helper()
+	charge := func(head bool) (used, scratch uint64) {
+		g, err := openGPU(t, gpu.WithDevices(devs), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || g == nil {
+			noDevice(t, devs, err)
+		}
+		defer g.Close()
+		st := testInstance(t, m, 8, append(append([]Option(nil), opts...), WithHeadPlacement(head))...)
+		defer st.Close()
+		st.SetDeviceLayers(g, -1)
+		if st.GPULayers() != m.Cfg.NLayer || st.HeadOnDevice() != head {
+			t.Fatalf("unbudgeted, the devices took %d of %d blocks, the projection on a device %v, asked %v: %s",
+				st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), head, g.Err())
+		}
+		for _, ds := range g.DevStats() {
+			used += ds.BudgetUsed
+			scratch += ds.ScratchBytes
+		}
+		return used, scratch
+	}
+	blocks, scratch := charge(false)
+	whole, _ := charge(true)
+	if whole <= blocks || blocks <= scratch {
+		t.Fatalf("the blocks charge %d bytes (%d of scratch) and the projection %d more", blocks, scratch, int64(whole)-int64(blocks))
+	}
+	n := uint64(m.Cfg.NLayer)
+	block := (blocks - scratch + n - 1) / n
+	b := scratch + (n-n/2+1)*block + (whole - blocks)
+	t.Logf("a block charges %d bytes, the projection %d, scratch %d: a budget of %d a device", block, whole-blocks, scratch, b)
+	return b
+}
+
 // TestTheHeadRidesTheRightDeviceOfTwo places EVERY block across two devices, so
 // that the output projection lands on the second one and rides its submission
 // after a crossing through the host.
 //
-// The head is offered only when every block is placed, so this uses half the
-// model per device (all blocks, two devices busy) rather than the split gate's
-// third. The head-on-another-device arm is covered (as unreachable) by
-// TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice.
+// The budget is measured (headBesideHalf): half the model a device with the
+// projection beside the tail's half, so both devices are busy and the
+// projection fits. A budget written as half the model plus a guessed margin
+// left the projection on the host on a V100 pair -- it is admitted with the
+// reserved width's per-row logits, 64 MiB beside its own 55 MB -- and the gate
+// skipped.
 func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	instOpts := []Option{WithKVF16(false)}
@@ -212,17 +255,16 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89}
 	want := teacherForce(t, m, ids, instOpts...)
 
-	// Half the model per device, plus the dense region the head lives in.
-	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + textPageBytes(m)/4
-	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+	a, b := moveDevices(t)
+	devs := a + "," + b
+	cap2 := headBesideHalf(t, m, devs, instOpts)
+	g, err := openGPU(t, gpu.WithDevices(devs), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
-		noDevice(t, "devices", err)
+		noDevice(t, devs, err)
 	}
 	defer g.Close()
-	if len(g.Placed()) < 2 {
-		t.Skip("this host has one device")
-	}
+	distinctCards(t, g)
 
 	st := testInstance(t, m, len(ids)+1, instOpts...)
 	defer st.Close()
@@ -237,16 +279,32 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 	t.Logf("%v placed (%d of %d), head on device: %v, %d crossing(s)",
 		placed, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Crossings())
 	if busy < 2 || st.GPULayers() != m.Cfg.NLayer {
-		t.Skipf("need every block placed across two devices; got %v (%d of %d)",
-			placed, st.GPULayers(), m.Cfg.NLayer)
+		t.Fatalf("every block across two devices under a budget of %d each: got %v (%d of %d): %s",
+			cap2, placed, st.GPULayers(), m.Cfg.NLayer, g.Err())
 	}
 	if !st.HeadOnDevice() {
-		// Not a pass: a head left on the host is the sibling gate's case.
-		t.Skip("every block is placed and the head stayed on the host -- " +
-			"this gate would prove nothing")
+		t.Fatalf("every block is placed and the projection stayed on the host under a budget of %d each: %s",
+			cap2, g.Err())
 	}
-
+	hw := g.Hardware()
+	tail := len(placed) - 1
+	for placed[tail] == 0 {
+		tail--
+	}
+	if at, _ := st.ld.(nn.NamedDevice).HeadDeviceName(); at == "" || at != hw[tail].Name {
+		t.Fatalf("the projection is on %q, not on %s, the device holding the last block", at, hw[tail].Name)
+	}
+	before := g.DevStats()
 	got := runIDs(t, st, ids)
+	for d, ds := range g.DevStats() {
+		w := 0
+		if d == tail {
+			w = len(ids)
+		}
+		if ran := ds.Heads - before[d].Heads; ran != w {
+			t.Fatalf("%s ran the projection %d time(s) over %d tokens, want %d", hw[d].Name, ran, len(ids), w)
+		}
+	}
 	worst, worstD := worstOf(want, got)
 	t.Logf("head on the second device vs host: NMSE %.3e, |dlogit| %.4f", worst, worstD)
 	if !(worst < mlaDeviceNMSE) {
@@ -259,11 +317,11 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 // GPU.Layers that a static placement cannot: the output projection sitting on a
 // device that holds no block of the range being run.
 //
-// That arm is unreachable from model/, so this skips with the reason:
-// PrepHead targets g.tail(), the seam shrink clears s.head and s.headReady, and
-// an earlier device holding the projection runs with a partial seam that never
-// hands GPU.Layers a head. See docs/engineering-history/placement.md. The gate
-// is here to run the arm if a placement policy ever makes it live.
+// Every block goes across two devices with the projection on the tail, then
+// the seam shrinks past the tail's blocks, which gives the projection back
+// (SetGPULayers releases it), and MoveHead names the tail for it again: a
+// device holding none of the range, so the projection runs as a submission
+// of its own there, counted per device (Stats.Heads).
 func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	instOpts := []Option{WithKVF16(false)}
@@ -276,51 +334,56 @@ func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89}
 	want := teacherForce(t, m, ids, instOpts...)
 
-	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + textPageBytes(m)/4
-	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+	a, b := moveDevices(t)
+	devs := a + "," + b
+	cap2 := headBesideHalf(t, m, devs, instOpts)
+	g, err := openGPU(t, gpu.WithDevices(devs), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
-		noDevice(t, "devices", err)
+		noDevice(t, devs, err)
 	}
 	defer g.Close()
-	if len(g.Placed()) < 2 {
-		t.Skip("this host has one device")
-	}
+	distinctCards(t, g)
 	st := testInstance(t, m, len(ids)+1, instOpts...)
 	defer st.Close()
 	st.SetDeviceLayers(g, -1)
 	placed := g.Placed()
-	if st.GPULayers() != m.Cfg.NLayer || placed[len(placed)-1] == 0 || !st.HeadOnDevice() {
-		t.Skipf("need every block across two devices with the head placed; got %v (%d of %d), head %v",
-			placed, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice())
+	tail := len(placed) - 1
+	if st.GPULayers() != m.Cfg.NLayer || placed[tail] == 0 || placed[0] == 0 || !st.HeadOnDevice() {
+		t.Fatalf("every block across two devices with the projection placed under a budget of %d each: got %v (%d of %d), projection %v: %s",
+			cap2, placed, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
 	}
 
-	// Shrink past the LAST device's blocks: the head stays where PrepHead put
-	// it, on a device that now holds none of the range.
-	keep := m.Cfg.NLayer - placed[len(placed)-1]
+	keep := m.Cfg.NLayer - placed[tail]
 	if n := st.SetGPULayers(keep); n != keep {
 		t.Fatalf("shrinking to %d left %d placed: %v", keep, n, g.Err())
 	}
 	after := g.Placed()
-	t.Logf("shrank %v -> %v, head still on a device: %v, %d crossing(s)",
-		placed, after, st.HeadOnDevice(), g.Crossings())
-	if after[len(after)-1] != 0 {
-		t.Skipf("the last device still holds %d block(s); the arm needs it empty", after[len(after)-1])
+	if after[tail] != 0 || st.HeadOnDevice() {
+		t.Fatalf("shrank %v -> %v: the tail holds %d block(s), the projection on a device %v",
+			placed, after, after[tail], st.HeadOnDevice())
 	}
-	if !st.HeadOnDevice() {
-		// The shrink drops the model's head while the tier's g.head survives;
-		// SetHeadOnDevice(true) is the public way to re-arm it.
-		st.SetHeadOnDevice(true)
-		if !st.HeadOnDevice() {
-			t.Skip("the shrink cleared headReady as well as head, so the projection " +
-				"cannot be put back on a device that holds no block -- GPU.Layers' " +
-				"own-submission arm is unreachable from model/ and stays insurance")
-		}
-		t.Log("the shrink dropped the head; SetHeadOnDevice(true) put it back on " +
-			"a device that now holds no block of the range -- the arm under test")
+	name := g.Hardware()[tail].Name
+	if held := g.DevStats()[tail].HeadBytes; held != 0 {
+		t.Fatalf("the shrink gave the projection back and %s still holds %d bytes of it", name, held)
 	}
+	mv, err := st.MoveHead(name)
+	if err != nil || !mv.Head || !st.HeadOnDevice() {
+		t.Fatalf("the projection to %s, which holds no block: moved %v, on a device %v, %v: %s", name, mv.Head, st.HeadOnDevice(), err, g.Err())
+	}
+	t.Logf("shrank %v -> %v and named %s for the projection, %d crossing(s)", placed, after, name, g.Crossings())
 
+	before := g.DevStats()
 	got := runIDs(t, st, ids)
+	for d, ds := range g.DevStats() {
+		w := 0
+		if d == tail {
+			w = len(ids)
+		}
+		if ran := ds.Heads - before[d].Heads; ran != w {
+			t.Fatalf("%s ran the projection %d time(s) over %d tokens, want %d", g.Hardware()[d].Name, ran, len(ids), w)
+		}
+	}
 	worst, worstD := worstOf(want, got)
 	t.Logf("head alone on its own submission vs host: NMSE %.3e, |dlogit| %.4f", worst, worstD)
 	if !(worst < mlaDeviceNMSE) {
@@ -424,14 +487,4 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	if !(worst < mlaDeviceNMSE) {
 		t.Fatalf("a pipelined prompt over two devices disagrees with the host: NMSE %.3e, |dlogit| %.3f", worst, worstD)
 	}
-}
-
-// textPageBytes is the bytes of m's text blocks' pages: what a decode with no
-// budget leaves resident.
-func textPageBytes(m *model.Model) uint64 {
-	var n uint64
-	for li := 0; li < m.Cfg.NLayer; li++ {
-		n += m.Container.PageBytes(li)
-	}
-	return n
 }

@@ -5196,6 +5196,67 @@ TestAHistoryReadAcrossCards, which now asks for the projection on the second
 card after every move (synth-gemma4-e and synth-gemma3n: the second card keeps
 a block through the source's move to the CPU).
 
+## A projection the caller names, and its release
+
+Commit moved a projection the placement named on a card to the move's target
+once none of the instance's blocks was left beside it: the engine choosing a
+destination the caller had named otherwise. A projection is now named when
+the placement names its head or MoveHead names its device (headNamed); a
+named projection stays where it was named through every move of blocks, and
+moves only when a move names it -- MoveHead, to a card or to the CPU. One the
+engine placed (no head in the placement) still follows the blocks between
+cards and to the CPU and back (Commit, headHome, headBack), and the move
+reports it (BlockMove.Head, RelocateBlocks' head_moved). A placement decides
+both again. The front ends name no head, so their moves keep the follow; they
+have no call that names the projection yet.
+
+A projection that left its card stayed resident there: headHome dropped the
+instance's head and the card kept the weights, its vectors and logits until a
+later PrepHeadOn replaced them, and SetGPULayers' shrink did the same. The tier
+now gives it back (GPU.ReleaseHead, nn.NamedDevice): where no other session
+runs the projection on that card the card frees it, and the scratch with it
+where the card holds no block. devTier.dropHead freed a head only on a card
+holding no block; it now frees it on any card no session runs it on, keeping
+the scratch the blocks there share. headHome, the seam's shrink, demoteAll and
+MoveHead to the CPU release it. The card's ledger shows it: Stats.HeadBytes is
+the projection's part of BudgetUsed.
+
+The release first left the reserved width's per-row logits on a card that
+kept blocks (69,208,064 bytes for Llama-3.2-1B: 130 rows of its 128,256-word
+vocabulary, the HeadRowBytes cap, and their tokens). Nothing but the
+projection writes them, and PrepHead admits the projection with them, so they
+are the projection's: devTier.dropRowsHead gives them back in every lane, set
+and width, and a projection placed again is admitted with them again. A card
+reserving a ragged step (Config.StepRows) keeps its width's: the reservation
+asked for them with the blocks, for every projection to come, and
+Stats.ReservedStep reports them. Stats.RowLogitsBytes is their part of
+BudgetUsed. On a V100 with Llama-3.2-1B a release gives back 287,844,352
+bytes (BudgetUsed 970,268,672 -> 682,424,320); with a step reserved it gives
+back the projection's 218,043,392 and keeps the 69,208,064 (-> 751,632,384).
+ragOutBytes priced a head of several streams' staging at one stream; it counts
+every stream, as allocRagOut allocates.
+
+TestTheHeadRidesTheRightDeviceOfTwo skipped on a V100 pair ("the head stayed on
+the host"): its budget was half the model plus a guessed margin, and the
+projection is admitted with the reserved width's per-row logits, 55,582,720
+bytes and 67,110,912 more against 114,900,480 left on the tail. The budget is
+measured now (headBesideHalf: what the two devices charge for every block with
+the projection on the CPU and then placed, tinyllama's projection 164,148,480
+bytes), and the gate fails rather than skips when it does not place it.
+TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice was unreachable for
+the same budget and for the shrink dropping the head; MoveHead names the tail
+for it after the shrink, so the arm runs, its projection counted on the tail
+(Stats.Heads).
+
+Gates: engine.TestAReleasedProjectionLeavesItsCard (one card: MoveHead to the
+CPU and back, then a shrink; the card's HeadBytes, RowLogitsBytes and
+BudgetUsed and the token's Stats.Heads asked at each, and an arm with a step
+reserved, whose per-row logits stay), TestTheProjectionComesBackFromTheCPU (the
+beside arm placed by the engine and following, the apart arm named and
+staying, with MoveHead to the CPU and back), TestTwoInstancesRunABlockOnTwoCards
+(the second instance's named projection stays through its blocks' move and
+moves with MoveHead), and the two head gates above.
+
 ## One pool spent by two devices
 
 One card listed as cuda:N and vulkan:N is one physical device under two

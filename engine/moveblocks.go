@@ -27,7 +27,8 @@ type BlockMove struct {
 	// Copied is the bytes the tier copied between the devices (the history
 	// in the devices' own page layout).
 	Copied uint64
-	// Head is set when the output projection followed the blocks.
+	// Head is set when the output projection moved: one the engine placed
+	// following the blocks, or a move naming it (MoveHead).
 	Head bool
 	// Staged is the blocks prepared on the target while the sequence kept
 	// generating (PrepareMove), and Prepare how long that took: time the
@@ -77,10 +78,11 @@ type PendingMove struct {
 //
 // Call it between tokens: like every placement call it must not overlap a
 // Forward of this Instance. Blocks already on to are left alone, and a block the
-// target refuses stays where it was and is reported. When no block of this
-// Instance is left on the device holding the output projection, the projection
-// follows them; a move to the CPU brings it to the CPU with them, and the next
-// move to a card takes it there.
+// target refuses stays where it was and is reported. An output projection the
+// engine placed follows the blocks when none of this Instance's is left on its
+// device: a move to the CPU brings it to the CPU with them, and the next move
+// to a card takes it there. One the caller named (the placement's head,
+// MoveHead) stays where it was named until a move names it again.
 //
 // A pinned block refuses the call before anything moves. A block of a
 // KV-sharing group moves alone: a block reading a history on another card
@@ -265,10 +267,10 @@ func (s *Instance) prepareMove(lo, hi int, to string, place bool) (*PendingMove,
 		close(p.done)
 		return p, nil
 	}
-	// The projection is prepared too when the move leaves none of the instance's
-	// blocks beside it (Commit then moves it).
+	// The projection the engine placed is prepared too when the move leaves
+	// none of the instance's blocks beside it (Commit then moves it).
 	var head *nn.Head
-	if was, on := nd.HeadDeviceName(); on && s.head != nil && was != nn.DeviceName(to) {
+	if was, on := nd.HeadDeviceName(); on && s.head != nil && !s.headNamed && was != nn.DeviceName(to) {
 		follows := true
 		for li := s.lo; li < s.hi; li++ {
 			if at, ok := nd.DeviceOf(li); ok && s.devAt(li) && at == was && (li < lo || li >= hi) {
@@ -372,7 +374,7 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 	}
 	nd := s.ld.(nn.NamedDevice)
 	headWas, headOn := nd.HeadDeviceName()
-	headOn = headOn && s.head != nil
+	headOn = headOn && s.head != nil && !s.headNamed
 	mover, direct := s.ld.(nn.BlockMover)
 	direct = direct && !s.opt.hostMoves
 	for i, li := range p.blocks {
@@ -412,8 +414,9 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 	}
 	slices.Sort(mv.Moved)
 	slices.Sort(mv.Declined)
-	// The projection follows once nothing of this instance is left beside it: a
-	// head alone on a card costs a crossing a token and holds the card.
+	// The projection the engine placed follows once nothing of this instance
+	// is left beside it: a head alone on a card costs a crossing a token and
+	// holds the card.
 	if headOn && headWas != nn.DeviceName(p.to) && len(mv.Moved) > 0 && !s.anyBlockOn(nd, headWas) {
 		if mv.Head, err = nd.PrepHeadOn(p.to, s.newHead()); err != nil {
 			return mv, err
@@ -442,6 +445,59 @@ func (s *Instance) headBack(to string) (bool, error) {
 		s.head, s.headReady, s.headHome = h, h, false
 	}
 	return took, err
+}
+
+// MoveHead moves the output projection to the device named to, the CPU
+// (nn.CPU) as any other: a card places it there, beside the blocks or on its
+// own, and the CPU projects with the card's copy given back (ReleaseHead). The
+// projection is then named there: a move of blocks leaves it where it is
+// until a move names it again, and a placement decides it anew. A card that
+// refuses it leaves it where it was, mv.Head false. Call it between tokens,
+// as MoveBlocks.
+func (s *Instance) MoveHead(to string) (mv BlockMove, err error) {
+	if s.pending != nil {
+		return mv, fmt.Errorf("model: a move of blocks %d..%d to %s is pending",
+			s.pending.lo, s.pending.hi-1, s.pending.to)
+	}
+	t0 := time.Now()
+	defer func() { mv.Pause = time.Since(t0) }()
+	if onCPU(to) {
+		s.headNamed, s.headHome = true, false
+		if s.head == nil && s.headReady == nil {
+			return mv, nil
+		}
+		s.releaseHead()
+		mv.Head = true
+		return mv, nil
+	}
+	nd, ok := s.ld.(nn.NamedDevice)
+	if !ok {
+		return mv, fmt.Errorf("model: no device that places the projection by name is attached, " +
+			"so there is no device to move it to")
+	}
+	if s.outW.Data == nil {
+		return mv, fmt.Errorf("model: this instance has no output projection to move")
+	}
+	if at, on := nd.HeadDeviceName(); on && s.head != nil && at == nn.DeviceName(to) {
+		s.headNamed = true
+		return mv, nil
+	}
+	h := s.newHead()
+	took, err := nd.PrepHeadOn(to, h)
+	if took {
+		s.head, s.headReady, s.headNamed, s.headHome = h, h, true, false
+	}
+	mv.Head = took
+	return mv, err
+}
+
+// releaseHead gives the projection's copy back to the device holding it,
+// and the instance projects on the CPU.
+func (s *Instance) releaseHead() {
+	if nd, ok := s.ld.(nn.NamedDevice); ok && (s.head != nil || s.headReady != nil) {
+		nd.ReleaseHead()
+	}
+	s.head, s.headReady = nil, nil
 }
 
 // slowerPath is the slower of two history paths, "" being none.

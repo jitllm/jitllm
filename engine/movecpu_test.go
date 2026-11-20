@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -215,19 +216,26 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 		ntok, n, a, b, a, nmseAll, worstAll, median(es), stillAll)
 }
 
-// TestTheProjectionComesBackFromTheCPU: the projection on a card stays there
-// while a block moves to the CPU and back, comes to the CPU only with the last
-// block it sat beside, and goes back with the next move to a card. Two arms:
-// the projection named beside the blocks on the first card, and named on the
-// second, which holds no block and keeps it through every move. Teacher-forced
-// on a CPU control's tokens, each token is counted on the card the tier ran
-// its projection on (Stats.Heads), and on none where the CPU projects, and its
-// logits are held to the control's inside three times what the same placement
-// reads never moved.
+// TestTheProjectionComesBackFromTheCPU: a projection on a card stays there
+// while blocks move to the CPU and back. One the engine placed beside the
+// blocks on the first card comes to the CPU with the last of them, its card
+// giving its copy back, and goes back with the next move to a card; one the
+// placement named on the second card, which holds no block, stays there
+// through every move of blocks and moves only when a move names it
+// (MoveHead): to the CPU, the card giving its copy back, and to its card
+// again. Teacher-forced on a CPU control's tokens, each token is counted on
+// the card the tier ran its projection on (Stats.Heads), and on none where
+// the CPU projects; the card's ledger holds the projection's bytes while it
+// is there and none once it went (Stats.HeadBytes, BudgetUsed); every move
+// reports whether the projection moved; and the logits are held to the
+// control's inside three times what the same placement reads never moved.
 //
 // VIOLATION SIGNATURE. Take the projection off its card at every move to the
 // CPU (moveOffCards, as it once did) and the token after the first move counts
-// no projection on the card.
+// no projection on the card; let a named projection follow the blocks (as
+// the move once did) and the apart arm's move of the last block reports it
+// moved; keep the card's copy when it comes home (as the engine once did) and
+// the card still holds its bytes.
 func TestTheProjectionComesBackFromTheCPU(t *testing.T) {
 	m, err := model.Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
 	if err != nil {
@@ -235,11 +243,14 @@ func TestTheProjectionComesBackFromTheCPU(t *testing.T) {
 	}
 	defer m.Close()
 	a, b := moveDevices(t)
-	t.Run("beside", func(t *testing.T) { projectionComesBack(t, m, a, b, a) })
+	t.Run("beside", func(t *testing.T) { projectionComesBack(t, m, a, b, "") })
 	t.Run("apart", func(t *testing.T) { projectionComesBack(t, m, a, b, b) })
 }
 
-func projectionComesBack(t *testing.T, m *model.Model, a, b, head string) {
+// projectionComesBack is TestTheProjectionComesBackFromTheCPU's arm with
+// every block on a and the projection named on named, or placed by the
+// engine where named is "".
+func projectionComesBack(t *testing.T, m *model.Model, a, b, named string) {
 	n := m.Cfg.NLayer
 	const ntok = 12
 	prompt := m.Vocab.Encode("The capital of France is a city that", true)
@@ -267,14 +278,29 @@ func projectionComesBack(t *testing.T, m *model.Model, a, b, head string) {
 	defer g.Close()
 	distinctCards(t, g)
 	cards := g.Hardware()
+	cardOf := func(name string) int {
+		for d, c := range cards {
+			if c.Name == name {
+				return d
+			}
+		}
+		t.Fatalf("no card is named %s", name)
+		return -1
+	}
 	type step struct {
 		lo, hi int
 		to     string
+		head   bool
 	}
-	moves := map[int]step{2: {n - 1, n, nn.CPU}, 4: {n - 1, n, a}, 6: {0, n, nn.CPU}, 8: {0, n, a}}
+	moves := map[int]step{2: {n - 1, n, nn.CPU, false}, 4: {n - 1, n, a, false}, 6: {0, n, nn.CPU, false}, 8: {0, n, a, false}}
+	pl := Placement{Rest: &Place{On: a}, Strict: true}
+	head := a
+	if named != "" {
+		pl.Head, head = &Place{On: named}, named
+		moves[7], moves[9] = step{to: nn.CPU, head: true}, step{to: named, head: true}
+	}
 	run := func(moved bool) []float64 {
-		st := testInstance(t, m, len(prompt)+ntok+1,
-			append(append([]Option(nil), io...), WithPlacement(Placement{Rest: &Place{On: a}, Head: &Place{On: head}, Strict: true}))...)
+		st := testInstance(t, m, len(prompt)+ntok+1, append(append([]Option(nil), io...), WithPlacement(pl))...)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -294,28 +320,52 @@ func projectionComesBack(t *testing.T, m *model.Model, a, b, head string) {
 		on := head
 		for i, id := range ids {
 			if s, ok := moves[i]; ok && moved {
-				mv, err := st.MoveBlocks(s.lo, s.hi, s.to)
-				if err != nil {
-					t.Fatalf("token %d: blocks %d..%d to %s: %v (%s)", i, s.lo, s.hi-1, s.to, err, g.Err())
+				was, from := on, -1
+				var held, used uint64
+				if on != nn.CPU {
+					from = cardOf(on)
+					held, used = g.DevStats()[from].HeadBytes, g.DevStats()[from].BudgetUsed
 				}
-				for li := s.lo; li < s.hi; li++ {
-					if at := st.WhereIs(li); at != nn.DeviceName(s.to) {
-						t.Fatalf("token %d: block %d is on %q, moved to %s", i, li, at, s.to)
+				var mv BlockMove
+				if s.head {
+					if mv, err = st.MoveHead(s.to); err != nil {
+						t.Fatalf("token %d: the projection to %s: %v (%s)", i, s.to, err, g.Err())
 					}
-				}
-				was := on
-				if head == a {
-					// Beside the blocks: it leaves its card with the last of
-					// them, and comes back with them.
-					switch {
-					case s.to == nn.CPU && s.lo == 0:
-						on = nn.CPU
-					case s.to != nn.CPU:
-						on = s.to
+					on = s.to
+				} else {
+					if mv, err = st.MoveBlocks(s.lo, s.hi, s.to); err != nil {
+						t.Fatalf("token %d: blocks %d..%d to %s: %v (%s)", i, s.lo, s.hi-1, s.to, err, g.Err())
+					}
+					for li := s.lo; li < s.hi; li++ {
+						if at := st.WhereIs(li); at != nn.DeviceName(s.to) {
+							t.Fatalf("token %d: block %d is on %q, moved to %s", i, li, at, s.to)
+						}
+					}
+					if named == "" {
+						// Placed by the engine beside the blocks: it leaves
+						// its card with the last of them, and comes back
+						// with them.
+						switch {
+						case s.to == nn.CPU && s.lo == 0:
+							on = nn.CPU
+						case s.to != nn.CPU:
+							on = s.to
+						}
 					}
 				}
 				if mv.Head != (on != was) {
 					t.Errorf("token %d: the move reports the projection moved %v, from %s to %s", i, mv.Head, was, on)
+				}
+				if on != was && from >= 0 {
+					ds := g.DevStats()[from]
+					if held == 0 || ds.HeadBytes != 0 || used < ds.BudgetUsed+held {
+						t.Fatalf("token %d: the projection left %s, which held %d bytes of it and holds %d; its ledger %d -> %d",
+							i, was, held, ds.HeadBytes, used, ds.BudgetUsed)
+					}
+					t.Logf("token %d: the projection left %s: %d bytes of it, the ledger %d -> %d", i, was, held, used, ds.BudgetUsed)
+				}
+				if on != nn.CPU && g.DevStats()[cardOf(on)].HeadBytes == 0 {
+					t.Fatalf("token %d: the projection is on %s, which holds none of its bytes", i, on)
 				}
 			}
 			before := g.DevStats()
@@ -354,4 +404,158 @@ func projectionComesBack(t *testing.T, m *model.Model, a, b, head string) {
 		}
 	}
 	t.Logf("projection on %s: NMSE from the CPU's, moved %.2e; unmoved %.2e", head, got, still)
+}
+
+// TestAReleasedProjectionLeavesItsCard: a projection that leaves its card
+// leaves its bytes with it, the per-row logits it was admitted with among
+// them. Every block and the projection on one card, a move naming the CPU
+// for the projection (MoveHead) gives the card's copy back -- the card's
+// ledger holds none of it (Stats.HeadBytes) and none of the per-row logits
+// (Stats.RowLogitsBytes), and spends at least what both held less
+// (BudgetUsed) -- a move naming the card places both there again, and a seam
+// shrinking off the card gives them back as well (SetGPULayers). The stepped
+// arm reserves a ragged step (Config.StepRows), whose reservation holds its
+// width's per-row logits for every projection to come: they stay through
+// each release, and the projection's own bytes go. Teacher-forced on a CPU
+// control's tokens, each token is counted on the card when the projection is
+// there and on none otherwise (Stats.Heads), and its logits are held to the
+// control's inside three times what the placement reads never moved.
+//
+// VIOLATION SIGNATURE. Make the tier's release keep the copy on a card that
+// still holds blocks (devTier.dropHead's guard, as it once was) and the card
+// holds the projection's bytes after the move to the CPU; keep the per-row
+// logits (no dropRowsHead) and it holds those.
+func TestAReleasedProjectionLeavesItsCard(t *testing.T) {
+	m, err := model.Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	card := testdevices.Take(t, 1, "cuda:0")[0]
+	t.Run("alone", func(t *testing.T) { releasedProjection(t, m, card, false) })
+	t.Run("stepped", func(t *testing.T) { releasedProjection(t, m, card, true) })
+}
+
+// releasedProjection is TestAReleasedProjectionLeavesItsCard's arm on card,
+// a ragged step reserved there where stepped.
+func releasedProjection(t *testing.T, m *model.Model, card string, stepped bool) {
+	n := m.Cfg.NLayer
+	const ntok = 8
+	prompt := m.Vocab.Encode("The capital of France is a city that", true)
+	io := []Option{WithKVF16(false)}
+	cpu := testInstance(t, m, len(prompt)+ntok+1, io...)
+	lg, err := cpu.Prefill(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want [][]float32
+	var ids []int32
+	for range ntok {
+		ids = append(ids, Greedy(lg))
+		if lg, err = cpu.Forward(ids[len(ids)-1]); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, append([]float32(nil), lg...))
+	}
+	cpu.Close()
+
+	gopts := []gpu.Option{gpu.WithDevices(card), gpu.WithDeviceTune(gpu.TuneOff)}
+	if stepped {
+		gopts = append(gopts, gpu.WithConfig(func(c *gpu.Config) { c.StepRows = MaxStepRows }))
+	}
+	g, err := openGPU(t, gopts...)
+	if err != nil || g == nil {
+		noDevice(t, card, err)
+	}
+	defer g.Close()
+	const (
+		toCPU = iota + 1
+		toCard
+		shrink
+	)
+	acts := map[int]int{1: toCPU, 3: toCard, 5: shrink}
+	run := func(moved bool) []float64 {
+		st := testInstance(t, m, len(prompt)+ntok+1,
+			append(append([]Option(nil), io...), WithPlacement(Placement{Rest: &Place{On: card}, Head: &Place{On: card}, Strict: true}))...)
+		defer st.Close()
+		if err := st.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		headOn(t, st, card)
+		if _, err := st.Prefill(prompt); err != nil {
+			t.Fatal(err)
+		}
+		on := true
+		var got []float64
+		for i, id := range ids {
+			if act := acts[i]; moved && act != 0 {
+				ds := g.DevStats()[0]
+				held, rows, used := ds.HeadBytes, ds.RowLogitsBytes, ds.BudgetUsed
+				if on && (held == 0 || rows == 0) {
+					t.Fatalf("token %d: %s holds the projection, %d bytes of it and %d of its per-row logits", i, card, held, rows)
+				}
+				if stepped && ds.ReservedStep == 0 {
+					t.Fatalf("token %d: %s reserved no ragged step", i, card)
+				}
+				switch act {
+				case toCPU:
+					if mv, err := st.MoveHead(nn.CPU); err != nil || !mv.Head {
+						t.Fatalf("token %d: the projection to the CPU: moved %v, %v", i, mv.Head, err)
+					}
+				case toCard:
+					if mv, err := st.MoveHead(card); err != nil || !mv.Head {
+						t.Fatalf("token %d: the projection to %s: moved %v, %v: %s", i, card, mv.Head, err, g.Err())
+					}
+				case shrink:
+					if got := st.SetGPULayers(n - 1); got != n-1 {
+						t.Fatalf("token %d: the seam to %d took %d: %s", i, n-1, got, g.Err())
+					}
+				}
+				on = act == toCard
+				ds = g.DevStats()[0]
+				// The per-row logits left on the card: none, or the step's
+				// reservation's where one holds them.
+				kept := ds.RowLogitsBytes
+				switch {
+				case on && (ds.HeadBytes == 0 || kept == 0):
+					t.Fatalf("token %d: the projection is back on %s, which holds %d bytes of it and %d of its per-row logits",
+						i, card, ds.HeadBytes, kept)
+				case !on && (ds.HeadBytes != 0 || stepped != (kept > 0) || kept > rows || used < ds.BudgetUsed+held+rows-kept):
+					t.Fatalf("token %d: the projection left %s, which held %d bytes of it and holds %d, and %d of per-row logits and holds %d (a step reserved %v); its ledger %d -> %d",
+						i, card, held, ds.HeadBytes, rows, kept, stepped, used, ds.BudgetUsed)
+				case !on:
+					t.Logf("token %d: the projection left %s: %d bytes of it and %d of per-row logits given back, %d kept; the ledger %d -> %d",
+						i, card, held, rows-kept, kept, used, ds.BudgetUsed)
+				}
+			}
+			before := g.DevStats()[0].Heads
+			if lg, err = st.Forward(id); err != nil {
+				t.Fatalf("token %d: %v", i, err)
+			}
+			w := 0
+			if on {
+				w = 1
+			}
+			if ran := g.DevStats()[0].Heads - before; ran != w {
+				t.Fatalf("token %d: %s ran the projection %d time(s), want %d", i, card, ran, w)
+			}
+			if st.HeadOnDevice() != on {
+				t.Fatalf("token %d: the instance projects on the card %v, want %v", i, st.HeadOnDevice(), on)
+			}
+			e, _ := nmseOf(lg, want[i])
+			if math.IsNaN(e) {
+				t.Fatalf("token %d: a non-finite logit", i)
+			}
+			got = append(got, e)
+		}
+		return got
+	}
+	still := run(false)
+	got := run(true)
+	for i := range got {
+		if bound := max(3*still[i], 1e-6); got[i] > bound {
+			t.Errorf("step %d: NMSE %.3e from the CPU's, above %.3e (unmoved %.3e)", i, got[i], bound, still[i])
+		}
+	}
+	t.Logf("NMSE from the CPU's, moved %.2e; unmoved %.2e", got, still)
 }

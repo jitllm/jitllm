@@ -349,6 +349,11 @@ func (s *gpuSession) PrepHeadOn(name string, h *nn.Head) (bool, error) {
 	return s.g.prepHeadOn(s.sid, name, h)
 }
 
+func (s *gpuSession) ReleaseHead() {
+	defer s.leave(s.enter())
+	s.g.releaseHead(s.sid)
+}
+
 // StageBlock is nn.BlockMover's: deliberately not under enter, since it runs
 // beside this session's steps on the block's current device (GPU.stageBlock).
 func (s *gpuSession) StageBlock(li int, to string, p *nn.LayerPlan, w *nn.LayerWeights, positions int) bool {

@@ -418,6 +418,14 @@ type Stats struct {
 	// ComposedBytes is the part of BudgetUsed the composed parts' instances
 	// hold: their scratch, a prompt part's at its rows and key bound.
 	ComposedBytes uint64
+	// HeadBytes is the part of BudgetUsed the output projection holds: its
+	// weights, where no other holder shares them, its vectors and its logits.
+	HeadBytes uint64
+	// RowLogitsBytes is the part of BudgetUsed the per-row logits and tokens
+	// a head over rows writes hold, every lane's and width's: the
+	// projection's while it is on the device, and the ragged step's
+	// reservation's (Config.StepRows) at its width.
+	RowLogitsBytes uint64
 	// SharedBankBytes is the part of BudgetUsed the streamed mixtures' shared
 	// compact banks hold, one a shape, while a placed block streams through it.
 	SharedBankBytes uint64
@@ -914,6 +922,8 @@ func (s *Stats) add(o Stats) {
 	s.ScratchBytes += o.ScratchBytes
 	s.ComposedBytes += o.ComposedBytes
 	s.ComposedArena += o.ComposedArena
+	s.HeadBytes += o.HeadBytes
+	s.RowLogitsBytes += o.RowLogitsBytes
 	s.SharedBankBytes += o.SharedBankBytes
 	s.Allocated += o.Allocated
 	s.RoundingBytes += o.RoundingBytes
@@ -2190,6 +2200,10 @@ func (d *devTier) stats() Stats {
 	s.BudgetUsed, s.Slack = d.used, d.slack()
 	s.HistoryCopiesHeld = d.copiesHeld()
 	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
+	if bs := d.bs; d.headPlaced(bs) {
+		s.HeadBytes = bs.head.bytes() + bs.hVecBytes + uint64(bs.mvHead.rows*4)
+	}
+	s.RowLogitsBytes = d.rowLogitsBytes()
 	for _, r := range d.res {
 		if r.shared && r.ok {
 			s.SharedBankBytes += r.planes()

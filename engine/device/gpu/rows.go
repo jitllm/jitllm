@@ -504,6 +504,55 @@ func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int) uint64 {
 	return n
 }
 
+// dropRowsHead gives back the per-row logits and tokens a head over rows
+// writes (allocRagOut), in every lane, set and width, once the projection has
+// left the device: nothing else writes or reads them, and the reserved
+// width's were admitted with the projection (PrepHead's rowsNeed), so they go
+// with it and a projection placed again is admitted with them again
+// (prepRowsReserved). The step's reservation keeps its width's: a device
+// that reserves a ragged step (Config.StepRows) reserved them with the
+// blocks, for every projection to come (reserveScratch), and
+// Stats.ReservedStep reports them. Callers hold g.mu, the recordings dropped
+// (giveBackHead).
+func (g *devTier) dropRowsHead() {
+	defer g.scratchWin().close()
+	drop := func(bbs map[int]*blockScratch, promptW, stepW int) {
+		for w, bb := range bbs {
+			if bb == nil || g.StepRows > 0 && (w == stepW || !g.ComposedWidths && w == promptW) {
+				continue
+			}
+			freeRagOut(bb)
+			bb.ragBuilt = false
+		}
+	}
+	g.eachLane(func(l *lane) {
+		drop(l.bbs, l.promptW, l.stepW)
+		for _, s := range l.geoSets {
+			drop(s.bbs, s.promptW, s.stepW)
+		}
+	})
+}
+
+// rowLogitsBytes is what the per-row logits and tokens hold in every lane,
+// set and width (Stats.RowLogitsBytes). Callers hold g.mu.
+func (g *devTier) rowLogitsBytes() uint64 {
+	var n uint64
+	add := func(bbs map[int]*blockScratch) {
+		for _, bb := range bbs {
+			if bb != nil && bb.ragLogits != nil {
+				n += g.ragOutBytes(bb, bb.ragVocab, bb.p.NEmbd)
+			}
+		}
+	}
+	g.eachLane(func(l *lane) {
+		add(l.bbs)
+		for _, s := range l.geoSets {
+			add(s.bbs)
+		}
+	})
+	return n
+}
+
 // prepRowsReserved builds the reserved width's per-row head where a ragged
 // step's rows run there (rowsReserved) -- the per-row argmax and the final
 // softcap, the composer's head writing the logits they read -- at placement

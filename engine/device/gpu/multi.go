@@ -1211,6 +1211,37 @@ func (g *GPU) prepHeadOn(sid uint64, name string, h *nn.Head) (bool, error) {
 	return true, nil
 }
 
+// ReleaseHead is releaseHead for the zero session.
+func (g *GPU) ReleaseHead() { g.releaseHead(0) }
+
+// releaseHead gives back the output projection session sid runs: the device
+// frees it, its vectors and its logits where no other session runs it there,
+// and the scratch they ran in where it holds no block. A later PrepHead or
+// PrepHeadOn places it again.
+func (g *GPU) releaseHead(sid uint64) {
+	g.settle()
+	g.mu.Lock()
+	d := g.headOf(sid)
+	if d == nil {
+		g.mu.Unlock()
+		return
+	}
+	heads := g.leaveHead(sid)
+	if g.head == d && !g.headShared(sid, d) {
+		g.head = nil
+		heads = append(heads, d)
+	}
+	if g.stagedHead == d {
+		g.stagedHead = nil
+	}
+	g.mu.Unlock()
+	for i, h := range heads {
+		if !slices.Contains(heads[:i], h) {
+			h.dropHead()
+		}
+	}
+}
+
 // DeviceOf is the name of the device holding block li ("" when none does, or
 // the one that does has no name), and whether one holds it.
 func (g *GPU) DeviceOf(li int) (string, bool) { return g.deviceOf(0, li) }

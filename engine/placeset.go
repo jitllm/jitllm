@@ -111,18 +111,21 @@ func (s *Instance) moveOffCards(lo, hi int) (mv BlockMove, err error) {
 	defer func() { mv.Pause = time.Since(t0) }()
 	// The projection stays on its card while a block of this instance is
 	// left beside it, as a move between cards leaves it (Commit). With the
-	// last of them it comes to the CPU, and the next move to a card takes it
-	// there (headHome). Asked once fixKVGroups has brought every group home.
+	// last of them one the engine placed comes to the CPU, its card's copy
+	// given back, and the next move to a card takes it there (headHome); one
+	// the caller named stays (MoveHead). Asked once fixKVGroups has brought
+	// every group home.
 	nd, named := s.ld.(nn.NamedDevice)
 	headWas, beside := "", false
-	if named && s.head != nil {
+	if named && s.head != nil && !s.headNamed {
 		var on bool
 		headWas, on = nd.HeadDeviceName()
 		beside = on && s.anyBlockOn(nd, headWas)
 	}
 	defer func() {
 		if s.head != nil && (!named || beside && !s.anyBlockOn(nd, headWas)) {
-			s.head, s.headHome, mv.Head = nil, true, true
+			s.releaseHead()
+			s.headHome, mv.Head = true, true
 		}
 	}()
 	defer s.followSystem()

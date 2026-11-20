@@ -21,9 +21,10 @@ import (
 // teacher-forced -- the unmoved first bit for bit, the second bit for bit
 // between two cards running the same kernels and in the reduction-order band
 // between two backends. Two tokens later the second moves its lower half
-// too, and its projection follows its blocks to the other card while the
-// first's stays where the first's blocks are: the tier holds the projection
-// twice, one an instance. The second's copies go when it closes, the second
+// too, which leaves its projection on the card the placement named for it,
+// and then names the other card for it (MoveHead) while the first's stays
+// where the first's blocks are: the tier holds the projection twice, one an
+// instance. The second's copies go when it closes, the second
 // card back to what it held before the moves, and the first decodes on. The
 // violations are the tier's one route a block, before which the first move
 // was refused ("another session is using it"), and its one projection, which
@@ -171,8 +172,11 @@ func twoInstancesRunABlockOnTwoCards(t *testing.T, path string) {
 			if err != nil {
 				t.Fatalf("blocks %d..%d of the second instance to %s: %v", lo, hi-1, b, err)
 			}
-			if !mv.Head {
-				t.Fatalf("the second instance's projection did not follow its blocks to %s: %+v", b, mv)
+			if at := headOn(y); mv.Head || at != a {
+				t.Fatalf("a move of the second instance's blocks to %s took the projection its placement named (moved %v, on %q): only a move naming it does", b, mv.Head, at)
+			}
+			if hm, err := y.MoveHead(b); err != nil || !hm.Head {
+				t.Fatalf("the second instance's projection to %s: moved %v, %v: %s", b, hm.Head, err, g.Err())
 			}
 			if at := headOn(y); at != b {
 				t.Fatalf("the second instance's projection is on %q after its move to %s", at, b)

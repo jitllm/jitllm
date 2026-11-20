@@ -444,6 +444,10 @@ type Instance struct {
 	// block beside it (moveOffCards), and the next move to a card takes it
 	// there (PendingMove.Commit). A placement decides it again.
 	headHome bool
+	// headNamed says the caller named the projection's device -- the
+	// placement's head, or a MoveHead -- so a move of blocks leaves it there.
+	// A placement decides it again.
+	headNamed bool
 	// PickIDs asks a prefill whose head runs on the host to project the
 	// listed vocabulary rows alone into PickVals (pickOnHost), the
 	// host's half of the label pick a device head does (nn.Head.Pick);
@@ -1238,6 +1242,7 @@ func (s *Instance) placeHead() {
 	if s.ld == nil || s.head != nil || !s.opt.headPlace || s.c != s.m.Cfg {
 		return
 	}
+	s.headNamed = s.opt.place != nil && s.opt.place.Head != nil
 	// A prediction block's own head is in the block's page.
 	if s.outW.Data == nil && s.hi > s.lo && s.layers[0].Mtp != nil {
 		if _, err := s.pageIn(s.lo); err != nil {
@@ -2338,7 +2343,7 @@ func (s *Instance) demoteAll() bool {
 			return false
 		}
 	}
-	s.head, s.headReady = nil, nil
+	s.releaseHead()
 	// Release every run, not one prefix: ReleaseLayers takes a range.
 	for _, r := range s.devRuns() {
 		s.ld.ReleaseLayers(r[0], r[1])
@@ -2839,9 +2844,9 @@ func (s *Instance) SetGPULayers(n int) int {
 		}
 	}
 	if from := s.placedFrom(n); len(from) > 0 {
-		// The head goes first, then the history comes home while the
-		// device buffers still exist, then the blocks are freed.
-		s.head, s.headReady = nil, nil
+		// The head goes first, its copy given back, then the history comes
+		// home while the device buffers still exist, then the blocks are freed.
+		s.releaseHead()
 		for _, li := range from {
 			if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 				return s.gpuLayers // refuse rather than lose the history
