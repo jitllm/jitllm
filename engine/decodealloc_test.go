@@ -659,7 +659,7 @@ func allocVerdict(t *testing.T, what string, w windowAllocs, n int, reads int64,
 		max(w.unattributed, 0), w.caches, reads)
 	if captures != 0 {
 		t.Fatalf("the window recorded the launch sequence %d time(s): it measured a re-capture, not a "+
-			"replayed token", captures)
+			"replayed token; its %d engine allocation(s):\n%s", captures, w.engine, w.where)
 	}
 	if reads != 0 {
 		t.Fatalf("the window read %d page(s): this measured page-ins, not a resident model's decode", reads)
@@ -781,7 +781,7 @@ func countAllocs(f func()) windowAllocs {
 			case strings.HasSuffix(fr.Function, ".memRecords"):
 				ours = true
 			}
-			if len(top) < 6 {
+			if len(top) < 12 {
 				top = append(top, fr.Function)
 			}
 			if !more {
