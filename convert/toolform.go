@@ -12,8 +12,9 @@ import (
 
 // stateToolForm states how the model writes a tool call: the form of the
 // template a request with tools renders (the one named tool_use, else the
-// default), read from that template and the vocabulary (ToolFormOf).
-func stateToolForm(s *jlm.Source) {
+// default), read from that template and the vocabulary (ToolFormOf), the
+// form added to taken where that is not nil.
+func stateToolForm(s *jlm.Source, taken map[string]bool) {
 	v := s.Vocab
 	if v == nil || len(v.Templates) == 0 {
 		return
@@ -23,6 +24,9 @@ func stateToolForm(s *jlm.Source) {
 		src, _ = v.Template("")
 	}
 	v.Tools = ToolFormOf(src, v.Tokens)
+	if v.Tools.Name != "" {
+		take(taken, "tool form "+v.Tools.Name)
+	}
 }
 
 //go:embed toolforms.json

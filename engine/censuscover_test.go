@@ -62,6 +62,9 @@ func censusGaps(t *testing.T, ms []auditModel) (features, projectors []string) {
 		if c := ModelConfigForTest(m.path); c != "" {
 			opts = append(opts, convert.WithModelConfig(c))
 		}
+		if tpl, ok := censusTemplates()[modelRel(m.path)]; ok {
+			opts = append(opts, convert.WithChatTemplate(testmodels.Path(tpl)))
+		}
 		fs, err := convert.FeaturesOf(m.path, m.mmproj, opts...)
 		if errors.Is(err, convert.ErrPart) {
 			// A part takes its features joined to the trunk it was exported
@@ -134,8 +137,7 @@ func ggufProjector(t *testing.T, p string) string {
 // trunkOf is the trunk GGUF a prediction head published alone (convert.ErrPart)
 // joins, by trunkPairs; "" where none is paired or the box does not hold it.
 func trunkOf(p string) string {
-	rel := filepath.ToSlash(strings.TrimPrefix(p, testmodels.Dir()+string(filepath.Separator)))
-	t, ok := trunkPairs()[rel]
+	t, ok := trunkPairs()[modelRel(p)]
 	if !ok {
 		return ""
 	}
@@ -144,6 +146,23 @@ func trunkOf(p string) string {
 		return ""
 	}
 	return q
+}
+
+// modelRel is p relative to the model directory, with forward slashes.
+func modelRel(p string) string {
+	return filepath.ToSlash(strings.TrimPrefix(p, testmodels.Dir()+string(filepath.Separator)))
+}
+
+// censusTemplates are the models, relative to the model directory, the census
+// converts with their publisher's chat template (convert.WithChatTemplate, as
+// `jitllm convert -chat-template` does), and the template: a tool-call form
+// no model here carries the template of is taken from its family's own.
+func censusTemplates() map[string]string {
+	return map[string]string{
+		"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf": "Mistral-7B-Instruct-v0.3/tokenizer_config.json",
+		"synth-kimilinear":                     "Kimi-Linear-48B-A3B-Instruct/chat_template.jinja",
+		"synth-minimaxm2.gguf":                 "MiniMax-M2/chat_template.jinja",
+	}
 }
 
 // trunkPairs are the heads published alone, relative to the model directory,

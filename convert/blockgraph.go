@@ -758,7 +758,7 @@ func StateBlocksAs(s *jlm.Source, arch string, keys map[string]int64) error {
 	if err := StateBlockGraphs(&Config{Config: s.Config}, s, g, d, nil); err != nil {
 		return err
 	}
-	return StateFront(s.Config, s)
+	return StateFront(s.Config, s, nil)
 }
 
 // usedGraphs are the library's graphs g's uses name, in their order.
@@ -831,6 +831,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 	}
 	for i, o := range ops {
 		vars = o.with(facts)
+		written := o
 		var err error
 		if o, err = g.named(o, vars); err != nil {
 			return fmt.Errorf("op %d (%s): %w", i, o.Op, err)
@@ -845,7 +846,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 			}
 		}
 		if taken != nil {
-			f, err := opFeature(o)
+			f, err := opFeature(written)
 			if err != nil {
 				return err
 			}

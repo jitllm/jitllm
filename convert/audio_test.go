@@ -25,7 +25,7 @@ func TestD1OmniStatesItsAudio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, ts, err := audioOf(f, 12)
+	a, ts, err := audioOf(f, 12, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

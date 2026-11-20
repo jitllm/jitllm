@@ -25,6 +25,8 @@ import (
 type mjPictures struct {
 	Steps map[string]*mjPicStep `json:"steps"`
 	Rules map[string]*mjPicRule `json:"rules"`
+	// taken, where not nil, takes each rule a picture is stated by.
+	taken map[string]bool
 }
 
 // mjPicStep is a step a rule reads: Code its kind where it is a processor's
@@ -403,6 +405,7 @@ func (l *mjPictures) picture(steps []jlm.PreStep, c picContext) (*jlm.PictureGeo
 			}
 			out = append(out, jlm.PreStep{Kind: s.Kind, Ints: slices.Clone(s.Ints), Floats: slices.Clone(s.Floats)})
 		}
+		take(l.taken, "picture rule "+rn)
 		return g, out, nil
 	}
 	if taken == "" {

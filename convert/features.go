@@ -19,8 +19,10 @@ import (
 // and expressions, not the values it names or the condition it runs under,
 // so one op two files state is one feature -- a graph's residual streams,
 // and a field a container statement sets (each of an object's, and a field
-// naming a word by the word). engine.TestTheCensusCoversEveryFeature holds
-// every feature to a model the census runs that takes it.
+// naming a word by the word) -- and each choice a statement table beside the
+// library states that changes what runs (tableFeatures).
+// engine.TestTheCensusCoversEveryFeature holds every feature to a model the
+// census runs that takes it.
 
 // streamsFeature is a graph's residual streams.
 const streamsFeature = "graph streams"
@@ -90,6 +92,13 @@ func StatedBy(f string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	tables, err := tableFeatures()
+	if err != nil {
+		return nil, err
+	}
+	if by, ok := tables[f]; ok {
+		return []string{by}, nil
+	}
 	var out []string
 	for _, mj := range files {
 		in := map[string]bool{}
@@ -134,7 +143,217 @@ func Features() ([]string, error) {
 			set[f] = true
 		}
 	}
+	tables, err := tableFeatures()
+	if err != nil {
+		return nil, err
+	}
+	for f := range tables {
+		set[f] = true
+	}
 	return slices.Sorted(maps.Keys(set)), nil
+}
+
+// take adds feature f to taken where that is not nil.
+func take(taken map[string]bool, f string) {
+	if taken != nil {
+		taken[f] = true
+	}
+}
+
+// tableFeatures is each choice the statement tables beside the library
+// state that changes what runs, and the table stating it: each op of a
+// part front.json states, by the part; a readout and a temperature band of
+// readouts.json; each source's reading of a rotary method and each
+// convention it is read under (rotary.json); a sampling key of
+// generation.json; a tool-call form of toolforms.json; a projector's own
+// tensor name, indexed part and rename of towertensors.json (a name it
+// leaves unread runs nothing); and each op of a projector's tower and each
+// picture rule of projectors.json.
+func tableFeatures() (map[string]string, error) {
+	out := map[string]string{}
+	add := func(by string, fs ...string) {
+		for _, f := range fs {
+			out[f] = by
+		}
+	}
+	var parts map[string][]mjBlockOp
+	if err := json.Unmarshal(frontJSON, &parts); err != nil {
+		return nil, fmt.Errorf("convert: front.json: %w", err)
+	}
+	for part, steps := range parts {
+		set := map[string]bool{}
+		if err := opFeatures(steps, set); err != nil {
+			return nil, err
+		}
+		for f := range set {
+			add("convert/front.json", frontFeature(part, f))
+		}
+	}
+	ro, err := readoutLibrary()
+	if err != nil {
+		return nil, err
+	}
+	for name := range ro.Readouts {
+		add("convert/readouts.json", "readout "+name)
+	}
+	for band := range ro.Bands {
+		add("convert/readouts.json", "readout band "+band)
+	}
+	rot, err := readRotary()
+	if err != nil {
+		return nil, err
+	}
+	for name, m := range rot.Methods {
+		if m.HF != nil {
+			add("convert/rotary.json", rotaryFeature(name, "hf", ""))
+		}
+		if m.GGUF != nil {
+			add("convert/rotary.json", rotaryFeature(name, "gguf", ""))
+			for c := range m.GGUF.Conventions {
+				add("convert/rotary.json", rotaryFeature(name, "gguf", c))
+			}
+		}
+	}
+	gen, err := generationKeys()
+	if err != nil {
+		return nil, err
+	}
+	for field := range gen {
+		add("convert/generation.json", "generation "+field)
+	}
+	tf, err := readToolForms()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range tf.Forms {
+		add("convert/toolforms.json", "tool form "+f.Form.Name)
+	}
+	tt, err := readTowerTensors()
+	if err != nil {
+		return nil, err
+	}
+	for p, tp := range tt.Projectors {
+		for name := range tp.Roles {
+			add("convert/towertensors.json", towerTensorFeature(p, "role", name))
+		}
+		for _, ix := range tp.Indexed {
+			for part := range ix.Roles {
+				add("convert/towertensors.json", towerTensorFeature(p, "indexed", ix.Prefix+part))
+			}
+		}
+		for _, rn := range tp.Renames {
+			add("convert/towertensors.json", towerTensorFeature(p, "rename", rn.Prefix+rn.Infix))
+		}
+	}
+	lib, err := projectorLibrary()
+	if err != nil {
+		return nil, err
+	}
+	var pf projectorFile
+	if err := json.Unmarshal(projectorsJSON, &pf); err != nil {
+		return nil, fmt.Errorf("convert: projectors.json: %w", err)
+	}
+	// An entry that is another's (as) is converted by that one's tower.
+	towers := map[string]*mjTower{}
+	for name, ps := range lib {
+		if pf.Projectors[name].As == "" {
+			towers[name] = ps.Tower
+		}
+	}
+	for name, a := range pf.Audio {
+		towers[name] = a.Tower
+	}
+	for name, t := range towers {
+		if t == nil {
+			continue
+		}
+		for _, ops := range t.programs() {
+			if err := towerOpFeatures(ops, func(f string) { add("convert/projectors.json", towerFeature(name, f)) }); err != nil {
+				return nil, err
+			}
+		}
+	}
+	pics, err := pictureLibrary()
+	if err != nil {
+		return nil, err
+	}
+	for rn := range pics.Rules {
+		add("convert/projectors.json", "picture rule "+rn)
+	}
+	return out, nil
+}
+
+// frontFeature is op feature f of front.json's part.
+func frontFeature(part, f string) string { return "front " + part + " " + f }
+
+// rotaryFeature is a method's reading by source (hf or gguf), under
+// convention where that is not "".
+func rotaryFeature(method, source, convention string) string {
+	f := "rotary " + method + " by " + source
+	if convention != "" {
+		f += ", convention " + convention
+	}
+	return f
+}
+
+// towerTensorFeature is projector p's towertensors.json entry of kind
+// (role, indexed, rename) for name.
+func towerTensorFeature(p, kind, name string) string {
+	return "tower tensors " + p + " " + kind + " " + name
+}
+
+// towerFeature is op feature f of projector p's tower.
+func towerFeature(p, f string) string { return "tower " + p + " " + f }
+
+// towerOpFeature is o as a feature: its fields as the file writes them but
+// its condition, the values it names and the ops it runs, the unset ones
+// left out.
+func towerOpFeature(o mjTowerOp) (string, error) {
+	o.If, o.In, o.Out, o.Var, o.Ops = "", nil, "", "", nil
+	b, err := json.Marshal(o)
+	if err != nil {
+		return "", fmt.Errorf("convert: a tower op as a feature: %w", err)
+	}
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return "", fmt.Errorf("convert: a tower op as a feature: %w", err)
+	}
+	if b, err = json.Marshal(setFields(v)); err != nil {
+		return "", fmt.Errorf("convert: a tower op as a feature: %w", err)
+	}
+	return "op " + string(b), nil
+}
+
+// towerOpFeatures calls add with each of ops' features, an each's ops among
+// them.
+func towerOpFeatures(ops []mjTowerOp, add func(string)) error {
+	for _, o := range ops {
+		f, err := towerOpFeature(o)
+		if err != nil {
+			return err
+		}
+		add(f)
+		if err := towerOpFeatures(o.Ops, add); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// towerTook records each op projector p's tower runs in taken; nil where
+// taken is.
+func towerTook(taken map[string]bool, p string) func(mjTowerOp) error {
+	if taken == nil {
+		return nil
+	}
+	return func(o mjTowerOp) error {
+		f, err := towerOpFeature(o)
+		if err != nil {
+			return err
+		}
+		taken[towerFeature(p, f)] = true
+		return nil
+	}
 }
 
 // opFeatures adds each of ops' features to set: an each's steps for it, and

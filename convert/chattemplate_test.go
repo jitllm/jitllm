@@ -203,7 +203,7 @@ func TestConvertStoresTheChatTemplate(t *testing.T) {
 	if err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v -- the replacement half proved nothing", err)
 	}
-	s, err := sourceOf(f)
+	s, err := sourceOf(f, nil)
 	f.Close()
 	if err != nil {
 		t.Fatal(err)

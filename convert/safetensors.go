@@ -108,7 +108,7 @@ func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, f
 		fp.Writer = jlm.WriterID()
 	}
 	s.Origin = originOf(name, open)
-	stateToolForm(s)
+	stateToolForm(s, o.taken)
 	return jlm.Write(dst, s, fp)
 }
 
@@ -357,6 +357,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 	cfg, err := ha.config(hc, names)
 	if err != nil {
 		return nil, err
+	}
+	for x := range cfg.took {
+		take(taken, x)
 	}
 	if err := localAxes(cfg); err != nil {
 		return nil, err
@@ -623,7 +626,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc), taken); err != nil {
 			return nil, err
 		}
-		if err := StateFront(s.Config, s); err != nil {
+		if err := StateFront(s.Config, s, taken); err != nil {
 			return nil, err
 		}
 	}

@@ -55,10 +55,14 @@ type towerVocab struct {
 	indexed map[string]map[string]jlm.Role
 	blocks  uint32
 	text    tensorNames
+	// proj is the projector's name, and taken where not nil the features its
+	// names take (roleOf).
+	proj  string
+	taken map[string]bool
 }
 
-// towerVocabOf is v's projector's tower names, over the text vocabulary.
-func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
+// readTowerTensors is towertensors.json.
+func readTowerTensors() (*towerTensors, error) {
 	b, err := towerTensorsFS.ReadFile("towertensors.json")
 	if err != nil {
 		return nil, err
@@ -67,8 +71,17 @@ func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
 	if err := json.Unmarshal(b, &t); err != nil {
 		return nil, fmt.Errorf("convert: towertensors.json: %w", err)
 	}
+	return &t, nil
+}
+
+// towerVocabOf is v's projector's tower names, over the text vocabulary.
+func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
+	t, err := readTowerTensors()
+	if err != nil {
+		return nil, err
+	}
 	n := &towerVocab{unread: t.Unread, p: t.Projectors[v.Projector.String()], roles: map[string]jlm.Role{},
-		indexed: map[string]map[string]jlm.Role{}, blocks: v.NLayer, text: text}
+		indexed: map[string]map[string]jlm.Role{}, blocks: v.NLayer, text: text, proj: v.Projector.String()}
 	named := rolesByName()
 	for _, ix := range n.p.Indexed {
 		if ix.Prefix == "" || !strings.HasSuffix(ix.Prefix, ".") || len(ix.Roles) == 0 {
@@ -99,6 +112,7 @@ func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
 // sees.
 func (n *towerVocab) roleOf(name string) (jlm.Role, int32, int32, error) {
 	if r, ok := n.roles[name]; ok {
+		take(n.taken, towerTensorFeature(n.proj, "role", name))
 		return r, jlm.DenseBlock, -1, nil
 	}
 	for prefix, parts := range n.indexed {
@@ -118,13 +132,16 @@ func (n *towerVocab) roleOf(name string) (jlm.Role, int32, int32, error) {
 		if uint32(i) >= n.blocks {
 			return 0, 0, 0, fmt.Errorf("convert: %s taps block %d of %d", name, i, n.blocks)
 		}
+		take(n.taken, towerTensorFeature(n.proj, "indexed", prefix+part))
 		return r, jlm.DenseBlock, int32(i), nil
 	}
 	for _, rn := range n.p.Renames {
 		switch {
 		case rn.Prefix != "" && strings.HasPrefix(name, rn.Prefix):
+			take(n.taken, towerTensorFeature(n.proj, "rename", rn.Prefix))
 			return n.text.identify(rn.To + strings.TrimPrefix(name, rn.Prefix))
 		case rn.Infix != "" && strings.Contains(name, rn.Infix):
+			take(n.taken, towerTensorFeature(n.proj, "rename", rn.Infix))
 			return n.text.identify(strings.Replace(name, rn.Infix, rn.To, 1))
 		}
 	}

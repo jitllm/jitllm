@@ -318,7 +318,7 @@ func TestInternVLTilesAreTheFiles(t *testing.T) {
 	if err != nil || lt == nil {
 		t.Fatalf("the library states no %v tower: %v", s.Vision.Projector, err)
 	}
-	tw, err := lt.state(by, s)
+	tw, err := lt.state(by, s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

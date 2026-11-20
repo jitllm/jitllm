@@ -103,7 +103,7 @@ func ggufConverted(t testing.TB, path string, built bool) *jlm.Source {
 	if built {
 		s, err = buildGGUF(f, nil, path, "", options{})
 	} else {
-		s, err = sourceOf(f)
+		s, err = sourceOf(f, nil)
 	}
 	if err != nil {
 		t.Fatal(err)

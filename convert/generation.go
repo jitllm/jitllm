@@ -125,19 +125,29 @@ func hfGeneration(dir hfDir) (*jlm.Generation, error) {
 	return &g, nil
 }
 
+// generationKeys is generation.json: the GGUF key of each sampling field.
+func generationKeys() (map[string]string, error) {
+	var keys struct {
+		GGUF map[string]string `json:"gguf"`
+	}
+	if err := json.Unmarshal(generationJSON, &keys); err != nil {
+		return nil, fmt.Errorf("convert: generation.json: %w", err)
+	}
+	return keys.GGUF, nil
+}
+
 // ggufGeneration is the draw a GGUF states, over GenerationConfig's
 // defaults: the family's statement's fields (mjStates.Generation), then
 // each field the file states under the key generation.json names for it.
 // A GGUF has no key for do_sample: the family's statement states it where
 // its reference says, and otherwise a file or statement stating a sampling
 // field samples at its temperature (0 the greedy draw), one stating none
-// is greedy.
-func ggufGeneration(f *meta.File) (*jlm.Generation, error) {
-	var keys struct {
-		GGUF map[string]string `json:"gguf"`
-	}
-	if err := json.Unmarshal(generationJSON, &keys); err != nil {
-		return nil, fmt.Errorf("convert: generation.json: %w", err)
+// is greedy. Each field the file states is added to taken where that is not
+// nil.
+func ggufGeneration(f *meta.File, taken map[string]bool) (*jlm.Generation, error) {
+	keys, err := generationKeys()
+	if err != nil {
+		return nil, err
 	}
 	st, _, err := ggufStates(f.Arch())
 	if err != nil {
@@ -147,11 +157,12 @@ func ggufGeneration(f *meta.File) (*jlm.Generation, error) {
 	if st != nil && st.Generation != nil {
 		family = *st.Generation
 	}
-	for _, field := range slices.Sorted(maps.Keys(keys.GGUF)) {
-		x, ok := f.KV[keys.GGUF[field]].Float()
+	for _, field := range slices.Sorted(maps.Keys(keys)) {
+		x, ok := f.KV[keys[field]].Float()
 		if !ok {
 			continue
 		}
+		take(taken, "generation "+field)
 		// The keys are f32: the decimal the writer meant is the shortest one
 		// that rounds to them.
 		if d, err := strconv.ParseFloat(strconv.FormatFloat(x, 'g', -1, 32), 64); err == nil {

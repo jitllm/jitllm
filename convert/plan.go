@@ -80,7 +80,7 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 		return nil, err
 	}
 	s.Origin = originOf(name, shards)
-	stateToolForm(s)
+	stateToolForm(s, o.taken)
 	h, size, err := jlm.Plan(s, jlm.Fingerprint{Writer: jlm.WriterID()})
 	if err != nil {
 		return nil, err

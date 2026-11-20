@@ -1154,7 +1154,7 @@
        {"shape": ["vision.embedding_length", "vision.embedding_length * size.sq"]}, {"type": "f32"},
        {"reshape": [-1, "vision.embedding_length", "size.sq"]}, {"transpose": [0, 2, 1]}, {"reshape": ["vision.embedding_length", -1]}]}}},
    "tower": {
-    "requires": ["v_patch_embd", "v_post_norm", "v_proj", "v_proj2", "v.token_embd.img_break"],
+    "requires": ["v_patch_embd", "v_proj", "v_proj2", "v.token_embd.img_break"],
     "require": [
      {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.image_size != 0 and (v.embd // v.heads) % 4 == 0 and (v.scale <= 1 or 'mm.patch_merger' in has)", "else": "the heads do not divide the width or a head's into quarters, there are no patches, or the file merges with no merger"}
     ],
@@ -1177,7 +1177,7 @@
      "rope": {"base": "10000", "dim": "v.embd // v.heads", "runs": [{"count": "v.embd // v.heads // 4", "each": [{"pairs": "1", "axis": "0", "freq": "2 * j"}]}, {"count": "v.embd // v.heads // 4", "each": [{"pairs": "1", "axis": "1", "freq": "2 * j + 1"}]}]}
     },
     "head": [
-     {"op": "rms_norm", "w": "v_post_norm", "eps": "v.eps"},
+     {"op": "rms_norm", "if": "'v_post_norm' in has", "w": "v_post_norm", "eps": "v.eps"},
      {"op": "regroup", "if": "v.scale > 1", "span": "v.scale"},
      {"op": "linear", "if": "v.scale > 1", "w": "mm.patch_merger"},
      {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},

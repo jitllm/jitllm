@@ -24,7 +24,8 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	if err != nil {
 		return nil, err
 	}
-	t, err := lt.state(by, s)
+	pics.taken = o.taken
+	t, err := lt.state(by, s, towerTook(o.taken, s.Vision.Projector.String()))
 	if err != nil {
 		return nil, err
 	}

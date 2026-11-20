@@ -26,6 +26,8 @@ type stateProg struct {
 	defs  map[string][]mjTowerOp
 	// wargs are the weights the call running passes, a def's $0, $1 ...
 	wargs []string
+	// took, where not nil, is called with each op the program runs.
+	took func(mjTowerOp) error
 }
 
 // prog is ops as a program over nin inputs, held saying which optional
@@ -71,6 +73,11 @@ func (sp *stateProg) run(p *jlm.Program, ops []mjTowerOp, held func(string) bool
 			}
 			if !on.IsTruthy() {
 				continue
+			}
+		}
+		if sp.took != nil {
+			if err := sp.took(o); err != nil {
+				return err
 			}
 		}
 		// A let names a value and writes no op; a call runs a def's ops over

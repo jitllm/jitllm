@@ -99,8 +99,9 @@ func predictFacts(c *jlm.Config, s *jlm.Source, names tensorNames, li int) *bloc
 // embedding model, a pointer, a marker head or a joint head; each prediction
 // block's entry, and its head over its own mix of the streams where it
 // stores one; the output norm alone where the model stores one. Each is
-// held to what the container stores (graph.Verify).
-func StateFront(c *jlm.Config, s *jlm.Source) error {
+// held to what the container stores (graph.Verify), each op it runs added to
+// taken, by its part, where that is not nil.
+func StateFront(c *jlm.Config, s *jlm.Source, taken map[string]bool) error {
 	var parts map[string][]mjBlockOp
 	if err := json.Unmarshal(frontJSON, &parts); err != nil {
 		return fmt.Errorf("convert: front.json: %w", err)
@@ -122,9 +123,16 @@ func StateFront(c *jlm.Config, s *jlm.Source) error {
 		} else if li >= 0 {
 			bf = predictFacts(c, s, names, li)
 		}
+		var ran map[string]bool
+		if taken != nil {
+			ran = map[string]bool{}
+		}
 		b := graph.NewBlock(li)
-		if err := g.run(b, parts[part], bf, li, nil); err != nil {
+		if err := g.run(b, parts[part], bf, li, ran); err != nil {
 			return fmt.Errorf("convert: the stated %s: %w", as, err)
+		}
+		for f := range ran {
+			taken[frontFeature(part, f)] = true
 		}
 		if err := graph.Verify(b.G, bf.facts); err != nil {
 			return fmt.Errorf("convert: the stated %s: %w", as, err)

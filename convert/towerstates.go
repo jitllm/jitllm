@@ -607,13 +607,31 @@ func towerFacts(s *jlm.Source, geom jinja.Value) map[string]jinja.Value {
 
 // state is the picture tower t states for s, refused where s lacks a tensor
 // it requires or its facts fail a requirement.
-func (t *mjTower) state(by string, s *jlm.Source) (*jlm.Tower, error) {
-	return t.stateOf(by, s, s.Vision.Projector, visionGeom(s.Vision))
+func (t *mjTower) state(by string, s *jlm.Source, took func(mjTowerOp) error) (*jlm.Tower, error) {
+	return t.stateOf(by, s, s.Vision.Projector, visionGeom(s.Vision), took)
+}
+
+// programs is each op list t states as a program: its entry, its head, each
+// chain kind's, its video's entry and its taps'.
+func (t *mjTower) programs() [][]mjTowerOp {
+	out := [][]mjTowerOp{t.Entry, t.Head}
+	if t.Chain != nil {
+		for _, k := range t.Chain.Kinds {
+			out = append(out, k.Ops)
+		}
+	}
+	if t.Video != nil {
+		out = append(out, t.Video.Entry)
+	}
+	if t.Taps != nil {
+		out = append(out, t.Taps.Prog)
+	}
+	return out
 }
 
 // stateOf is the tower t states over s's tensors, projector proj's, its
-// geometry geom.
-func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jinja.Value) (*jlm.Tower, error) {
+// geometry geom, took (where not nil) called with each op its programs run.
+func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jinja.Value, took func(mjTowerOp) error) (*jlm.Tower, error) {
 	facts := towerFacts(s, geom)
 	has := facts["has"].AsDict()
 	held := func(n string) bool {
@@ -680,7 +698,7 @@ func (t *mjTower) stateOf(by string, s *jlm.Source, proj jlm.Projector, geom jin
 		return nil, err
 	}
 	roles := rolesByName()
-	pb := &stateProg{where: fmt.Sprintf("%s: %v", by, proj), value: value, num: num, facts: facts,
+	pb := &stateProg{where: fmt.Sprintf("%s: %v", by, proj), value: value, num: num, facts: facts, took: took,
 		role: func(n string) (jlm.Role, bool) {
 			r, ok := roles[n]
 			return r, ok

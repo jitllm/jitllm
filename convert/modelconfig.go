@@ -49,9 +49,13 @@ func (o *options) applyModelConfig(f *meta.File, s *jlm.Source, src string) erro
 	if err != nil {
 		return err
 	}
-	ts, err := modelConfigFactors(c, &Config{Config: s.Config})
+	mc := &Config{Config: s.Config}
+	ts, err := modelConfigFactors(c, mc)
 	if err != nil {
 		return err
+	}
+	for x := range mc.took {
+		take(o.taken, x)
 	}
 	if len(ts) == 0 {
 		if named != nil {

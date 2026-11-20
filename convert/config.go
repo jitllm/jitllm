@@ -39,6 +39,18 @@ type Config struct {
 	// RouterScore, RouterWeight and StateRevision refuse rather than read as
 	// stating nothing (Unstated).
 	Stated *Statement
+	// took is the statement tables' choices reading the source made (a
+	// rotary method's reading, a readout and its bands), which FeaturesOf
+	// counts.
+	took map[string]bool
+}
+
+// take records feature f as one reading c's source made.
+func (c *Config) take(f string) {
+	if c.took == nil {
+		c.took = map[string]bool{}
+	}
+	c.took[f] = true
 }
 
 // Unstated is jc as a Config no library file states anything for.

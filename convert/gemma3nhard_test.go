@@ -78,7 +78,7 @@ func TestGemma3nHardRowsAreTheEmbedders(t *testing.T) {
 			y[r] *= inv
 		}
 	}
-	s, err := sourceOf(f)
+	s, err := sourceOf(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

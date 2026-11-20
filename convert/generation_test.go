@@ -117,7 +117,7 @@ func TestGGUFGenerationReadsItsSamplingKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer f.Close()
-			g, err := ggufGeneration(f)
+			g, err := ggufGeneration(f, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +167,7 @@ func TestDoSampleIsGenerationConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	g, err := ggufGeneration(f)
+	g, err := ggufGeneration(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

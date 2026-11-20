@@ -63,6 +63,7 @@ func decisionOf(f *meta.File, c *Config) error {
 	if err := st.state(name, f, c); err != nil {
 		return err
 	}
+	c.take("readout " + name)
 
 	prefix := f.Arch() + ".decision.temperature."
 	for key, val := range f.KV {
@@ -86,6 +87,7 @@ func decisionOf(f *meta.File, c *Config) error {
 				return fmt.Errorf("decision temperature %s names band %q, which no reference fits", key, band)
 			}
 			d.MinOptions, d.MaxOptions = b[0], b[1]
+			c.take("readout band " + band)
 		}
 		c.DecisionTemps = append(c.DecisionTemps, d)
 	}

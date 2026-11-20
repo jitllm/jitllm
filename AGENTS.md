@@ -372,8 +372,10 @@ an addition is chosen from and priced against.
 5. **The five principles' gates**, with the model added to each gate's list.
    The census's list is checked: `engine.TestTheCensusCoversEveryFeature` fails
    until a model it runs takes every feature the new statement states (each
-   op of its graph by what it computes, each container field) and carries the
-   new projector.
+   op of its graph, its front and its tower by what it computes, each
+   container field, and each choice the readout, rotary, generation,
+   tool-form, tower-tensor and picture tables state) and carries the new
+   projector.
 6. **A real checkpoint against llama.cpp**, teacher-forced
    (`TestGreedyMatchesLlamaCpp`; `JITLLM_GREEDY_MODEL` names one over its size
    limit), wherever one fits a box.

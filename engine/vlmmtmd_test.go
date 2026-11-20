@@ -50,6 +50,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 	}{
 		{"gemma3", "gemma-3-4b-it-Q4_K_M.gguf", "vlm/mmproj-gemma-3-4b-it-f16.gguf", 85, 8},
 		{"internvl", "vlm/InternVL3-1B-Instruct-Q8_0.gguf", "vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf", 75, 0},
+		{"pixtral", "pixtral/pixtral-12b-Q4_K_M.gguf", "pixtral/mmproj-pixtral-12b-Q8_0.gguf", 85, 8},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			raw, err := os.ReadFile(testmodels.Path(filepath.Join("vlm", "oracle", c.name+"-cli.json")))

@@ -175,7 +175,7 @@ func stateStoredFront(f *jlm.File, jc *jlm.Config) (bool, error) {
 		s.Tensors = append(s.Tensors, jlm.Tensor{Role: e.Role, Block: e.Block, Index: e.Index, Type: e.Type, NDim: e.NDim,
 			Dims: e.Dims, Name: e.Name, RowTable: f.RowTable(e)})
 	}
-	if err := StateFront(jc, s); err != nil {
+	if err := StateFront(jc, s, nil); err != nil {
 		return false, err
 	}
 	return jc.Front.Stated(), nil

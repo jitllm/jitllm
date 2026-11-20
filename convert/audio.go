@@ -15,7 +15,7 @@ import (
 // for an mmproj with none or of an audio projector the library does not
 // state. The statement (projectors.json's audio entries) gives its
 // geometry, its tensors' names and layouts, and its tower.
-func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
+func audioOf(f *meta.File, nVis uint32, taken map[string]bool) (*jlm.Audio, []jlm.Tensor, error) {
 	if v, ok := f.KV["clip.has_audio_encoder"]; !ok || v.Type != meta.Bool || len(v.Raw) != 1 || v.Raw[0] == 0 {
 		return nil, nil, nil
 	}
@@ -141,7 +141,8 @@ func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
 	if err := quantizeTower(out); err != nil {
 		return nil, nil, err
 	}
-	if a.Tower, err = st.Tower.stateOf("convert/projectors.json", &jlm.Source{Tensors: out}, a.Projector, audioGeom(a)); err != nil {
+	if a.Tower, err = st.Tower.stateOf("convert/projectors.json", &jlm.Source{Tensors: out}, a.Projector, audioGeom(a),
+		towerTook(taken, proj)); err != nil {
 		return nil, nil, fmt.Errorf("convert: the audio tower: %w", err)
 	}
 	if err := a.Tower.Valid(); err != nil {

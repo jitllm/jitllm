@@ -162,6 +162,10 @@ embed/embeddinggemma-300m.gguf                     ollama:library/embeddinggemma
 embed/embeddinggemma-300M-BF16-lcpp.gguf           unsloth/embeddinggemma-300m-GGUF                       embeddinggemma-300M-BF16.gguf                                                   612429792    default
 # convert/gguf's header test pins this file (it still reads it from a fixed path)
 embed/MiniLM-L6-v2.Q8_0.gguf                       leliuga/all-MiniLM-L6-v2-GGUF                          all-MiniLM-L6-v2.Q8_0.gguf                                                      25008064     default
+embed/modernbert-embed-base-Q8_0.gguf              keisuke-miyako/modernbert-embed-base-gguf-q8_0         modernbert-embed-base-Q8_0.gguf                                                 160208800    default
+# Pixtral-12B, its tower's [IMG_BREAK] row: the census and the llama-mtmd gate
+pixtral/pixtral-12b-Q4_K_M.gguf                    ggml-org/pixtral-12b-GGUF                              pixtral-12b-Q4_K_M.gguf                                                         7477204608   default
+pixtral/mmproj-pixtral-12b-Q8_0.gguf               ggml-org/pixtral-12b-GGUF                              mmproj-pixtral-12b-Q8_0.gguf                                                    463091616    default
 # --- HuggingFace directories: the safetensors converter's fixtures ---
 # (goldens: scripts/hfgold.py, testdata/golden/hf; the synth-* ones are built from these)
 SmolLM2-360M-Instruct/config.json                  HuggingFaceTB/SmolLM2-360M-Instruct                    config.json                                                                     846          default
@@ -269,6 +273,8 @@ Kimi-Linear-48B-A3B-Instruct/model.safetensors.index.json moonshotai/Kimi-Linear
 Kimi-Linear-48B-A3B-Instruct/special_tokens_map.json moonshotai/Kimi-Linear-48B-A3B-Instruct              special_tokens_map.json                                                         5583         default
 Kimi-Linear-48B-A3B-Instruct/tiktoken.model        moonshotai/Kimi-Linear-48B-A3B-Instruct                tiktoken.model                                                                  2795286      default
 Kimi-Linear-48B-A3B-Instruct/tokenization_kimi.py  moonshotai/Kimi-Linear-48B-A3B-Instruct                tokenization_kimi.py                                                            12534        default
+# MiniMax-M2's chat template, which the census converts synth-minimaxm2 with
+MiniMax-M2/chat_template.jinja                     MiniMaxAI/MiniMax-M2                                   chat_template.jinja                                                             6780         default
 Kimi-Linear-48B-A3B-Instruct/tokenizer_config.json moonshotai/Kimi-Linear-48B-A3B-Instruct                tokenizer_config.json                                                           3695         default
 # Kimi-K3-0.40B, a trained K3 test model, as published GGUFs: TestKimiK3RealMatchesReference
 kimik3/Kimi-K3-0.40B-F16.gguf                      murillo2000/Kimi-K3-0.40B-GGUF                         Kimi-K3-0.40B-F16.gguf                                                          784318432    default

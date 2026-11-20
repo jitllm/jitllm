@@ -104,7 +104,7 @@ func qwen35File(arch string) *meta.File {
 // run: stacking beta above alpha, or pairing a head's beta with the next
 // head's alpha, has the right shape and decays at another head's rate.
 func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
-	s, err := sourceOf(qwen35File("qwen35"))
+	s, err := sourceOf(qwen35File("qwen35"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 
 	// The same file under qwen3next's name is grouped: a qwen3next GGUF is
 	// not reordered, so the flag is about the qwen35 file.
-	g, err := sourceOf(qwen35File("qwen3next"))
+	g, err := sourceOf(qwen35File("qwen3next"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestQwen35RefusesAnUnpairedGate(t *testing.T) {
 		}
 		f.Tensors = keep
 		f.Reindex()
-		if _, err := sourceOf(f); err == nil || !strings.Contains(err.Error(), gone) {
+		if _, err := sourceOf(f, nil); err == nil || !strings.Contains(err.Error(), gone) {
 			t.Errorf("a block without its %s converted (err %v)", gone, err)
 		}
 	}

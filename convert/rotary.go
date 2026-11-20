@@ -178,12 +178,14 @@ func rotaryKeeps() map[string]func(c *Config, v float64) error {
 }
 
 // rotaryReading is one source's statement of a rotary scaling: the method,
-// its name, the source's statement of it and the parameters read.
+// its name, the source's statement of it, the parameters read and the
+// convention read in place of the method's reads ("" for none).
 type rotaryReading struct {
-	m      *rotaryMethod
-	name   string
-	src    *rotarySource
-	params map[string]any
+	m          *rotaryMethod
+	name       string
+	src        *rotarySource
+	params     map[string]any
+	convention string
 }
 
 // rotaryScaling is obj, a config's rope scaling object, read by its method's
@@ -251,12 +253,16 @@ func ggufRotary(f *meta.File, c *Config, convention string) (*rotaryReading, err
 		return nil, fmt.Errorf("rope scaling %s states no convention %q", name, convention)
 	}
 	bound, env := c.rotaryBound(), ggufEnv(f)
-	return readRotary1(m, name, m.GGUF, reads, func(p string) any {
+	r, err := readRotary1(m, name, m.GGUF, reads, func(p string) any {
 		if v, ok := bound[p]; ok {
 			return v
 		}
 		return env(p)
 	})
+	if r != nil && m.GGUF.Conventions[convention] != nil {
+		r.convention = convention
+	}
+	return r, err
 }
 
 // readRotary1 is the reading of method m, name, by src: each of reads
@@ -339,7 +345,15 @@ func (r *rotaryReading) holds(c *Config) (bool, error) {
 			return false, nil
 		}
 	}
-	return true, r.conds(r.src.Check, env, nil)
+	if err := r.conds(r.src.Check, env, nil); err != nil {
+		return false, err
+	}
+	source := "gguf"
+	if r.src == r.m.HF {
+		source = "hf"
+	}
+	c.take(rotaryFeature(r.name, source, r.convention))
+	return true, nil
 }
 
 // settle states r on c -- the magnitude, refused where an Implements fails,

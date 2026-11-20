@@ -97,12 +97,12 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 	if vf == nil {
 		f = withoutAudio(f)
 	}
-	s, err := sourceOf(f)
+	s, err := sourceOf(f, o.taken)
 	if err != nil {
 		return nil, err
 	}
 	if alone != f && s.Vision != nil {
-		aud, ats, err := audioOf(alone, s.Vision.NLayer)
+		aud, ats, err := audioOf(alone, s.Vision.NLayer, o.taken)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +127,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		}
 		af := vf
 		vf = withoutAudio(vf)
-		vs, err := sourceOf(vf)
+		vs, err := sourceOf(vf, o.taken)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +154,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		}
 		s.Tensors = append(s.Tensors, vs.Tensors...)
 		// The audio half, its blocks after the vision blocks.
-		aud, ats, err := audioOf(af, s.Vision.NLayer)
+		aud, ats, err := audioOf(af, s.Vision.NLayer, o.taken)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +182,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 	if err := o.applyChatTemplate(s); err != nil {
 		return nil, err
 	}
-	stateToolForm(s)
+	stateToolForm(s, o.taken)
 	// The blocks' graphs last: over the publisher's config where one was
 	// applied, and the tower whose taps the first blocks add.
 	g, err := ggufGraph(f.Arch())
@@ -199,7 +199,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		if err := StateBlockGraphs(&Config{Config: s.Config}, s, g, ggufKeys(f), o.taken); err != nil {
 			return nil, err
 		}
-		if err := StateFront(s.Config, s); err != nil {
+		if err := StateFront(s.Config, s, o.taken); err != nil {
 			return nil, err
 		}
 	}
@@ -211,7 +211,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 // mmproj) declares, whatever its projector.
 const towerArch = "clip"
 
-func sourceOf(f *meta.File) (*jlm.Source, error) {
+func sourceOf(f *meta.File, taken map[string]bool) (*jlm.Source, error) {
 	vocab, err := readTensorNames()
 	if err != nil {
 		return nil, err
@@ -230,6 +230,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if names, err = towerVocabOf(v, vocab); err != nil {
 			return nil, err
 		}
+		names.taken = taken
 		// A tower still needs a Config, because a container always has one; its
 		// language-model fields are the tower's where they mean the same thing.
 		s.Vision = v
@@ -249,7 +250,10 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if c, err = configOf(f); err != nil {
 			return nil, err
 		}
-		if c.Config.Generation, err = ggufGeneration(f); err != nil {
+		for x := range c.took {
+			take(taken, x)
+		}
+		if c.Config.Generation, err = ggufGeneration(f, taken); err != nil {
 			return nil, err
 		}
 	}

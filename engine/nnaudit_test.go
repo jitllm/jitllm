@@ -992,6 +992,7 @@ func towerPairs() map[string]string {
 		"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf": "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
 		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":    "mmproj-Qwen3.5-0.8B-f16.gguf",
 		"d1/d1-3B-Q8_0.gguf":                 "d1/mmproj-d1-3B-F16.gguf",
+		"pixtral/pixtral-12b-Q4_K_M.gguf":    "pixtral/mmproj-pixtral-12b-Q8_0.gguf",
 	}
 }
 
