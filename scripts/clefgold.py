@@ -2,6 +2,7 @@
 Cloudflare/clef-flash), for the engine's decision gates.
 
     python -I scripts/clefgold.py fixture <clef_dir> <requests_dir> <out_dir>
+    python -I scripts/clefgold.py fixture-tied <clef_dir> <requests_dir> <out_dir>
     python -I scripts/clefgold.py real    <clef_dir> <requests_dir> <out_dir>
 
 clef_dir holds the release's joint_schema_model.py, config.json,
@@ -29,6 +30,12 @@ fixture-vl: the same, its tower's position table the release's 48x48 (a
 Qwen3-VL tower here bounds a picture by) where the fixture's is 8x8, so a
 picture of a few hundred pixels is read at the size the release's processor
 reads it; written under the name clef-fixture-vl.
+
+fixture-tied: the same, its output tied to its token table
+(tie_word_embeddings, so the checkpoint and the GGUF carry no output matrix and
+the head reads its option tokens' rows from the embeddings), text only: no
+tower is written, and requests_dir holds text requests alone. Written under the
+name clef-fixture-tied.
 
 real: the release itself (clef_dir the whole Cloudflare/clef-flash
 snapshot), read by the release's classes in float32, with the same goldens,
@@ -206,7 +213,7 @@ def randomise(module, seed):
                 p.copy_(0.08 * torch.randn_like(p))
 
 
-def fixture(clef_dir, requests_dir, out_dir, fixture_name="clef-fixture", table=64):
+def fixture(clef_dir, requests_dir, out_dir, fixture_name="clef-fixture", table=64, tied=False):
     from safetensors.torch import save_file
     from transformers import AutoTokenizer, Qwen3_5Config, Qwen3_5ForConditionalGeneration
     jsm = load_reference(clef_dir)
@@ -218,11 +225,12 @@ def fixture(clef_dir, requests_dir, out_dir, fixture_name="clef-fixture", table=
     os.makedirs(work)
     # The release's shape at toy size: Qwen3.5's hybrid text model (three
     # linear blocks then a full one), the interleaved M-RoPE on a quarter of
-    # each head, untied output, and a small tower the text path never reads.
+    # each head, untied output (tied, for fixture-tied), and a small tower the
+    # text path never reads.
     cfg = Qwen3_5Config(
         text_config=dict(vocab_size=248320, hidden_size=64, intermediate_size=128,
                          num_hidden_layers=4, num_attention_heads=4, num_key_value_heads=2,
-                         head_dim=32, tie_word_embeddings=False, attn_output_gate=True,
+                         head_dim=32, tie_word_embeddings=tied, attn_output_gate=True,
                          layer_types=["linear_attention", "linear_attention",
                                       "linear_attention", "full_attention"],
                          linear_conv_kernel_dim=4, linear_key_head_dim=16, linear_value_head_dim=16,
@@ -234,7 +242,7 @@ def fixture(clef_dir, requests_dir, out_dir, fixture_name="clef-fixture", table=
         vision_config=dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=64,
                            patch_size=16, spatial_merge_size=2, temporal_patch_size=2,
                            num_position_embeddings=table, deepstack_visual_indexes=[]),
-        tie_word_embeddings=False)
+        tie_word_embeddings=tied)
     cfg._attn_implementation = "eager"
     cfg.text_config._attn_implementation = "eager"
     cfg.vision_config._attn_implementation = "eager"
@@ -258,11 +266,14 @@ def fixture(clef_dir, requests_dir, out_dir, fixture_name="clef-fixture", table=
               "processor_config.json"):
         shutil.copy(os.path.join(clef_dir, f), os.path.join(work, f))
     gguf = os.path.join(out_dir, fixture_name + ".gguf")
-    env = {**os.environ, "PYTHONPATH": os.path.join(lcpp, "gguf-py")}
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [os.path.join(lcpp, "gguf-py"),
+                                                                       os.environ.get("PYTHONPATH")]))}
     subprocess.run([sys.executable, os.path.join(lcpp, "convert_hf_to_gguf.py"), work, "--outtype", "f32",
                     "--outfile", gguf], check=True, env=env)
-    subprocess.run([sys.executable, os.path.join(lcpp, "convert_hf_to_gguf.py"), work, "--outtype", "f32",
-                    "--outfile", os.path.join(out_dir, "mmproj-" + fixture_name + ".gguf"), "--mmproj"], check=True, env=env)
+    if not tied:
+        subprocess.run([sys.executable, os.path.join(lcpp, "convert_hf_to_gguf.py"), work, "--outtype", "f32",
+                        "--outfile", os.path.join(out_dir, "mmproj-" + fixture_name + ".gguf"), "--mmproj"],
+                       check=True, env=env)
     from transformers import AutoProcessor
     processor = AutoProcessor.from_pretrained(work)
     tok = AutoTokenizer.from_pretrained(work)
@@ -308,6 +319,8 @@ if __name__ == "__main__":
         fixture(*sys.argv[2:5])
     elif len(sys.argv) == 5 and sys.argv[1] == "fixture-vl":
         fixture(*sys.argv[2:5], fixture_name="clef-fixture-vl", table=48 * 48)
+    elif len(sys.argv) == 5 and sys.argv[1] == "fixture-tied":
+        fixture(*sys.argv[2:5], fixture_name="clef-fixture-tied", tied=True)
     elif len(sys.argv) == 5 and sys.argv[1] == "real":
         real(*sys.argv[2:5])
     else:

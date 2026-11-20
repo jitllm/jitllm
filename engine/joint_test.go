@@ -38,6 +38,9 @@ func TestJointDecisionMatchesTheReference(t *testing.T) {
 		tol, logit      float64
 	}{
 		{"clef/fixture/clef-fixture.gguf", "clef-fixture", "clef-fixture", 1e-3, 2e-3},
+		// Its output tied to the token table: the head reads its option
+		// tokens' rows from token_embd (clefgold.py fixture-tied).
+		{"clef/fixture-tied/clef-fixture-tied.gguf", "clef-fixture-tied", "clef-fixture-tied", 1e-3, 2e-3},
 		// The release: its prompts, logits and answers held to Clef's own code
 		// (f32 on the BF16 weights, clefgold.py real). The band is Q8_0's
 		// rounding with the CPU's int8 activations through the backbone, as the

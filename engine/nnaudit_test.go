@@ -1051,7 +1051,8 @@ type auditHFDir struct {
 // auditDecision is the decision models' GGUFs two directories down; d1's and
 // lev's one directory down are found by the glob.
 func auditDecision() []string {
-	return []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf"}
+	return []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf",
+		"clef/fixture/clef-fixture.gguf", "clef/fixture-tied/clef-fixture-tied.gguf"}
 }
 
 // isProjector reads general.architecture, as languageModels does: a vision
