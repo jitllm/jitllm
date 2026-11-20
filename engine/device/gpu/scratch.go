@@ -337,11 +337,10 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 	// Its per-row logits are the reserved width's too, reserved with it, as
 	// the tier's own step width reserves them: asked for at the first step
 	// they come from a card the blocks filled.
-	rowsHead := false
+	rowsHead := g.reservesRowsHead()
 	if !g.ComposedWidths {
-		if g.StepRows > 0 {
+		if rowsHead {
 			want = max(want, roundUp(min(g.StepRows, batchWidth), 8))
-			rowsHead = true
 		}
 	} else if sw := g.stepRows(); sw > 0 && g.stepW != sw {
 		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.room(need) {
@@ -594,6 +593,11 @@ func (g *devTier) fitReserved() {
 	g.ReservedRows = g.promptW
 }
 
+// reservesRowsHead says the reserved width holds a ragged step's per-row
+// logits: the step width the caller reserves (Config.StepRows) runs there.
+// Callers hold g.mu.
+func (g *devTier) reservesRowsHead() bool { return !g.ComposedWidths && g.StepRows > 0 }
+
 // narrowReserved halves the reserved width, builds the scratch again at it
 // and forms every placed block there, and reports whether it did; beside
 // names what the freed bytes are for. Callers hold g.mu.
@@ -614,7 +618,7 @@ func (g *devTier) narrowReserved(beside string) bool {
 	held, step, floor := g.promptW, g.stepW == g.promptW, max(batchGrain, g.StepRows)
 	g.dropBatch(held)
 	for ; w >= floor; w = w / 2 / batchGrain * batchGrain {
-		if g.prepBatch(w) && g.reserveRowsHead(g.bbs[w], &g.bs.p) {
+		if g.prepBatch(w) && (!g.reservesRowsHead() || g.reserveRowsHead(g.bbs[w], &g.bs.p)) {
 			break
 		}
 		g.dropBatch(w)

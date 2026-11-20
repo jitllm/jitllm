@@ -704,8 +704,9 @@ func (g *devTier) cloneLane() (*lane, bool) {
 		v.promptW, v.stepW = s.promptW, s.stepW
 		// The decode scratch's forms over passes, as the placement holds
 		// lane0's (prewarmComposedBlock): a history the clone's step first
-		// reads in passes allocates nothing. A block that has none is left
-		// to its step, as on lane0.
+		// reads in passes allocates nothing. One the budget leaves no room
+		// for here is left to its step: lane0 holds one for every block it
+		// keeps (passesRoomless).
 		if len(s.bs.prompt) > 0 {
 			was := g.prewarming
 			g.prewarming = true

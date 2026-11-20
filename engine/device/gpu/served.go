@@ -2747,9 +2747,8 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 				g.LastErr = "the composed block's copy: " + err.Error()
 			}
 		}
-		// A form that failed earlier was named then: prefixed once.
-		if was := g.LastErr; (!l.linear || l.withAttn) && !g.streamServed(l, li, bs) && g.LastErr != was {
-			g.LastErr = "the composed block over passes: " + g.LastErr
+		if why := g.passesRoomless(l, li, bs, narrow, "the composed block over passes: "); why != "" {
+			return why
 		}
 	}
 	// Every prompt width the lane holds a scratch for, and a ragged step's:
@@ -2793,8 +2792,9 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 }
 
 // promptRoomless is why block li, which the composer serves, has no prompt
-// part at the reserved width for want of room, or "" where it has one, the
-// composer does not serve it, or what failed was not room. Callers hold g.mu.
+// part or no form over passes at the reserved width for want of room, or ""
+// where it has both, the composer does not serve it, or what failed was not
+// room. Callers hold g.mu.
 func (g *devTier) promptRoomless(li int) string {
 	defer g.useGeom(g.enterGeomOf(li))
 	// A placement's: what promptServed forms here is formed at it.
@@ -2806,10 +2806,96 @@ func (g *devTier) promptRoomless(li int) string {
 		return ""
 	}
 	bb.instNoRoom = false
-	if g.promptServed(l, li, bb) || !bb.instNoRoom {
+	if g.promptServed(l, li, bb) {
+		return g.passesRoomless(l, li, bb, true, "the composed prompt block over passes: ")
+	}
+	if !bb.instNoRoom {
 		return ""
 	}
 	return fmt.Sprintf("block %d: its composed prompt part does not fit beside the blocks placed (%s)", li, g.LastErr)
+}
+
+// passesRoomless is why block l has no instance of its form over passes at
+// bs's rows for want of room, or "" where it has one, it reads no history,
+// or what failed was not room (named in LastErr after prefix). A step over
+// evicted history meets the form and its instance as the placement made
+// them, so a placement that cannot hold the instance declines the block as
+// it does for its own part, the reserved width narrowing first where
+// narrow. bs is the decode scratch or the reserved width's, which a
+// narrowing builds again. Callers hold g.mu.
+func (g *devTier) passesRoomless(l *layer, li int, bs *blockScratch, narrow bool, prefix string) string {
+	if l.linear && !l.withAttn {
+		return ""
+	}
+	reserved := bs != g.bs
+	for {
+		was := g.LastErr
+		bs.instNoRoom = false
+		if g.streamServed(l, li, bs) {
+			return ""
+		}
+		// A form that failed earlier was named then: prefixed once.
+		if g.LastErr != was {
+			g.LastErr = prefix + g.LastErr
+		}
+		if !bs.instNoRoom {
+			return ""
+		}
+		why := g.LastErr
+		if !narrow || !g.narrowReserved(fmt.Sprintf("block %d's composed buffers over passes", li)) {
+			return fmt.Sprintf("block %d: its composed part over passes does not fit beside the blocks placed (%s)", li, why)
+		}
+		if reserved {
+			if bs = g.bbs[g.promptW]; bs == nil {
+				return ""
+			}
+		}
+	}
+}
+
+// passesHeld reports whether bs holds an instance of each of block l's
+// forms over passes streamServed makes at its rows, asking nothing of the
+// composer. Callers hold g.mu.
+func (g *devTier) passesHeld(l *layer, bs *blockScratch) bool {
+	for _, seqs := range [...]int{1, 0} {
+		if seqs == 1 && bs.rows == 1 || seqs == 0 && bs.rows > 1 && !g.raggedAt(bs) {
+			continue
+		}
+		sv := g.served[g.blockKey(l, g.kvp.layers[l.kvSrc], g.passKeys(bs, bs.p.MaxSeq), g.kvp.p, bs.rows, seqs, true, bs)]
+		if sv == nil || bs.prompt[sv.f] == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// passesUnheld counts the placed blocks reading a history that hold no
+// instance of their form over passes at the decode scratch's rows or the
+// reserved width's (Stats.PassesUnheld). Callers hold g.mu.
+func (g *devTier) passesUnheld() int {
+	if g.kvp == nil || g.NoPromptPrewarm {
+		return 0
+	}
+	defer g.useGeom(g.geoCur)
+	n := 0
+	for li, l := range g.layers {
+		if l == nil || !l.ok || l.nonCausal || l.linear && !l.withAttn {
+			continue
+		}
+		if g.geoUsed {
+			g.useGeom(g.geomFor(li, li+1))
+		}
+		for _, bs := range [...]*blockScratch{g.bs, g.reservedFor(nn.ComposedPrompt)} {
+			if bs == nil || bs.pkv == nil || g.blockServes(l, li, &bs.p, bs, bs != g.bs) != nil {
+				continue
+			}
+			if !g.passesHeld(l, bs) {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 // promptServed reports whether the composer serves block li of a prompt call
@@ -2839,6 +2925,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 			if !errors.Is(err, errFormedEarlier) {
 				g.LastErr = "the composed prompt block: " + err.Error()
 			}
+			bb.instNoRoom = bb.instNoRoom || errors.As(err, new(partRoomError))
 			return false
 		}
 		if sv.f.apart(len(l.graph.Out)) {
@@ -2885,11 +2972,13 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 			if !errors.Is(err, errFormedEarlier) {
 				g.LastErr = err.Error()
 			}
+			bb.instNoRoom = bb.instNoRoom || errors.As(err, new(partRoomError))
 			return false
 		}
 		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bb, bb.rows); err != nil {
 				g.LastErr = err.Error()
+				bb.instNoRoom = bb.instNoRoom || errors.As(err, new(partRoomError))
 				return false
 			}
 		}
@@ -3145,18 +3234,8 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 // running partial's buffers, is set (composer.History.Passes).
 func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int,
 	run []backend.Buf, bs *blockScratch) (*servedPart, error) {
-	keys := keyBound(maxSeq)
-	kind := nn.PartBlock
-	if R > 1 {
-		kind = nn.PartPrompt
-	}
-	// A selection over a history read in passes ranks the whole history's
-	// blocks: its form is told the positions the history holds, bounded as
-	// its keys are.
-	context := 0
-	if run != nil && bs != nil && selectsBlocks(l.graph) {
-		context = keyBound(bs.p.MaxSeq)
-	}
+	sk := g.blockKey(l, pl, maxSeq, page, R, seqs, run != nil, bs)
+	kind, bg, keys, context := sk.kind, sk.graph, sk.keys, sk.context
 	// A linear block holds no history, unless it attends too: its state is
 	// its pool's (bindRec).
 	var kk, kv, tab backend.Buf
@@ -3170,13 +3249,6 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if g.kvp != nil {
 		nh = g.kvp.blockHists(l.kvSrc)
 	}
-	// A step that keeps its rows runs a linear block's keep form.
-	bg := l.graph
-	if k := g.kept; g.keeping && l.linear && k != nil && k.graphs[l] != nil {
-		bg = k.graphs[l]
-	}
-	sk := servedKey{kind: kind, graph: bg, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil,
-		held: l.pagedHeld(), context: context}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
@@ -3308,6 +3380,34 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	g.bindRowTables(t, bs)
 	g.bindRotaries(t, bs, cs, readsPlanes(l.graph))
 	return sv, nil
+}
+
+// blockKey is the key servedBlockAs serves block l under at R rows of seqs
+// sequences, over pl's history of maxSeq positions, read in passes where
+// stream.
+func (g *devTier) blockKey(l *layer, pl *kvLayerPool, maxSeq, page, R, seqs int, stream bool, bs *blockScratch) servedKey {
+	kind := nn.PartBlock
+	if R > 1 {
+		kind = nn.PartPrompt
+	}
+	// A selection over a history read in passes ranks the whole history's
+	// blocks: its form is told the positions the history holds, bounded as
+	// its keys are.
+	context := 0
+	if stream && bs != nil && selectsBlocks(l.graph) {
+		context = keyBound(bs.p.MaxSeq)
+	}
+	var geom kvGeom
+	if pl != nil && (!l.linear || l.withAttn) {
+		geom = pl.geom
+	}
+	// A step that keeps its rows runs a linear block's keep form.
+	bg := l.graph
+	if k := g.kept; g.keeping && l.linear && k != nil && k.graphs[l] != nil {
+		bg = k.graphs[l]
+	}
+	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, half: geom.f16, latent: geom.mla, seqs: seqs,
+		stream: stream, held: l.pagedHeld(), context: context}
 }
 
 // bindRotaries binds a block's rotary tables into t by instance, as its rope

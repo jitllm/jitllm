@@ -530,6 +530,12 @@ type Stats struct {
 	// (fitReserved): its capacity, a call of more rows running in chunks of
 	// it. Over several devices, the narrowest.
 	ReservedRows int
+	// PassesUnheld is the placed blocks reading a history that hold no
+	// instance of their form over passes -- what a step over evicted history
+	// runs -- at the decode scratch's rows or the reserved width's: each is
+	// a step that would compose at a token. A placement declines such a
+	// block, so it is 0.
+	PassesUnheld int
 	// HiddenHeads counts the calls whose head the composer served and whose
 	// normed rows the caller read back (nn.Head.Hidden), HiddenRows those
 	// rows: a speculation step's verification is one call of several.
@@ -892,6 +898,7 @@ func (s *Stats) add(o Stats) {
 	s.ComposerRuns += o.ComposerRuns
 	s.FormedAhead += o.FormedAhead
 	s.FormedInWalk += o.FormedInWalk
+	s.PassesUnheld += o.PassesUnheld
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
 	s.LaneBuilds += o.LaneBuilds
@@ -2206,6 +2213,7 @@ func (d *devTier) stats() Stats {
 	s.BudgetUsed, s.Slack = d.used, d.slack()
 	s.HistoryCopiesHeld = d.copiesHeld()
 	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
+	s.PassesUnheld = d.passesUnheld()
 	if bs := d.bs; d.headPlaced(bs) {
 		s.HeadBytes = bs.head.bytes() + bs.hVecBytes + uint64(bs.mvHead.rows*4)
 	}
