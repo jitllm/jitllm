@@ -1,5 +1,7 @@
 package composer
 
+import "github.com/jitllm/jitllm/graph"
+
 // What the external tests reach of the package's internals.
 
 func EntryName(s string) string { return entryName(s) }
@@ -51,3 +53,9 @@ func WeightLoads(r *Registry, req Request) (int, error) {
 	}
 	return n, nil
 }
+
+func Q8RowsCase(R, W int) []float32 { return q8RowsCase(R, W) }
+
+func BlockFmts() []graph.BlockFmt { return blockFmts() }
+
+func HalvesWithinAnUlp(a, b uint32) bool { return halvesWithinAnUlp(a, b) }

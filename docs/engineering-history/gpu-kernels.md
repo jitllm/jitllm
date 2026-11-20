@@ -11271,3 +11271,66 @@ forms a projection of the same shape over four rows folded into one and
 holds the rows a call reaches to the oracle and every word past them and the
 guard after the result untouched; HEAD fails it. Rows past binary16's range
 were an earlier explanation of the same NaN, and a wrong one.
+
+## A typed history on a card against the CPU's
+
+A q4_0 history on a card read 0.50 from the CPU device's q4_0 run, where
+f32, q8_0 and bf16 read 0.10 to 0.12 the same way (the RMS of the
+log-probabilities' difference over the scored half, Llama 3.2 1B Q4_K_M
+teacher-forced over 191 positions, one V100 as cuda:0 against the CPU
+device on the same box, the split tuner off). It is the coarse type
+amplifying the card's ordinary difference, not a difference in how the
+card narrows, rounds or reads the type.
+
+The bytes: composer.TestComposedGPUBlockRows runs OpBlockRows and
+OpWidenBlockRows on each card backend, as TestComposedCPUBlockRows does on
+the CPU, and every block format's rows are oracle.QuantizeBlocks' byte for
+byte and widen as the container's decoder reads them, on PTX and SPIR-V
+alike. A code biased by 0.05 (bias+0.45 in place of bias+0.5) fails it on
+both.
+
+The seam: the gap does not track the depth below it, for any type, because
+it does not grow with the blocks on the card at all -- one block on the
+card already reads what sixteen do:
+
+| blocks on the card | f32 | q8_0 | bf16 | q4_0 |
+|---|---|---|---|---|
+| 1 | 0.1012 | 0.1114 | 0.0994 | 0.5372 |
+| 2 | 0.1019 | 0.1141 | 0.0991 | 0.5175 |
+| 4 | 0.1023 | 0.1116 | 0.1003 | 0.5184 |
+| 8 | 0.1010 | 0.1113 | 0.1018 | 0.5209 |
+| 12 | 0.1017 | 0.1120 | 0.1014 | 0.4993 |
+| 16 | 0.1020 | 0.1107 | 0.1010 | 0.4998 |
+
+So moving the seam cannot tell the two readings apart here, and the
+deciding measurement is on one device. The reference (historyReference: an
+f32 history whose rows take the type's narrowing and widening before the
+append, the same function in another summation order) against the typed
+instance, every block on the card or none:
+
+| type | card typed vs card reference | CPU typed vs CPU reference | card vs CPU, typed | card vs CPU, reference |
+|---|---|---|---|---|
+| q8_0 | 0 | 0.1112 | 0.1107 | 0.1051 |
+| q4_0 | 0 | 0.5039 | 0.4998 | 0.5113 |
+| q4_1 | 0 | 0.4506 | 0.4985 | 0.4877 |
+| q5_0 | 0 | 0.2774 | 0.2813 | 0.2986 |
+| iq4_nl | 0 | 0.4638 | 0.4324 | 0.4069 |
+
+The card's typed history is its reference bit for bit; the CPU's typed run
+is as far from the CPU's own reference as from the card. A code a float
+rounding flips is a step of the type, and at four bits the steps the f32
+band flips add up to as much as the type's whole loss: q4_0's distance from
+the f32 history is 0.6107 for the CPU's typed run, 0.7011 for the CPU's
+reference and 0.7047 on the card -- three draws of one noise, the CPU's
+typed run the luckiest. The card is not further from f32 than the CPU's
+own reference is.
+
+The bound that follows: a card against the CPU in a typed history reads the
+type's amplification of the f32 band, which the CPU measures against itself
+(its typed run against its reference). Over the five types the card-to-CPU
+distance was 0.93 to 1.11 of it, so 1.25 of it is the bound a card-to-CPU
+comparison of a typed history can hold. It cannot discriminate at four
+bits: the card's f32 history is 0.61 from the CPU's q4_0, inside 1.25 of
+0.50. What does discriminate is on one device -- the typed instance against
+its reference on the same card (TestACardHoldsATypedHistorysBytes, 0 here)
+-- and the bytes (TestComposedGPUBlockRows).
