@@ -356,7 +356,7 @@ type Statement struct {
 	drops                               []statedDrop
 	sizes                               map[string]*exprNode
 	ternaryRoles                        map[jlm.Role]bool
-	ternaryScale                        string
+	ternaryScale, wholeRotary           string
 	gathers                             []hfGatherStep
 	keys                                []string
 	// sources are the names a tower's gathers read: past v.blk.N. for a
@@ -601,7 +601,9 @@ func ggufStates(arch string) (*mjStates, string, error) {
 }
 
 // stateContainer applies what the library states for the container of f's
-// GGUF architecture to c.
+// GGUF architecture to c, the head width a file leaves to its projections
+// among it (headsOfProjections), and refuses any other rotary width than the
+// head's where the class turns the whole head.
 func stateContainer(f *meta.File, c *Config) error {
 	st, by, err := ggufStates(f.Arch())
 	c.Stated = &Statement{}
@@ -612,6 +614,13 @@ func stateContainer(f *meta.File, c *Config) error {
 		if err := st.apply(by, f, c); err != nil {
 			return err
 		}
+	}
+	if err := headsOfProjections(f, c); err != nil {
+		return fmt.Errorf("convert: %s: %w", f.Arch(), err)
+	}
+	if by := c.Stated.wholeRotary; by != "" && c.NRot != c.HeadDim {
+		return fmt.Errorf("convert: %s: a rotary over %d of a head's %d dimensions, where the reference turns "+
+			"the whole head (%s): %w", f.Arch(), c.NRot, c.HeadDim, by, ErrNotImplemented)
 	}
 	return statedTensorsAgree(f, c)
 }
@@ -896,9 +905,8 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	if err := st.Router.apply(f, c); err != nil {
 		return fmt.Errorf("convert: %s: %w", arch, err)
 	}
-	if st.WholeRotary && c.NRot != c.HeadDim {
-		return fmt.Errorf("convert: %s: a rotary over %d of a head's %d dimensions, where the reference turns "+
-			"the whole head (%s): %w", arch, c.NRot, c.HeadDim, by, ErrNotImplemented)
+	if st.WholeRotary {
+		c.Stated.wholeRotary = by
 	}
 	if st.RopeBase != "" {
 		if c.RopeBase, err = number("rope_base", st.RopeBase); err != nil {

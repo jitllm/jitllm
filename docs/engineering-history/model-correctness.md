@@ -8429,10 +8429,18 @@ safetensors row runs f32 activations and is exact. Phi-tiny-MoE has heads of
 128 on a 4096-wide model (16 x 128 = 2048), stated by `head_dim` in
 config.json; llama.cpp's phimoe converter writes no attention.key_length, so
 its published GGUF implies heads of 256 while its q projection has 2048 rows.
-llama.cpp refuses to load that file, and so does this converter now, naming the
-safetensors input -- before, it converted, decoded the first token wrong
-(NMSE 0.42) and panicked in the attention's output add
-(`convert.TestPhimoeRefusesAHeadWidthTheFileDoesNotState`).
+llama.cpp refuses to load that file. This converter refused it too for a while,
+naming the safetensors input, after it had converted it at heads of 256, decoded
+the first token wrong (NMSE 0.42) and panicked in the attention's output add.
+The refusal's reason -- "its heads cannot be read off it" -- was not true: q's
+2048 rows over 16 heads are 128, which k's and v's 512 rows over 4 kv heads
+agree with, so the converter reads the width there
+(`convert.TestPhimoeReadsItsHeadWidthOffItsProjections`). The file also states
+rope.dimension_count 256, the same embedding/heads quotient; the class
+(transformers' PhimoeRotaryEmbedding and the publisher's PhiMoERotaryEmbedding
+alike) turns the whole head_dim, which classic.json now states
+(`whole_rotary`), so the rotary is 128. The softmax scale is 1/sqrt(head_dim)
+in both, which the container's unstated scale already follows.
 
 ### Apertus: xIELU, a parameterised activation, and llama 3's rotary from safetensors
 

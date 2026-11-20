@@ -162,6 +162,65 @@ func localAxes(c *Config) error {
 		c.Name, c.RopeSections, ErrNotImplemented)
 }
 
+// headsOfProjections is the head width of a file that states no
+// attention.key_length where its q projection is not its heads at
+// embedding/heads (Phi-tiny-MoE's sixteen heads of 128 on a 4096-wide
+// model): q's rows over the heads, which k's rows over the kv heads agree
+// with, and v's at attention.value_length where the file states one. The
+// value and rotary widths the file leaves to the head follow it. A rotary
+// stated at embedding/heads is the same quotient the file's writer took for
+// the head, so it is the head's whole width only where the class turns the
+// whole head; elsewhere the file does not say which of the two it means. A
+// gated q projection carries the gate's rows beside the heads', and its
+// files state key_length.
+func headsOfProjections(f *meta.File, c *Config) error {
+	if _, ok := f.Key("attention.key_length"); ok || c.Flags.Has(jlm.FlagAttnOutGate) || c.NHead == 0 {
+		return nil
+	}
+	q, ok := f.Layer(0, "attn_q.weight")
+	if !ok || len(q.Dims) != 2 || q.Dims[1] == uint64(c.NHead)*uint64(c.HeadDim) {
+		return nil
+	}
+	_, perKV, err := layerCount(f, "attention.head_count_kv", c.NHead)
+	if err != nil {
+		return err
+	}
+	nkv := uint64(c.NKVHead)
+	if perKV != nil {
+		nkv = uint64(perKV[0])
+	}
+	w := q.Dims[1] / uint64(c.NHead)
+	if q.Dims[1]%uint64(c.NHead) != 0 || w == 0 {
+		return fmt.Errorf("blk.0.attn_q.weight has %d rows, not whole heads of %d, and the file states no "+
+			"attention.key_length: %w", q.Dims[1], c.NHead, ErrBadInput)
+	}
+	vw := f.UintKey("attention.value_length", w)
+	k, kok := f.Layer(0, "attn_k.weight")
+	v, vok := f.Layer(0, "attn_v.weight")
+	if !kok || !vok || len(k.Dims) != 2 || len(v.Dims) != 2 || nkv == 0 {
+		return fmt.Errorf("blk.0.attn_q.weight is %d heads of %d, not of embedding/heads %d, and the file "+
+			"states no attention.key_length and no blk.0 k and v projection to hold them to: %w",
+			c.NHead, w, c.HeadDim, ErrBadInput)
+	}
+	if k.Dims[1] != nkv*w || v.Dims[1] != nkv*vw {
+		return fmt.Errorf("blk.0.attn_q.weight is %d heads of %d, and blk.0.attn_k.weight's %d rows and "+
+			"blk.0.attn_v.weight's %d are not %d kv heads of %d and %d: %w",
+			c.NHead, w, k.Dims[1], v.Dims[1], nkv, w, vw, ErrBadInput)
+	}
+	quot := c.HeadDim
+	c.HeadDim, c.HeadDimV = uint32(w), 0
+	if vw != w {
+		c.HeadDimV = uint32(vw)
+	}
+	if _, ok := f.Key("rope.dimension_count"); !ok || c.NRot == quot && c.Stated.wholeRotary != "" {
+		c.NRot = c.HeadDim
+	} else if c.NRot == quot {
+		return fmt.Errorf("rope.dimension_count %d is embedding/heads, and blk.0.attn_q.weight is %d heads of "+
+			"%d: the file does not say whether its rotary turns the whole head: %w", quot, c.NHead, w, ErrBadInput)
+	}
+	return nil
+}
+
 // configOfFile is configOf for every file but the ones read through a view
 // (a readout's trunk, trunk.go).
 func configOfFile(f *meta.File, class bool) (*Config, error) {
@@ -256,19 +315,6 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 		return nil, err
 	}
 
-	// A head narrower than embedding/heads is stated only by key_length; a
-	// file that states none where its q projection says otherwise is refused
-	// (its heads cannot be read off it), and its safetensors input, which
-	// reads head_dim, converts the model. A gated q projection carries the
-	// gate's rows beside the heads'.
-	if _, ok := f.Key("attention.key_length"); !ok && !c.Flags.Has(jlm.FlagAttnOutGate) {
-		if q, ok := f.Layer(0, "attn_q.weight"); ok && len(q.Dims) == 2 &&
-			q.Dims[1] != uint64(c.NHead)*uint64(c.HeadDim) {
-			return nil, fmt.Errorf("convert: %s: blk.0.attn_q.weight has %d rows for %d heads of %d: the file "+
-				"states no attention.key_length for its head width; convert the model from its safetensors: %w",
-				name, q.Dims[1], c.NHead, c.HeadDim, ErrBadInput)
-		}
-	}
 	// A mixture on every n'th block, the rest dense, is no graph this
 	// converter states.
 	if n := f.UintKey("moe_every_n_layers", 0); n > 0 {

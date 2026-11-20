@@ -32,6 +32,8 @@ import (
 //	                    row per position from the prompt's last on
 //	JITLLM_TEST_DEVICES the device to place every block on, or unset for the host
 //	JITLLM_REF_KVF16    1 for the f16 KV cache, else f32
+//	JITLLM_REF_MAX_NMSE when set, the worst logit NMSE the run may reach, a
+//	                    non-finite one failing too
 func TestTeacherForcedAgainstReference(t *testing.T) {
 	path := os.Getenv("JITLLM_REF_MODEL")
 	if path == "" {
@@ -145,4 +147,13 @@ func TestTeacherForcedAgainstReference(t *testing.T) {
 	}
 	t.Logf("%d of %d argmaxes agree with the reference, %d confident disagreements, worst logit NMSE %.3e",
 		agree, rows, confident, worst)
+	if s := os.Getenv("JITLLM_REF_MAX_NMSE"); s != "" {
+		bound, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			t.Fatalf("JITLLM_REF_MAX_NMSE %q: %v", s, err)
+		}
+		if !(worst <= bound) {
+			t.Fatalf("worst logit NMSE %.3e, past the bound %.3e", worst, bound)
+		}
+	}
 }
