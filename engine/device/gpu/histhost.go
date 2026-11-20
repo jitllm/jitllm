@@ -3,30 +3,86 @@ package gpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
 // A history read across the CPU and a card. A block placed here reading a
-// block a session runs on the CPU device reads a copy of that block's
-// history the card holds for the session (makeHostCopy): the source's pool
-// layer at the reader's geometry, made empty with the reader and written
-// from the CPU's rows by the engine before each run reading it -- from the
-// first position it lacks (hostCopyFrom) to the run's end (writeHostRows),
-// whole pages in the card's layout, so the copy pages at the card's size
-// whatever the CPU's is. A block on the CPU device reading a block placed
-// here reads the CPU's own copy, which the engine reads from here
-// (readHostRows) as the block's rows are written.
+// block a session runs on the CPU device reads a copy of each history of it
+// it reads, the card holding it for the session (makeHostCopy): a pool layer
+// of the source's at the geometry the reader reads it at (hostHists), made
+// empty with the reader and written from the CPU's rows -- or, for a history
+// past the source's rows, its entries (writeEntries) -- by the engine before
+// each run reading it, from the first position it lacks (hostCopyFrom) to
+// the run's end (writeHostRows), whole pages in the card's layout, so the
+// copy pages at the card's size whatever the CPU's is. A block on the CPU
+// device reading a block placed here reads the CPU's own copy, which the
+// engine reads from here (readHostRows) as the block's rows are written.
 //
 // The copy is a history of the card like any other: grown, sent home and
 // released behind a window as the card pages. It is held once on the card a
 // session, and goes when no block here reads it (settleCopies), or becomes
 // the block's own pages when the block comes here.
 
-// makeHostCopy gives d a copy of session sid's history of block src, which
-// the session runs on the CPU device, at geometry geom, the window win
-// (chunked) and tail of the block reading it: empty, for the engine to
-// write. p is the reading block's plan, nil once it is placed.
-func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, geom kvGeom, win int, chunked bool, tail int, p *nn.LayerPlan) error {
+// hostHist is one history of a block the CPU device runs that a copy of
+// it here holds: its index, its geometry, and the window (chunked) and tail
+// it is read at.
+type hostHist struct {
+	h       int
+	geom    kvGeom
+	win     int
+	chunked bool
+	tail    int
+}
+
+// hostHists appends to dst the histories of block src a block reading it
+// here reads from a copy of them as the CPU's, each once: where it binds
+// src's histories in place of its own (kvSrc), its rows' at rgeom, window
+// win (chunked) and tail, and each past them as src keeps it (kept); and
+// each other history of src it reads past those (more, as bound states
+// each, a rows' history held as binary16 where f16).
+func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bool, tail int, kept []graph.KeptHistory, more []graph.HistoryRead, bound []graph.KeptHistory, f16 bool) []hostHist {
+	add := func(x hostHist) {
+		for _, y := range dst {
+			if y.h == x.h {
+				return
+			}
+		}
+		dst = append(dst, x)
+	}
+	if src == kvSrc {
+		add(hostHist{geom: rgeom, win: win, chunked: chunked, tail: tail})
+		for _, k := range kept {
+			add(hostHist{h: k.Hist, geom: keptGeom(k)})
+		}
+	}
+	for j, r := range more {
+		switch {
+		case r.Block != src || j >= len(bound):
+		case r.Hist == 0:
+			add(hostHist{geom: kvGeom{kvRow: bound[j].Width, f16: f16}})
+		default:
+			add(hostHist{h: r.Hist, geom: keptGeom(bound[j])})
+		}
+	}
+	return dst
+}
+
+// keptGeom is the page geometry of history k, one past its block's rows
+// (pagedLayer).
+func keptGeom(k graph.KeptHistory) kvGeom {
+	return kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
+}
+
+// hostHistsOf is hostHists for placed block l reading block src.
+func (g *devTier) hostHistsOf(dst []hostHist, l *layer, src int) []hostHist {
+	return hostHists(dst, src, l.kvSrc, l.rgeom, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound, g.KVF16)
+}
+
+// makeHostCopy gives d a copy of session sid's histories hs of block src,
+// which the session runs on the CPU device: empty, for the engine to write.
+// p is the reading block's plan, nil once it is placed.
+func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, hs []hostHist, p *nn.LayerPlan) error {
 	dv := d.bareView(sid)
 	dv.mu.Lock()
 	defer dv.mu.Unlock()
@@ -34,19 +90,29 @@ func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, geom kvGeom, win int
 		dv.initKVCap(p)
 	}
 	kp := dv.kvPages()
-	key := histKey(src, 0)
-	if tl := kp.layers[key]; tl != nil {
-		if tl.geom != geom {
-			return fmt.Errorf("block %d's history is laid out %+v on %s, and a block reading it there reads %+v", src, tl.geom, label(d.dev, d.ord), geom)
+	for _, x := range hs {
+		key, geom := histKey(src, x.h), x.geom
+		if geom.kvRow <= 0 {
+			return fmt.Errorf("block %d's history %d is read on %s at no width", src, x.h, label(d.dev, d.ord))
 		}
-	} else {
-		if err := dv.addKVLayer(kp, key, geom, 2); err != nil {
-			return err
+		if tl := kp.layers[key]; tl != nil {
+			if tl.geom != geom {
+				return fmt.Errorf("block %d's history %d is laid out %+v on %s, and a block reading it there reads %+v", src, x.h, tl.geom, label(d.dev, d.ord), geom)
+			}
+		} else {
+			if err := dv.addKVLayer(kp, key, geom, 2); err != nil {
+				return err
+			}
+			tl := kp.layers[key]
+			tl.win, tl.chunked, tl.tail = x.win, x.chunked, x.tail
+			if x.win > 0 {
+				kp.chunked = x.chunked
+			}
 		}
-		tl := kp.layers[key]
-		tl.win, tl.chunked, tl.tail = win, chunked, tail
-		if win > 0 {
-			kp.chunked = chunked
+		if x.h == 0 && geom.f16 && geom.vWords(kp.p) > 0 {
+			if err := dv.formHalves(geom.kvRow, kp.p); err != nil {
+				return err
+			}
 		}
 	}
 	if dv.histCopies == nil {
@@ -72,12 +138,6 @@ func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, geom kvGeom, win int
 	return nil
 }
 
-// readGeom is the geometry, window and tail placed block l reads its
-// source's history at, for a copy of it made here.
-func (l *layer) readGeom() (kvGeom, int, bool, int) {
-	return l.rgeom, l.win, l.chunked, l.rtail
-}
-
 // forgetHost lets the record of session sid's copy of block src's history
 // as the CPU's go. Callers hold g.mu.
 func (g *devTier) forgetHost(sid uint64, src int) {
@@ -88,13 +148,18 @@ func (g *devTier) forgetHost(sid uint64, src int) {
 	if len(g.hostOf[src]) == 0 {
 		delete(g.hostOf, src)
 	}
-	for s := range g.hostRows[src] {
-		if s.sid == sid {
-			delete(g.hostRows[src], s)
+	for key, m := range g.hostRows {
+		if keyBlock(key) != src {
+			continue
 		}
-	}
-	if len(g.hostRows[src]) == 0 {
-		delete(g.hostRows, src)
+		for s := range m {
+			if s.sid == sid {
+				delete(m, s)
+			}
+		}
+		if len(m) == 0 {
+			delete(g.hostRows, key)
+		}
 	}
 }
 
@@ -120,20 +185,24 @@ func (g *GPU) hostCopies(sid uint64, src int, buf []*devTier) []*devTier {
 }
 
 // hostCopyFrom is the first position of session sid's sequence at base of
-// block src's history that a copy of it here as the CPU's lacks, at most
+// block src's history h that a copy of it here as the CPU's lacks, at most
 // start, at the start of the page it falls in on every device holding one;
 // false where none does.
-func (g *GPU) hostCopyFrom(sid uint64, src, base, start int) (int, bool) {
+func (g *GPU) hostCopyFrom(sid uint64, src, h, base, start int) (int, bool) {
 	var buf [ownersStack]*devTier
 	ds := g.hostCopies(sid, src, buf[:0])
 	if len(ds) == 0 {
 		return 0, false
 	}
 	from := max(start, 0)
-	s := seqID{sid, base}
+	s, key := seqID{sid, base}, histKey(src, h)
 	for _, d := range ds {
 		d.mu.Lock()
-		f := min(from, d.hostRows[src][s])
+		if d.kvp == nil || d.kvp.layers[key] == nil {
+			d.mu.Unlock()
+			return 0, false
+		}
+		f := min(from, d.hostRows[key][s])
 		if d.kvp != nil && d.kvp.p > 0 {
 			f = f / d.kvp.p * d.kvp.p
 		}
@@ -144,15 +213,15 @@ func (g *GPU) hostCopyFrom(sid uint64, src, base, start int) (int, bool) {
 }
 
 // copyHostRows writes positions [from, to) of session sid's sequence at base
-// of block src's history, k and v [to-from][kvRow] floats, into every copy
-// of it held as the CPU's. start is where the call about to run writes from:
-// the sequence's record on the card comes down to it first.
-func (g *GPU) copyHostRows(sid uint64, src, base, from, start, to int, k, v []float32) bool {
+// of block src's history h, as nn.HistoryCopier lays them out, into every
+// copy of it held as the CPU's. start is where the call about to run writes
+// from: the sequence's record on the card comes down to it first.
+func (g *GPU) copyHostRows(sid uint64, src, h, base, from, start, to int, k, v []float32) bool {
 	var buf [ownersStack]*devTier
 	for _, d := range g.hostCopies(sid, src, buf[:0]) {
 		dv := d.bareView(sid)
 		dv.mu.Lock()
-		err := dv.writeHostRows(seqID{sid, base}, src, from, start, to, k, v)
+		err := dv.writeHostRows(seqID{sid, base}, src, h, from, start, to, k, v)
 		if err != nil {
 			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", src, label(d.dev, d.ord), err)
 		}
@@ -164,23 +233,30 @@ func (g *GPU) copyHostRows(sid uint64, src, base, from, start, to int, k, v []fl
 	return true
 }
 
-// writeHostRows is copyHostRows on one device (writeRows), the copy then
-// holding the sequence to to. Callers hold g.mu.
-func (g *devTier) writeHostRows(s seqID, src, from, start, to int, k, v []float32) error {
+// writeHostRows is copyHostRows on one device (writeRows, writeEntries),
+// the copy then holding the sequence to to. Callers hold g.mu.
+func (g *devTier) writeHostRows(s seqID, src, h, from, start, to int, k, v []float32) error {
 	if g.pagedFaulted("copystale") {
 		return nil
 	}
-	pages, err := g.writeRows(s, src, from, start, to, k, v)
+	key := histKey(src, h)
+	var pages int
+	var err error
+	if h == 0 {
+		pages, err = g.writeRows(s, src, from, start, to, k, v)
+	} else {
+		pages, err = g.writeEntries(s, key, from, start, to, k)
+	}
 	if err != nil {
 		return err
 	}
 	if g.hostRows == nil {
 		g.hostRows = map[int]map[seqID]int{}
 	}
-	if g.hostRows[src] == nil {
-		g.hostRows[src] = map[seqID]int{}
+	if g.hostRows[key] == nil {
+		g.hostRows[key] = map[seqID]int{}
 	}
-	g.hostRows[src][s] = to
+	g.hostRows[key][s] = to
 	g.HostCopyPages += pages
 	return nil
 }
@@ -228,10 +304,9 @@ func (g *devTier) writeRows(s seqID, src, from, start, to int, k, v []float32) (
 	var hv *pageHalves
 	if tl.geom.f16 && vw > 0 {
 		var err error
-		if hv, err = g.newPageHalves(kvRow, P); err != nil {
+		if hv, err = g.keptHalves(kvRow, P); err != nil {
 			return 0, err
 		}
-		defer hv.close()
 	}
 	page := g.hostScratch(kw + P*kvRow)
 	kPage, vPage := page[:kw], page[kw:]
@@ -288,34 +363,230 @@ func (g *devTier) writeRows(s seqID, src, from, start, to int, k, v []float32) (
 }
 
 // copyRepaged is copySeqPages between two devices whose pools page apart:
-// positions [from, to) of sequence s of block src's history read as rows
-// from sv's pages and written into dv's, from the start of dv's page from
-// falls in. start is copySeqPages' from. Callers hold both locks.
+// positions [from, to) of sequence s of each of block src's histories read
+// from sv's pages -- its rows' as rows, one past them as its entries -- and
+// written into dv's, from the start of dv's page from falls in. start is
+// copySeqPages' from. Callers hold both locks.
 func copyRepaged(sv, dv *devTier, s seqID, src, from, start, to int) error {
 	from = from / dv.kvp.p * dv.kvp.p
 	if to <= from {
 		return nil
 	}
-	n := (to - from) * sv.kvp.layers[src].geom.kvRow
-	if len(dv.rowsK) < n {
-		n2 := max(n, 2*len(dv.rowsK))
-		dv.rowsK, dv.rowsV = make([]float32, n2), make([]float32, n2)
+	if start >= 0 {
+		if err := dv.rewind(s.sid, dv.kvp, s, start); err != nil {
+			return err
+		}
 	}
-	k, v := dv.rowsK[:n], dv.rowsV[:n]
-	if err := sv.readRows(s, src, from, to, k, v); err != nil {
-		return err
+	for h := range sv.kvp.blockHists(src) {
+		key := histKey(src, h)
+		fl := sv.kvp.layers[key]
+		if fl == nil {
+			continue
+		}
+		if dv.kvp.layers[key] == nil {
+			return fmt.Errorf("block %d's history %d has no copy on %s", src, h, label(dv.dev, dv.ord))
+		}
+		to := min(to, len(fl.owned[s])*sv.kvp.p)
+		if to <= from {
+			continue
+		}
+		n := (to - from) * fl.geom.kvRow
+		if h > 0 {
+			n = entryFloats(fl.geom, from, to)
+		}
+		k, v := dv.copyRows(n)
+		var pages int
+		var err error
+		if h == 0 {
+			if err = sv.readRows(s, src, from, to, k, v); err == nil {
+				pages, err = dv.writeRows(s, src, from, -1, to, k, v)
+			}
+		} else if err = sv.readEntries(s, key, from, to, k); err == nil {
+			pages, err = dv.writeEntries(s, key, from, -1, to, k)
+		}
+		dv.HistoryCopyPages += pages
+		if err != nil {
+			return err
+		}
 	}
-	pages, err := dv.writeRows(s, src, from, start, to, k, v)
-	dv.HistoryCopyPages += pages
-	return err
+	return nil
+}
+
+// copyRows is the rows of n floats each for k and v a copy between two
+// cards crosses through, grown to twice what they held, never shrunk.
+func (g *devTier) copyRows(n int) ([]float32, []float32) {
+	if len(g.rowsK) < n {
+		n2 := max(n, 2*len(g.rowsK))
+		g.rowsK, g.rowsV = make([]float32, n2), make([]float32, n2)
+	}
+	return g.rowsK[:n], g.rowsV[:n]
+}
+
+// entryFloats is the floats the entries of positions [from, to) of a
+// history past a block's rows of geometry geom cross as: each entry its
+// keys, then its values where they are not its keys
+// (nn.HistoryCopier.CopyEntries). from is at a page's start.
+func entryFloats(geom kvGeom, from, to int) int {
+	per := max(1, geom.period)
+	n := (to/per - from/per) * geom.kvRow
+	if !geom.mla {
+		n *= 2
+	}
+	return max(n, 0)
+}
+
+// readEntries reads the entries of positions [from, to) of sequence s of
+// the history past a block's rows that pool key holds here into e, as
+// entryFloats lays them out: entry j, of position (j+1)*period-1, at
+// (j-from/period) entries in. from is at a page's start. Callers hold g.mu.
+func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
+	kp := g.kvp
+	if kp == nil || kp.layers[key] == nil {
+		return fmt.Errorf("block %d keeps no history %d here", keyBlock(key), key>>histShift)
+	}
+	pl := kp.layers[key]
+	P, per, w := kp.p, max(1, pl.geom.period), pl.geom.kvRow
+	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
+	ew := w
+	if vw > 0 {
+		ew = 2 * w
+	}
+	j0, j1 := from/per, to/per
+	if j1 <= j0 {
+		return nil
+	}
+	if len(e) < (j1-j0)*ew {
+		return fmt.Errorf("%d entries of %d floats do not fit %d", j1-j0, ew, len(e))
+	}
+	ids := pl.owned[s]
+	last := ((j1-1)+1)*per - 1
+	if len(ids) <= last/P {
+		return fmt.Errorf("the sequence holds %d entry page(s) and %d positions need %d", len(ids), to, last/P+1)
+	}
+	page := g.hostScratch(kw + vw)
+	kPage, vPage := page[:kw], page[kw:]
+	cur := -1
+	for j := j0; j < j1; j++ {
+		q := (j+1)*per - 1
+		if pg := q / P; pg != cur {
+			cur = pg
+			clear(page)
+			switch id := ids[pg]; {
+			case id == 0 && pg < len(pl.home[s]) && len(pl.home[s][pg]) >= kw+vw:
+				copy(page, pl.home[s][pg][:kw+vw])
+			case id == 0:
+			default:
+				if err := g.dev.Copy(pl.stage, 0, pl.k, int(id)*kw*4, kw*4); err != nil {
+					return err
+				}
+				if err := pl.stage.Read(f32b(kPage)); err != nil {
+					return err
+				}
+				if vw > 0 {
+					if err := g.dev.Copy(pl.stage, 0, pl.v, int(id)*vw*4, vw*4); err != nil {
+						return err
+					}
+					if err := pl.stage.Read(f32b(vPage)); err != nil {
+						return err
+					}
+				}
+				g.HostReadPages++
+			}
+		}
+		at, o := q%P/per*w, (j-j0)*ew
+		copy(e[o:o+w], kPage[at:at+w])
+		if vw > 0 {
+			copy(e[o+w:o+ew], vPage[at:at+w])
+		}
+	}
+	return nil
+}
+
+// writeEntries is writeRows for the history past a block's rows that pool
+// key holds here: the entries of positions [from, to) from e (readEntries'
+// layout), the pages they fall in built whole, entries outside them zeros.
+// It is the pages written. Callers hold g.mu.
+func (g *devTier) writeEntries(s seqID, key, from, start, to int, e []float32) (int, error) {
+	kp := g.kvp
+	if kp == nil || kp.layers[key] == nil {
+		return 0, fmt.Errorf("no copy of block %d's history %d", keyBlock(key), key>>histShift)
+	}
+	if to <= from {
+		return 0, nil
+	}
+	tl := kp.layers[key]
+	P, per, w := kp.p, max(1, tl.geom.period), tl.geom.kvRow
+	kw, vw := tl.geom.kWords(P), tl.geom.vWords(P)
+	ew := w
+	if vw > 0 {
+		ew = 2 * w
+	}
+	j0, j1 := from/per, to/per
+	if len(e) < max(j1-j0, 0)*ew {
+		return 0, fmt.Errorf("%d entries of %d floats do not fit %d", j1-j0, ew, len(e))
+	}
+	if start >= 0 {
+		if err := g.rewind(s.sid, kp, s, start); err != nil {
+			return 0, err
+		}
+	}
+	p0, p1 := from/P, (to+P-1)/P
+	if err := g.cowPages(s.sid, kp, tl, s, from, p1*P); err != nil {
+		return 0, err
+	}
+	if have := len(tl.owned[s]); have < p1 {
+		if err := g.allocPages(s.sid, kp, tl, s, p1-have); err != nil {
+			return 0, err
+		}
+	}
+	if err := g.flushTabs(); err != nil {
+		return 0, err
+	}
+	page := g.hostScratch(kw + vw)
+	kPage, vPage := page[:kw], page[kw:]
+	pages := 0
+	for pg := p0; pg < p1; pg++ {
+		id := tl.owned[s][pg]
+		home := id == 0 && pg < len(tl.home[s]) && tl.home[s][pg] != nil
+		if id == 0 && !home {
+			continue
+		}
+		clear(page)
+		for j := max(j0, (pg*P+1+per-1)/per-1); j < j1; j++ {
+			q := (j+1)*per - 1
+			if q/P != pg {
+				break
+			}
+			at, o := q%P/per*w, (j-j0)*ew
+			copy(kPage[at:at+w], e[o:o+w])
+			if vw > 0 {
+				copy(vPage[at:at+w], e[o+w:o+ew])
+			}
+		}
+		if home {
+			copy(tl.home[s][pg], page)
+			pages++
+			continue
+		}
+		if err := tl.k.WriteAt(int(id)*kw*4, f32b(kPage)); err != nil {
+			return 0, err
+		}
+		if vw > 0 {
+			if err := tl.v.WriteAt(int(id)*vw*4, f32b(vPage)); err != nil {
+				return 0, err
+			}
+		}
+		pages++
+	}
+	return pages, nil
 }
 
 // readHostRows reads positions [from, to) of session sid's sequence at base
-// of block src's history, which the session runs here, into k and v
-// [to-from][kvRow] floats: a page at a time through the layer's read
+// of block src's history h, which the session runs here, into k and v as
+// nn.HistoryCopier lays them out: a page at a time through the layer's read
 // reserve, a page at home from host memory, one released behind a window as
 // zeros.
-func (g *GPU) readHostRows(sid uint64, src, base, from, to int, k, v []float32) bool {
+func (g *GPU) readHostRows(sid uint64, src, h, base, from, to int, k, v []float32) bool {
 	g.mu.Lock()
 	o := g.at(sid, src)
 	g.mu.Unlock()
@@ -324,7 +595,12 @@ func (g *GPU) readHostRows(sid uint64, src, base, from, to int, k, v []float32) 
 	}
 	ov := o.bareView(sid)
 	ov.mu.Lock()
-	err := ov.readRows(seqID{sid, base}, src, from, to, k, v)
+	var err error
+	if h == 0 {
+		err = ov.readRows(seqID{sid, base}, src, from, to, k, v)
+	} else {
+		err = ov.readEntries(seqID{sid, base}, histKey(src, h), from, to, k)
+	}
 	if err != nil {
 		ov.LastErr = fmt.Sprintf("block %d's history read for the CPU device on %s: %v", src, label(o.dev, o.ord), err)
 	}
@@ -355,10 +631,9 @@ func (g *devTier) readRows(s seqID, src, from, to int, k, v []float32) error {
 	var hv *pageHalves
 	if pl.geom.f16 && vw > 0 {
 		var err error
-		if hv, err = g.newPageHalves(kvRow, P); err != nil {
+		if hv, err = g.keptHalves(kvRow, P); err != nil {
 			return err
 		}
-		defer hv.close()
 	}
 	page := g.hostScratch(kw + P*kvRow)
 	kPage, vPage := page[:kw], page[kw:]
@@ -506,29 +781,31 @@ func (g *devTier) hostScratch(n int) []float32 {
 }
 
 // CopyFrom is hostCopyFrom for the zero session (nn.HistoryCopier).
-func (g *GPU) CopyFrom(li, base, start int) (int, bool) { return g.hostCopyFrom(0, li, base, start) }
+func (g *GPU) CopyFrom(li, h, base, start int) (int, bool) {
+	return g.hostCopyFrom(0, li, h, base, start)
+}
 
 // CopyRows is copyHostRows for the zero session (nn.HistoryCopier).
-func (g *GPU) CopyRows(li, base, from, start, to int, k, v []float32) bool {
-	return g.copyHostRows(0, li, base, from, start, to, k, v)
+func (g *GPU) CopyRows(li, h, base, from, start, to int, k, v []float32) bool {
+	return g.copyHostRows(0, li, h, base, from, start, to, k, v)
 }
 
 // ReadRows is readHostRows for the zero session (nn.HistoryCopier).
-func (g *GPU) ReadRows(li, base, from, to int, k, v []float32) bool {
-	return g.readHostRows(0, li, base, from, to, k, v)
+func (g *GPU) ReadRows(li, h, base, from, to int, k, v []float32) bool {
+	return g.readHostRows(0, li, h, base, from, to, k, v)
 }
 
-func (s *gpuSession) CopyFrom(li, base, start int) (int, bool) {
+func (s *gpuSession) CopyFrom(li, h, base, start int) (int, bool) {
 	defer s.leave(s.step())
-	return s.g.hostCopyFrom(s.sid, li, base, start)
+	return s.g.hostCopyFrom(s.sid, li, h, base, start)
 }
 
-func (s *gpuSession) CopyRows(li, base, from, start, to int, k, v []float32) bool {
+func (s *gpuSession) CopyRows(li, h, base, from, start, to int, k, v []float32) bool {
 	defer s.leave(s.step())
-	return s.g.copyHostRows(s.sid, li, base, from, start, to, k, v)
+	return s.g.copyHostRows(s.sid, li, h, base, from, start, to, k, v)
 }
 
-func (s *gpuSession) ReadRows(li, base, from, to int, k, v []float32) bool {
+func (s *gpuSession) ReadRows(li, h, base, from, to int, k, v []float32) bool {
 	defer s.leave(s.step())
-	return s.g.readHostRows(s.sid, li, base, from, to, k, v)
+	return s.g.readHostRows(s.sid, li, h, base, from, to, k, v)
 }

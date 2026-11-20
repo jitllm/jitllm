@@ -5063,11 +5063,71 @@ history keeps none, so its coverage was 0 and so was every restore
 longer decides coverage (kvCache.covers); it reads the pages restored for its
 source (TestAPrefixRestoresPastSharedHistories).
 
-With the readers on the CPU device a second session sharing the prefix still
-restores nothing: the sources' windows on the card are cut at the card's
+With the readers on the CPU device a second session sharing the prefix
+restored nothing: the windowed blocks on the card are cut at the card's
 page, 64 positions at least, and the CPU's at a window of 4 keys' 32, so no
-key the CPU's cache knows names the card's pages of them. Its CPU copies
-read the first session's pages through the store all the same.
+key the CPU's cache knows named the card's pages of them -- not only the
+sources the readers read but every windowed block placed there, which no
+CPU block reads at all (synth-gemma4-e's blocks 0 and 1). A block on a card
+that pages it apart from the CPU's cache now has its pages named there at
+the card's page, by the key of the positions up to each page's end, as each
+fills and before its window lets it go (nameApart), and a restore maps the
+whole pages of the card's its window reads (mapApart). The CPU device's
+copy of a source there aliases the store's page its restored window starts
+in (crossAlias, from inside a page where it waited for a page's start; the
+second session otherwise held page 7 of synth-gemma4-e's block 3 beside the
+store's). The shared arms both ways now hold the second session to the
+whole 256-position prefix restored: with the readers on the CPU device 7
+pages mapped on the card for synth-gemma4-e and 11 for synth-gemma3n, on
+CUDA and Vulkan, where the commit before restored 0. Seal had also named
+such a card's pages by the CPU's keys, a 64-position page under the key of
+its first 32: it names nothing at the CPU's geometry there now.
+
+A failed restore -- the store's pages found, then a miss where a windowed
+layer's were not, or a move to the card that would not happen -- left each
+layer's lastSealed at the pages it had found, so the prompt run again from
+its start never offered those pages to the store: the session held them as
+its own beside the store's copy. The restore takes lastSealed (and the
+copies' copySealed) back to what it kept (unsealPast).
+TestAFailedRestoreSealsItsPages makes the restore of a shared 48-position
+prefix miss after finding it (a gate's fault) and holds every page of the
+prefix to the store's copy after the prompt: red at the commit before,
+"block 0's page 0 of the prefix is the session's own (lastSealed 4)".
+
+A binary16 card pool's copy narrowed and widened a page through staging
+made and freed every write: a warm token allocated 1216 to 2688 objects
+over 64 tokens with the card's pool binary16. It did not get that far: the
+conversions' forms were formed on the placing lane, and the copy runs on
+the session's bare view, so every write was refused, "the composed history
+page's halves at 256 rows was not formed at placement". The conversions a
+copy runs are formed at placement on a lane of their own, held by the
+device (formHalves), their staging made at their first run and kept with
+the page of halves read to host memory and the submission's closure:
+TestDecodeDoesNotAllocateAcrossTheCPU's binary16 arms, both ways, at 0.
+
+A group whose readers read a history past the one they bind (ReadsMore),
+or whose source keeps one past its rows, came home whole across the CPU
+(crossGroups), and between two cards a history past a block's rows was
+copied only where the pools paged alike. Every history a block reads of
+another is copied now (crossReadsOf): a history past a block's rows as its
+entries, the CPU's pages of it in its slot (entriesOut, entriesIn) and the
+card's as entry pages (readEntries, writeEntries), at each side's page; and
+between two cards paging apart as entries re-paged (copyRepaged). The copy
+of a CPU block on a card is made of each history its readers there read
+(hostHists), the geometry of one past the rows or read past the bound one
+from the block's statement (BlockSpec.Hists, Bound, whose rows' entries now
+carry their width). A block on the CPU device bound to a source on a card
+keeps every history of the source as its copy, read or not: the CPU
+device's binding faults them (lanesRead). Gates: TestAHistoryReadAcrossTheCPU
+with synth-gemma3n restated to keep every history past its rows
+(pastTheRows) and synth-seedoss restated so its last block reads blocks 0's
+and 1's past its own (readsTwoFixture), every arm but the restated
+synth-gemma3n's shared ones; TestAHistoryCopyRepages with the restated
+synth-gemma3n, 128- against 256-position pools on every pair;
+TestDecodeDoesNotAllocateAcrossTheCPU with both. With the restriction put
+back, every CUDA arm of both is refused its placement ("block 8 is on cpu, not
+cuda:0"), and TestAHistoryCopyRepages' at the commit before ("block 4's
+histories page 128 positions on ... and 256 on ...").
 
 Gates: engine.TestAHistoryReadAcrossTheCPU (synth-gemma4-e and
 synth-gemma3n split at the first source a block above reads, on a CUDA card
@@ -5090,8 +5150,9 @@ whose source now moves to the CPU with its readers left on the card.
 Between two cards a copy was the pages as they are, and a pair of pools
 paging apart refused it. The rows the CPU copies cross through re-page it
 now (copyRepaged): read from the source's card and written as whole pages of
-the copy's. A history past a block's rows is still copied only between pools
-that page alike: nothing reading another block's history keeps one.
+the copy's. A history past a block's rows was then copied only between pools
+that paged alike (nothing reading another block's history kept one); it is
+re-paged as its entries now (above).
 TestAHistoryCopyRepages holds the readers' card at a 256-position page (an
 instance of a longer context placed there first) and the source's at 128:
 NMSE 6.2e-6 and below from the CPU's on every pair, where the commit before

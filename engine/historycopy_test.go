@@ -184,12 +184,13 @@ func historyStepAcrossCards(t *testing.T, m *model.Model, io []Option, a, b, hea
 // shorter one by this instance's -- the copy re-paged as rows on the way
 // (copyRepaged). The prompt and every token after it are held to the CPU's
 // logits for the prompt alone, and the copies held are the reads across the
-// cards.
+// cards. synth-gemma3n restated to keep each block's history past its rows
+// (pastTheRows) has its copies re-paged as entries.
 func TestAHistoryCopyRepages(t *testing.T) {
 	for _, f := range []struct {
 		name string
 		open func(*testing.T, string) (*model.Model, *c6Golden, []Option)
-	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n}} {
+	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n}, {"synth-gemma3n-past-the-rows", openPastTheRows(openGemma3n, "synth-gemma3n", 1)}} {
 		t.Run(f.name, func(t *testing.T) {
 			m, _, io := f.open(t, f.name)
 			defer m.Close()
@@ -201,6 +202,23 @@ func TestAHistoryCopyRepages(t *testing.T) {
 				t.Run(p[0]+","+p[1], func(t *testing.T) { historyCopyRepages(t, m, io, p[0], p[1]) })
 			}
 		})
+	}
+}
+
+// openPastTheRows is open of fixture name with every block's rows' history
+// kept as history h (pastTheRows): a block reading another's reads that
+// block's history h, one past its rows.
+func openPastTheRows(open func(*testing.T, string) (*model.Model, *c6Golden, []Option), name string, h uint8) func(*testing.T, string) (*model.Model, *c6Golden, []Option) {
+	return func(t *testing.T, _ string) (*model.Model, *c6Golden, []Option) {
+		m, gold, io := open(t, name)
+		f := m.FrontGraphs()
+		for li := range f.Blocks {
+			f.Blocks[li] = pastTheRows(f.Blocks[li], h)
+		}
+		if src, _ := historyCut(t, m); len(m.Composing().BlockGraph(src).KeptHistories()) == 0 {
+			t.Fatalf("block %d keeps no history past its rows: the restatement selected nothing", src)
+		}
+		return m, gold, io
 	}
 }
 
@@ -319,9 +337,8 @@ type historyStep struct {
 }
 
 // crossCardReads is the history copies st's placement needs on its cards:
-// each block whose history a block on another card reads, or a block on the
-// CPU device whose history a block on a card reads in place of its own
-// (histcross.go), once a card it is read on.
+// each block whose history a block on another card, or on the CPU device,
+// reads (histcross.go), once a card it is read on.
 func crossCardReads(st *Instance, m *model.Model) int {
 	type pair struct {
 		src int
@@ -343,7 +360,7 @@ func crossCardReads(st *Instance, m *model.Model) int {
 			srcs = append(srcs, r.Block)
 		}
 		for _, s := range srcs {
-			if at, ok := st.DeviceOf(s); ok && at != on || !ok && s == n {
+			if at, ok := st.DeviceOf(s); !ok || at != on {
 				need[pair{s, on}] = true
 			}
 		}

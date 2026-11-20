@@ -100,13 +100,13 @@ type Instance struct {
 	histMore [][]graph.HistoryRead
 	kvGroup  []int
 	winOf    []blockWindow
-	// readsAcross says a block reads another block's history in place of
-	// its own, crossOK whose groups may part across the CPU and a card
-	// (crossGroups), and crossK and crossV the rows a copy of such a
-	// history crosses through (histcross.go). crossStale is the gate's
-	// violation: the CPU device's copies take no rows once made.
+	// readsAcross says a block reads another block's history, crossReads
+	// each block's reads of others' (crossReadsOf), and crossK and crossV the
+	// rows a copy of such a history crosses through (histcross.go).
+	// crossStale is the gate's violation: the CPU device's copies take no
+	// rows once made.
 	readsAcross    bool
-	crossOK        []bool
+	crossReads     [][]graph.HistoryRead
 	crossK, crossV []float32
 	crossStale     bool
 	// mu is held by a call running on the instance: sessions leasing it run
@@ -651,9 +651,9 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.own.on = s
 	s.histOf, s.histMore = historySources(m, hi)
 	s.kvGroup = historyGroups(s.histOf, s.histMore)
-	s.crossOK = crossGroups(m, s.histOf, s.histMore, s.kvGroup)
-	for li, src := range s.histOf {
-		s.readsAcross = s.readsAcross || src != li
+	s.crossReads = crossReadsOf(m, hi)
+	for _, r := range s.crossReads {
+		s.readsAcross = s.readsAcross || len(r) > 0
 	}
 	s.winOf = attendWindows(m, lo, hi)
 	if err := m.BindDense(fr, &s.dense); err != nil {

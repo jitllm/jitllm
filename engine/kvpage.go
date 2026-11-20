@@ -210,6 +210,10 @@ type kvPages struct {
 	// copySealed is the first page of the copy not yet offered to the shared
 	// store (kvCache.publishCopies).
 	copySealed int
+	// apart is the positions a page of the block's history holds on the card
+	// it runs on where that card cuts it apart from p, and apartSealed the
+	// first of those pages not yet named there (kvCache.nameApart).
+	apart, apartSealed int
 }
 
 // keyStart is the first key position pos attends on this layer: the start of
@@ -1152,6 +1156,19 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 	return best + tail, tail, nil
 }
 
+// unsealPast takes back what every layer counts as offered to the store
+// past position n (lastSealed, copySealed, apartSealed): the pages from
+// there are written again.
+func (kc *kvCache) unsealPast(n int) {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if pg := &kc.layers[li]; pg.p > 0 {
+			pg.lastSealed = min(pg.lastSealed, n/pg.p)
+			pg.copySealed = min(pg.copySealed, n/pg.p)
+			pg.apartSealed = min(pg.apartSealed, n/max(pg.apart, 1))
+		}
+	}
+}
+
 // dropResident lets every resident page go, its memory to spare for the
 // faults a restore makes next (keepOnReset): a restore asks the store, and a
 // reused instance's leftovers would otherwise count as hits.
@@ -1223,6 +1240,13 @@ func (kc *kvCache) restoreWin(n, cover int) (bool, error) {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
 		if s.p == 0 || kc.src[li] != li || kc.covers(li) || n <= 0 {
+			continue
+		}
+		if kc.share != nil && kc.devAt(li) != nil && kc.cardPage(li) == nil {
+			if !kc.mapApart(li, n, cover) {
+				kc.dropWin()
+				return false, nil
+			}
 			continue
 		}
 		first, last := s.keyStart(n)/s.p, (n-1)/s.p
@@ -1487,6 +1511,7 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 	// summary cannot be shortened by one position to make room for a token.)
 	n, err := s.restoreKV(len(tokens))
 	if err != nil {
+		s.kv.unsealPast(0)
 		return 0, nil, err
 	}
 	full := []float32(nil)
@@ -1499,6 +1524,7 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 			// something is left to run. A hybrid cannot shorten a restored
 			// tail, so it gives the tail up entirely -- restoreKV's rule.
 			if n, err = s.restoreKV(rows - 1); err != nil {
+				s.kv.unsealPast(0)
 				return 0, nil, err
 			}
 		}
@@ -1508,6 +1534,7 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 	for _, r := range s.bidir {
 		if r.Lo < n && n < r.Hi {
 			if n, err = s.restoreKV(r.Lo); err != nil {
+				s.kv.unsealPast(0)
 				return 0, nil, err
 			}
 			full = nil
@@ -1541,6 +1568,9 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 			break
 		}
 	}
+	// A restore given up, or cut short, runs its positions again, and they
+	// are offered to the store again as they seal.
+	s.kv.unsealPast(n)
 	s.kv.chunked = n / kvChunk * kvChunk
 	if n > 0 {
 		s.advance(0, n)
@@ -1635,7 +1665,11 @@ func (s *Instance) restoreKV(max int) (int, error) {
 
 	// The windowed layers' pages, once the length is known: only what n's
 	// window reads was ever stored, so that is all a restore can bring back.
-	if ok, err := s.kv.restoreWin(n, cover); err != nil || !ok {
+	ok, err := s.kv.restoreWin(n, cover)
+	if f := s.opt.restoreMissFault; f != nil {
+		*f, ok = n, false
+	}
+	if err != nil || !ok {
 		return 0, err
 	}
 
@@ -1705,10 +1739,14 @@ func (kc *kvCache) seal(pos int) {
 		}
 		cur, _ := s.page(pos)
 		if kc.share != nil && kc.devAt(li) != nil {
-			// On the card: every page the position has passed is named there,
-			// and held once on the host too where the CPU device keeps a copy
-			// of it (histcross.go).
-			for n := s.lastSealed; n < cur; n++ {
+			// On the card: every page the position has passed is named there
+			// -- at the card's page where it cuts the history apart from this
+			// cache (nameApart) -- and held once on the host too where the
+			// CPU device keeps a copy of it (histcross.go).
+			if kc.cardPage(li) == nil {
+				kc.nameApart(li, pos)
+			}
+			for n := s.lastSealed; n < cur && kc.cardPage(li) != nil; n++ {
 				if key := kc.pageKey(li, n); key != "" {
 					kc.publishSealed(li, n, key)
 				}

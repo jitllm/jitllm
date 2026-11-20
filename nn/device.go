@@ -531,7 +531,7 @@ type BlockSpec struct {
 	Hists []graph.KeptHistory
 	// Bound are the other blocks' histories the block reads past those
 	// (graph.Graph.ReadsMore), each as its block keeps it: Hist 0 a block's
-	// rows', laid out as the block's own.
+	// rows', laid out as the block's own, Width its row.
 	Bound    []graph.KeptHistory
 	Rotaries []graph.Rotary
 	Tables   []RowTable
@@ -1300,23 +1300,28 @@ type HistoryMigrator interface {
 }
 
 // HistoryCopier is a device keeping copies of histories the CPU device
-// writes, for blocks placed on it that read them in place of their own, and
-// reading its own blocks' histories for the CPU device's copies of them: a
-// history read across the CPU and a card. Rows are [n][kvRow] float32, the
-// first row from's; each side pages its copy at its own page size.
+// writes, for blocks placed on it that read them, and reading its own
+// blocks' histories for the CPU device's copies of them: a history read
+// across the CPU and a card. Block li's history h is its rows' (h 0) or one
+// past them (graph.Graph.KeptHistories). A rows' history crosses as rows,
+// [n][kvRow] float32 in k and v, the first row from's; one past them as its
+// entries in k alone, each its keys and then, where its values are not its
+// keys, its values, the first entry the one at or past from
+// (cpudev.History.MigrateHistory's layout). Each side pages its copy at its
+// own page size.
 type HistoryCopier interface {
 	// CopyFrom is the first position of the sequence at base of block li's
-	// history that the copies of it here lack, at most start and at the
+	// history h that the copies of it here lack, at most start and at the
 	// start of the page it falls in there; false where no copy of it is
 	// held here.
-	CopyFrom(li, base, start int) (int, bool)
+	CopyFrom(li, h, base, start int) (int, bool)
 	// CopyRows writes positions [from, to) of that history, from a position
 	// CopyFrom gave or one no call reads below, into every copy of it here;
 	// start is where the call about to run writes from.
-	CopyRows(li, base, from, start, to int, k, v []float32) bool
-	// ReadRows reads positions [from, to) of block li's history, the
+	CopyRows(li, h, base, from, start, to int, k, v []float32) bool
+	// ReadRows reads positions [from, to) of block li's history h, the
 	// device's own, into k and v.
-	ReadRows(li, base, from, to int, k, v []float32) bool
+	ReadRows(li, h, base, from, to int, k, v []float32) bool
 }
 
 // RecMigrator is a device's half of moving block li's recurrent state

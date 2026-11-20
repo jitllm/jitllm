@@ -351,7 +351,7 @@ func (s *Instance) boundHistories(li int) []graph.KeptHistory {
 	}
 	out := make([]graph.KeptHistory, 0, len(s.histMore[li]))
 	for _, r := range s.histMore[li] {
-		k := graph.KeptHistory{Hist: r.Hist}
+		k := graph.KeptHistory{Hist: r.Hist, Width: s.c.KVRowAt(r.Block)}
 		if r.Hist > 0 {
 			for _, h := range s.m.Composing().BlockGraph(r.Block).KeptHistories() {
 				if h.Hist == r.Hist {

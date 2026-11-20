@@ -79,9 +79,7 @@ func (s *Instance) placeOnto(lo, hi int, to string) ([]int, error) {
 			}
 			return placed, fmt.Errorf("model: block %d's history would not move to the device", li)
 		}
-		if li < len(s.kv.layers) && !s.lanesRead(li) {
-			s.kv.layers[li].dropResident()
-		}
+		s.dropUnread(li)
 		placed = append(placed, li)
 	}
 	return placed, err

@@ -567,6 +567,10 @@ func (kc *kvCache) publishHost(li, n int, key string) {
 func (kc *kvCache) nameMoved(li, pos int) {
 	d := kc.cardPage(li)
 	s := &kc.layers[li]
+	if d == nil && s.p > 0 && kc.devAt(li) != nil {
+		s.apartSealed = 0
+		kc.nameApart(li, pos)
+	}
 	if d == nil || s.p == 0 {
 		return
 	}
@@ -587,6 +591,61 @@ func (kc *kvCache) nameMoved(li, pos int) {
 	}
 	kc.flushPublish()
 	s.lastSealed = max(s.lastSealed, pos/s.p)
+}
+
+// nameApart names, on the card block li runs on where that card cuts its
+// history into pages apart from this cache, every page of it there pos has
+// passed, by the key of the positions up to the page's end at the card's
+// page: no key of this cache's pages names them. Each is named as it fills,
+// before a window lets it go.
+func (kc *kvCache) nameApart(li, pos int) {
+	s := &kc.layers[li]
+	d := kc.devAt(li)
+	if d == nil || kc.ns == "" {
+		return
+	}
+	pc := d.SharePage(li)
+	if pc <= 0 {
+		return
+	}
+	if s.apart != pc {
+		s.apart, s.apartSealed = pc, 0
+	}
+	for ; (s.apartSealed+1)*pc <= pos; s.apartSealed++ {
+		key := kc.pageKeyP(pc, s.apartSealed)
+		if key == "" {
+			return
+		}
+		d.PublishKV(li, s.apartSealed, key)
+	}
+}
+
+// mapApart maps into block li's history on the card it runs on, where that
+// card cuts it apart from this cache (nameApart), the pages of it there the
+// first n positions' window reads, from a store whose prefix covers cover
+// >= n positions: each named whole, so each must lie inside cover. It
+// reports false at the first the card names by no key.
+func (kc *kvCache) mapApart(li, n, cover int) bool {
+	s := &kc.layers[li]
+	d := kc.devAt(li)
+	if d == nil || n <= 0 {
+		return false
+	}
+	pc := d.SharePage(li)
+	if pc <= 0 {
+		return false
+	}
+	for j := s.keyStart(n) / pc; j*pc < n; j++ {
+		key := ""
+		if (j+1)*pc <= cover {
+			key = kc.pageKeyP(pc, j)
+		}
+		if key == "" || !d.MapKV(li, j, key, n) {
+			return false
+		}
+	}
+	s.apart, s.apartSealed = pc, n/pc
+	return true
 }
 
 // faultShared aliases page n of layer li from the store, or reports a miss.

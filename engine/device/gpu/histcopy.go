@@ -29,9 +29,8 @@ import (
 // The copy pages as any history on its device: grown, sent home and read
 // back in passes, released behind a window. Its pages are copied whole and
 // raw where the two pools page alike, the same positions a page, and as rows
-// re-paged where they do not (copyRepaged); a history past a block's rows
-// is copied only between pools that page alike, and the layouts must be the
-// same.
+// re-paged where they do not (copyRepaged), a history past a block's rows as
+// its entries; the layouts must be the same.
 
 // readsOf is the blocks whose histories a block li of graph g reads beside or
 // in place of its own, appended to dst.
@@ -149,10 +148,6 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 		dv.kvp = newKVPool(fkp.p, dv.maxBuffer())
 	}
 	dkp := dv.kvp
-	if dkp.p != fkp.p && fkp.blockHists(src) > 1 {
-		return fmt.Errorf("block %d's histories page %d positions on %s and %d on %s: a history past a block's rows is copied as its pages are",
-			src, fkp.p, label(o.dev, o.ord), dkp.p, label(d.dev, d.ord))
-	}
 	for h := range fkp.blockHists(src) {
 		key := histKey(src, h)
 		fl := fkp.layers[key]
@@ -172,6 +167,16 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 		tl.win, tl.chunked, tl.tail, tl.ctx = fl.win, fl.chunked, fl.tail, fl.ctx
 		if fl.win > 0 {
 			dkp.chunked = fl.chunked
+		}
+		// Pools paging apart copy as rows (copyRepaged), through each
+		// side's page conversions.
+		if g := fl.geom; dkp.p != fkp.p && h == 0 && g.f16 && g.vWords(fkp.p) > 0 {
+			if err := sv.formHalves(g.kvRow, fkp.p); err != nil {
+				return err
+			}
+			if err := dv.formHalves(g.kvRow, dkp.p); err != nil {
+				return err
+			}
 		}
 	}
 	if dv.histCopies == nil {
@@ -276,8 +281,10 @@ func copySeqPages(sv, dv *devTier, s seqID, src, j0, j1, from int) error {
 	P := fkp.p
 	if P != dkp.p {
 		end := 0
-		if fl := fkp.layers[src]; fl != nil {
-			end = len(fl.owned[s]) * P
+		for h := range fkp.blockHists(src) {
+			if fl := fkp.layers[histKey(src, h)]; fl != nil {
+				end = max(end, len(fl.owned[s])*P)
+			}
 		}
 		if j1 >= 0 {
 			end = min(end, j1*P)
@@ -454,7 +461,7 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 		g.mu.Lock()
 		o := g.at(sid, src)
 		g.mu.Unlock()
-		if o == d || o == nil && src != p.Graph.ReadsHistoryOf() {
+		if o == d {
 			continue
 		}
 		d.mu.Lock()
@@ -469,7 +476,13 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 		}
 		if o == nil {
 			win, chunked := p.Graph.AttendWindow()
-			if err := g.makeHostCopy(sid, src, d, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), p); err != nil {
+			kvSrc := p.Graph.ReadsHistoryOf()
+			var kept, bound []graph.KeptHistory
+			if p.Spec != nil {
+				kept, bound = p.Spec.Hists, p.Spec.Bound
+			}
+			hs := hostHists(nil, src, kvSrc, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), kept, p.Graph.ReadsMore(), bound, d.KVF16)
+			if err := g.makeHostCopy(sid, src, d, hs, p); err != nil {
 				g.dropCopies(sid, d, made)
 				return nil, err
 			}
@@ -519,7 +532,7 @@ func (g *GPU) settleCopies(sid uint64) error {
 	type hcopy struct {
 		d, o *devTier
 		src  int
-		l    *layer
+		hs   []hostHist
 	}
 	var add, drop []hcopy
 	var srcs []int
@@ -528,15 +541,18 @@ func (g *GPU) settleCopies(sid uint64) error {
 		// A source the session runs on the CPU device is wanted as the
 		// CPU's copy (o nil), of the history read in place of a block's own.
 		want := map[int]*devTier{}
-		by := map[int]*layer{}
+		by := map[int][]hostHist{}
 		for li, l := range d.layers {
 			if l == nil || !l.ok || at[li] != d {
 				continue
 			}
 			srcs = l.readsInto(srcs[:0], li)
 			for _, src := range srcs {
-				if o := at[src]; o != d && (o != nil || src == l.kvSrc) {
-					want[src], by[src] = o, l
+				if o := at[src]; o != d {
+					want[src] = o
+					if o == nil {
+						by[src] = d.hostHistsOf(by[src], l, src)
+					}
 				}
 			}
 		}
@@ -551,7 +567,7 @@ func (g *GPU) settleCopies(sid uint64) error {
 			drop = append(drop, hcopy{d: d, src: src})
 		}
 		for src, o := range want {
-			add = append(add, hcopy{d: d, o: o, src: src, l: by[src]})
+			add = append(add, hcopy{d: d, o: o, src: src, hs: by[src]})
 		}
 		d.mu.Unlock()
 	}
@@ -563,8 +579,7 @@ func (g *GPU) settleCopies(sid uint64) error {
 	for _, c := range add {
 		var err error
 		if c.o == nil {
-			geom, win, chunked, tail := c.l.readGeom()
-			err = g.makeHostCopy(sid, c.src, c.d, geom, win, chunked, tail, nil)
+			err = g.makeHostCopy(sid, c.src, c.d, c.hs, nil)
 		} else {
 			err = g.makeHistCopy(sid, c.src, c.o, c.d, nil)
 		}

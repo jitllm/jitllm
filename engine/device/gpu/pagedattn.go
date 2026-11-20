@@ -501,6 +501,11 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 			}
 		}
 		g.prewarming = was
+		// A block on the CPU device reading this one's history reads it a
+		// page at a time through them (readRows).
+		if err := g.formHalves(geom.kvRow, kp.p); err != nil {
+			return err
+		}
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked

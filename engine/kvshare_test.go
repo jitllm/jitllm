@@ -325,3 +325,53 @@ func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
 			"this gate cannot see the write it guards against")
 	}
 }
+
+// TestAFailedRestoreSealsItsPages: a restore that finds a shared prefix's
+// pages and then gives them up (a miss where its windowed layers' pages
+// would be, the fault) runs the prompt from its start, and every page the
+// prompt writes is offered to the store again: the session holds the prefix
+// as the store's copy, once, as a session whose restore held does, and
+// answers as it would alone. Red where the miss left each layer's
+// lastSealed past the pages the prompt rewrote.
+func TestAFailedRestoreSealsItsPages(t *testing.T) {
+	name := shareModels()[0]
+	m, err := model.Open(jlmOf(t, testmodels.Path(name)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	instOpts := []Option{sharedCPU(t), withKVPage(sharePage)}
+	solo := shareSession(t, m, 1, nil, false, instOpts...)
+	solo.s.Close()
+	st := NewSharedStore()
+	first := shareSession(t, m, 0, st, true, instOpts...)
+	defer first.s.Close()
+	found := 0
+	second := shareSession(t, m, 1, st, true, append(append([]Option(nil), instOpts...), withRestoreMissFault(&found))...)
+	defer second.s.Close()
+	if found < sharePrefix {
+		t.Fatalf("the restore found %d positions of the %d-position prefix before it missed: the fault failed no restore", found, sharePrefix)
+	}
+	if n := second.s.KVRestored(); n != 0 {
+		t.Fatalf("the failed restore kept %d positions", n)
+	}
+	sameTokens(t, "after a failed restore against solo", solo.toks, second.toks)
+	pages := 0
+	for li := range second.s.kv.layers {
+		pg := &second.s.kv.layers[li]
+		if pg.p == 0 {
+			continue
+		}
+		for j := 0; j < sharePrefix/pg.p; j++ {
+			if !pg.isShared(j) {
+				t.Fatalf("block %d's page %d of the prefix is the session's own (lastSealed %d): the pages the failed restore gave up were never sealed again",
+					li, j, pg.lastSealed)
+			}
+			pages++
+		}
+	}
+	if pages == 0 {
+		t.Fatal("no layer holds a page of the prefix: the gate checked nothing")
+	}
+	t.Logf("the restore found %d positions and missed; %d pages of the prefix sealed again, each the store's copy", found, pages)
+}

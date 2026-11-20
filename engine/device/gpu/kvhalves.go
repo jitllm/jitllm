@@ -1,6 +1,8 @@
 package gpu
 
 import (
+	"fmt"
+
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
@@ -44,14 +46,21 @@ func (g *devTier) servedHalves(w, rows int, widen bool) (*servedPart, error) {
 	})
 }
 
-// pageHalves is a migration's binary16 page conversions: a page's floats and
-// its halves staged on the card, and the forms between them, at a page's rows
-// of positions.
+// pageHalves is a page's binary16 conversions: a page's floats and its
+// halves staged on the card, and the forms between them, at a page's rows of
+// positions. words is a page's halves read to host memory, and sv, in, out,
+// err and fn a conversion's submission, kept so that one run a token
+// allocates nothing.
 type pageHalves struct {
 	g              *devTier
 	f, h           backend.Buf
 	narrow, widen  *servedPart
 	fBytes, hBytes int
+	words          []float32
+	sv             *servedPart
+	in, out        [1]backend.Buf
+	err            error
+	fn             func(backend.Session)
 }
 
 // newPageHalves stages a page of rows positions of w floats.
@@ -64,34 +73,104 @@ func (g *devTier) newPageHalves(w, rows int) (*pageHalves, error) {
 	if c.widen, err = g.servedHalves(w, rows, true); err != nil {
 		return nil, err
 	}
-	if c.f, err = g.alloc(c.fBytes); err != nil {
-		return nil, err
-	}
-	if c.h, err = g.alloc(c.hBytes); err != nil {
-		c.f.Free()
+	if err := c.stage(); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
+// stage makes the page's staging on the card.
+func (c *pageHalves) stage() error {
+	var err error
+	if c.f, err = c.g.alloc(c.fBytes); err != nil {
+		return err
+	}
+	if c.h, err = c.g.alloc(c.hBytes); err != nil {
+		c.f.Free()
+		c.f = nil
+		return err
+	}
+	return nil
+}
+
 func (c *pageHalves) close() {
-	c.f.Free()
-	c.h.Free()
+	if c.f != nil {
+		c.f.Free()
+		c.h.Free()
+		c.f, c.h = nil, nil
+	}
+}
+
+// formHalves forms, at a placement, the page conversions a history copy runs
+// at rows positions of w floats (keptHalves): the device's, held on a lane
+// of their own and run under g.mu, their staging made at their first run.
+// Callers hold g.mu.
+func (g *devTier) formHalves(w, rows int) error {
+	key := [2]int{w, rows}
+	if g.halves[key] != nil {
+		return nil
+	}
+	v := &devTier{devShared: g.devShared, devSess: g.dv.devSess, lane: &lane{}, Stats: g.dv.Stats}
+	c := &pageHalves{g: v, fBytes: rows * w * 4, hBytes: rows * w * 2}
+	was := g.prewarming
+	g.prewarming = true
+	var err error
+	if c.narrow, err = v.servedHalves(w, rows, false); err == nil {
+		c.widen, err = v.servedHalves(w, rows, true)
+	}
+	g.prewarming = was
+	if err != nil {
+		v.dropLaneParts(v.lane)
+		return err
+	}
+	if g.halves == nil {
+		g.halves = map[[2]int]*pageHalves{}
+	}
+	g.halves[key] = c
+	return nil
+}
+
+// keptHalves is the conversions formHalves formed, staged at the first call.
+// Callers hold g.mu.
+func (g *devTier) keptHalves(w, rows int) (*pageHalves, error) {
+	c := g.halves[[2]int{w, rows}]
+	if c == nil {
+		return nil, fmt.Errorf("a history page's halves of %d floats at %d rows were not formed at placement", w, rows)
+	}
+	if c.f == nil {
+		if err := c.stage(); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+// freeHalves frees what formHalves formed. Callers hold g.mu.
+func (g *devTier) freeHalves() {
+	for key, c := range g.halves {
+		c.close()
+		c.g.dropLaneParts(c.g.lane)
+		delete(g.halves, key)
+	}
 }
 
 // run runs sv from in into out in a submission of its own.
 func (c *pageHalves) run(sv *servedPart, in, out backend.Buf) error {
-	g := c.g
-	var err error
-	g.dev.Session(func(s backend.Session) {
-		g.halvesTo.s = s
-		defer g.halvesTo.leave()
-		lc := launcher{to: &g.halvesTo, err: &err, g: g}
-		if e := sv.run(g, &lc, sv.inst, []backend.Buf{in}, []backend.Buf{out}); e != nil && err == nil {
-			err = e
+	if c.fn == nil {
+		c.fn = func(s backend.Session) {
+			g := c.g
+			g.halvesTo.s = s
+			defer g.halvesTo.leave()
+			lc := launcher{to: &g.halvesTo, err: &c.err, g: g}
+			if e := c.sv.run(g, &lc, c.sv.inst, c.in[:], c.out[:]); e != nil && c.err == nil {
+				c.err = e
+			}
 		}
-	})
-	return err
+	}
+	c.sv, c.in[0], c.out[0], c.err = sv, in, out, nil
+	c.g.dev.Session(c.fn)
+	c.sv, c.in[0], c.out[0] = nil, nil, nil
+	return c.err
 }
 
 // narrowPage narrows page's floats into pool at byte off, or, with pool nil,
@@ -106,8 +185,10 @@ func (c *pageHalves) narrowPage(page []float32, pool backend.Buf, off int) ([]fl
 	if pool != nil {
 		return nil, c.g.dev.Copy(pool, off, c.h, 0, c.hBytes)
 	}
-	words := make([]float32, c.hBytes/4)
-	return words, c.h.Read(f32b(words))
+	if c.words == nil {
+		c.words = make([]float32, c.hBytes/4)
+	}
+	return c.words, c.h.Read(f32b(c.words))
 }
 
 // widenPage widens a page's halves -- in pool at byte off, or, with pool nil,

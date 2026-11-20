@@ -1657,6 +1657,9 @@ type devShared struct {
 	// and halvesGraphs its graphs by width and direction.
 	halvesTo     launchTo
 	halvesGraphs map[halvesKey]*graph.Graph
+	// halves is the page conversions a history copy runs, by row width and
+	// page (formHalves).
+	halves map[[2]int]*pageHalves
 	// embTo is the composer's gather made real on its own
 	// (materializeComposed).
 	embTo launchTo
@@ -2374,6 +2377,7 @@ func (g *devTier) Close() {
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
 	g.quiesce()
+	g.freeHalves()
 	g.partsClose()
 	g.freeMarks()
 	for _, ds := range g.sess {

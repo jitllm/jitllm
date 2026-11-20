@@ -55,6 +55,12 @@ func withStepPosFault(f func(base, j, k int) int) Option {
 	return func(l *loadOpts) { l.opt.stepPosFault = f }
 }
 
+// withRestoreMissFault makes a restore miss once it has found its pages,
+// found taking how many positions it found: a gate's violation.
+func withRestoreMissFault(found *int) Option {
+	return func(l *loadOpts) { l.opt.restoreMissFault = found }
+}
+
 // withStaleKeyFault names a restore's pages by f's key: a gate's violation.
 func withStaleKeyFault(f func(key []int32) []int32) Option {
 	return func(l *loadOpts) { l.opt.staleKeyFault = f }

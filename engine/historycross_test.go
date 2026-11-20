@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -42,12 +43,19 @@ import (
 // sessions sharing a prompt's prefix through the prefix cache run the split
 // placement both ways: the second restores the prefix, both are held to the
 // CPU's logits for their prompts, and the prefix is held once on each
-// device (historySharedAcrossTheCPU).
+// device (historySharedAcrossTheCPU). synth-gemma3n restated to keep each
+// block's history past its rows (pastTheRows) parts its groups so too, the
+// copies its entries, and so does a block reading two others' histories
+// past its own (readsTwoFixture). The restated synth-gemma3n runs no shared
+// arm: a card names no page of a history past a block's rows for the prefix
+// cache (open-questions.md).
 func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 	for _, f := range []struct {
-		name string
-		open func(*testing.T, string) (*model.Model, *c6Golden, []Option)
-	}{{"synth-gemma4-e", openGemma4}, {"synth-gemma3n", openGemma3n}} {
+		name    string
+		open    func(*testing.T, string) (*model.Model, *c6Golden, []Option)
+		noShare bool
+	}{{"synth-gemma4-e", openGemma4, false}, {"synth-gemma3n", openGemma3n, false},
+		{"synth-gemma3n-past-the-rows", openPastTheRows(openGemma3n, "synth-gemma3n", 1), true}, {"synth-seedoss-readstwo", openReadsTwo, false}} {
 		t.Run(f.name, func(t *testing.T) {
 			m, _, io := f.open(t, f.name)
 			defer m.Close()
@@ -62,6 +70,9 @@ func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 					t.Run(fmt.Sprintf("%s/step-readers-on-the-card-%t", dev, readersUp), func(t *testing.T) {
 						historyStepAcrossTheCPU(t, m, io, dev, readersUp)
 					})
+					if f.noShare {
+						continue
+					}
 					t.Run(fmt.Sprintf("%s/shared-readers-on-the-card-%t", dev, readersUp), func(t *testing.T) {
 						historySharedAcrossTheCPU(t, m, io, dev, readersUp)
 					})
@@ -69,6 +80,21 @@ func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 			}
 		})
 	}
+}
+
+// openReadsTwo opens readsTwoFixture: its last block reads blocks 0's and
+// 1's histories past its own.
+func openReadsTwo(t *testing.T, _ string) (*model.Model, *c6Golden, []Option) {
+	t.Helper()
+	m, err := model.Open(jlmOf(t, testmodels.Path("synth-seedoss.gguf")+readsTwoSuffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if li := m.Cfg.NLayer - 1; len(m.Composing().BlockGraph(li).ReadsMore()) < 2 {
+		m.Close()
+		t.Fatalf("block %d reads no two histories past its own: the restatement selected nothing", li)
+	}
+	return m, nil, []Option{WithKVF16(false)}
 }
 
 // crossOutside fails t unless a step of got stands outside the band.
@@ -202,19 +228,24 @@ func crossCopies(t *testing.T, g *gpu.GPU, st *Instance, m *model.Model, alike i
 		if !st.devAt(li) {
 			continue
 		}
-		if st.lanesRead(li) {
-			need++
-		}
-		pg := &st.kv.layers[li]
-		if pg.copy {
-			held++
-		}
-		if pg.copy && st.lanesRead(li) {
-			continue
-		}
-		for n := range pg.mem.Len() {
-			if pg.mem.K(n) != nil {
-				t.Fatalf("%s: the CPU device holds page %d of block %d, on a card, which no block on the CPU device reads (%s)", what, n, li, crossWhere(st, m.Cfg.NLayer))
+		for h := 0; h <= st.kv.nHist(li); h++ {
+			pg := st.histPages(li, h)
+			if pg == nil {
+				continue
+			}
+			if st.lanesRead(li, h) {
+				need++
+			}
+			if pg.copy {
+				held++
+			}
+			if pg.copy && st.lanesRead(li, h) {
+				continue
+			}
+			for n := range pg.mem.Len() {
+				if pg.mem.K(n) != nil {
+					t.Fatalf("%s: the CPU device holds page %d of block %d's history %d, on a card, which no block on the CPU device reads (%s)", what, n, li, h, crossWhere(st, m.Cfg.NLayer))
+				}
 			}
 		}
 	}
@@ -428,14 +459,13 @@ func historyStepAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev stri
 // own prompt and the tokens after it, and the prefix is held once on each
 // device: no page a session holds beside the store's on the host
 // (kvDuplicates), the second session's CPU copy of a card's block reading
-// the first's pages through the store (KVSharedBytes), and with the readers
-// on the card the second restores the prefix (KVRestored) and its copy on
-// the card maps the pages the first's named (KVPagesMapped).
-//
-// With the readers on the CPU device the second session restores nothing:
-// its sources' windows on the card are cut at the card's page, 64 positions
-// at least, and the CPU's at a window of 4 keys' 32, so the card's pages of
-// them are named by no key the CPU's cache knows (open-questions.md).
+// the first's pages through the store (KVSharedBytes), the second restores
+// the prefix (KVRestored), and the card maps the pages the first's named
+// (KVPagesMapped): with the readers on the card, its copies of the CPU's
+// blocks; with them on the CPU device, the blocks there. A windowed source
+// on the card, which pages it apart from the CPU device (64 positions
+// against a window of 4 keys' 32), restores through the CPU device's copy
+// of it, its pages named at the CPU's geometry.
 func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev string, readersUp bool) {
 	nl := m.Cfg.NLayer
 	_, cut := historyCut(t, m)
@@ -480,7 +510,7 @@ func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev st
 		}
 		sess[i], firsts[i] = st, lg
 	}
-	if readersUp && sess[1].KVRestored() < 4*page {
+	if sess[1].KVRestored() < 4*page {
 		t.Fatalf("the second session restored %d positions of the shared %d", sess[1].KVRestored(), 4*page)
 	}
 	for i, st := range sess {
@@ -512,10 +542,10 @@ func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev st
 		}
 		crossCopies(t, g, st, m, len(sess), fmt.Sprintf("session %d", i))
 	}
-	switch {
-	case readersUp && g.Stats().KVPagesMapped == m0:
-		t.Error("the second session's copy on the card mapped none of the first's pages: the prefix is held twice there")
-	case !readersUp && sess[1].KVSharedBytes() == 0:
+	if g.Stats().KVPagesMapped == m0 {
+		t.Error("the second session mapped none of the first's pages on the card: the prefix is held twice there")
+	}
+	if !readersUp && sess[1].KVSharedBytes() == 0 {
 		t.Error("the second session's CPU copies read none of the first's pages through the store: the prefix is held twice on the host")
 	}
 	t.Logf("restored %d; pages mapped on the card %d; the second session reads %d bytes through the store", sess[1].KVRestored(), g.Stats().KVPagesMapped-m0, sess[1].KVSharedBytes())

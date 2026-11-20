@@ -113,6 +113,10 @@ type modelOpts struct {
 	// (TestSharedPrefixIsHeldOnce): the key a restore names its pages by, in
 	// place of the prompt's. Nil in every real run.
 	staleKeyFault func(key []int32) []int32
+	// restoreMissFault, when set, takes the positions a restore found and
+	// makes it miss where its windowed layers' pages would (restoreWin): a
+	// gate's violation. Nil in every real run.
+	restoreMissFault *int
 	// stepShareFault, when set, gives every row of a routed step the first run's
 	// instance as its history. False but in a gate's violation: it is how the
 	// gate shows that rows reading one session's history fail it.
