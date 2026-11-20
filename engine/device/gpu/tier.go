@@ -1214,6 +1214,11 @@ func (g *devTier) claim(n uint64) (uint64, bool) {
 // unclaim gives the pool back what the operation claim opened did not
 // spend. Callers hold g.mu.
 func (g *devTier) unclaim(before uint64) {
+	// An operation ending under the bytes a window took from it leaves
+	// them the window's: given back, they go to the pool.
+	if g.winOp > 0 && before <= g.winOpAt {
+		g.winOp, g.winOpAt = 0, 0
+	}
 	if g.claimed > before {
 		g.pool.give(g.claimed - before)
 		g.claimed = before
@@ -1225,7 +1230,7 @@ func (g *devTier) unclaim(before uint64) {
 // and this device's claim after it.
 func (g *devTier) poolTake(n uint64) {
 	w := min(n, g.winHeld)
-	g.winHeld -= w
+	g.winSpend(w)
 	c := min(n-w, g.claimed)
 	g.claimed -= c
 	if !g.pool.take(n-w-c) && n > w+c {
@@ -1314,9 +1319,26 @@ func (g *devTier) winTrim() {
 	}
 	owed := uint64(max(g.winOwed(), int64(g.winUp), 0))
 	if owed < g.winHeld {
-		g.pool.give(g.winHeld - owed)
-		g.winHeld = owed
+		g.winGive(g.winHeld - owed)
 	}
+}
+
+// winGive gives n bytes of the window's hold back: to the operation they
+// were taken from (winOp), the rest to the pool. Callers hold g.mu.
+func (g *devTier) winGive(n uint64) {
+	back := min(n, g.winOp)
+	g.winOp -= back
+	g.claimed += back
+	g.winHeld -= n
+	g.pool.give(n - back)
+}
+
+// winSpend is n bytes of the window's hold spent by its charges: what it
+// took from the operation goes first, the operation's charges having
+// counted on it. Callers hold g.mu.
+func (g *devTier) winSpend(n uint64) {
+	g.winHeld -= n
+	g.winOp -= min(n, g.winOp)
 }
 
 // holdWin holds n more bytes of a shared pool for the open window: from
@@ -1333,6 +1355,8 @@ func (g *devTier) holdWin(n uint64) error {
 			return g.shortOf(n)
 		}
 		g.claimed -= n
+		g.winOp += n
+		g.winOpAt = g.claimed
 	}
 	g.winHeld += n
 	return nil
@@ -1709,8 +1733,11 @@ type devShared struct {
 	// at its close; winUp is what was held ahead of the buffers (winAhead).
 	// winFoot, winX and winRound are the footprint, explicit charges and
 	// rounding at the outermost window's open, and winSlack says the window
-	// holds the device's slack already.
+	// holds the device's slack already. winOp is what of winHeld the window
+	// took from the operation it runs in (holdWin), owed back to it while
+	// the hold it came from is open: the claim stood above winOpAt.
 	winHeld, winUp uint64
+	winOp, winOpAt uint64
 	winFoot, winX  int64
 	winRound       uint64
 	winSlack       bool

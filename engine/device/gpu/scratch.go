@@ -133,8 +133,8 @@ func (m scratchMark) close() {
 	}
 	g.settleScratch(g.allocated() - m.a - (g.explicit - m.x))
 	g.settleRounding()
-	g.pool.give(g.winHeld)
-	g.winHeld, g.winUp, g.winSlack = 0, 0, false
+	g.winGive(g.winHeld)
+	g.winUp, g.winSlack, g.winOp, g.winOpAt = 0, false, 0, 0
 }
 
 // settleScratch moves d bytes into (or out of) the scratch's share of both
@@ -145,7 +145,7 @@ func (g *devTier) settleScratch(d int64) {
 		g.scratch += uint64(d)
 		g.used += uint64(d)
 		w := min(uint64(d), g.winHeld)
-		g.winHeld -= w
+		g.winSpend(w)
 		if !g.pool.take(uint64(d)-w) && uint64(d) > w {
 			g.ScratchOver++
 		}
