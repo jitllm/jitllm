@@ -35,7 +35,7 @@ func TestEncodersAreTheLibrarys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"bert", "modern-bert", "nomic-bert"}; !slices.Equal(got, want) {
+	if want := []string{"bert", "gemma-embedding", "modern-bert", "nomic-bert"}; !slices.Equal(got, want) {
 		t.Fatalf("encoders %v, want %v", got, want)
 	}
 }

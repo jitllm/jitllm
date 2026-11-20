@@ -137,6 +137,10 @@
       "graph": "gemma"
     },
     {
+      "name": "gemma-embedding",
+      "graph": "prepost_qknorm"
+    },
+    {
       "name": "gemma2",
       "graph": "prepost"
     },

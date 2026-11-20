@@ -328,27 +328,33 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 	// An embedding model is flagged by two keys, read for every architecture:
 	// pooling_type (1 mean, 2 first position, 3 last) and attention.causal=false.
 	// A decoder can carry either (qwen3-embedding, EmbeddingGemma), so neither
-	// makes a new architecture.
+	// makes a new architecture. Where the file states no pooling_type, the
+	// statement's pooling is the readout.
+	pooling := uint64(c.Stated.pooling)
 	if kv, ok := f.Key("pooling_type"); ok {
-		switch v, _ := kv.Uint(); v {
-		case 0:
-		case 1:
-			c.Flags |= jlm.FlagPoolMean
-		case 2:
-			c.Flags |= jlm.FlagPoolCLS
-		case 3:
-			c.Flags |= jlm.FlagPoolLast
-		default:
-			// 4 is RANK, a reranker's classification head; the vector would be
-			// the wrong object entirely.
-			return nil, fmt.Errorf("convert: %s: pooling_type %d is not implemented: %w",
-				name, v, ErrNotImplemented)
-		}
+		pooling, _ = kv.Uint()
+	}
+	switch v := pooling; v {
+	case 0:
+	case 1:
+		c.Flags |= jlm.FlagPoolMean
+	case 2:
+		c.Flags |= jlm.FlagPoolCLS
+	case 3:
+		c.Flags |= jlm.FlagPoolLast
+	default:
+		// 4 is RANK, a reranker's classification head; the vector would be
+		// the wrong object entirely.
+		return nil, fmt.Errorf("convert: %s: pooling_type %d is not implemented: %w",
+			name, v, ErrNotImplemented)
 	}
 	if kv, ok := f.Key("attention.causal"); ok {
 		if v, ok := kv.Uint(); ok && v == 0 {
 			c.Flags |= jlm.FlagNonCausal
 		}
+	}
+	if err := denseHeadsFit(f); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 
 	// block_count includes any multi-token-prediction blocks after the trunk;
@@ -744,6 +750,30 @@ func sparsityOf(f *meta.File, c *Config) error {
 	c.NSparse = uint32(n)
 	if n > 0 {
 		c.SparseStd = vs[0]
+	}
+	return nil
+}
+
+// denseHeadsFit holds the widths a file states for its projection heads
+// (dense_2_feat_in and the rest) to the heads' own tensors: two statements of
+// one shape that disagree are refused, and so is a width for a head the file
+// does not carry.
+func denseHeadsFit(f *meta.File) error {
+	for _, h := range [...]string{"dense_2", "dense_3"} {
+		t, has := f.Get(h + ".weight")
+		for i, side := range [...]string{"in", "out"} {
+			kv, ok := f.Key(h + "_feat_" + side)
+			if !ok {
+				continue
+			}
+			v, _ := kv.Uint()
+			if !has {
+				return fmt.Errorf("%s_feat_%s is %d, and the file carries no %s.weight", h, side, v, h)
+			}
+			if len(t.Dims) != 2 || t.Dims[i] != v {
+				return fmt.Errorf("%s_feat_%s is %d, and %s.weight is %v", h, side, v, h, t.Dims)
+			}
+		}
 	}
 	return nil
 }

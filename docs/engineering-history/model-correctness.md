@@ -3111,6 +3111,32 @@ Go's stdlib lacks, so scripts/genunicode now emits llama.cpp's pinned 15.1
 `unicode_ranges_nfd` beside the existing tables (every existing table
 byte-identical, so no token id moved).
 
+### The gemma-embedding label
+
+The oracle's converter writes the same weights under the label
+`gemma-embedding`, and its loader hardcodes what that label's file leaves out:
+every position attends to every position (no `attention.causal` key; the
+loader sets it false whatever a key says), the score's scale is
+1/sqrt(key_length) (no `attention.scale` is read), the window is symmetric
+with a period of six where no `sliding_window_pattern` is stated, and the dense
+heads, when the file was converted with the sentence-transformers modules, are
+`dense_2`/`dense_3` with their widths stated as `dense_2_feat_in` and the rest.
+`convert/models/prepost_qknorm.json` states it as data beside gemma3's
+statement, and nothing past the converter changed: the container is the one
+gemma3's EmbeddingGemma converts to. A file with no `pooling_type` takes the
+mean, which is the checkpoint's own Pooling module (the oracle's loader would
+pool nothing); the heads' stated widths are held to their tensors at
+conversion. `convert.TestTheGemmaEmbeddingLabelIsStated` relabels the same
+file gemma3 and it converts causal, so the statement is what is under test.
+
+Two goldens: `embeddinggemma-300m-lcpp` is the BF16 file read by jitllm
+itself, against the oracle on the same file and against
+sentence-transformers' Transformer and Pooling modules in float32 (the file
+carries no heads); `synth-gemma-embedding` is `scripts/embedfixture.py`'s
+Gemma3TextModel with use_bidirectional_attention, every parameter randomised,
+a window of 8 that every text crosses, two dense heads, written by the
+oracle's own converter with `--sentence-transformers-dense-modules`.
+
 Not done: a bidirectional decoder on a device (it embeds on the host; the
 encoders run there, `docs/design/decision-models.md` section 10), the Unigram
 tokenizer (C12c: bge-m3,

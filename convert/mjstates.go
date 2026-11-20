@@ -89,7 +89,10 @@ type mjStates struct {
 	// how many last layers read an earlier layer's history, PLEWidth the
 	// per-layer input's width (at least one where stated), each a number;
 	// ValueKeyWidth, true, holds the value as wide as the key.
-	AttnScale     string `json:"attn_scale"`
+	AttnScale string `json:"attn_scale"`
+	// Pooling is the readout where the file states no pooling_type, as that
+	// key's number: 0 none, 1 mean, 2 the first position, 3 the last.
+	Pooling       string `json:"pooling"`
 	KVShared      string `json:"kv_shared"`
 	PLEWidth      string `json:"ple_width"`
 	ValueKeyWidth bool   `json:"value_key_width"`
@@ -338,6 +341,7 @@ type Statement struct {
 	actQuant                            jlm.ActQuant
 	ropeScaleSWA                        float32
 	swaGlobalFirst, pictureBidirSliding bool
+	pooling                             uint32
 	activation, ropeLayout              string
 	yarnMagnitude                       string
 	routerGate                          string
@@ -449,7 +453,7 @@ func (mj *modelJSON) checkStates() error {
 			}
 			srcs = append(srcs, x.Beta, x.LinearBeta)
 		}
-		srcs = append(srcs, st.HashLayers, st.AttnResBlock, st.ExpertLatent)
+		srcs = append(srcs, st.HashLayers, st.AttnResBlock, st.ExpertLatent, st.Pooling)
 		if r := st.Revision; r != nil {
 			if _, ok := mjActQuants()[r.ActQuant]; r.ActQuant != "" && !ok {
 				return fmt.Errorf("convert: %s: %s: activation quantization %q is not one the container states", mj.name, arch, r.ActQuant)
@@ -1093,6 +1097,11 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		}
 		if x := float64(c.AttnScale); !(x >= 0) || math.IsInf(x, 0) {
 			return fmt.Errorf("convert: %s: %s: attn_scale is %g", by, arch, x)
+		}
+	}
+	if st.Pooling != "" {
+		if c.Stated.pooling, err = whole("pooling", st.Pooling); err != nil {
+			return err
 		}
 	}
 	if st.KVShared != "" {

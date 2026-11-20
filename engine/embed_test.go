@@ -292,6 +292,33 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 				return func() { undo(); undoM() }
 			}},
 		},
+		// The file under the gemma-embedding label: no attention.causal key,
+		// no pooling_type needed, no dense heads.
+		"embeddinggemma-300m-lcpp": {
+			{"causal attention on a bidirectional model", func(m *model.Model) func() {
+				return cfgMut(m, func(c *model.Config) { c.NonCausal = false })
+			}},
+			{"last-token pooling on a mean model", func(m *model.Model) func() { return pool(m, jlm.PoolLast) }},
+			{"a sliding window four times too wide", func(m *model.Model) func() {
+				return jlmMut(m, func(c *jlm.Config) { c.SWAWindow *= 4 })
+			}},
+		},
+		// Its randomised fixture: a window of 8, which every text crosses, and
+		// dense heads in the label's spelling (dense_2, dense_3).
+		"synth-gemma-embedding": {
+			{"causal attention on a bidirectional model", func(m *model.Model) func() {
+				return cfgMut(m, func(c *model.Config) { c.NonCausal = false })
+			}},
+			{"last-token pooling on a mean model", func(m *model.Model) func() { return pool(m, jlm.PoolLast) }},
+			{"a sliding window four times too wide", func(m *model.Model) func() {
+				return jlmMut(m, func(c *jlm.Config) { c.SWAWindow *= 4 })
+			}},
+			{"no dense heads", func(m *model.Model) func() {
+				undoM := dropDenseMats(m, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2)
+				undo := dropStoredDense(m, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2)
+				return func() { undo(); undoM() }
+			}},
+		},
 		"qwen3-embedding-0.6b": {
 			{"mean pooling on a last-token model", func(m *model.Model) func() { return pool(m, jlm.PoolMean) }},
 			{"bidirectional attention on a causal model", func(m *model.Model) func() {

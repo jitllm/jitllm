@@ -138,6 +138,8 @@ Made rather than fetched -- the script's header has the commands:
   reference's own classes, in the CPU torch/transformers venv each script's
   header describes (`hfgold.py` starts several from the downloaded tiny-random
   directories);
+- `embed/synth-gemma-embedding.gguf`: `scripts/embedfixture.py`, its checkpoint
+  in `$CV_HF`, then `scripts/embedgold.py synth-gemma-embedding` for its golden;
 - `tiny-qwen3moe-f32.gguf`: `scripts/tiny-moe-gguf.py`, from `tiny-qwen3moe-hf/`;
 - `synth-llama4-q8-hf/`: `scripts/llama4hf.py`, `synth-llama4-q8.gguf` read back
   into its transformers class, the directory `scripts/rowsgold.py` takes the

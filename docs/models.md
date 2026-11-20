@@ -7,12 +7,12 @@ a GGUF architecture, Hugging Face class or vision projector that is not here is 
 by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the code part; rerun
 `go run ./scripts/genmodels docs/models.md`.
 
-- **70** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **31** graphs
+- **71** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **31** graphs
 - **36** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **25** graphs, **3** of them reached only from safetensors
 - **34** graphs in all (`convert.GraphOf`, each a library file)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
-- **3** embedding encoders, and pooling on any decoder
+- **4** embedding encoders, and pooling on any decoder
 - **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes()`)
 - **87** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
 
@@ -46,7 +46,7 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `opt` | -- | `OPTForCausalLM` | OPT 125M to 66B with pre-norm blocks (safetensors only) |
 | `phi3` | `phi3` | `Phi3ForCausalLM` | Phi-3, Phi-3.5, Phi-4, Phi-4-mini |
 | `prepost` | `gemma2`, `glm4` | -- | `gemma2`: Gemma 2; `glm4`: GLM-4-0414; the text model of GLM-4.1V and GLM-4.6V-Flash |
-| `prepost_qknorm` | `gemma3` | -- | Gemma 3; EmbeddingGemma (pooled) |
+| `prepost_qknorm` | `gemma-embedding`, `gemma3` | -- | `gemma-embedding`: EmbeddingGemma as llama.cpp writes it (pooled, bidirectional); `gemma3`: Gemma 3; EmbeddingGemma (pooled) |
 | `prepost_qkvnorm` | `gemma4` | -- | Gemma 4 |
 | `qwen2` | `qwen2`, `qwen2vl` | `Qwen2ForCausalLM` | `qwen2`: Qwen2, Qwen2.5, QwQ, DeepSeek-R1-Distill-Qwen; `qwen2vl`: the text model of Qwen2-VL and Qwen2.5-VL |
 | `qwen2moe` | `qwen2moe` | `Qwen2MoeForCausalLM` | Qwen1.5-MoE, Qwen2-57B-A14B |
@@ -144,6 +144,7 @@ projector is the mmproj's `clip.audio.projector_type`.
 Encoders, run by the engine's encoder rather than its decoder graph:
 
 - `bert`: all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings)
+- `gemma-embedding`: EmbeddingGemma as llama.cpp writes it (pooled, bidirectional)
 - `modern-bert`: Laya (decision model, /v1/systemone)
 - `nomic-bert`: nomic-embed-text (embeddings)
 
