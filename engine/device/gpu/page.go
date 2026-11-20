@@ -553,21 +553,35 @@ func (g *devTier) shortOf(n uint64) error {
 // fromPeers pages out the other devices' streamed blocks of this device's
 // pool until n fits, and reports whether it does: a block no submission
 // reads, on a peer with nothing in flight, and never a peer's last one in
-// (keepOf). A peer whose lock is held is passed over rather than waited for:
-// this device holds its own, and that peer may be waiting for it
-// (lockPair). n fits this device's budget and its pool (room), or the pool
-// alone where pool is set (a scratch window's hold, holdWin). Callers hold
-// g.mu.
+// (keepOf). A peer after this device in the lock order (lockPair's) is
+// waited for, its lock and then its submissions in flight (drain): whoever
+// holds it waits for nothing this device holds, since a pair is taken
+// lower first and a peer asks this device only by trying. A peer before it
+// is tried and passed over when its lock is held or a submission is in
+// flight (Stats.PeerPassed): it may be waiting for this device's lock, and
+// a submission of its ends under its lock, which a pair taken lower first
+// may be holding while it waits for this one's. n fits this device's
+// budget and its pool (room), or the pool alone where pool is set (a
+// scratch window's hold, holdWin). Callers hold g.mu.
 func (g *devTier) fromPeers(n uint64, pool bool) bool {
 	for _, p := range g.peers {
 		if g.fitsFor(n, pool) {
 			return true
 		}
-		if !p.mu.TryLock() {
+		pd := p.dv
+		wait := pd.ord > g.ord
+		if wait {
+			p.mu.Lock()
+		} else if !p.mu.TryLock() {
+			g.PeerPassed++
 			continue
 		}
-		pd := p.dv
-		if len(pd.tickets) == 0 && !pd.inSub && !pd.prologueHeld {
+		if wait && !pd.prologueHeld {
+			pd.drain()
+		}
+		if len(pd.tickets) != 0 || pd.inSub || pd.prologueHeld {
+			g.PeerPassed++
+		} else {
 			for !g.fitsFor(n, pool) {
 				v := pd.victim(-1, 0, 0, true)
 				if v < 0 || v == headSlot || pd.keepOf(v) > 0 {

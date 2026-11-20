@@ -145,6 +145,24 @@ func (g *devTier) evictedFor(sid uint64, rag *ragStep) bool {
 // starting while it waits; the caller then changes what they read before it
 // lets g.mu go. It must not be called from inside a submission -- it would
 // wait for itself. Callers hold g.mu.
+// drain waits for every submission in flight on this device to complete,
+// holding off new ones, for another device of its pool that pages its
+// blocks out (fromPeers): a quiesce asked from outside the device's own
+// calls, where one of its sessions' submissions may be the one in flight.
+// Callers hold g.mu.
+func (g *devTier) drain() {
+	if len(g.tickets) == 0 {
+		return
+	}
+	g.quiet++
+	for len(g.tickets) > 0 {
+		g.idle.Wait()
+	}
+	if g.quiet--; g.quiet == 0 {
+		g.idle.Broadcast()
+	}
+}
+
 func (g *devTier) quiesce() {
 	if g.inSub {
 		panic("tier: quiesce from inside a submission")

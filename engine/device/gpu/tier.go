@@ -394,6 +394,10 @@ type Stats struct {
 	// PeerPageOuts is blocks of another device of the pool this device paged
 	// out for its history (fromPeers).
 	PeerPageOuts int
+	// PeerPassed is how many times this device, short of its pool's room,
+	// passed over another device of the pool before it in the lock order:
+	// its lock held or a submission of it in flight (fromPeers).
+	PeerPassed int
 	// SessionDeclines is blocks a session could not take because its history
 	// did not fit beside the sessions already there (see Config.Sessions).
 	SessionDeclines int
@@ -917,6 +921,7 @@ func (s *Stats) add(o Stats) {
 	s.PoolOver += o.PoolOver
 	s.ScratchOver += o.ScratchOver
 	s.PeerPageOuts += o.PeerPageOuts
+	s.PeerPassed += o.PeerPassed
 	s.SessionDeclines += o.SessionDeclines
 	s.RopeTableUploads += o.RopeTableUploads
 	s.Prepacked += o.Prepacked
