@@ -169,6 +169,9 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		if err := textRows(s, vp); err != nil {
 			return nil, err
 		}
+		if err := dropPaddedBlock(s, vp); err != nil {
+			return nil, err
+		}
 		if err := towerFFNByShape(s); err != nil {
 			return nil, err
 		}

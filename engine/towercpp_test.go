@@ -261,3 +261,118 @@ func TestTinyOpenJevTowerMatchesLlamaCpp(t *testing.T) {
 		t.Errorf("VIOLATION: the normalised checkerboard reads %.4f and %.2f%%, inside the bound: the gate cannot see the input", vr, vd*100)
 	}
 }
+
+// TestMoondreamTowerMatchesLlamaCpp checks moondream2's stated tower against
+// the GGUF oracle's graph dump of its projector output on a checkerboard:
+//
+//	llama-mtmd-debug -m moondream2-text-model-f16_ct-vicuna.gguf \
+//	  --mmproj moondream2-mmproj-f16-20250414.gguf --image cb -n 378 -p encode
+//
+// The debug tool builds the 378x378 picture as raw samples, 1 and 0 on every
+// channel, and normalises nothing, so the container is converted with its
+// normalisation restated to the identity, as TestSmolVLMTowerMatchesLlamaCpp
+// does; the processor's resize and crop are the identity at the tower's side.
+// The dump prints three leading and three trailing values of rows 0, 1, 2,
+// 726, 727 and 728 of the 729 and the whole tensor's sum. The file states 28
+// blocks and its block 27 is block 26 byte for byte, padding the GGUF oracle
+// never runs (convert's dropPaddedBlock): run as a block, the output reads a
+// relative RMS of 0.68 and a sum 21% off. Without it the int8 activations
+// here against the GGUF oracle's f32/f16 compound over 27 blocks to 0.052
+// and 6.0% on amd64 (SmolVLM's twelve read ~1.5%, InternVL's 4.6% on
+// amd64 and 6.7% on the M4), so the bar is 8% and 10%, under a tenth of the
+// padding's. The shipping normalisation is the violation.
+func TestMoondreamTowerMatchesLlamaCpp(t *testing.T) {
+	rows := [6]int{0, 1, 2, 726, 727, 728}
+	vals := [6][6]float64{
+		{0.3823, 1.1614, 1.3537, 1.7729, 0.2392, -0.7965},
+		{-5.3397, -10.7389, 6.3170, 1.0830, -2.5277, -2.0037},
+		{-5.2632, -9.0741, 5.6166, 0.1460, -2.3256, -1.1393},
+		{-3.3217, 0.0770, 5.8415, 8.7523, -2.6976, -8.1462},
+		{-0.4842, 1.3990, 1.4011, 1.6893, 0.6980, -4.3346},
+		{0.0138, -1.0643, 1.7534, 2.8735, -1.3090, -2.5282},
+	}
+	const sum = 2974.681641
+	text := testmodels.Path("moondream2/moondream2-text-model-f16_ct-vicuna.gguf")
+	mm := testmodels.Path("moondream2/moondream2-mmproj-f16-20250414.gguf")
+	if !sourcePresent(text, mm) {
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+	}
+	found := false
+	identity := convert.WithPictureStep(func(s *jlm.PreStep) {
+		if s.Kind == jlm.PreNormalize {
+			s.Floats = []float32{0, 0, 0, 1, 1, 1}
+			found = true
+		}
+	})
+	raw := filepath.Join(t.TempDir(), "moondream2-raw"+jlm.Ext)
+	if _, err := convert.FromGGUFs(text, mm, raw, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, identity); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("moondream2's processor states no normalisation to restate")
+	}
+	rel := func(path string) (float64, float64) {
+		t.Helper()
+		m, err := model.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		if n := m.Container.Vision().NLayer; n != 27 {
+			t.Fatalf("the tower runs %d blocks; moondream2's has 27 and a padding block", n)
+		}
+		side := int(m.Container.Vision().ImageSize)
+		cb := image.NewNRGBA(image.Rect(0, 0, side, side))
+		for y := range side {
+			for x := range side {
+				v := uint8(0)
+				if (x+y)%2 == 0 {
+					v = 255
+				}
+				i := cb.PixOffset(x, y)
+				cb.Pix[i], cb.Pix[i+1], cb.Pix[i+2], cb.Pix[i+3] = v, v, v, 255
+			}
+		}
+		s := testInstance(t, m, 64)
+		defer s.Close()
+		out, err := s.EncodePicture(cb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pd := m.Cfg.NEmbd
+		if len(out) != 729*pd {
+			t.Fatalf("%d values, not 729 rows of %d", len(out), pd)
+		}
+		var sse, sy2, total float64
+		for i, row := range rows {
+			for j := range 6 {
+				col := j
+				if j >= 3 {
+					col = pd - 6 + j
+				}
+				got, want := float64(out[row*pd+col]), vals[i][j]
+				sse += (got - want) * (got - want)
+				sy2 += want * want
+			}
+		}
+		for _, v := range out {
+			total += float64(v)
+		}
+		if math.IsNaN(sse) || math.IsNaN(total) {
+			t.Fatalf("a non-finite output: sse %g, sum %g", sse, total)
+		}
+		return math.Sqrt(sse / sy2), math.Abs(total-sum) / math.Abs(sum)
+	}
+	const rmsBound, sumBound = 0.08, 0.10
+	r, d := rel(raw)
+	t.Logf("against llama-mtmd-debug: relative RMS %.4f over 36 sampled values, the sum %.2f%% off", r, d*100)
+	if r > rmsBound || d > sumBound {
+		t.Errorf("the projector output differs from the GGUF oracle's: relative RMS %.4f, the sum %.2f%% off (bounds %.0f%% and %.0f%%)",
+			r, d*100, rmsBound*100, sumBound*100)
+	}
+	vr, vd := rel(jlmOfPair(t, text, mm))
+	t.Logf("violation, moondream2's own normalisation: relative RMS %.4f, the sum %.2f%% off", vr, vd*100)
+	if vr <= rmsBound && vd <= sumBound {
+		t.Errorf("VIOLATION: the normalised checkerboard reads %.4f and %.2f%%, inside the bound: the gate cannot see the input", vr, vd*100)
+	}
+}

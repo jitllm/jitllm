@@ -43,6 +43,11 @@ type mtmdOracle struct {
 // alone, no opening tokens. A grey picture of the same size is a violation for
 // both, and Gemma 3's rows causal, where the GGUF oracle decodes them both
 // ways, for it.
+//
+// moondream2's GGUF names no pre-tokenizer, and the answer is re-encoded here
+// to teacher-force it: its own tokenizer.json is asserted over the GGUF
+// (model.WithTokenizer, ownTokenizers), so the answer's digits split as the
+// model's GPT-2 pre-tokenizer splits them and as the model emits them.
 func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 	for _, c := range []struct {
 		name, text, mm string
@@ -51,6 +56,7 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 		{"gemma3", "gemma-3-4b-it-Q4_K_M.gguf", "vlm/mmproj-gemma-3-4b-it-f16.gguf", 85, 8},
 		{"internvl", "vlm/InternVL3-1B-Instruct-Q8_0.gguf", "vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf", 75, 0},
 		{"pixtral", "pixtral/pixtral-12b-Q4_K_M.gguf", "pixtral/mmproj-pixtral-12b-Q8_0.gguf", 85, 8},
+		{"moondream2", "moondream2/moondream2-text-model-f16_ct-vicuna.gguf", "moondream2/moondream2-mmproj-f16-20250414.gguf", 85, 8},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			raw, err := os.ReadFile(testmodels.Path(filepath.Join("vlm", "oracle", c.name+"-cli.json")))
@@ -65,7 +71,16 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 			if !sourcePresent(text, mm) {
 				testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 			}
-			m, err := model.Open(jlmOfPair(t, text, mm))
+			var opts []model.Option
+			if p, ok := ownTokenizers()[c.name]; ok {
+				f, err := os.Open(testmodels.Path(p))
+				if err != nil {
+					testmodels.Missing(t, "TOKENIZER MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+				}
+				defer f.Close()
+				opts = append(opts, model.WithTokenizer(f))
+			}
+			m, err := model.Open(jlmOfPair(t, text, mm), opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,4 +195,11 @@ func TestTowerAnswersMatchLlamaMtmd(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ownTokenizers are the gate's models whose GGUF names no pre-tokenizer, and
+// the model's own tokenizer.json, relative to the model directory, asserted
+// over it.
+func ownTokenizers() map[string]string {
+	return map[string]string{"moondream2": "moondream2/tokenizer.json"}
 }

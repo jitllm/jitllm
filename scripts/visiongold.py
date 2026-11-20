@@ -106,7 +106,7 @@ def pictures(out):
     pics["photo"] = photo
     # The photograph already at each tower's size, for the llama-mtmd-cli
     # comparison (scripts/vlmgold.py): a picture neither engine resizes.
-    for n in (448, 896):
+    for n in (378, 448, 896):
         sq = os.path.join(out, "..", "photo-%d.png" % n)
         if not os.path.exists(sq):
             Image.open(photo).convert("RGB").resize((n, n), Image.BICUBIC).save(sq)

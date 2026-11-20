@@ -42,6 +42,8 @@ type projStates struct {
 	// Blocks "staged" names the file's blocks by a stage and a place in it
 	// (stagedBlocks), one container block each in that order, counted in place
 	// of the file's block count, each carrying its place (stagePlaces).
+	// Blocks "padded" reads a last block that repeats the one before it as
+	// padding, not a block (dropPaddedBlock).
 	Blocks    string `json:"blocks"`
 	PatchSize string `json:"patch_size"`
 	Scale     string `json:"scale"`
@@ -277,8 +279,8 @@ func (p *projStates) check(kinds map[string]jlm.PreKind) error {
 			return fmt.Errorf("flag %q is no tower feature", f)
 		}
 	}
-	if p.Blocks != "" && p.Blocks != "staged" {
-		return fmt.Errorf("blocks %q: only \"staged\" is read", p.Blocks)
+	if p.Blocks != "" && p.Blocks != "staged" && p.Blocks != "padded" {
+		return fmt.Errorf("blocks %q: only \"staged\" and \"padded\" are read", p.Blocks)
 	}
 	if p.Activation != "" && p.Activation != "gelu" {
 		return fmt.Errorf("activation %q: only \"gelu\" is stated", p.Activation)

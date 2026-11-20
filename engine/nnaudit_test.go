@@ -997,15 +997,16 @@ func towerOf(p string) string {
 // them.
 func towerPairs() map[string]string {
 	return map[string]string{
-		"gemma-3-4b-it-Q4_K_M.gguf":          "vlm/mmproj-gemma-3-4b-it-f16.gguf",
-		"llava-phi-3-mini-int4.gguf":         "llava-phi-3-mini-mmproj-f16.gguf",
-		"minicpmv/MiniCPM-V-4-Q4_K_M.gguf":   "minicpmv/mmproj-MiniCPM-V-4-f16.gguf",
-		"minicpmv/Janus-Pro-1B-Q4_K_M.gguf":  "minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf",
-		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf":   "mmproj-Qwen2-VL-2B-Instruct-f16.gguf",
-		"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf": "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
-		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":    "mmproj-Qwen3.5-0.8B-f16.gguf",
-		"d1/d1-3B-Q8_0.gguf":                 "d1/mmproj-d1-3B-F16.gguf",
-		"pixtral/pixtral-12b-Q4_K_M.gguf":    "pixtral/mmproj-pixtral-12b-Q8_0.gguf",
+		"gemma-3-4b-it-Q4_K_M.gguf":                           "vlm/mmproj-gemma-3-4b-it-f16.gguf",
+		"llava-phi-3-mini-int4.gguf":                          "llava-phi-3-mini-mmproj-f16.gguf",
+		"minicpmv/MiniCPM-V-4-Q4_K_M.gguf":                    "minicpmv/mmproj-MiniCPM-V-4-f16.gguf",
+		"minicpmv/Janus-Pro-1B-Q4_K_M.gguf":                   "minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf",
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf":                    "mmproj-Qwen2-VL-2B-Instruct-f16.gguf",
+		"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf":                  "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
+		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":                     "mmproj-Qwen3.5-0.8B-f16.gguf",
+		"d1/d1-3B-Q8_0.gguf":                                  "d1/mmproj-d1-3B-F16.gguf",
+		"pixtral/pixtral-12b-Q4_K_M.gguf":                     "pixtral/mmproj-pixtral-12b-Q8_0.gguf",
+		"moondream2/moondream2-text-model-f16_ct-vicuna.gguf": "moondream2/moondream2-mmproj-f16-20250414.gguf",
 	}
 }
 

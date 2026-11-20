@@ -169,6 +169,11 @@ embed/modernbert-embed-base-Q8_0.gguf              keisuke-miyako/modernbert-emb
 # Pixtral-12B, its tower's [IMG_BREAK] row: the census and the llama-mtmd gate
 pixtral/pixtral-12b-Q4_K_M.gguf                    ggml-org/pixtral-12b-GGUF                              pixtral-12b-Q4_K_M.gguf                                                         7477204608   default
 pixtral/mmproj-pixtral-12b-Q8_0.gguf               ggml-org/pixtral-12b-GGUF                              mmproj-pixtral-12b-Q8_0.gguf                                                    463091616    default
+# moondream2, an MLP projector over its tower's post-norm, and its own tokenizer:
+# the census and the llama-mtmd gate
+moondream2/moondream2-text-model-f16_ct-vicuna.gguf ggml-org/moondream2-20250414-GGUF                     moondream2-text-model-f16_ct-vicuna.gguf                                        2839535072   default
+moondream2/moondream2-mmproj-f16-20250414.gguf     ggml-org/moondream2-20250414-GGUF                      moondream2-mmproj-f16-20250414.gguf                                             909777984    default
+moondream2/tokenizer.json                          vikhyatk/moondream2                                    tokenizer.json                                                                  2114924      default
 # --- HuggingFace directories: the safetensors converter's fixtures ---
 # (goldens: scripts/hfgold.py, testdata/golden/hf; the synth-* ones are built from these)
 SmolLM2-360M-Instruct/config.json                  HuggingFaceTB/SmolLM2-360M-Instruct                    config.json                                                                     846          default

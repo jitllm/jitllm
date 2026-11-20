@@ -157,9 +157,10 @@
   },
   "mlp": {"describe": "LLaVA and LLaVA-style models (a CLIP tower and a two-matrix MLP), llava-phi-3", 
    "code": 2,
+   "blocks": "padded",
    "output": {"tensor": "mm.2.weight", "dim": 1},
    "tower": {
-    "requires": ["v_patch_embd", "v_class_embd", "v_pos_embd", "v_proj", "v_proj2"],
+    "requires": ["v_patch_embd", "v_pos_embd", "v_proj", "v_proj2"],
     "require": [
      {"that": "v.heads != 0 and v.embd % v.heads == 0 and v.patch_size != 0 and v.image_size % v.patch_size == 0", "else": "the heads do not divide the width, or the patches the picture"}
     ],
@@ -169,9 +170,10 @@
      {"kind": "normalize", "floats": ["v.mean[0]", "v.mean[1]", "v.mean[2]", "v.std[0]", "v.std[1]", "v.std[2]"]}
     ],
     "entry": [
-     {"op": "patchify", "span": "v.patch_size", "offset": "1"},
-     {"op": "linear", "w": ["v_patch_embd", "v_patch_bias?"]},
-     {"op": "lead_row", "w": "v_class_embd", "offset": "1", "out": "x"},
+     {"op": "patchify", "span": "v.patch_size", "offset": "1 if 'v_class_embd' in has else 0"},
+     {"op": "linear", "if": "'v_class_embd' not in has", "w": ["v_patch_embd", "v_patch_bias?"], "out": "x"},
+     {"op": "linear", "if": "'v_class_embd' in has", "w": ["v_patch_embd", "v_patch_bias?"]},
+     {"op": "lead_row", "if": "'v_class_embd' in has", "w": "v_class_embd", "offset": "1", "out": "x"},
      {"op": "pos_table", "in": [], "w": "v_pos_embd", "out": "pos"},
      {"op": "add", "in": ["x", "pos"]},
      {"op": "layer_norm", "if": "'v_pre_norm' in has", "w": ["v_pre_norm", "v_pre_norm.bias?"], "eps": "v.eps"}
@@ -185,7 +187,7 @@
     },
     "head": [
      {"op": "layer_norm", "if": "'v_post_norm' in has", "w": ["v_post_norm", "v_post_norm.bias?"], "eps": "v.eps"},
-     {"op": "drop_rows", "offset": "1"},
+     {"op": "drop_rows", "if": "'v_class_embd' in has", "offset": "1"},
      {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
      {"op": "stated", "fn": "gelu_erf", "width": "dims['v_proj'][1]"},
      {"op": "linear", "w": ["v_proj2", "v_proj2.bias?"]}
