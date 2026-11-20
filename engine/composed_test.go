@@ -1017,8 +1017,34 @@ func TestComposedBlocksServe(t *testing.T) {
 									violated("every row gathered at the next token's", nn.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
 								}
 								violated("every split's last segment dropped", nn.ComposedBlock, nil, tile, gpu.WithSplitFault(true))
-								if a.stream != 0 {
+								// The budget arm streams one mixture block (one of
+								// DeepSeek-V2-Lite's 26), and a swap of a step's two
+								// first experts moves that block's output by their
+								// weights' difference: a median 0.348 of the
+								// reference's distance there, its first expert reading
+								// the second's page 1.48, inside the band. Every block
+								// reads its pages in the cached arm, where the swap
+								// reads 53.3. On the budget arm the swap is held to the
+								// arm's own run, every decoded step moved, and the
+								// band's page violation is the stale page (2.23).
+								if a.stream == streamBudget {
+									p := panel[0]
+									out, bst, _ := composedDecodeWith(t, m, io, dev, p.ids, p.toks, parts, noGraph, false, nil, slices.Concat([]gpu.Option{tile, gpu.WithPageFault(gpu.PageFaultSwap)}, soptsOf(p))...)
+									if n, d := bst.ServedPart(nn.ComposedBlock); n == 0 || d != 0 {
+										t.Fatalf("the arm with every page table swapping two experts served the blocks %d times and declined them %d", n, d)
+									}
+									far := 0.0
+									for i := 1; i < len(got0); i++ {
+										if slices.Equal(out[i], got0[i]) {
+											t.Fatalf("step %d: with every page table swapping two experts the logits are the arm's own: the streamed block's page table is not read", i)
+										}
+										far = max(far, nmse(out[i], got0[i]))
+									}
+									t.Logf("with every page table swapping two experts every decoded step moves from the arm's own, %.3g at the farthest", far)
+								} else if a.stream != 0 {
 									violated("every page table swapping two experts", nn.ComposedBlock, nil, gpu.WithPageFault(gpu.PageFaultSwap))
+								}
+								if a.stream != 0 {
 									violated("every block's pages left as the last call filled them", nn.ComposedBlock, nil, gpu.WithPageFault(gpu.PageFaultStale))
 								}
 								// Every buffer filled with NaN at allocation: a
