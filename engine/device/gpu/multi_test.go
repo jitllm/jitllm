@@ -896,6 +896,51 @@ func TestASpillThatFindsNoRoomStaysASpill(t *testing.T) {
 	}
 }
 
+// TestASpillMarkIsItsSessions: a spill one session armed and no later device
+// took (SpillAfter, then a refused offer) leaves its mark, and another
+// session's offer of the block -- a plan-only offer, sharing what the device
+// holds -- goes where the block is. Taken by the tier's one mark, the offer
+// went to the later device as a block of nothing (no weights), which the
+// composer refuses, and the session's block left the device it was on.
+func TestASpillMarkIsItsSessions(t *testing.T) {
+	p := fakePlan()
+	sc, blk := onceAndBlock(t, p)
+	g, err := New([]Slot{{Dev: &fakeDev{}, Bytes: sc + 2*blk + blk/2}, {Dev: &fakeDev{}, Bytes: sc + 2*blk + blk/2}},
+		WithDeviceTune(TuneOff))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.Close()
+	a, b := g.Attach().(*gpuSession), g.Attach().(*gpuSession)
+	ws := blocks(p, 4)
+	for li := range ws {
+		a.PrepLayer(li, p, ws[li])
+	}
+	if got := fmt.Sprint(placement(g, 4)); got != "[0 0 1 1]" {
+		t.Fatalf("placement %s, want [0 0 1 1]", got)
+	}
+	if !b.SpillAfter(1) {
+		t.Fatal("block 1 is on the first of two devices and SpillAfter refused")
+	}
+	if b.PrepLayer(1, p, ws[1]) {
+		t.Fatalf("a spilling block was taken with no room on the later device: placement %s", fmt.Sprint(placement(g, 4)))
+	}
+	if !a.HoldsBlock(1) {
+		t.Fatal("the session that placed block 1 does not hold it")
+	}
+	ok := a.PrepLayer(1, p, &nn.LayerWeights{})
+	g.mu.Lock()
+	at := g.at(a.sid, 1)
+	g.mu.Unlock()
+	if !ok || at != g.devs[0] {
+		t.Fatalf("another session's plan-only offer of block 1 took %v, its block on the first device %v (placement %s): %s",
+			ok, at == g.devs[0], fmt.Sprint(placement(g, 4)), g.Err())
+	}
+	if got := fmt.Sprint(placement(g, 4)); got != "[0 0 1 1]" {
+		t.Fatalf("placement %s after another session's offer, want [0 0 1 1]", got)
+	}
+}
+
 // onceAndBlock sizes p's blocks on an unbounded device: what one more block
 // costs (the second placed over the first) and what the device pays once
 // beside its blocks -- its scratch and the composed parts they share (a part

@@ -284,15 +284,22 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 		end = start + 1
 	}
 	// A spill's mark lasts until a later device takes the block, the block
-	// goes home (ReleaseLayers) or another block is offered: the model can
-	// offer one block twice in an attempt (a held block's plan-only offer,
-	// then the full one), and a mark the first refusal cleared sent the second
-	// back onto the card it was leaving -- which the model read as a spill,
-	// and relocateUntil spun on it.
+	// goes home (ReleaseLayers) or its session offers another block: the
+	// model can offer one block twice in an attempt (a mixture's streamed
+	// retry), and a mark the first refusal cleared sent the second back onto
+	// the card it was leaving -- which the model read as a spill, and
+	// relocateUntil spun on it. The mark is the session's that armed it:
+	// another session's offer of the block shares it where it is. Nor does
+	// an offer that carries no weights follow it (a held block's plan-only
+	// offer, made once the spill is over): on a device that does not hold
+	// the block it places a block of nothing, which the composer refuses.
 	old := g.spillFrom
-	if old != nil && g.spillLi == li {
+	switch {
+	case old == nil || g.spillSid != sid:
+		old = nil
+	case g.spillLi == li && carriesWeights(w):
 		start, end = slices.Index(g.devs, old)+1, len(g.devs)
-	} else {
+	default:
 		old = nil
 		g.spillFrom = nil
 	}
@@ -384,6 +391,13 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 		}
 	}
 	return false
+}
+
+// carriesWeights says offer w brings the block's weights, or the device
+// binds them (nn.LayerWeights.Bind): an offer a device that does not hold
+// the block can place it from.
+func carriesWeights(w *nn.LayerWeights) bool {
+	return w != nil && (w.Bind != nil || len(w.Mats) > 0)
 }
 
 // at is the device session sid runs block li on: its own route's, where it
@@ -721,7 +735,7 @@ func (g *GPU) spillAfter(li int, sid uint64) bool {
 	if o == nil || slices.Index(g.devs, o) == len(g.devs)-1 {
 		return false
 	}
-	g.spillFrom, g.spillLi = o, li
+	g.spillFrom, g.spillLi, g.spillSid = o, li, sid
 	return true
 }
 

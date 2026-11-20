@@ -1907,11 +1907,12 @@ type GPU struct {
 	// refused is, by session, the device whose last ReserveKV said no, or
 	// nil. See Refused.
 	refused map[uint64]*devTier
-	// spillFrom, when set, sends the next PrepLayer of block spillLi to a
-	// device after spillFrom, and frees spillFrom's copy once one takes it.
-	// See SpillAfter.
+	// spillFrom, when set, sends session spillSid's next PrepLayer of block
+	// spillLi to a device after spillFrom, and frees spillFrom's copy once
+	// one takes it. See SpillAfter.
 	spillFrom *devTier
 	spillLi   int
+	spillSid  uint64
 	// planN is how many blocks the caller said it is about to offer
 	// (PlanBlocks), and share, once the first block has priced one, is the
 	// device index each block is steered to -- nil while there is no plan or
