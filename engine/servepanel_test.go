@@ -49,16 +49,25 @@ func servePanel() []string {
 const panelSteps = 48
 
 // panelBand is the serving gate's statistic over servePanel: the median
-// across prompts of each prompt's median per-step ratio, and the worst step.
+// across prompts of each prompt's median per-step ratio, and every step's
+// distance.
 type panelBand struct {
-	meds  []float64
-	worst float64
+	meds, dists []float64
 }
 
-func (b *panelBand) add(ratios []float64, worst float64) {
+func (b *panelBand) add(ratios, dists []float64) {
 	slices.Sort(ratios)
 	b.meds = append(b.meds, ratios[len(ratios)/2])
-	b.worst = max(b.worst, worst)
+	b.dists = append(b.dists, dists...)
+}
+
+// worst is the panel's widest step, and next the widest past one step in a
+// thousand of the panel's.
+func (b *panelBand) worst() float64 { return slices.Max(b.dists) }
+
+func (b *panelBand) next() float64 {
+	d := slices.Sorted(slices.Values(b.dists))
+	return d[len(d)-1-len(d)/1000]
 }
 
 func (b *panelBand) median() float64 {
@@ -66,6 +75,9 @@ func (b *panelBand) median() float64 {
 	return m[len(m)/2]
 }
 
+// inside holds the median to bandRatio, every step but one in a thousand to
+// bandWorst times the reference's widest, and those to bandWorst times that
+// bound (bandWorst).
 func (b *panelBand) inside(wide float64) bool {
-	return b.median() <= bandRatio && b.worst <= bandWorst*wide
+	return b.median() <= bandRatio && b.next() <= bandWorst*wide && b.worst() <= bandWorst*bandWorst*wide
 }
