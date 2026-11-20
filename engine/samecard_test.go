@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
@@ -247,14 +248,167 @@ func TestOneCardUnderTwoBackendsGrowsHistoryOnBoth(t *testing.T) {
 		t.Logf("%s: %d of %d used, pool %s %d", b.Name, b.Used, b.Limit, b.Pool, b.PoolLimit)
 	}
 	for i, s := range ds {
-		t.Logf("%s: history %d bytes (pool %d), %d page-out(s), %d of the other device's, %d KV eviction(s), %d charge(s) and %d scratch window(s) past the pool",
-			s.Device, s.KVBytes, s.KVPoolBytes, s.PageOuts, s.PeerPageOuts, s.KVEvictions, s.PoolOver, s.ScratchOver)
+		t.Logf("%s: history %d bytes (pool %d), %d page-out(s), %d of the other device's, %d KV eviction(s), %d charge(s) and %d scratch window(s) past the pool, the other device passed over %d time(s) and waited for %d",
+			s.Device, s.KVBytes, s.KVPoolBytes, s.PageOuts, s.PeerPageOuts, s.KVEvictions, s.PoolOver, s.ScratchOver, s.PeerPassed, s.PeerLetGo)
 		if s.KVPoolBytes == 0 && s.KVBytes == 0 {
 			t.Fatalf("device %d holds no history: the gate grew history on one device only", i)
 		}
 		if s.PoolOver != 0 {
 			t.Fatalf("%s: %d charge(s) left the pool past its limit", s.Device, s.PoolOver)
 		}
+	}
+	for j := range want {
+		if got[j] == want[j] {
+			continue
+		}
+		if gap := hostGap(t, m, prompt, want[:j], want[j], got[j]); gap > batchTie {
+			t.Fatalf("token %d: device %d, host %d, %.4f apart\ngot  %v\nwant %v", j, got[j], want[j], gap, got, want)
+		}
+		t.Logf("token %d: a tie, not compared past it", j)
+		break
+	}
+}
+
+// TestOneCardUnderTwoBackendsWaitsForABusyDevice: two instances on one card
+// listed under two backends, one streaming every block through the first
+// device and decoding without pause, the other holding every block resident
+// on the second. The pool is what the second holds once placed, the first's
+// whole budget and JITLLM_PEER_SLACK bytes (90 MB, what the streaming
+// instance's logits rows and buffers take), so the second's history, past
+// what its placement reserved, asks the first for its idle streamed blocks
+// (fromPeers) while the first is busy. The first is before the second in
+// the lock order: busy, it was passed over (Stats.PeerPassed).
+func TestOneCardUnderTwoBackendsWaitsForABusyDevice(t *testing.T) {
+	devs := sameCardPair(t)
+	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
+	if _, err := os.Stat(p); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	}
+	m, err := model.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	var prompt []int32
+	for len(prompt) < 2600 {
+		prompt = append(prompt, m.Vocab.Encode("The capital of France is Paris. Water boils at 100 degrees. ", false)...)
+	}
+	short := m.Vocab.Encode("Water boils at", true)
+	const gen, busyMax = 8, 1024
+	run := func(st *Instance) ([]int32, error) {
+		lg, err := st.Prefill(prompt)
+		if err != nil {
+			return nil, err
+		}
+		out := []int32{Greedy(lg)}
+		for len(out) < gen {
+			next, err := st.ForwardGreedy(out[len(out)-1])
+			if err != nil {
+				return out, err
+			}
+			out = append(out, next)
+		}
+		return out, nil
+	}
+	host := testInstance(t, m, len(prompt)+gen+1)
+	want, err := run(host)
+	host.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := spillBudget(380_000_000)
+	open := func(second uint64) *gpu.GPU {
+		spec := devs[0] + "=" + strconv.FormatUint(first, 10) + "," + devs[1]
+		if second > 0 {
+			spec += "=" + strconv.FormatUint(second, 10)
+		}
+		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || g == nil {
+			t.Fatalf("opening %s: %v", spec, err)
+		}
+		return g
+	}
+	// both runs the long prompt on the second device while an instance
+	// streaming through the first decodes until it is done.
+	both := func(g *gpu.GPU) (got []int32, placed uint64, steps int) {
+		t.Helper()
+		busy := testInstance(t, m, len(short)+busyMax+1, WithPlacement(Placement{Rest: &Place{On: devs[0], Stream: true}}))
+		defer busy.Close()
+		st := testInstance(t, m, len(prompt)+gen+1, WithPlacement(Placement{Rest: &Place{On: devs[1]}}))
+		defer st.Close()
+		if err := busy.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range g.Budgets() {
+			if b.Name == devs[1] {
+				placed = b.Used
+			}
+		}
+		lg, err := busy.Prefill(short)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			tok := Greedy(lg)
+			for steps = 0; steps < busyMax; steps++ {
+				select {
+				case <-stop:
+					done <- nil
+					return
+				default:
+				}
+				var err error
+				if tok, err = busy.ForwardGreedy(tok); err != nil {
+					done <- err
+					return
+				}
+			}
+			done <- nil
+		}()
+		start := time.Now()
+		got, err = run(st)
+		took := time.Since(start)
+		close(stop)
+		if berr := <-done; berr != nil {
+			t.Fatalf("the streaming instance: %v (%s)", berr, g.Err())
+		}
+		if err != nil {
+			t.Fatalf("%v (%s)", err, g.Err())
+		}
+		t.Logf("%d of %d blocks on the card, %d relocation(s), %d demotion(s); %d prompt and %d generated tokens in %v beside %d streamed decode step(s)",
+			st.GPULayers(), m.Cfg.NLayer, st.Relocations(), st.DeviceDemotions(), len(prompt), gen, took, steps)
+		return got, placed, steps
+	}
+	probe := open(0)
+	_, placed, _ := both(probe)
+	probe.Close()
+	slack := int64(90_000_000)
+	if v, err := strconv.ParseInt(os.Getenv("JITLLM_PEER_SLACK"), 10, 64); err == nil {
+		slack = v
+	}
+	g := open(uint64(int64(placed+first) + slack))
+	defer g.Close()
+	got, _, _ := both(g)
+	var asked, passed int
+	for _, s := range g.DevStats() {
+		t.Logf("%s: %d page-out(s), %d of the other device's, %d KV eviction(s), %d charge(s) past the pool, the other device passed over %d time(s) and waited for %d",
+			s.Device, s.PageOuts, s.PeerPageOuts, s.KVEvictions, s.PoolOver, s.PeerPassed, s.PeerLetGo)
+		asked += s.PeerPageOuts + s.PeerPassed + s.PeerLetGo
+		passed += s.PeerPassed
+		if s.PoolOver != 0 {
+			t.Fatalf("%s: %d charge(s) left the pool past its limit", s.Device, s.PoolOver)
+		}
+	}
+	if asked == 0 {
+		t.Fatal("neither device asked the other for room: the squeeze does not bite, this gate proved nothing")
+	}
+	if passed != 0 {
+		t.Fatalf("a busy device of the pool passed over %d time(s)", passed)
 	}
 	for j := range want {
 		if got[j] == want[j] {

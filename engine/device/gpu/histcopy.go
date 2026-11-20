@@ -120,9 +120,13 @@ func lockPair(a, b *devTier) {
 	}
 	a.mu.Lock()
 	b.mu.Lock()
+	a.paired++
+	b.paired++
 }
 
 func unlockPair(a, b *devTier) {
+	a.paired--
+	b.paired--
 	b.mu.Unlock()
 	a.mu.Unlock()
 }

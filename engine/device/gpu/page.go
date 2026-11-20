@@ -553,31 +553,46 @@ func (g *devTier) shortOf(n uint64) error {
 // fromPeers pages out the other devices' streamed blocks of this device's
 // pool until n fits, and reports whether it does: a block no submission
 // reads, on a peer with nothing in flight, and never a peer's last one in
-// (keepOf). A peer after this device in the lock order (lockPair's) is
-// waited for, its lock and then its submissions in flight (drain): whoever
-// holds it waits for nothing this device holds, since a pair is taken
-// lower first and a peer asks this device only by trying. A peer before it
-// is tried and passed over when its lock is held or a submission is in
-// flight (Stats.PeerPassed): it may be waiting for this device's lock, and
-// a submission of its ends under its lock, which a pair taken lower first
-// may be holding while it waits for this one's. n fits this device's
-// budget and its pool (room), or the pool alone where pool is set (a
-// scratch window's hold, holdWin). Callers hold g.mu.
+// (keepOf). A busy peer is waited for, its lock and then its submissions in
+// flight (drain), in lockPair's order: a peer after this device is waited
+// for holding g.mu, since whoever holds it waits for nothing this device
+// holds; for a peer before it g.mu is let go first (Stats.PeerLetGo), since
+// its holder may be waiting for g.mu and its submissions end under its own
+// lock, and taken again after the peer's. Where g.mu may not be let go
+// (mayLetGo) a busy peer before it is passed over (Stats.PeerPassed). n fits
+// this device's budget and its pool (room), or the pool alone where pool is
+// set (a scratch window's hold, holdWin). Callers hold g.mu.
 func (g *devTier) fromPeers(n uint64, pool bool) bool {
 	for _, p := range g.peers {
 		if g.fitsFor(n, pool) {
 			return true
 		}
 		pd := p.dv
-		wait := pd.ord > g.ord
-		if wait {
+		after := pd.ord > g.ord
+		let := !after && g.mayLetGo()
+		switch {
+		case after:
 			p.mu.Lock()
-		} else if !p.mu.TryLock() {
+		case p.mu.TryLock():
+		case let:
+			g.PeerLetGo++
+			g.mu.Unlock()
+			p.mu.Lock()
+			g.mu.Lock()
+		default:
 			g.PeerPassed++
 			continue
 		}
-		if wait && !pd.prologueHeld {
-			pd.drain()
+		if len(pd.tickets) != 0 && !pd.prologueHeld {
+			switch {
+			case after:
+				pd.drain()
+			case let:
+				g.PeerLetGo++
+				g.mu.Unlock()
+				pd.drain()
+				g.mu.Lock()
+			}
 		}
 		if len(pd.tickets) != 0 || pd.inSub || pd.prologueHeld {
 			g.PeerPassed++
@@ -595,6 +610,16 @@ func (g *devTier) fromPeers(n uint64, pool bool) bool {
 		p.mu.Unlock()
 	}
 	return g.fitsFor(n, pool)
+}
+
+// mayLetGo reports that g.mu may be let go and taken again in the middle of
+// the caller's operation, as reclaim's wait lets it go: not inside a scratch
+// window, which measures what the device allocates until its close, nor in
+// a submission or its prologue (devSess.inSub, prologueHeld), nor a hold
+// taken with another device's (paired), whose holder may be this caller.
+// Callers hold g.mu.
+func (g *devTier) mayLetGo() bool {
+	return g.winDepth == 0 && !g.inSub && !g.prologueHeld && g.paired == 0
 }
 
 // fitsFor is room, or the pool's alone where pool is set (fromPeers).

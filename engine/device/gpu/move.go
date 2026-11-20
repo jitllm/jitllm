@@ -316,10 +316,8 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 	if dst.ord < src.ord {
 		a, b = dv, sv
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	lockPair(a, b)
+	defer unlockPair(a, b)
 	path, total := "peer", uint64(0)
 	worse := func(p string) {
 		rank := map[string]int{nn.CPU: 0, "staged": 1, "peer": 2}

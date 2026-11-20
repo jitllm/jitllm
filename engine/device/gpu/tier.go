@@ -395,9 +395,13 @@ type Stats struct {
 	// out for its history (fromPeers).
 	PeerPageOuts int
 	// PeerPassed is how many times this device, short of its pool's room,
-	// passed over another device of the pool before it in the lock order:
-	// its lock held or a submission of it in flight (fromPeers).
+	// passed over another device of the pool before it in the lock order,
+	// its lock held or a submission of it in flight, where its own lock could
+	// not be let go (fromPeers, mayLetGo).
 	PeerPassed int
+	// PeerLetGo is how many times this device let its lock go to wait for
+	// another device of the pool before it in the lock order (fromPeers).
+	PeerLetGo int
 	// SessionDeclines is blocks a session could not take because its history
 	// did not fit beside the sessions already there (see Config.Sessions).
 	SessionDeclines int
@@ -922,6 +926,7 @@ func (s *Stats) add(o Stats) {
 	s.ScratchOver += o.ScratchOver
 	s.PeerPageOuts += o.PeerPageOuts
 	s.PeerPassed += o.PeerPassed
+	s.PeerLetGo += o.PeerLetGo
 	s.SessionDeclines += o.SessionDeclines
 	s.RopeTableUploads += o.RopeTableUploads
 	s.Prepacked += o.Prepacked
@@ -1511,6 +1516,11 @@ type devShared struct {
 	packEnd  int
 	*Config
 	mu sync.Mutex
+	// paired counts the holds of mu taken with another device's in one
+	// order (lockPair, a block's move): such a hold is never let go in the
+	// middle (mayLetGo), the other device's lock being its holder's too.
+	// Guarded by mu.
+	paired int
 	// tot is the device's counters (Stats). A view names them through its
 	// Stats pointer; see devTier.
 	tot Stats

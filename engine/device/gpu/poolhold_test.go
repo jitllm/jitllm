@@ -13,7 +13,7 @@ import (
 func raceAllocs(fa *fakeDev, db *devTier, kp *kvPool, l *kvLayerPool) *int {
 	grew := new(int)
 	fa.onAlloc = func() {
-		if growAll(db, kp, l) > 0 {
+		if growBeside(db, kp, l) > 0 {
 			*grew++
 		}
 	}

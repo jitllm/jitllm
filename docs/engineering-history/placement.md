@@ -5515,13 +5515,27 @@ The leftovers, each on fake devices before and after:
   over. That was this code's choice (RULE 11e): a peer after the device in
   lockPair's order is now waited for, its lock and then its submissions in
   flight (drain, a quiesce asked from outside): whoever holds it waits for
-  nothing this device holds. A peer before it is still passed over and
-  counted (Stats.PeerPassed): a pair taken lower first may hold it while it
-  waits for this device, and its submission ends under its lock.
-  TestAPeerInFlightIsWaitedFor: the peer's ticket in flight 50 ms, a block
-  placed resident beside its idle streamed blocks; red with the wait
-  removed (declined to the host, one pass over the peer), green after (one
-  of the peer's blocks paged out); the peer before it passed over, counted.
+  nothing this device holds. A peer before it is waited for with this
+  device's lock let go and taken again after the peer's (Stats.PeerLetGo),
+  as reclaim's wait for a held victim lets it go: a pair taken lower first
+  may hold the peer while it waits for this device, and the peer's
+  submission ends under its own lock. It is passed over (Stats.PeerPassed)
+  only where the lock may not be let go (mayLetGo): inside a scratch window,
+  which measures what the device allocates until its close, a submission
+  and its prologue, or a hold taken with another device's (paired: lockPair,
+  a block's move), whose holder may be the caller itself.
+  TestAPairIsNotLetGo grows a history under a pair and passes over, and
+  deadlocks with that check removed. TestAPeerInFlightIsWaitedFor: the peer's
+  ticket in flight 50 ms, a block placed resident beside its idle streamed
+  blocks, the peer after the device, before it, and before it with its lock
+  held by a pair waiting for the device's; red with the wait removed
+  (declined to the host, one pass over the peer), green after (one of the
+  peer's blocks paged out, the device's lock let go for a peer before it);
+  a wait holding the device's lock (the pair's case) is a deadlock the gate
+  names. Two gates grew the other device inside an allocation of this one,
+  on its goroutine with its lock held (growAll in an alloc or free hook):
+  that stand-in now asks no peer (growBeside), since a device running
+  beside it waits for that lock to go first.
 - "A width placement probes pages out nothing of the other device" was not
   so: the width's instances hold their room through stateHold, which pages
   out the other device's idle blocks; only the window's own hold of their
@@ -5548,8 +5562,20 @@ The leftovers, each on fake devices before and after:
   device of the pool claims through the pool, which those bytes never
   reach. Not a defect, by construction.
 
-What is still open is in open-questions.md ("one pool spent by two
-devices").
+On a card, TestOneCardUnderTwoBackendsWaitsForABusyDevice (a V100 as
+cuda:0 and a Vulkan ordinal of the same card): an instance streaming every
+block through cuda:0 decodes while another prefills a 2610-position prompt
+with every block resident on the Vulkan device, the pool what that device
+holds once placed, cuda:0's whole budget and 90 MB, so its history past
+its first 2048 positions asks cuda:0, before it in the lock order and busy.
+Before: passed over 5 times in each of 4 runs. After: waited for 4 to 6
+times, passed over 0, in each of 4. The outcome is the same in all eight:
+no block of cuda:0's paged out (each wait ended with no victim fromPeers
+may take), one relocation of the prompt's instance, its tokens the host's
+after, the prompt 10.3 to 12.1 s before and 10.5 to 11.4 s after, beside
+26 to 30 streamed decode steps. A pipelined prompt alone on the two
+devices never met a busy peer at any squeeze from 20 to 96 MB (0 passes,
+0 waits, both trees).
 
 ## A typed history's bytes on a card
 

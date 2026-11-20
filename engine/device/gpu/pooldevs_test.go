@@ -37,6 +37,22 @@ func historyOn(t *testing.T, d *devTier) (*kvPool, *kvLayerPool) {
 	return kp, kp.layers[0]
 }
 
+// growBeside is growAll from inside an allocation of another device of the
+// pool, on that device's goroutine with its lock held: a stand-in for d
+// growing at that moment, which asks none of its peers (fromPeers), since a
+// d running beside it would wait for that lock to go first.
+func growBeside(d *devTier, kp *kvPool, l *kvLayerPool) int {
+	d.mu.Lock()
+	peers := d.peers
+	d.peers = nil
+	d.mu.Unlock()
+	n := growAll(d, kp, l)
+	d.mu.Lock()
+	d.peers = peers
+	d.mu.Unlock()
+	return n
+}
+
 // growAll grows d's history a page at a time until the budget or the pool
 // refuses, and returns the pages it took.
 func growAll(d *devTier, kp *kvPool, l *kvLayerPool) int {
@@ -89,7 +105,7 @@ func TestAHistoryGrowsInsideItsPool(t *testing.T) {
 	grown := 0
 	fa.onAlloc = func() {
 		fa.onAlloc = nil
-		grown = growAll(db, kpb, lb)
+		grown = growBeside(db, kpb, lb)
 	}
 	da.mu.Lock()
 	err := da.growKVLayer(kpa, la, 40)
@@ -156,7 +172,7 @@ func TestASwapSlotIsKeptFromTheOtherDevice(t *testing.T) {
 	fills := 0
 	fa.onFree = func() {
 		fills++
-		growAll(db, kpb, lb)
+		growBeside(db, kpb, lb)
 	}
 	if !token(t, g, p, n, 1) {
 		t.Fatalf("a page-in lost its slot to the other device's history: %s", g.Err())
