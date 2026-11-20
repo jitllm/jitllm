@@ -388,12 +388,25 @@ func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 
 // the class itself sits 0.0376 away at its worst, and the composed arms a
 // median 0.854 of its distance. Its GGUF states no pre-tokenizer, so the
 // golden runs the panel as the engine encodes it (rowsgold.py seqs=).
+//
+// The GGUF oracle does not read synth-kimilinear@q8, and the floor alone
+// (5.72e-06) left out its int8 activations: its class run as the container
+// runs sits a median 1.8e-3 to 3.1e-3 from its own float run and 0.63 at the
+// worst step, and 0.718 from the float reference at prompt 0's step 136, a
+// step every implementation reaches far from it (the float class 0.729);
+// the composed arms read a median 1.006 of the class's distance and 0.719 at
+// their worst. The oracle asserts n_expert_groups < n_expert on the deepseek
+// yarn fixtures (eight groups of one expert) and aborts; their class sits
+// 1.35e-11 and 7.47e-12 from the float reference. Their tokenizers add no
+// BOS, so their goldens too run the panel as the engine encodes it.
 func serveGolden(file string) string {
 	switch file {
 	case "synth-llama4-q8.gguf":
 		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.q8.json")
-	case "bitnet-b1.58-2B-4T-i2_s.gguf":
+	case "bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf":
 		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.json")
+	case "synth-kimilinear@q8":
+		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.q8.json")
 	}
 	return ""
 }
