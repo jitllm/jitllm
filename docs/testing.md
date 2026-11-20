@@ -331,7 +331,8 @@ block bound with the shallow control past it too.
   llama.cpp's CUDA and CPU arms' distances from the float reference, and the worst-step bound is
   4x the widest of those arms (`scripts/lcpplogits`, built in `JITLLM_LCPP`, which the gate requires), each
   teacher-forced on the panel. A model llama.cpp does not read is held to the floor
-  (`bandFloor`).
+  (`bandFloor`), or to its class's golden where the floor cannot price it (`serveGolden`:
+  int8 activations, or a router a binary16 attention can tip, `rowsgold.py serve attn16`).
 - The CPU gates (`TestComposedCPUBlocksServe`, the rows, recurrent, delta and expert-page gates)
   take the same band against the CPU's float forms (`withCPUFloat`: no int8 form, no split sums,
   an f32 history), each step's llama.cpp arms teacher-forced on the same tokens (`cpuReference`,

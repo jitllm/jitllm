@@ -4,7 +4,7 @@ cannot run, from the fixture's own transformers class (the user's decision for
 such fixtures: the model's reference, not llama.cpp, not jitllm's CPU path).
 -> testdata/golden/rows/<gguf name>.json
 
-  $JITLLM_HF_PY scripts/rowsgold.py <transformers dir> <gguf name> [experts|serve] [q8] [seqs=FILE]
+  $JITLLM_HF_PY scripts/rowsgold.py <transformers dir> <gguf name> [experts|serve] [q8|attn16] [seqs=FILE]
 
 The gate's sequences, as engine/cpurows_test.go builds them: its text's ids,
 a prompt of each length with the decode tokens after it, and a batch of three
@@ -43,12 +43,20 @@ torch.bmm), the routers kept float -- dequantized as Q8_0 holds it
 each such matrix quantized as the composed kernels quantize it (a 32-element
 window's d = amax/127 and 1/d in float32, codes trunc(x/d + copysign(0.5))).
 -> <gguf name>.q8.json; the float golden is the quantization loss's reference.
+
+With "attn16" as well, every attention rounds its four operands to binary16
+-- q, k, the exponentials and v, the products and sums in float32, each row
+divided by the sum of its unrounded exponentials -- as the matrix unit's
+attention does and as engine/composed_test.go's bandFloor prices it. A
+router whose choice the rounding can tip makes a step move by more than that
+smooth bound: this run is where the serving gate measures by how much.
+-> <gguf name>.attn16.json
 """
 import base64, json, os, re, struct, sys
 import torch
 import torch.nn.functional as F
 from tokenizers import Tokenizer
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AttentionInterface, AutoConfig, AutoModelForCausalLM
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "testdata", "golden", "rows")
@@ -127,6 +135,21 @@ def q8_inputs(held):
     torch.bmm = qb
 
 
+def attn16(module, query, key, value, attention_mask, scaling=None, dropout=0.0, **kwargs):
+    """Causal attention over one unpadded sequence with binary16 operands."""
+    h = lambda t: t.to(torch.float16).to(torch.float32)
+    g = query.shape[1] // key.shape[1]
+    key, value = key.repeat_interleave(g, dim=1), value.repeat_interleave(g, dim=1)
+    if scaling is None:
+        scaling = query.shape[-1] ** -0.5
+    s = torch.matmul(h(query), h(key).transpose(2, 3)) * scaling
+    n, m = s.shape[-2], s.shape[-1]
+    s = s.masked_fill(torch.ones(n, m, dtype=torch.bool).triu(m - n + 1), float("-inf"))
+    e = torch.exp(s - s.amax(-1, keepdim=True))
+    out = torch.matmul(h(e), h(value)) / e.sum(-1, keepdim=True)
+    return out.transpose(1, 2).contiguous(), None
+
+
 ENGINE = os.path.join(HERE, "..", "engine")
 GO = re.compile(r'"(?:[^"\\]|\\.)*"|\w+|[,+{}]')
 
@@ -174,10 +197,13 @@ def serve_seqs(tok, cfg, embed):
     return out
 
 
-def main(d, name, experts=False, q8=False, serve=False, seqs_file=None):
+def main(d, name, experts=False, q8=False, serve=False, seqs_file=None, half=False):
     tok = Tokenizer.from_file(os.path.join(d, "tokenizer.json"))
     ids = tok.encode(TEXT).ids
     cfg = AutoConfig.from_pretrained(d, experts_implementation="eager")
+    if half:
+        AttentionInterface.register("attn16", attn16)
+        cfg._attn_implementation = "attn16"
     m = AutoModelForCausalLM.from_pretrained(d, config=cfg, dtype=torch.float32)
     m.eval()
     if serve:
@@ -185,6 +211,8 @@ def main(d, name, experts=False, q8=False, serve=False, seqs_file=None):
     if q8:
         q8_inputs(q8_weights(m, cfg))
         name += ".q8"
+    if half:
+        name += ".attn16"
     stride = max(1, cfg.vocab_size // (SAMPLES // 4 if experts or serve else SAMPLES))
     seqs = [(ids[:n], ids[n:n + DECODE]) for n in LENGTHS]
     seqs += [(p, ids[200:200 + BATCH_DECODE]) for p in (ids[:7], ids[40:73], ids[100:150])]
@@ -209,9 +237,10 @@ def main(d, name, experts=False, q8=False, serve=False, seqs_file=None):
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, name + ".json"), "w") as f:
         json.dump({"source": os.path.basename(os.path.normpath(d)), "class": cfg.model_type,
-                   "stride": stride, "ids": ids[:256], "seqs": out, "reference": "q8" if q8 else "float"}, f)
+                   "stride": stride, "ids": ids[:256], "seqs": out, "reference": "q8" if q8 else "attn16" if half else "float"}, f)
 
 
 if __name__ == "__main__":
     seqs_file = next((a[len("seqs="):] for a in sys.argv[3:] if a.startswith("seqs=")), None)
-    main(sys.argv[1], sys.argv[2], "experts" in sys.argv[3:], "q8" in sys.argv[3:], "serve" in sys.argv[3:], seqs_file)
+    main(sys.argv[1], sys.argv[2], "experts" in sys.argv[3:], "q8" in sys.argv[3:], "serve" in sys.argv[3:], seqs_file,
+         "attn16" in sys.argv[3:])

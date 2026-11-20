@@ -399,6 +399,22 @@ func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 
 // yarn fixtures (eight groups of one expert) and aborts; their class sits
 // 1.35e-11 and 7.47e-12 from the float reference. Their tokenizers add no
 // BOS, so their goldens too run the panel as the engine encodes it.
+//
+// The GGUF oracle does not read synth-ernie45moe (its loader takes every
+// block past the dense lead for a mixture, and the fixture's step of 2 leaves
+// block 2 dense), and the floor is a smooth bound a router is not: on CUDA the
+// prompt's attention on the matrix unit takes binary16 operands, the arms sit
+// a median 0.103 of the floor, and two choices of the second expert pass to
+// the other side of a near tie -- block 1 at prompt 4's position 99 (a margin
+// of 1.9e-4 in score plus bias), seven steps after it 3.6e-5 to 1.2e-4 from
+// the float reference, and block 3 at prompt 5's position 120 (8.2e-4), that
+// step 0.0136 -- each step reproduced to two digits by a float64 forward of
+// the class's weights with that one choice flipped. The class run with
+// binary16 attention operands (serve attn16) flips the same two choices and
+// two more (prompt 0 block 3 at position 194, prompt 1 block 1 at 39), a
+// median 1.9e-6 to 4.5e-6 from its float run and 0.0131 at its worst. With
+// the matrix unit off, and on Vulkan, the arms read the float reference to
+// 1e-10.
 func serveGolden(file string) string {
 	switch file {
 	case "synth-llama4-q8.gguf":
@@ -407,6 +423,8 @@ func serveGolden(file string) string {
 		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.json")
 	case "synth-kimilinear@q8":
 		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.q8.json")
+	case "synth-ernie45moe.gguf":
+		return filepath.Join("..", "testdata", "golden", "rows", file+".serve.attn16.json")
 	}
 	return ""
 }
