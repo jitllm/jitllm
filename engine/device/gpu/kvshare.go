@@ -289,7 +289,7 @@ func (g *devTier) mapKVs(sid uint64, li, page int, key string, end int) bool {
 	s := seqID{sid, 0}
 	ok, err := g.mapKV(kp, l, s, page, key)
 	if err != nil {
-		g.LastErr = fmt.Sprintf("MapKV: block %d: %v", li, err)
+		g.fail(fmt.Sprintf("MapKV: block %d: %v", li, err))
 		return false
 	}
 	if ok {

@@ -348,7 +348,7 @@ func (g *devTier) pagedAppendRows(sid uint64, rows []pagedRow) bool {
 	g.pgSeqs = seqEnds(g.pgSeqs, rows)
 	if err := g.pagedAppend(sid, g.pgSeqs); err != nil {
 		g.noteRoom(err)
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	return true
@@ -695,7 +695,7 @@ func (g *devTier) pagedLeave(li int, sid uint64, bl *layer) {
 	if bl != nil {
 		// The seat goes with the session: pagedSeat recounts.
 		if err := g.pagedSeat(g.kvp, li, bl); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 		}
 	}
 }
@@ -720,7 +720,7 @@ func (g *devTier) kvCompact(n uint64, keep *kvLayerPool) bool {
 		}
 		l.fence()
 		if err := g.shrinkKVLayer(g.kvp, l); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 		}
 		if g.room(n) {
 			return true
@@ -1048,7 +1048,7 @@ func (g *devTier) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
-		g.LastErr = "MigrateKVSeq: this device keeps the contiguous cache"
+		g.fail("MigrateKVSeq: this device keeps the contiguous cache")
 		return false
 	}
 	// A KV-sharing block has no history of its own to move: it reads its
@@ -1057,7 +1057,7 @@ func (g *devTier) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int
 		return true
 	}
 	if err := g.pagedMigrate(sid, li, base, k, v, pos, toDevice); err != nil {
-		g.LastErr = fmt.Sprintf("MigrateKVSeq: block %d, sequence at %d: %v", li, base, err)
+		g.fail(fmt.Sprintf("MigrateKVSeq: block %d, sequence at %d: %v", li, base, err))
 		return false
 	}
 	return true
@@ -1079,7 +1079,7 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	g.asking = true
 	defer func() { g.asking = false }()
 	if !g.paged {
-		g.LastErr = "ReserveKVSeqs: this device keeps the contiguous cache"
+		g.fail("ReserveKVSeqs: this device keeps the contiguous cache")
 		return false
 	}
 	g.pgSeqs = g.pgSeqs[:0]
@@ -1088,7 +1088,7 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	}
 	if err := g.pagedAppend(sid, g.pgSeqs); err != nil {
 		g.noteRoom(err)
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	return true

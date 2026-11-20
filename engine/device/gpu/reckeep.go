@@ -235,7 +235,7 @@ func (g *devTier) recKeepRows(sid uint64, rows int) {
 	k.armed, k.ran, k.split = rows, 0, false
 	if rows > 0 {
 		if err := g.growKept(rows + 1); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			k.armed = 0
 		}
 	}
@@ -265,7 +265,7 @@ func (g *devTier) recRestoreRow(sid uint64, row int) bool {
 			continue
 		}
 		if k.split || row < 0 || row >= k.ran || k.s[l] == nil {
-			g.LastErr = fmt.Sprintf("recurrent restore: block %d kept no row %d", li, row)
+			g.fail(fmt.Sprintf("recurrent restore: block %d kept no row %d", li, row))
 			return false
 		}
 		for h := range 2 {
@@ -281,7 +281,7 @@ func (g *devTier) recRestoreRow(sid uint64, row int) bool {
 		return true
 	}
 	if err := backend.CopyAll(g.dev, list); err != nil {
-		g.LastErr = "recurrent restore: " + err.Error()
+		g.fail("recurrent restore: " + err.Error())
 		return false
 	}
 	return true

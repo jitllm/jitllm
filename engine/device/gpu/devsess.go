@@ -3,6 +3,7 @@ package gpu
 import (
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -74,6 +75,11 @@ type devSess struct {
 	// sessCause is the refusal kind the session's last call met here, noted by
 	// its view (devTier.noteCause).
 	sessCause atomic.Uint32
+	// own is why the session's last call refused here, recorded by
+	// devTier.fail and cleared at the head of each of its calls; under ownMu,
+	// which a recording takes whatever else its caller holds.
+	ownMu sync.Mutex
+	own   string
 	// inSub says the session's submission is running outside g.mu: what it
 	// builds on the way (a kernel, a grown staging buffer) takes g.mu for the
 	// build (subLock; subHeld while it does), and nothing it calls may
@@ -455,7 +461,7 @@ func (g *devTier) sessQueue() {
 	}
 	q, err := qd.NewQueue()
 	if err != nil {
-		g.LastErr = "no queue of its own for a session: " + err.Error()
+		g.fail("no queue of its own for a session: " + err.Error())
 		return
 	}
 	g.q, g.qd = q, qd
@@ -685,7 +691,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 	// Lane0's parts first, so the widths below find their forms and take
 	// only their instances.
 	if err := g.cloneParts(nl); err != nil {
-		g.LastErr = "a lane's composed parts: " + err.Error()
+		g.fail("a lane's composed parts: " + err.Error())
 		return fail()
 	}
 	sets := map[geoKey]geomSet{l0.geoCur: {bs: l0.bs, bbs: l0.bbs, promptW: l0.promptW, stepW: l0.stepW}}
@@ -740,7 +746,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 	if l0.argmaxOut != nil {
 		b, err := g.alloc(4)
 		if err != nil {
-			g.LastErr = "a lane's argmax word: " + err.Error()
+			g.fail("a lane's argmax word: " + err.Error())
 			return fail()
 		}
 		nl.argmaxOut = b
@@ -762,7 +768,7 @@ func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	n := src.mvHead.rows
 	var err error
 	if dst.logits, err = g.alloc(n * 4); err != nil {
-		g.LastErr = "a lane's logits: " + err.Error()
+		g.fail("a lane's logits: " + err.Error())
 		return false
 	}
 	dst.hRaw = make([]byte, n*4)

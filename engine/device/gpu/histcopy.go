@@ -228,7 +228,7 @@ func (g *devTier) forgetCopy(sid uint64, src int) {
 	}
 	if g.layers[src] != nil || len(g.histCopies[src]) > 0 {
 		if err := g.copySeat(kp, src); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 		}
 		return
 	}
@@ -612,7 +612,7 @@ func (g *GPU) settleCopies(sid uint64) error {
 		if err != nil {
 			err = fmt.Errorf("tier: a copy of block %d's history on %s: %w", c.src, label(c.d.dev, c.d.ord), err)
 			c.d.mu.Lock()
-			c.d.LastErr = err.Error()
+			c.d.fail(err.Error())
 			c.d.mu.Unlock()
 			return err
 		}
@@ -687,7 +687,7 @@ func (g *GPU) shareCopies(sid uint64, li, page int, key string, end int) bool {
 		lockPair(sv, dv)
 		err := shareCopy(sv, dv, seqID{sid, 0}, li, page, key, end)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", keyBlock(li), label(d.dev, d.ord), err)
+			dv.fail(fmt.Sprintf("block %d's history copy on %s: %v", keyBlock(li), label(d.dev, d.ord), err))
 		}
 		unlockPair(sv, dv)
 		if err != nil {
@@ -796,7 +796,7 @@ func (g *GPU) appendSeq(s seqID, d *devTier, lo, hi, start, end int) bool {
 		P := sv.kvp.p
 		err := copySeqPages(sv, dv, s, src, start/P, (end-1)/P+1, start)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", src, label(d.dev, d.ord), err)
+			dv.fail(fmt.Sprintf("block %d's history copy on %s: %v", src, label(d.dev, d.ord), err))
 		}
 		unlockPair(sv, dv)
 		if err != nil {
@@ -861,7 +861,7 @@ func (g *GPU) refreshCopies(sid uint64, li int, s seqID, j0, j1, from int) bool 
 		lockPair(sv, dv)
 		err := copySeqPages(sv, dv, s, li, j0, j1, from)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", li, label(d.dev, d.ord), err)
+			dv.fail(fmt.Sprintf("block %d's history copy on %s: %v", li, label(d.dev, d.ord), err))
 		}
 		unlockPair(sv, dv)
 		if err != nil {

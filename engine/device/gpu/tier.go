@@ -1469,6 +1469,10 @@ type devShared struct {
 	arenaBytes uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
+	// exclSess is the session whose call holds the device exclusively
+	// (gpuSession.enter), nil between such calls: the session a reason the
+	// device's own view records is that call's (devTier.fail).
+	exclSess atomic.Pointer[devSess]
 	// histCopies is, per block, the sessions whose history of it this device
 	// holds as a copy -- the block runs on another device for them, and a
 	// block placed here reads it -- and copyN how many (histcopy.go).
@@ -2405,14 +2409,15 @@ func (g *devTier) recStepsOf(sid uint64) int {
 	return 0
 }
 
-// startCall zeroes session sid's count and cause here at the head of its call
-// (GPU.startRows).
+// startCall zeroes session sid's count, cause and reason here at the head of
+// its call (GPU.startRows).
 func (g *devTier) startCall(sid uint64) {
 	g.mu.Lock()
 	ds := g.sessOf(sid)
 	ds.recSteps = 0
 	ds.sessCause.Store(0)
 	g.mu.Unlock()
+	ds.setOwn("")
 }
 
 // setRecSteps sets session sid's count; see GPU.resetRecSteps.
@@ -2579,7 +2584,7 @@ func (g *devTier) importPacked(r *resident, p *Packed) bool {
 		}
 		b, err := g.imp.Import(Ptr(v), int(PaddedBytes(len(v))))
 		if err != nil {
-			g.LastErr = "import: " + err.Error()
+			g.fail("import: " + err.Error())
 			ok = false
 			break
 		}
@@ -2618,7 +2623,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 		// differently strided payload (a silent out-of-bounds read), and
 		// refusing on a mismatch would stop a bank from ever being placed.
 		if !r.ok && r.why != "" {
-			g.LastErr = r.why
+			g.fail(r.why)
 		}
 		return r
 	}
@@ -2635,7 +2640,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 	// arithmetic with no allocation (TestPackedWordsMatchesPack).
 	pq, pd, psc, err := layout.PackedWords(q, nrows, k)
 	if err != nil {
-		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
+		g.fail("PackedWords " + q.String() + ": " + err.Error())
 		return r
 	}
 	need := uint64(pq+pd+psc) * 4
@@ -2652,7 +2657,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 		before, held := g.roomHold(foot)
 		if !held {
 			g.Declined++
-			g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, foot, g.used, g.limit)
+			g.fail(fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, foot, g.used, g.limit))
 			return r
 		}
 		defer g.unclaim(before)
@@ -2681,7 +2686,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 		p, aerr := g.arena.Pack(block, q, w, nrows, k)
 		g.TPack += time.Since(tp)
 		if aerr != nil {
-			g.LastErr = "arena " + q.String() + ": " + aerr.Error()
+			g.fail("arena " + q.String() + ": " + aerr.Error())
 			return r
 		}
 		if p != nil {
@@ -2698,8 +2703,8 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 	before, held := g.roomHold(foot)
 	if !held {
 		g.Declined++
-		g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used (pool %s: %d of %d)",
-			q, nrows, k, foot, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+		g.fail(fmt.Sprintf("%s %dx%d needs %d, %d of %d used (pool %s: %d of %d)",
+			q, nrows, k, foot, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit()))
 		return r // declines from here on; the CPU keeps this tensor
 	}
 	defer g.unclaim(before)
@@ -2712,8 +2717,8 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 		// tensor's, and a kernel would read past them; they are refused,
 		// never uploaded.
 		if len(pre.QS) < 4*pq || len(pre.D) < 4*pd || len(pre.SC) < 4*psc {
-			g.LastErr = fmt.Sprintf("%s %dx%d: planes of %d, %d and %d bytes, short of the shape's %d, %d and %d",
-				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), 4*pq, 4*pd, 4*psc)
+			g.fail(fmt.Sprintf("%s %dx%d: planes of %d, %d and %d bytes, short of the shape's %d, %d and %d",
+				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), 4*pq, 4*pd, 4*psc))
 			return r
 		}
 		tu := time.Now()
@@ -2730,8 +2735,8 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 			g.NoRoom++
 			// The driver's own words, so a reader can tell a full card from
 			// a failed copy.
-			g.LastErr = fmt.Sprintf("%s %dx%d: a plane of %d, %d and %d bytes was not uploaded: %v",
-				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), errors.Join(eq, ed, es))
+			g.fail(fmt.Sprintf("%s %dx%d: a plane of %d, %d and %d bytes was not uploaded: %v",
+				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), errors.Join(eq, ed, es)))
 			return r
 		}
 		r.qs, r.d, r.sc, r.ok = bq, bd, bs, true
@@ -2753,7 +2758,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 		p, aerr = g.arena.Pack(block, q, w, nrows, k)
 		g.TPack += time.Since(tp)
 		if aerr != nil {
-			g.LastErr = "arena " + q.String() + ": " + aerr.Error()
+			g.fail("arena " + q.String() + ": " + aerr.Error())
 			return r
 		}
 	}
@@ -2775,7 +2780,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 		g.TPack += time.Since(tp)
 		g.Packs++
 		if err != nil {
-			g.LastErr = "PackWeights " + q.String() + ": " + err.Error()
+			g.fail("PackWeights " + q.String() + ": " + err.Error())
 			return r
 		}
 	}
@@ -2819,7 +2824,7 @@ func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []by
 // exactly the buffer a contiguous bank would have uploaded.
 func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre *nn.Packed) bool {
 	if pre.Sheets <= 0 || nrows%pre.Sheets != 0 {
-		g.LastErr = fmt.Sprintf("tier: %d rows do not split into %d sheets", nrows, pre.Sheets)
+		g.fail(fmt.Sprintf("tier: %d rows do not split into %d sheets", nrows, pre.Sheets))
 		return false
 	}
 	// A raw bank's sheets are its rows, expert-major and end to end at their
@@ -2828,7 +2833,7 @@ func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre 
 	if !layout.IsRaw(q) {
 		sq, sd, ssc, err := layout.PackedWords(q, nrows/pre.Sheets, k)
 		if err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return false
 		}
 		per = [3]int{sq * 4, sd * 4, ssc * 4}
@@ -2860,7 +2865,7 @@ func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre 
 		sr := rd.get(x)
 		if sr.err != nil {
 			sr.release()
-			g.LastErr = sr.err.Error()
+			g.fail(sr.err.Error())
 			free()
 			return false
 		}
@@ -2870,13 +2875,13 @@ func (g *devTier) residentSheets(r *resident, q layout.Quant, nrows, k int, pre 
 			}
 			if len(src) != per[i] {
 				sr.release()
-				g.LastErr = fmt.Sprintf("tier: expert %d plane %d is %d bytes, want %d", x, i, len(src), per[i])
+				g.fail(fmt.Sprintf("tier: expert %d plane %d is %d bytes, want %d", x, i, len(src), per[i]))
 				free()
 				return false
 			}
 			if err := bufs[i].WriteAt(x*per[i], src); err != nil {
 				sr.release()
-				g.LastErr = err.Error()
+				g.fail(err.Error())
 				free()
 				return false
 			}
@@ -3012,7 +3017,7 @@ func (g *devTier) regrow(dst *backend.Buf, have *int, n, unit int, drop, poison 
 	alloc := func(n int) bool {
 		b, err := g.alloc(n * unit)
 		if err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return false
 		}
 		if poison {
@@ -3329,7 +3334,7 @@ func (g *devTier) residentCompact(q layout.Quant, rows, k, slots int) (*resident
 	var sh [3]int
 	pq, pd, psc, err := layout.PackedWords(q, rows, k)
 	if err != nil {
-		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
+		g.fail("PackedWords " + q.String() + ": " + err.Error())
 		return nil, sh, false
 	}
 	sh = [3]int{pq * 4, pd * 4, psc * 4}
@@ -3341,8 +3346,8 @@ func (g *devTier) residentCompact(q layout.Quant, rows, k, slots int) (*resident
 	foot := g.planeFootprint(pq*slots) + g.planeFootprint(pd*slots) + g.planeFootprint(psc*slots)
 	if !g.room(foot) {
 		g.Declined++
-		g.LastErr = fmt.Sprintf("%s %dx%d x %d sheets needs %d, %d of %d used",
-			q, rows, k, slots, foot, g.used, g.limit)
+		g.fail(fmt.Sprintf("%s %dx%d x %d sheets needs %d, %d of %d used",
+			q, rows, k, slots, foot, g.used, g.limit))
 		return nil, sh, false
 	}
 	bufs := [3]backend.Buf{}

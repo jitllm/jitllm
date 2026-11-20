@@ -56,7 +56,7 @@ func (g *devTier) injectedFail() bool {
 	g.calls++
 	for _, n := range g.failAt {
 		if g.calls == n {
-			g.LastErr = "injected device failure (JITLLM_DEVICE_FAIL_AT)"
+			g.fail("injected device failure (JITLLM_DEVICE_FAIL_AT)")
 			g.noteCause(nn.FailFault)
 			return true
 		}

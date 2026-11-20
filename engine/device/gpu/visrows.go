@@ -205,14 +205,14 @@ func (g *devTier) prewarmSetWidths(k geoKey) {
 		}
 	}
 	if (g.vs().cap != first || g.vs().keys != 0) && !back() {
-		g.LastErr = fmt.Sprintf("%s; and the tower's set at its first %d rows could not be rebuilt after its widths formed: %s",
-			why, first, g.LastErr)
+		g.fail(fmt.Sprintf("%s; and the tower's set at its first %d rows could not be rebuilt after its widths formed: %s",
+			why, first, g.LastErr))
 		return
 	}
 	if keys != 0 {
 		g.chunkTower(keys, keys)
 	}
-	g.LastErr = why
+	g.fail(why)
 }
 
 // buildTowerScratch builds the set in use's scratch from plan p at visCap
@@ -382,7 +382,7 @@ func (g *devTier) segmentSplit(k geoKey) bool {
 // reserveSetRows is ReserveRows for the set in use. Callers hold g.mu.
 func (g *devTier) reserveSetRows(n int) bool {
 	if n > g.vs().max {
-		g.LastErr = fmt.Sprintf("a call of %d rows on a tower whose largest grid is %d", n, g.vs().max)
+		g.fail(fmt.Sprintf("a call of %d rows on a tower whose largest grid is %d", n, g.vs().max))
 		return false
 	}
 	want := g.vs().widthFor(n)
@@ -473,7 +473,7 @@ func (g *devTier) chunkTower(n, want int) bool {
 	// the placement searches for the widest that fits and keeps it.
 	top, formed := g.vs().chunk[want]
 	if !g.prewarming && !formed {
-		g.LastErr = fmt.Sprintf("%s; and no row-chunked set of %d keys was formed at the placement", why, want)
+		g.fail(fmt.Sprintf("%s; and no row-chunked set of %d keys was formed at the placement", why, want))
 		return false
 	}
 	if !formed {
@@ -504,15 +504,15 @@ func (g *devTier) chunkTower(n, want int) bool {
 		}
 		g.vs().keys = prevKeys
 		if !g.towerAt(&plan, prevCap) {
-			g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prevCap, g.LastErr)
+			g.fail(fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prevCap, g.LastErr))
 			return false
 		}
 		if c == visGrain || !g.prewarming {
 			break
 		}
 	}
-	g.LastErr = fmt.Sprintf("%s; and no chunk of %d rows down to %d fits beside the picture's %d keys",
-		why, top, visGrain, want)
+	g.fail(fmt.Sprintf("%s; and no chunk of %d rows down to %d fits beside the picture's %d keys",
+		why, top, visGrain, want))
 	return false
 }
 
@@ -521,7 +521,7 @@ func (g *devTier) chunkTower(n, want int) bool {
 func (g *devTier) resizeTower(n, want int) bool {
 	old := g.bs
 	if old == nil {
-		g.LastErr = "a tower block with no scratch set"
+		g.fail("a tower block with no scratch set")
 		return false
 	}
 	// A streamed tower swaps its blocks through the device's slots, so
@@ -548,8 +548,8 @@ func (g *devTier) resizeTower(n, want int) bool {
 			g.reclaim(uint64(need), -1, 0, 0)
 		}
 		if !g.room(uint64(max(need, 0))) {
-			g.LastErr = fmt.Sprintf("a picture of %d rows: the tower's set at %d rows needs about %d bytes "+
-				"more than it holds, and %d of %d are used", n, want, need, g.used, g.limit)
+			g.fail(fmt.Sprintf("a picture of %d rows: the tower's set at %d rows needs about %d bytes "+
+				"more than it holds, and %d of %d are used", n, want, need, g.used, g.limit))
 			return false
 		}
 	}
@@ -565,18 +565,18 @@ func (g *devTier) resizeTower(n, want int) bool {
 		if keep == 0 || g.slots() >= minSlots {
 			return g.headSetAt(want)
 		}
-		g.LastErr = fmt.Sprintf("a picture of %d rows: the tower's set at %d rows leaves %d block slot(s), "+
-			"below the %d a swap needs", n, want, g.slots(), minSlots)
+		g.fail(fmt.Sprintf("a picture of %d rows: the tower's set at %d rows leaves %d block slot(s), "+
+			"below the %d a swap needs", n, want, g.slots(), minSlots))
 	}
 	why := g.LastErr
 	// What fitted before fits again, its blocks' composed parts with it: the
 	// old rows, or nothing at all, and the caller moves blocks to the CPU.
 	g.vs().keys = prevKeys
 	if !g.towerComposedAt(&plan, prev) {
-		g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prev, g.LastErr)
+		g.fail(fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prev, g.LastErr))
 		return false
 	}
-	g.LastErr = why
+	g.fail(why)
 	return false
 }
 
@@ -599,7 +599,7 @@ func (g *devTier) towerAt(p *nn.LayerPlan, rows int) bool {
 		return g.buildTowerScratch(p) && g.towerKVAt(p)
 	}()
 	if ok && g.overBudget() {
-		g.LastErr = fmt.Sprintf("the tower's set at %d rows passes the budget: %d of %d used", rows, g.used, g.limit)
+		g.fail(fmt.Sprintf("the tower's set at %d rows passes the budget: %d of %d used", rows, g.used, g.limit))
 		ok = false
 	}
 	if !ok && g.bs != nil {
@@ -666,7 +666,7 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 		kvp.bytes = 0
 		if _, held := g.claim(before + uint64(cache+vcache)); !held {
 			g.unclaim(before)
-			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, g.shortOf(uint64(cache+vcache)))
+			g.fail(fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, g.shortOf(uint64(cache+vcache))))
 			return false
 		}
 		var err error
@@ -675,7 +675,7 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 		}
 		if err != nil {
 			g.unclaim(before)
-			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, err)
+			g.fail(fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, err))
 			return false
 		}
 		kvp.bytes = uint64(cache + vcache)
@@ -751,7 +751,7 @@ func (g *devTier) headSetAt(rows int) bool {
 		plan := g.bs.p
 		plan.MaxSeq = g.vs().max
 		if !g.towerAt(&plan, rows) {
-			g.LastErr = fmt.Sprintf("the decision head's set at %d rows: %s", rows, g.LastErr)
+			g.fail(fmt.Sprintf("the decision head's set at %d rows: %s", rows, g.LastErr))
 			return false
 		}
 	}

@@ -45,7 +45,7 @@ func (g *devTier) pickBufs() bool {
 			if i > 0 {
 				bufs[0].Free()
 			}
-			g.LastErr = fmt.Sprintf("the label pick's buffers: %v", err)
+			g.fail(fmt.Sprintf("the label pick's buffers: %v", err))
 			return false
 		}
 		bufs[i] = b

@@ -1102,9 +1102,9 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 	}
 	in, err := g.instanceOn(f, bs)
 	if err != nil {
-		g.LastErr = fmt.Sprintf("the composed prompt block: %v (an instance at %d rows, over passes %v, at a placement %v; "+
+		g.fail(fmt.Sprintf("the composed prompt block: %v (an instance at %d rows, over passes %v, at a placement %v; "+
 			"the lane's decode scratch %v, %d instance(s) held there, clone lane %v)",
-			err, bs.rows, len(f.sweeps) > 0, g.prewarming, bs == g.bs, len(bs.prompt), g.lane.clone)
+			err, bs.rows, len(f.sweeps) > 0, g.prewarming, bs == g.bs, len(bs.prompt), g.lane.clone))
 		if _, room := err.(partRoomError); room {
 			bs.instNoRoom = true
 		}
@@ -1425,8 +1425,8 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if !g.prewarming {
 		g.UnformedAtStep++
 		g.UnformedAtStepParts[sk.kind]++
-		g.LastErr = fmt.Sprintf("the composed %s at %d rows was not formed at placement (keys %d, seqs %d, stream %v, held %d, clone lane %v): a step composes nothing",
-			sk.kind, sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone)
+		g.fail(fmt.Sprintf("the composed %s at %d rows was not formed at placement (keys %d, seqs %d, stream %v, held %d, clone lane %v): a step composes nothing",
+			sk.kind, sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone))
 		return nil, errors.New(g.LastErr)
 	}
 	if g.served == nil {
@@ -1439,7 +1439,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		var room partRoomError
 		if errors.As(err, &room) {
 			delete(g.served, sk)
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return err
 		}
 		err = g.buildFailed(err)
@@ -1447,7 +1447,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			g.formErr = map[servedKey]error{}
 		}
 		g.formErr[sk] = fmt.Errorf("the composed %s %w: %w", sk.kind, errFormedEarlier, err)
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return err
 	}
 	defer g.subUnlock(g.subLock())
@@ -1549,7 +1549,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			// a move or a page given back has made it.
 			if errors.As(err, new(partRoomError)) {
 				delete(g.served, sk)
-				g.LastErr = err.Error()
+				g.fail(err.Error())
 				return nil, err
 			}
 			return nil, fail(err)
@@ -2097,7 +2097,7 @@ func (g *devTier) formTables(bs *blockScratch) {
 	}
 	if bs.p.NonCausal && bs.gridGraph != nil {
 		if _, err := g.servedGridTable(bs, bs.rows); err != nil && !errors.Is(err, errFormedAhead) {
-			g.LastErr = "the composed grid table: " + err.Error()
+			g.fail("the composed grid table: " + err.Error())
 		}
 		return
 	}
@@ -2111,7 +2111,7 @@ func (g *devTier) formTables(bs *blockScratch) {
 			continue
 		}
 		if _, err := g.servedTable(gr, bs.rows, bs.p.RopeMarks, cs, planes, at); err != nil && !errors.Is(err, errFormedAhead) {
-			g.LastErr = "the composed table: " + err.Error()
+			g.fail("the composed table: " + err.Error())
 		}
 	}
 }
@@ -2773,7 +2773,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 			sv, err = serve()
 		}
 		if err != nil {
-			g.LastErr = "the composed block: " + err.Error()
+			g.fail("the composed block: " + err.Error())
 			if errors.As(err, new(partRoomError)) {
 				return fmt.Sprintf("block %d: its composed part does not fit beside the blocks placed (%s)", li, err)
 			}
@@ -2781,7 +2781,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 		}
 		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bs, 1); err != nil {
-				g.LastErr = "the composed block's copy: " + err.Error()
+				g.fail("the composed block's copy: " + err.Error())
 			}
 		}
 		if why := g.passesRoomless(l, li, bs, narrow, "the composed block over passes: "); why != "" {
@@ -2801,11 +2801,11 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 			return
 		}
 		if err := g.spreadParts(g.lane, o, l.graph); err != nil {
-			g.LastErr = "a lane's composed block: " + err.Error()
+			g.fail("a lane's composed block: " + err.Error())
 		}
 		for _, gr := range g.copyGraphs {
 			if err := g.spreadParts(g.lane, o, gr); err != nil {
-				g.LastErr = "a lane's composed copy: " + err.Error()
+				g.fail("a lane's composed copy: " + err.Error())
 			}
 		}
 	})
@@ -2824,7 +2824,7 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 	// Its form over passes too, as main's staged prefill holds its planes
 	// from the placement: a chunk over evicted history forms nothing.
 	if was := g.LastErr; g.promptServed(l, li, bb) && (!l.linear || l.withAttn) && !g.streamServed(l, li, bb) && g.LastErr != was {
-		g.LastErr = "the composed prompt block over passes: " + g.LastErr
+		g.fail("the composed prompt block over passes: " + g.LastErr)
 	}
 }
 
@@ -2873,7 +2873,7 @@ func (g *devTier) passesRoomless(l *layer, li int, bs *blockScratch, narrow bool
 		}
 		// A form that failed earlier was named then: prefixed once.
 		if g.LastErr != was {
-			g.LastErr = prefix + g.LastErr
+			g.fail(prefix + g.LastErr)
 		}
 		if !bs.instNoRoom {
 			return ""
@@ -2960,14 +2960,14 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		if err != nil {
 			// A form that failed earlier was named then (servedFor).
 			if !errors.Is(err, errFormedEarlier) {
-				g.LastErr = "the composed prompt block: " + err.Error()
+				g.fail("the composed prompt block: " + err.Error())
 			}
 			bb.instNoRoom = bb.instNoRoom || errors.As(err, new(partRoomError))
 			return false
 		}
 		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bb, bb.rows); err != nil {
-				g.LastErr = "the composed prompt block's copy: " + err.Error()
+				g.fail("the composed prompt block's copy: " + err.Error())
 				return false
 			}
 		}
@@ -2989,7 +2989,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 	run, err := g.runBufs(bb, l, li)
 	if err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	rcs, qOff := bb.cs, bb.zero
@@ -3007,14 +3007,14 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 		}
 		if err != nil {
 			if !errors.Is(err, errFormedEarlier) {
-				g.LastErr = err.Error()
+				g.fail(err.Error())
 			}
 			bb.instNoRoom = bb.instNoRoom || errors.As(err, new(partRoomError))
 			return false
 		}
 		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bb, bb.rows); err != nil {
-				g.LastErr = err.Error()
+				g.fail(err.Error())
 				bb.instNoRoom = bb.instNoRoom || errors.As(err, new(partRoomError))
 				return false
 			}
@@ -3064,7 +3064,7 @@ func (g *devTier) promptForms(bb *blockScratch) {
 	// The input rows at bb's rows, where the composer gathers a chunk's.
 	if bs := g.bs; bs != nil && bs.embedServes() == nil && g.embedBufs(bs) {
 		if _, err := g.servedEmbed(bs, bb.rows); err != nil && !errors.Is(err, errFormedAhead) {
-			g.LastErr = "the composed input rows: " + err.Error()
+			g.fail("the composed input rows: " + err.Error())
 		}
 	}
 	for li := range g.layers {
@@ -3099,7 +3099,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	if !g.NoPromptPrewarm && bs != nil && bs.sampleGraph != nil && g.argmaxOut != nil {
 		g.prewarming = true
 		if _, err := g.servedSample(bs.sampleGraph); err != nil {
-			g.LastErr = "the composed sample: " + err.Error()
+			g.fail("the composed sample: " + err.Error())
 		}
 		g.prewarming = false
 	}
@@ -3108,7 +3108,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = true
 		for w := range g.bbs {
 			if _, err := g.servedSampleAt(bs.sampleGraph, w); err != nil {
-				g.LastErr = "the composed rows sample: " + err.Error()
+				g.fail("the composed rows sample: " + err.Error())
 			}
 		}
 		g.prewarming = false
@@ -3122,7 +3122,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 				continue
 			}
 			if _, err := g.servedSample(gr); err != nil {
-				g.LastErr = "the composed sampler's walk or the label pick: " + err.Error()
+				g.fail("the composed sampler's walk or the label pick: " + err.Error())
 			}
 		}
 		g.prewarming = false
@@ -3134,7 +3134,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = true
 		form := func(rows int) {
 			if _, err := g.servedEmbed(bs, rows); err != nil {
-				g.LastErr = "the composed input rows: " + err.Error()
+				g.fail("the composed input rows: " + err.Error())
 			}
 		}
 		form(1)
@@ -3163,7 +3163,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 			_, err = g.servedHead(bs, f, bs.hVecs, 1)
 		}
 		if err != nil {
-			g.LastErr = "the composed head: " + err.Error()
+			g.fail("the composed head: " + err.Error())
 			if errors.As(err, new(partRoomError)) {
 				return fmt.Sprintf("the composed head does not fit beside the blocks placed (%s)", err)
 			}
@@ -3171,7 +3171,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	}
 	if bs.pickHead != nil {
 		if _, err := g.servedPickHead(bs, bs.hVecs); err != nil {
-			g.LastErr = "the composed pick head: " + err.Error()
+			g.fail("the composed pick head: " + err.Error())
 		}
 	}
 	// A head over rows at each width the lane holds a scratch for, its rows
@@ -3180,7 +3180,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	for w := range g.bbs {
 		for _, f := range bs.heads {
 			if _, err := g.servedHead(bs, f, bs.hVecs, w); err != nil {
-				g.LastErr = "the composed rows head: " + err.Error()
+				g.fail("the composed rows head: " + err.Error())
 				return
 			}
 		}

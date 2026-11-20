@@ -91,6 +91,7 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		`package p; import "fmt"; func fail(f string, a ...any) error { return fmt.Errorf("tier: "+f, a...) }; func g() error { return fail("block %d keeps to the host", 3) }`,
 		`package p; import "fmt"; func fits(n int) (bool, string) { return false, fmt.Sprintf("%d rows go one at a time", n) }`,
 		`package p; type tier struct{ LastErr string }; func (g *tier) f() { g.LastErr = "the chunk restarts on the host" }`,
+		`package p; import "fmt"; type tier struct{ LastErr string }; func (g *tier) fail(w string) { g.LastErr = w }; func (g *tier) f() { r := func(f string, a ...any) { g.fail(fmt.Sprintf(f, a...)) }; r("the lane runs %d rows alone", 3) }`,
 	} {
 		f, err := parser.ParseFile(token.NewFileSet(), "v.go", v, 0)
 		if err != nil {
@@ -205,7 +206,20 @@ func errorOrigins(root string, dirs []string) (map[originKey]bool, int, error) {
 // closure whose string parameter reaches fmt.Errorf, errors.New, a
 // fmt.Sprintf into a name ending in Err, or such a name; and a type with an
 // Error method, whose conversion makes one.
+// A helper's argument passed on to a helper makes one too, to a fixed point.
 func errorHelpers(files []*ast.File) map[string][]int {
+	out := helpersOnce(files, nil)
+	for {
+		next := helpersOnce(files, out)
+		if maps.EqualFunc(out, next, slices.Equal[[]int]) {
+			return out
+		}
+		out = next
+	}
+}
+
+// helpersOnce is one pass of errorHelpers, known the helpers found so far.
+func helpersOnce(files []*ast.File, known map[string][]int) map[string][]int {
 	out := map[string][]int{}
 	check := func(name string, ft *ast.FuncType, body *ast.BlockStmt) {
 		if body == nil || ft.Params == nil {
@@ -216,7 +230,7 @@ func errorHelpers(files []*ast.File) map[string][]int {
 			n := max(1, len(p.Names))
 			id, ok := p.Type.(*ast.Ident)
 			for j := range n {
-				if ok && id.Name == "string" && len(p.Names) > 0 && reachesError(body, p.Names[j].Name) {
+				if ok && id.Name == "string" && len(p.Names) > 0 && reachesError(body, p.Names[j].Name, known) {
 					out[name] = append(out[name], i)
 				}
 				i++
@@ -252,8 +266,9 @@ func errorHelpers(files []*ast.File) map[string][]int {
 	return out
 }
 
-// reachesError says body makes an error of the parameter named param.
-func reachesError(body *ast.BlockStmt, param string) bool {
+// reachesError says body makes an error of the parameter named param, or
+// passes it to one of helpers.
+func reachesError(body *ast.BlockStmt, param string, helpers map[string][]int) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch v := n.(type) {
@@ -262,6 +277,16 @@ func reachesError(body *ast.BlockStmt, param string) bool {
 				for _, a := range v.Args {
 					found = found || mentions(a, param)
 				}
+			}
+			name := ""
+			switch fn := v.Fun.(type) {
+			case *ast.Ident:
+				name = fn.Name
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			}
+			for _, i := range helpers[name] {
+				found = found || i < len(v.Args) && mentions(v.Args[i], param)
 			}
 		case *ast.AssignStmt:
 			for i, r := range v.Rhs {

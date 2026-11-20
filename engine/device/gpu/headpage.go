@@ -106,7 +106,7 @@ func (g *devTier) pageInHead(hp *headPage) bool {
 	g.dropGraph()
 	w, release, err := g.ownWeight(hp.f, hp.w)
 	if err != nil {
-		g.LastErr = fmt.Sprintf("the output projection: %v", err)
+		g.fail(fmt.Sprintf("the output projection: %v", err))
 		return false
 	}
 	defer release()
@@ -165,8 +165,8 @@ func (g *devTier) headHold(cur, lo, hi int, wait bool) bool {
 		defer g.closeSlot(g.openSlot(hp.foot))
 		if !g.headRoom(hp, cur, lo, hi, wait) {
 			if wait {
-				g.LastErr = fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
-					"can be paged out for it", hp.foot)
+				g.fail(fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
+					"can be paged out for it", hp.foot))
 				g.noteCause(nn.FailRoom)
 			}
 			return false
@@ -175,8 +175,8 @@ func (g *devTier) headHold(cur, lo, hi int, wait bool) bool {
 			return true
 		}
 		if _, held := g.claim(hp.foot); !held && !hp.in {
-			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and its pool %s has %d of %d used by its devices",
-				hp.foot, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+			g.fail(fmt.Sprintf("the output projection needs %d bytes and its pool %s has %d of %d used by its devices",
+				hp.foot, g.pool.Name(), g.pool.Used(), g.pool.Limit()))
 			g.noteCause(nn.FailRoom)
 			return false
 		}

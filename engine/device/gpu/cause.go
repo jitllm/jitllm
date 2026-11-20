@@ -25,6 +25,78 @@ func (g *devTier) noteCause(c nn.FailCause) {
 	}
 }
 
+// fail records why the device's call refused: as the device's LastErr,
+// which the last writer wins, and as the calling session's own reason
+// (devSess.own), which only that session's calls write.
+func (g *devTier) fail(why string) {
+	g.LastErr = why
+	g.failSess().setOwn(why)
+}
+
+// failSess is the session a reason recorded through g is the call's of: a
+// session's view's own, and on the device's own view the session whose call
+// holds the device exclusively, the zero session's when none does.
+func (g *devTier) failSess() *devSess {
+	if g == g.dv {
+		if c := g.exclSess.Load(); c != nil {
+			return c
+		}
+	}
+	return g.devSess
+}
+
+func (ds *devSess) setOwn(why string) {
+	ds.ownMu.Lock()
+	ds.own = why
+	ds.ownMu.Unlock()
+}
+
+func (ds *devSess) ownErr() string {
+	ds.ownMu.Lock()
+	defer ds.ownMu.Unlock()
+	return ds.own
+}
+
+// errMark is the reasons a question asked on the way to a call found
+// (markErr), put back after it (restoreErr) so the question leaves them as
+// they were.
+type errMark struct {
+	last, own string
+	ds        *devSess
+}
+
+func (g *devTier) markErr() errMark {
+	ds := g.failSess()
+	return errMark{last: g.LastErr, own: ds.ownErr(), ds: ds}
+}
+
+func (g *devTier) restoreErr(m errMark) {
+	g.LastErr = m.last
+	m.ds.setOwn(m.own)
+}
+
+// reasonOf is why session sid's call just refused here, read inside that
+// call: its own reason, and the device's last where its view recorded none
+// (a write the device's own view made beside other sessions' steps).
+func (g *devTier) reasonOf(sid uint64) string {
+	if e := g.ownErr(sid); e != "" {
+		return e
+	}
+	return g.Err()
+}
+
+// ownErr is why session sid's last call refused on this device, "" when
+// it recorded no reason here.
+func (g *devTier) ownErr(sid uint64) string {
+	g.mu.Lock()
+	ds := g.sess[sid]
+	g.mu.Unlock()
+	if ds == nil {
+		return ""
+	}
+	return ds.ownErr()
+}
+
 // noteRoom records a call refused for room (ErrKVCapacity) as one.
 func (g *devTier) noteRoom(err error) {
 	if errors.Is(err, ErrKVCapacity) {

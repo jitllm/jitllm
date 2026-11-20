@@ -346,8 +346,8 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.room(need) {
 			g.stepW = sw
 		} else {
-			g.LastErr = fmt.Sprintf("a %d-row ragged step's scratch does not fit the budget beside the decode scratch (%d of %d bytes charged)",
-				sw, g.used, g.limit)
+			g.fail(fmt.Sprintf("a %d-row ragged step's scratch does not fit the budget beside the decode scratch (%d of %d bytes charged)",
+				sw, g.used, g.limit))
 			g.dropBatch(sw)
 		}
 	}
@@ -379,15 +379,15 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 	}
 	defer g.scratchWin().close()
 	if need := g.ragOutBytes(bs, p.Vocab, p.NEmbd); !g.room(need) {
-		g.LastErr = fmt.Sprintf("rows: the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, p.Vocab), need, g.used, g.limit)
+		g.fail(fmt.Sprintf("rows: the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, p.Vocab), need, g.used, g.limit))
 		return false
 	} else if err := g.winAhead(need); err != nil {
-		g.LastErr = fmt.Sprintf("rows: the logits of %d rows: %v", g.headRows(bs, p.Vocab), err)
+		g.fail(fmt.Sprintf("rows: the logits of %d rows: %v", g.headRows(bs, p.Vocab), err))
 		return false
 	}
 	if err := g.allocRagOut(bs, p.Vocab, p.NEmbd); err != nil {
 		freeRagOut(bs)
-		g.LastErr = "rows: " + err.Error()
+		g.fail("rows: " + err.Error())
 		return false
 	}
 	return true
@@ -461,7 +461,7 @@ func freeRagOut(bs *blockScratch) {
 // step ran padded to the 512-row scratch, eight times its rows.
 func (g *devTier) batchFor(w int) int {
 	if w > 64 && (g.roomFaulted("narrow") || g.roomFaulted("narrow-lie")) {
-		g.LastErr = fmt.Sprintf("a %d-row batched scratch does not fit the budget (roomFault)", w)
+		g.fail(fmt.Sprintf("a %d-row batched scratch does not fit the budget (roomFault)", w))
 		return 0
 	}
 	if g.bbs[w] != nil && g.prepBatch(w) {
@@ -556,7 +556,7 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 	l := g.layers[li]
 	switch {
 	case l == nil || !l.ok:
-		g.LastErr = fmt.Sprintf("block %d is not on the device: a prompt over it runs no reserved width", li)
+		g.fail(fmt.Sprintf("block %d is not on the device: a prompt over it runs no reserved width", li))
 		return false
 	case !g.promptServed(l, li, bb):
 		// A step over rows asks this every call (rowsComposed), for every
@@ -571,7 +571,7 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 			}
 			g.notComposedWhy[k] = why
 		}
-		g.LastErr = why
+		g.fail(why)
 		return false
 	}
 	return true
@@ -606,8 +606,8 @@ func (g *devTier) narrowReserved(beside string) bool {
 	// away: its ragged steps would build their rows at a step instead.
 	w := g.promptW / 2 / batchGrain * batchGrain
 	if w < max(batchGrain, g.StepRows) {
-		g.LastErr = fmt.Sprintf("the reserved width of %d rows is the narrowest (a step of %d rows reserved), and %s do not fit beside it",
-			g.promptW, g.StepRows, beside)
+		g.fail(fmt.Sprintf("the reserved width of %d rows is the narrowest (a step of %d rows reserved), and %s do not fit beside it",
+			g.promptW, g.StepRows, beside))
 		return false
 	}
 	was := g.prewarming
@@ -634,7 +634,7 @@ func (g *devTier) narrowReserved(beside string) bool {
 			g.placeGen.Add(1)
 			g.promptForms(g.bbs[held])
 		}
-		g.LastErr = fmt.Sprintf("no reserved width below %d rows builds beside the blocks placed", held)
+		g.fail(fmt.Sprintf("no reserved width below %d rows builds beside the blocks placed", held))
 		return false
 	}
 	g.promptW = w
@@ -675,9 +675,9 @@ func (g *devTier) narrowSets(w int) {
 // uncomposed is a prompt that runs at its own widths, not a refusal, so it
 // leaves LastErr as it was. Callers hold g.mu.
 func (g *devTier) rowsHeld() bool {
-	e := g.LastErr
+	m := g.markErr()
 	ok := g.rowsReserved()
-	g.LastErr = e
+	g.restoreErr(m)
 	return ok
 }
 
@@ -721,7 +721,7 @@ func (g *devTier) composedInSet(li int) bool {
 	defer g.useGeom(g.enterGeomOf(li))
 	bb := g.reservedFor(nn.ComposedBlock)
 	if bb == nil {
-		g.LastErr = fmt.Sprintf("block %d's set reserves no width: its prompts run at their own widths", li)
+		g.fail(fmt.Sprintf("block %d's set reserves no width: its prompts run at their own widths", li))
 		return false
 	}
 	return g.composedBlock(li, bb)
@@ -780,7 +780,7 @@ func (g *devTier) prewarmHeadKernels() {
 		return
 	}
 	if err := g.foldReqBuf(hb); err != nil {
-		g.LastErr = "the folded head's row take: " + err.Error()
+		g.fail("the folded head's row take: " + err.Error())
 		return
 	}
 	was := g.prewarming
@@ -805,7 +805,7 @@ func (g *devTier) prewarmHeadKernels() {
 			continue
 		}
 		if _, err := g.servedRowTake(hb, hb.p.NEmbd, w); err != nil {
-			g.LastErr = "the folded head's row take: " + err.Error()
+			g.fail("the folded head's row take: " + err.Error())
 			return
 		}
 	}

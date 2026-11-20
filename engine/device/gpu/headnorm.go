@@ -37,7 +37,7 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 		same = len(h.W.Data) > 0 && &h.W.Data[0] == g.headSrc
 	}
 	if !same {
-		g.LastErr = "the head resident on this device is another projection of the same shape"
+		g.fail("the head resident on this device is another projection of the same shape")
 		return false
 	}
 	if _, _, ok := g.headVecsFor(h); ok {
@@ -46,7 +46,7 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 	spec, _ := headShape(h.Graph, h.Mix)
 	bufs, n, err := g.upHeadVecs(h, spec)
 	if err != nil {
-		g.LastErr = "the head's second vectors: " + err.Error()
+		g.fail("the head's second vectors: " + err.Error())
 		return false
 	}
 	g.altVecs = append(g.altVecs, altVecs{src: headSrc(h, spec), bufs: bufs, n: n})
@@ -117,7 +117,7 @@ func (g *devTier) joinHead(h *nn.Head) bool {
 // g.mu.
 func (g *devTier) formHeads() bool {
 	if why := g.prewarmComposedHead(true); why != "" {
-		g.LastErr = why
+		g.fail(why)
 		return false
 	}
 	return true

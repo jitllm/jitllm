@@ -83,7 +83,7 @@ func (g *devTier) snapRec(sid uint64, li int, key string) bool {
 func (g *devTier) flushSnaps(ok bool) bool {
 	if len(g.snapList) > 0 {
 		if err := backend.CopyAll(g.dev, g.snapList); err != nil {
-			g.LastErr = "SnapRec: " + err.Error()
+			g.fail("SnapRec: " + err.Error())
 			ok = false
 		} else {
 			g.RecPointsKept += g.snapCount
@@ -157,14 +157,14 @@ func (g *devTier) loadRec(sid uint64, li int, key string) bool {
 	}
 	for i := 0; i < 2; i++ {
 		if err := g.dev.Copy(l.pool.c[i], st.base*l.recC*4, sn.c, 0, l.recC*4); err != nil {
-			g.LastErr = "LoadRec: " + err.Error()
+			g.fail("LoadRec: " + err.Error())
 			return false
 		}
 		if l.pool.s[i] == nil || l.recS == 0 {
 			continue
 		}
 		if err := g.dev.Copy(l.pool.s[i], st.base*l.recS*4, sn.s, 0, l.recS*4); err != nil {
-			g.LastErr = "LoadRec: " + err.Error()
+			g.fail("LoadRec: " + err.Error())
 			return false
 		}
 	}

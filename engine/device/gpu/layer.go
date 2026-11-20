@@ -1024,13 +1024,13 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	if cost > 0 {
 		before, why := g.seatHold(cost, len(l.rec), need)
 		if why != nil {
-			g.LastErr = fmt.Sprintf("a session's recurrent state does not fit: %v", why)
+			g.fail(fmt.Sprintf("a session's recurrent state does not fit: %v", why))
 			g.SessionDeclines++
 			return false
 		}
 		defer g.unclaim(before)
 	}
-	fail := func(err error) bool { g.LastErr = err.Error(); return false }
+	fail := func(err error) bool { g.fail(err.Error()); return false }
 	if slots != g.recSlots || shared != g.recShared {
 		if err := g.recResize(slots, shared); err != nil {
 			return fail(err)
@@ -1075,7 +1075,7 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 // ledger for any growth. It runs outside a session (growSeat, LayersRows
 // before submit), where Compile is allowed. Callers hold g.mu.
 func (g *devTier) ensureRecNext(rows int) bool {
-	fail := func(err error) bool { g.LastErr = "rows: " + err.Error(); return false }
+	fail := func(err error) bool { g.fail("rows: " + err.Error()); return false }
 	if g.recS == 0 {
 		return true // a short convolution keeps no state beside its window
 	}
@@ -1133,7 +1133,7 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 		g.setHistType(sid, l.kvSrc, poolCode(g.kvGeomOf(p).pool))
 		if g.kvPages().layers[g.sessKey(sid, l.kvSrc)] == nil {
 			if err := g.pagedLayer(sid, l, l.kvSrc, p); err != nil {
-				g.LastErr = err.Error()
+				g.fail(err.Error())
 				return false
 			}
 			return true
@@ -1149,7 +1149,7 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	need := uint64(cache + vcache)
 	before, why := g.seatHold(need, len(l.kv), need)
 	if why != nil {
-		g.LastErr = fmt.Sprintf("a second session's KV cache does not fit: %v", why)
+		g.fail(fmt.Sprintf("a second session's KV cache does not fit: %v", why))
 		g.SessionDeclines++
 		return false
 	}
@@ -1166,7 +1166,7 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 			kvp.kc.Free()
 		}
 		g.refund(need)
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	if l.kv == nil {
@@ -1395,7 +1395,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	fr, pin, ferr := g.offerFrames(li, p, w)
 	if ferr != nil {
 		pin.Release()
-		g.LastErr = fmt.Sprintf("block %d: %v", li, ferr)
+		g.fail(fmt.Sprintf("block %d: %v", li, ferr))
 		return false
 	}
 	// Last to run, after the body's unlocks: the pin goes, then the card's
@@ -1439,7 +1439,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				g.releaseBlock(li)
 				g.afterRelease()
 				g.Declined++
-				g.LastErr = why
+				g.fail(why)
 				placed = false
 			}
 			// The reserved width the forms above narrowed (narrowReserved),
@@ -1500,7 +1500,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.maxSeqAsked = p.MaxSeq
 	}
 	if r := g.planConflict(sp); r != "" {
-		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
+		g.fail(fmt.Sprintf("block %d: %s", li, r))
 		return false
 	}
 
@@ -1512,7 +1512,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// placed with, and a session offering another at this index offers
 		// another model's.
 		if p.Graph != l.graph {
-			g.LastErr = fmt.Sprintf("block %d: offered with a graph other than the one this device holds for it", li)
+			g.fail(fmt.Sprintf("block %d: offered with a graph other than the one this device holds for it", li))
 			return false
 		}
 		defer func() {
@@ -1617,7 +1617,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 		if rw.Rows != p.NExpert || rw.K != p.NEmbd {
-			g.LastErr = fmt.Sprintf("block %d: %s is %dx%d, the plan routes %d experts over %d", li, jlm.RoleRouter, rw.Rows, rw.K, p.NExpert, p.NEmbd)
+			g.fail(fmt.Sprintf("block %d: %s is %dx%d, the plan routes %d experts over %d", li, jlm.RoleRouter, rw.Rows, rw.K, p.NExpert, p.NEmbd))
 			return false
 		}
 		bank, slots = p.NExpert, p.NExpertUsed
@@ -1644,8 +1644,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				continue
 			}
 			if ws[i].Rows%bank != 0 {
-				g.LastErr = fmt.Sprintf("block %d: %s has %d rows, not a multiple of %d experts",
-					li, l.mats[i].role, ws[i].Rows, bank)
+				g.fail(fmt.Sprintf("block %d: %s has %d rows, not a multiple of %d experts",
+					li, l.mats[i].role, ws[i].Rows, bank))
 				return false
 			}
 			ws[i].Rows = ws[i].Rows / bank * slots
@@ -1662,7 +1662,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// sets LastErr.
 	full, why, ok := g.pageSizeWhy(l, price)
 	if !ok {
-		g.LastErr = fmt.Sprintf("block %d: %s", li, why)
+		g.fail(fmt.Sprintf("block %d: %s", li, why))
 		return false
 	}
 	// The slot width is the widest block, not this one; see slots().
@@ -1731,8 +1731,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					why = fmt.Sprintf("the budget holds %d block slot(s), below the %d a swap needs", n, minSlots)
 				}
 			}
-			g.LastErr = fmt.Sprintf("block %d needs %d bytes, %d of %d used (pool %s: %d of %d); %s",
-				li, need, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit(), why)
+			g.fail(fmt.Sprintf("block %d needs %d bytes, %d of %d used (pool %s: %d of %d); %s",
+				li, need, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit(), why))
 			// Recorded on the final pass only, like Declined.
 			if mayPage && g.DeclineWhy == "" {
 				g.DeclineWhy = why
@@ -1744,8 +1744,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// policy settles on, so the first token starts warm. See victim().
 		if !g.reclaim(need, li, 0, li+1) && !g.fromPeers(need, false) {
 			g.Declined++
-			g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used)",
-				li, need, g.used, g.limit)
+			g.fail(fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used)",
+				li, need, g.used, g.limit))
 			if g.DeclineWhy == "" {
 				g.DeclineWhy = "nothing can be paged out"
 			}
@@ -1760,8 +1760,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	if !held {
 		g.Declined++
-		g.LastErr = fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
-			li, need, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+		g.fail(fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
+			li, need, g.pool.Name(), g.pool.Used(), g.pool.Limit()))
 		return false
 	}
 	defer g.unclaim(before)
@@ -1776,7 +1776,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// refuses.
 	if w.Ensure != nil {
 		if err := w.Ensure(w, fr); err != nil {
-			g.LastErr = fmt.Sprintf("block %d: %v", li, err)
+			g.fail(fmt.Sprintf("block %d: %v", li, err))
 			return false
 		}
 	}
@@ -1808,16 +1808,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if stream && inBank {
 			q, qok := quantOf(x.T)
 			if !qok {
-				g.LastErr = fmt.Sprintf("block %d: %s is %s, which has no device kernel",
-					li, role, x.T)
+				g.fail(fmt.Sprintf("block %d: %s is %s, which has no device kernel",
+					li, role, x.T))
 				return false
 			}
 			if x.Packed == nil && (!layout.IsRaw(q) || len(x.Data) == 0) {
 				// A streamed bank sends a sheet at a time: a packed bank's
 				// planes, or a raw bank's own rows (its one plane,
 				// expert-major) -- a float or a verbatim format's.
-				g.LastErr = fmt.Sprintf("block %d: %s holds neither its packed planes nor its rows",
-					li, role)
+				g.fail(fmt.Sprintf("block %d: %s holds neither its packed planes nor its rows",
+					li, role))
 				return false
 			}
 			j := int(role - jlm.RoleExpGateBank)
@@ -1851,7 +1851,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		if r == nil || !r.ok {
 			if g.LastErr == "" {
-				g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, role, x.T, x.Rows, x.K)
+				g.fail(fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, role, x.T, x.Rows, x.K))
 			}
 			return false
 		}
@@ -1919,7 +1919,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	l.kvMore = p.Graph.ReadsMore()
 	for _, r := range l.kvMore {
 		if r.Block >= li || !g.holdsHistoryOf(sid, r.Block) {
-			g.LastErr = fmt.Sprintf("block %d attends to block %d's history %d, which is not on this device", li, r.Block, r.Hist)
+			g.fail(fmt.Sprintf("block %d attends to block %d's history %d, which is not on this device", li, r.Block, r.Hist))
 			return false
 		}
 	}
@@ -1928,7 +1928,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// device already (blocks are offered in order), or copied here
 		// from the device it runs on (histcopy.go).
 		if hsrc >= li || !g.holdsHistoryOf(sid, hsrc) {
-			g.LastErr = fmt.Sprintf("block %d attends to block %d's history, which is not on this device", li, hsrc)
+			g.fail(fmt.Sprintf("block %d attends to block %d's history, which is not on this device", li, hsrc))
 			return false
 		}
 		l.kvSrc = hsrc
@@ -1989,7 +1989,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		l.kv[sid] = kvp
 	}
 	if err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	// WithPoisonKV fills the cache with NaN so an attention kernel reading a
@@ -2273,17 +2273,17 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.pleIn, rows*p.SideW*4)
 	}
 	if err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return nil
 	}
 	if bs.gridPlanes != nil {
 		if err = bs.gridPlanes.Write(f32b(p.GridPlanes)); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return nil
 		}
 	}
 	if err = bs.zero.Write([]byte{0, 0, 0, 0}); err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return nil
 	}
 	// Each row's offset into a picture's query rows, which the tower's
@@ -2294,12 +2294,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		roff = append(roff, u32one(uint32(r*qdim))...)
 	}
 	if err = bs.roff.Write(roff); err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return nil
 	}
 	if g.pagedPlan(p) {
 		if err := g.initPagedScratch(bs); err != nil {
-			g.LastErr = "paged attention: " + err.Error()
+			g.fail("paged attention: " + err.Error())
 			return nil
 		}
 	}
@@ -2553,13 +2553,13 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		n := g.slotsIfPerm(foot - planes + rows)
 		g.widest = was
 		if g.holdsPages() && n < minSlots+1 {
-			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and taking them "+
-				"would leave %d block slot(s), below the %d a swap needs", foot+rows, n, minSlots+1)
+			g.fail(fmt.Sprintf("the output projection needs %d bytes and taking them "+
+				"would leave %d block slot(s), below the %d a swap needs", foot+rows, n, minSlots+1))
 			return false
 		}
 		if !g.room(foot+rows) && (len(g.stream) == 0 || !g.reclaim(foot+rows, -1, 0, 0)) {
-			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
-				"can be paged out for it", foot+rows)
+			g.fail(fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
+				"can be paged out for it", foot+rows))
 			return false
 		}
 	} else if want := foot + rows; len(g.stream) > 0 && h.NoCPU {
@@ -2568,29 +2568,29 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 			after = g.slotsIfPerm(want)
 		}
 		if after < minSlots {
-			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and taking them "+
-				"would leave %d block slot(s), below the %d a swap needs", want, after, minSlots)
+			g.fail(fmt.Sprintf("the output projection needs %d bytes and taking them "+
+				"would leave %d block slot(s), below the %d a swap needs", want, after, minSlots))
 			return false
 		}
 		if !g.reclaim(want, -1, 0, 0) {
-			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
-				"can be paged out for it", want)
+			g.fail(fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
+				"can be paged out for it", want))
 			return false
 		}
 	} else if now, after := g.slots(), g.slotsIfPerm(want); len(g.stream) > 0 && after < now ||
 		!h.NoCPU && g.holdsPages() && after < minSlots {
 		// Paging is always on: a projection that leaves the blocks paged here
 		// no slot to turn over in strands them.
-		g.LastErr = fmt.Sprintf("the output projection needs %d bytes and "+
+		g.fail(fmt.Sprintf("the output projection needs %d bytes and "+
 			"taking them would leave %d block slot(s) instead of %d for %d block(s) the card holds, so it "+
 			"stays on the CPU: a slot turns over every block and the "+
-			"projection runs once a token", want, after, now, g.pagesIn)
+			"projection runs once a token", want, after, now, g.pagesIn))
 		return false
 	}
 	if rows > 0 && !g.room(foot+rows) {
 		g.Declined++
-		g.LastErr = fmt.Sprintf("the output projection needs %d bytes and its per-row logits %d more, %d of %d used",
-			foot, rows, g.used, g.limit)
+		g.fail(fmt.Sprintf("the output projection needs %d bytes and its per-row logits %d more, %d of %d used",
+			foot, rows, g.used, g.limit))
 		return false
 	}
 	// What was found room for is held until the head's last charge, its
@@ -2602,7 +2602,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	if !held {
 		g.Declined++
-		g.LastErr = "the output projection: " + g.shortOf(hold).Error()
+		g.fail("the output projection: " + g.shortOf(hold).Error())
 		return false
 	}
 	defer g.unclaim(before)
@@ -2612,7 +2612,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if held := g.res[adhocKey(w.Entry, w.Data, q, w.Rows, w.K)]; held == nil || !held.ok {
 		own, release, err := g.ownWeight(h.File, w)
 		if err != nil {
-			g.LastErr = "the output projection: " + err.Error()
+			g.fail("the output projection: " + err.Error())
 			return false
 		}
 		defer release()
@@ -2624,7 +2624,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	var err error
 	if bs.hVecs, bs.hVecBytes, err = g.upHeadVecs(h, spec); err != nil {
-		g.LastErr = "the head's vectors: " + err.Error()
+		g.fail("the head's vectors: " + err.Error())
 		return false
 	}
 	if bs.logits, err = g.alloc(h.W.Rows * 4); err != nil {
@@ -2655,7 +2655,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if errors.Is(bs.embErr, errEmbedRoom) {
 		g.giveBackHead(bs)
 		g.Declined++
-		g.LastErr = "the input rows' tables have no room beside the head and the blocks placed: " + g.LastErr
+		g.fail("the input rows' tables have no room beside the head and the blocks placed: " + g.LastErr)
 		return false
 	}
 	// The greedy token on the device (nn.Head.ArgmaxOnly): the word the
@@ -2675,7 +2675,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if why := g.prewarmComposedHead(true); why != "" {
 		g.giveBackHead(bs)
 		g.Declined++
-		g.LastErr = why
+		g.fail(why)
 		return false
 	}
 	// A head graph binding what the tier holds no buffer for is the model's
@@ -2683,7 +2683,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if err := bs.headsServe(bs.hVecs); err != nil {
 		g.giveBackHead(bs)
 		g.Declined++
-		g.LastErr = "the composed head: " + err.Error()
+		g.fail("the composed head: " + err.Error())
 		return false
 	}
 	if stream {
@@ -2766,7 +2766,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 		bs := g.bs
 		g.mu.Unlock()
 		if bs == nil || n > bs.rows || head != nil {
-			g.LastErr = fmt.Sprintf("non-causal n=%d scratch=%v head=%v", n, bs != nil, head != nil)
+			g.fail(fmt.Sprintf("non-causal n=%d scratch=%v head=%v", n, bs != nil, head != nil))
 			return false
 		}
 		return g.submit(sid, bs, lo, hi, pos, x, cs, nil)
@@ -2787,7 +2787,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 	if n != 1 {
 		bw := batchWidth
 		if n > bw {
-			g.LastErr = fmt.Sprintf("batch n=%d width=%d head=%v", n, bw, head != nil)
+			g.fail(fmt.Sprintf("batch n=%d width=%d head=%v", n, bw, head != nil))
 			return false
 		}
 		// The width is the chunk's rounded up to the grain, so a short tail does
@@ -2876,7 +2876,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 		g.mu.Unlock()
 		if head != nil && head.RowLogits && (!ok || bbs == nil) {
 			if g.LastErr == "" {
-				g.LastErr = fmt.Sprintf("a %d-row chunk wanting every row's logits has no batched scratch", n)
+				g.fail(fmt.Sprintf("a %d-row chunk wanting every row's logits has no batched scratch", n))
 			}
 			return false
 		}
@@ -2958,7 +2958,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 			// Narrower submissions or a row at a time cut what a centred
 			// convolution reads across the chunk's rows: declined before any
 			// block runs, and the call ends with the reason.
-			g.LastErr = "a chunk of a centred convolution this device has no batched scratch for"
+			g.fail("a chunk of a centred convolution this device has no batched scratch for")
 			return false
 		}
 		if (!ok || bbs == nil) && n > sub && dbs != nil {
@@ -2990,7 +2990,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.
 			// which attention cannot read row by row: refused before any
 			// block runs (nothing has advanced), so the chunk restarts on
 			// the host whole.
-			g.LastErr = "a bidirectional chunk this device has no batched scratch for"
+			g.fail("a bidirectional chunk this device has no batched scratch for")
 			return false
 		}
 		if !ok || bbs == nil {
@@ -3218,7 +3218,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	// seam. Every refusal records why, since the instance's answer to false is a
 	// silent restart on the host.
 	refuse := func(f string, a ...any) bool {
-		g.LastErr = fmt.Sprintf(f, a...)
+		g.fail(fmt.Sprintf(f, a...))
 		return false
 	}
 	switch {
@@ -3296,7 +3296,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		// range in first; this asserts it, and is why nothing else may call
 		// layersOnce.
 		if l.pg != nil && !l.pg.in {
-			g.LastErr = fmt.Sprintf("block %d is paged out", li)
+			g.fail(fmt.Sprintf("block %d is paged out", li))
 			return false
 		}
 		// A ragged step's rows are different sequences, or different positions
@@ -3814,7 +3814,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	err, direct := g.sub.err, g.sub.direct
 	g.sub = submitArgs{}
 	if err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		if nn.IsBuildError(err) {
 			g.noteCause(nn.FailBuild)
 		} else {
@@ -4316,7 +4316,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// wrong as far as jitllm does, so it is retired unused.
 				g.graphOff, err, g.Steps.Served = true, nil, parts
 				if e != nil {
-					g.LastErr = "graphs disabled: " + e.Error()
+					g.fail("graphs disabled: " + e.Error())
 				}
 				if r != nil {
 					g.stale = append(g.stale, r)
@@ -4338,7 +4338,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.recParts[key] = parts
 		}
 		if e := rec.Replay(cur); e != nil {
-			g.graphOff, g.LastErr = true, "graphs disabled: "+e.Error()
+			g.graphOff = true
+			g.fail("graphs disabled: " + e.Error())
 			g.stale = append(g.stale, cur)
 			delete(g.recs, key)
 			emit()
@@ -4867,7 +4868,7 @@ func (g *devTier) reserveKV(sid uint64, pos int) bool {
 		return true
 	}
 	if err := g.pagedHold(sid, pos); err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	return true
@@ -5013,8 +5014,8 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 	// r*StateLen: the seat's own layout, one slot a row.
 	rows := len(conv) / l.recC
 	if rows < 1 || len(conv) != rows*l.recC || len(state) != rows*l.recS {
-		g.LastErr = fmt.Sprintf("MigrateRec: block %d wants a multiple of %d conv and %d state floats, "+
-			"the caller offered %d and %d", li, l.recC, l.recS, len(conv), len(state))
+		g.fail(fmt.Sprintf("MigrateRec: block %d wants a multiple of %d conv and %d state floats, "+
+			"the caller offered %d and %d", li, l.recC, l.recS, len(conv), len(state)))
 		return false
 	}
 	st := g.recSeats[sid]
@@ -5036,8 +5037,8 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 		}
 		st = g.recSeats[sid]
 	default:
-		g.LastErr = fmt.Sprintf("MigrateRec: block %d holds %d row(s), the caller offered %d",
-			li, st.rows, rows)
+		g.fail(fmt.Sprintf("MigrateRec: block %d holds %d row(s), the caller offered %d",
+			li, st.rows, rows))
 		return false
 	}
 	sh := rp.cur
@@ -5073,7 +5074,7 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 				return tmp.Read(f32b(v))
 			}()
 			if err != nil {
-				g.LastErr = fmt.Sprintf("MigrateRec: block %d %s: %v", li, name, err)
+				g.fail(fmt.Sprintf("MigrateRec: block %d %s: %v", li, name, err))
 				return false
 			}
 			return true
@@ -5085,14 +5086,14 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 	// future caller depends on that parity argument.
 	for i := 0; i < 2; i++ {
 		if err := l.pool.c[i].WriteAt(st.base*l.recC*4, f32b(conv)); err != nil {
-			g.LastErr = fmt.Sprintf("MigrateRec: block %d conv half %d: %v", li, i, err)
+			g.fail(fmt.Sprintf("MigrateRec: block %d conv half %d: %v", li, i, err))
 			return false
 		}
 		if l.pool.s[i] == nil || len(state) == 0 {
 			continue // a shared pool's second half is the device's scratch
 		}
 		if err := l.pool.s[i].WriteAt(st.base*l.recS*4, f32b(state)); err != nil {
-			g.LastErr = fmt.Sprintf("MigrateRec: block %d state half %d: %v", li, i, err)
+			g.fail(fmt.Sprintf("MigrateRec: block %d state half %d: %v", li, i, err))
 			return false
 		}
 	}
@@ -5127,7 +5128,7 @@ func (g *devTier) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevic
 		return l != nil
 	}
 	if err := g.pagedMigrate(sid, li, 0, k, v, pos, toDevice); err != nil {
-		g.LastErr = fmt.Sprintf("MigrateKV: block %d: %v", li, err)
+		g.fail(fmt.Sprintf("MigrateKV: block %d: %v", li, err))
 		return false
 	}
 	return true
@@ -5150,7 +5151,7 @@ func (g *devTier) migrateHistory(sid uint64, li, h int, e []float32, pos int, to
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if err := g.historyMigrate(sid, li, h, e, pos, toDevice); err != nil {
-		g.LastErr = fmt.Sprintf("MigrateHistory: block %d history %d: %v", li, h, err)
+		g.fail(fmt.Sprintf("MigrateHistory: block %d history %d: %v", li, h, err))
 		return false
 	}
 	return true
@@ -5406,7 +5407,7 @@ func (g *devTier) prepBatch(width int) bool {
 			g.dropBatch(width)
 			g.markNoRoom(width)
 			g.ScratchRefused++
-			g.LastErr = fmt.Sprintf("a %d-row batched scratch does not fit the budget (%d of %d bytes charged)", width, g.used, g.limit)
+			g.fail(fmt.Sprintf("a %d-row batched scratch does not fit the budget (%d of %d bytes charged)", width, g.used, g.limit))
 			return false
 		}
 	}
@@ -5680,7 +5681,7 @@ func (g *devTier) restride(src, dst backend.Buf, rows, cols, srcStride, dstStrid
 		clear(cs)
 	}
 	if err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	return true

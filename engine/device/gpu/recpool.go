@@ -370,7 +370,7 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 	if had {
 		var err error
 		if kept, err = g.readSeat(old); err != nil {
-			g.LastErr = "rows: " + err.Error()
+			g.fail("rows: " + err.Error())
 			return false
 		}
 		defer kept.free()
@@ -405,10 +405,10 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 	if need+extra > 0 {
 		before, why := g.stateHold(need+extra, nil)
 		if why != nil {
-			g.LastErr = fmt.Sprintf("rows: a batch's recurrent states do not fit: "+
+			g.fail(fmt.Sprintf("rows: a batch's recurrent states do not fit: "+
 				"%d sequences want %.1f MiB (%.1f MiB doubled); %v",
 				rows, float64(uint64(rows)*g.recPoolsSlotBytes(true))/(1<<20),
-				float64(uint64(rows)*g.recPoolsSlotBytes(false))/(1<<20), why)
+				float64(uint64(rows)*g.recPoolsSlotBytes(false))/(1<<20), why))
 			restore()
 			return false
 		}
@@ -416,7 +416,7 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 	}
 	if slots != g.recSlots || shared != g.recShared {
 		if err := g.recResize(slots, shared); err != nil {
-			g.LastErr = "rows: " + err.Error()
+			g.fail("rows: " + err.Error())
 			restore()
 			return false
 		}
@@ -429,12 +429,12 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 	}
 	g.recSeats[sid] = recSeat{base, rows}
 	if err := g.recZero(nil, base, rows); err != nil {
-		g.LastErr = "rows: " + err.Error()
+		g.fail("rows: " + err.Error())
 		return false
 	}
 	if had && !g.recFaulted("resize") {
 		if err := g.writeSeat(sid, kept, base, old.rows, wasShared); err != nil {
-			g.LastErr = "rows: " + err.Error()
+			g.fail("rows: " + err.Error())
 			return false
 		}
 	}
@@ -573,7 +573,7 @@ func (g *devTier) recTidy() {
 	if end := g.recEnd(); end < g.recSlots {
 		if err := g.recResize(end, g.recShared); err != nil {
 			// The pools keep their size: room not given back, nothing lost.
-			g.LastErr = "recurrent pools did not shrink: " + err.Error()
+			g.fail("recurrent pools did not shrink: " + err.Error())
 		}
 	}
 }
@@ -757,7 +757,7 @@ func (g *devTier) copyMark(sid uint64) {
 		}
 	}
 	if err := backend.CopyAll(g.dev, list); err != nil {
-		g.LastErr = "recurrent mark: " + err.Error()
+		g.fail("recurrent mark: " + err.Error())
 		return
 	}
 	m.taken = true
@@ -782,19 +782,19 @@ func (g *devTier) markBufs(l *layer) bool {
 	sB, cB := max(l.recS, 1)*4, max(l.recC, 1)*4
 	before, why := g.stateHold(uint64(sB+cB), nil)
 	if why != nil {
-		g.LastErr = fmt.Sprintf("recurrent mark: no room for a copy of a marked state: %v", why)
+		g.fail(fmt.Sprintf("recurrent mark: no room for a copy of a marked state: %v", why))
 		return false
 	}
 	defer g.unclaim(before)
 	s, err := g.alloc(sB)
 	if err != nil {
-		g.LastErr = "recurrent mark: " + err.Error()
+		g.fail("recurrent mark: " + err.Error())
 		return false
 	}
 	c, err := g.alloc(cB)
 	if err != nil {
 		s.Free()
-		g.LastErr = "recurrent mark: " + err.Error()
+		g.fail("recurrent mark: " + err.Error())
 		return false
 	}
 	m.s[l], m.c[l] = s, c
@@ -840,7 +840,7 @@ func (g *devTier) keepMarkHalves(sid uint64, lo, hi int) {
 	}
 	defer func() { m.list = list[:0] }()
 	if err := backend.CopyAll(g.dev, list); err != nil {
-		g.LastErr = "recurrent mark: " + err.Error()
+		g.fail("recurrent mark: " + err.Error())
 		clear(m.half)
 	}
 }
@@ -878,7 +878,7 @@ func (g *devTier) restoreMark(sid uint64) bool {
 		}
 	}
 	if err := backend.CopyAll(g.dev, list); err != nil {
-		g.LastErr = "recurrent rewind: " + err.Error()
+		g.fail("recurrent rewind: " + err.Error())
 		return false
 	}
 	m.taken = false
@@ -936,15 +936,15 @@ func (g *devTier) rewindable(sid uint64) ([]*recPair, bool) {
 		}
 		switch {
 		case !rp.marked:
-			g.LastErr = "recurrent rewind: a linear block with no mark"
+			g.fail("recurrent rewind: a linear block with no mark")
 			return nil, false
 		case rp.steps == rp.markSteps:
 			continue // not stepped since the mark: already there
 		case g.markCopied(sid, l):
 			// The shared form's state, restored from the mark's copy.
 		case g.recShared || rp.steps != rp.markSteps+1:
-			g.LastErr = fmt.Sprintf("recurrent rewind: %d step(s) since the mark, shared form %v",
-				rp.steps-rp.markSteps, g.recShared)
+			g.fail(fmt.Sprintf("recurrent rewind: %d step(s) since the mark, shared form %v",
+				rp.steps-rp.markSteps, g.recShared))
 			return nil, false
 		}
 		back = append(back, rp)
@@ -1065,13 +1065,13 @@ func (g *devTier) prepRecRows(sid uint64, lo, hi int, rs *ragStep) bool {
 	} else {
 		for _, s := range rs.sess {
 			if st, ok := g.recSeats[s]; !ok || st.rows != 1 {
-				g.LastErr = fmt.Sprintf("sessions: session %d holds %d recurrent state(s) here; "+
-					"a step across sessions takes one a session", s, st.rows)
+				g.fail(fmt.Sprintf("sessions: session %d holds %d recurrent state(s) here; "+
+					"a step across sessions takes one a session", s, st.rows))
 				return false
 			}
 			for li := lo; li < hi; li++ {
 				if l := g.layers[li]; l != nil && l.linear && l.recOf(s) == nil {
-					g.LastErr = fmt.Sprintf("sessions: block %d holds no recurrent state for session %d", li, s)
+					g.fail(fmt.Sprintf("sessions: block %d holds no recurrent state for session %d", li, s))
 					return false
 				}
 			}
@@ -1134,7 +1134,7 @@ func (g *devTier) moveHalf(l *layer, st recSeat, from, to int) bool {
 		}
 		off := st.base * b.w * 4
 		if err := g.dev.Copy(b.dst, off, b.src, off, st.rows*b.w*4); err != nil {
-			g.LastErr = "sessions: " + err.Error()
+			g.fail("sessions: " + err.Error())
 			return false
 		}
 	}

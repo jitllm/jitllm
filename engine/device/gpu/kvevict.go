@@ -194,7 +194,7 @@ func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int)
 			return false
 		}
 		if err := g.evictPage(kp, l, s); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return false
 		}
 	}
@@ -247,7 +247,7 @@ func (g *devTier) evictForBytes(sid uint64, kp *kvPool, l *kvLayerPool, count in
 			return false
 		}
 		if err := g.evictPage(kp, from, s); err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return false
 		}
 	}

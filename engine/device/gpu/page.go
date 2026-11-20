@@ -798,8 +798,8 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		if l.pg.in {
 			return g.holdPages(li, li+1)
 		}
-		g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
-			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots())
+		g.fail(fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
+			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots()))
 		g.noteCause(nn.FailRoom)
 		return false
 	}
@@ -815,8 +815,8 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 			if l.pg.in {
 				return g.holdPages(li, li+1)
 			}
-			g.LastErr = fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
-				li, l.pg.bytes+l.pg.round, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+			g.fail(fmt.Sprintf("block %d needs %d bytes and its pool %s has %d of %d used by its devices",
+				li, l.pg.bytes+l.pg.round, g.pool.Name(), g.pool.Used(), g.pool.Limit()))
 			g.noteCause(nn.FailRoom)
 			return false
 		}
@@ -841,7 +841,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		if fr := l.pg.fr; fr != nil {
 			pin, err := fr.Hold(li, nil)
 			if err != nil {
-				g.LastErr = fmt.Sprintf("block %d page-in: %v", li, err)
+				g.fail(fmt.Sprintf("block %d page-in: %v", li, err))
 				return false
 			}
 			defer pin.Release()
@@ -849,13 +849,13 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		var w nn.LayerWeights
 		w.Ensure = l.pg.ensure
 		if err := l.pg.ensure(&w, l.pg.fr); err != nil {
-			g.LastErr = fmt.Sprintf("block %d page-in: %v", li, err)
+			g.fail(fmt.Sprintf("block %d page-in: %v", li, err))
 			return false
 		}
 		got := l.pageList(&w)
 		if len(got) != len(l.pg.ws) {
-			g.LastErr = fmt.Sprintf("block %d page-in: the refreshed weight list is "+
-				"%d long and the page's is %d", li, len(got), len(l.pg.ws))
+			g.fail(fmt.Sprintf("block %d page-in: the refreshed weight list is "+
+				"%d long and the page's is %d", li, len(got), len(l.pg.ws)))
 			return false
 		}
 		// The shapes are checked: a refresh that returned a different block
@@ -863,9 +863,9 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		for i, x := range got {
 			if o := l.pg.ws[i]; x.Rows != o.Rows || x.K != o.K || x.T != o.T ||
 				len(x.Data) != len(o.Data) {
-				g.LastErr = fmt.Sprintf("block %d page-in: tensor %d refreshed as "+
+				g.fail(fmt.Sprintf("block %d page-in: tensor %d refreshed as "+
 					"%v %dx%d of %d bytes, admitted as %v %dx%d of %d",
-					li, i, x.T, x.Rows, x.K, len(x.Data), o.T, o.Rows, o.K, len(o.Data))
+					li, i, x.T, x.Rows, x.K, len(x.Data), o.T, o.Rows, o.K, len(o.Data)))
 				return false
 			}
 		}
@@ -874,7 +874,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	ts := l.tensors()
 	// What a failed upload reports is this page-in's reason, not one an
 	// earlier call left (a placement's first, refused pass sets LastErr).
-	g.LastErr = ""
+	g.fail("")
 	for i, x := range l.pg.ws {
 		if len(x.Data) == 0 {
 			continue
@@ -886,7 +886,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		r := g.resident(li, i, nil, q, x.Data, x.Rows, x.K, x.Packed)
 		if r == nil || !r.ok {
 			if g.LastErr == "" {
-				g.LastErr = fmt.Sprintf("block %d page-in: tensor %d not resident", li, i)
+				g.fail(fmt.Sprintf("block %d page-in: tensor %d not resident", li, i))
 			}
 			// A half-paged block is a block whose kernels would launch against
 			// freed buffers, so it goes all the way back out.
@@ -1024,7 +1024,7 @@ func (g *devTier) SetBudget(bytes uint64) int {
 			}
 			l.fence()
 			if err := g.shrinkKVLayer(g.kvp, l); err != nil {
-				g.LastErr = err.Error()
+				g.fail(err.Error())
 			}
 		}
 	}

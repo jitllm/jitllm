@@ -350,7 +350,7 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 			made, err := g.copiesFor(sid, d, li, p)
 			if err != nil {
 				d.mu.Lock()
-				d.LastErr = err.Error()
+				d.fail(err.Error())
 				d.mu.Unlock()
 				continue
 			}
@@ -1172,7 +1172,7 @@ func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *n
 		made, err := g.copiesFor(sid, d, li, p)
 		if err != nil {
 			d.mu.Lock()
-			d.LastErr = err.Error()
+			d.fail(err.Error())
 			d.mu.Unlock()
 			return false, nil
 		}
@@ -1791,8 +1791,7 @@ func (d *devTier) wholeRows(sid uint64, lo, hi int) int {
 		defer v.useGeom(v.geoCur)
 		v.useGeom(v.geomFor(lo, hi))
 	}
-	e := v.LastErr
-	defer func() { v.LastErr = e }()
+	defer v.restoreErr(v.markErr())
 	if w := v.pagedCall(lo, hi, v.promptW); w > 0 && v.promptComposed(lo, hi) {
 		return min(w, batchWidth)
 	}
@@ -1852,8 +1851,8 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTa
 				}
 				if 2*h >= w {
 					rn.dev.mu.Lock()
-					rn.dev.LastErr = fmt.Sprintf("block %d's centred convolution reads %d rows past each side of a row, "+
-						"more than a %d-row submission holds beside one row of its own", li, h, w)
+					rn.dev.fail(fmt.Sprintf("block %d's centred convolution reads %d rows past each side of a row, "+
+						"more than a %d-row submission holds beside one row of its own", li, h, w))
 					rn.dev.mu.Unlock()
 					return false
 				}

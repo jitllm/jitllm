@@ -1051,8 +1051,8 @@ type PromptDevice interface {
 // and in any row order: a prompt laid out as rows at positions p..p+L-1 of the
 // same slots is a causal prefill, because every row's key and value are
 // written before any row attends and a recurrent block steps a sequence's
-// rows in position order. False means nothing ran, and the device's LastErr
-// says why.
+// rows in position order. False means nothing ran, and the device's Err
+// (ErrReporter) says why.
 type RowsDevice interface {
 	LayersRows(lo, hi int, pos, slot []int, seqLen int, x []float32, cs RopeTables, head *Head) bool
 }
@@ -1264,7 +1264,8 @@ type ModelTier interface {
 	ForModel(model uint64) LayerDevice
 }
 
-// ErrReporter says why the device's last call refused.
+// ErrReporter says why the device's last call refused. A session's says why
+// its own last call did, never another session's.
 type ErrReporter interface{ Err() string }
 
 // LayerRunner runs a range of blocks (LayerDevice.Layers): what a step asks

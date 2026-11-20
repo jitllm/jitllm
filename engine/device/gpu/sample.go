@@ -42,7 +42,7 @@ func (g *devTier) sampleBufs(n int) bool {
 			for _, f := range bufs[:i] {
 				f.Free()
 			}
-			g.LastErr = "the sampler's buffers: " + err.Error()
+			g.fail("the sampler's buffers: " + err.Error())
 			return false
 		}
 		bufs[i] = b

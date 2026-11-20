@@ -136,7 +136,7 @@ func (g *GPU) holds() bool {
 func (g *GPU) refuse(why string) {
 	for _, d := range g.devs {
 		d.mu.Lock()
-		d.LastErr = why
+		d.fail(why)
 		d.mu.Unlock()
 	}
 }

@@ -65,7 +65,7 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 	}
 	_, inst, _, err := g.towerStep(bs, l, li, &bs.p, bs.rows)
 	if err != nil {
-		g.LastErr = "the composed tower block: " + err.Error()
+		g.fail("the composed tower block: " + err.Error())
 		if errors.As(err, new(partRoomError)) {
 			return fmt.Sprintf("tower block %d: its composed part does not fit beside the blocks placed (%s)", li, err)
 		}

@@ -111,13 +111,13 @@ func (g *devTier) PrepRows(p *nn.RowsPart) bool {
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
 	if _, err := g.servedRows(p); err != nil {
-		g.LastErr = "the composed picture rows: " + err.Error()
+		g.fail("the composed picture rows: " + err.Error())
 		return false
 	}
 	gr := p.Graph
 	inW, outW := gr.Values[gr.In[0]].Width, gr.Values[gr.Out[0]].Width
 	if err := g.rowsBufs(4*p.Rows*inW, 4*max(p.Rows, outRows(p, p.Rows))*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
-		g.LastErr = "the composed picture rows: " + err.Error()
+		g.fail("the composed picture rows: " + err.Error())
 		return false
 	}
 	return true
@@ -139,21 +139,21 @@ func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out [
 	defer g.scratchWin().close()
 	sv, err := g.servedRows(p)
 	if err != nil {
-		g.LastErr = "the composed picture rows: " + err.Error()
+		g.fail("the composed picture rows: " + err.Error())
 		g.Steps.Decline(nn.PartRows, partNotFormed)
 		return false
 	}
 	gr := p.Graph
 	on := outRows(p, live)
 	if live > p.Rows || len(in) > p.Rows*gr.Values[gr.In[0]].Width || len(out) < on*gr.Values[gr.Out[0]].Width {
-		g.LastErr = fmt.Sprintf("the composed picture rows: %d live rows past the %d the form holds", live, p.Rows)
+		g.fail(fmt.Sprintf("the composed picture rows: %d live rows past the %d the form holds", live, p.Rows))
 		g.Steps.Decline(nn.PartRows, partCaller)
 		return false
 	}
 	rs := &g.rows
 	inW, outW := gr.Values[gr.In[0]].Width, gr.Values[gr.Out[0]].Width
 	if err := g.rowsBufs(4*p.Rows*inW, 4*max(p.Rows, on)*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
-		g.LastErr = "the composed picture rows: " + err.Error()
+		g.fail("the composed picture rows: " + err.Error())
 		g.Steps.Decline(nn.PartRows, partNoRoom)
 		return false
 	}
@@ -171,7 +171,7 @@ func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out [
 	err = rs.err
 	rs.sv, rs.inB, rs.outB, rs.reqB, rs.posB, rs.err, rs.at = nil, nil, nil, nil, nil, nil, nil
 	if err != nil {
-		g.LastErr = "the composed picture rows: " + err.Error()
+		g.fail("the composed picture rows: " + err.Error())
 		return false
 	}
 	return true

@@ -59,7 +59,7 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 		kind = nn.PartEmbedRows
 	}
 	if !bs.embedDst(n, dst) {
-		g.LastErr = fmt.Sprintf("input rows of %d tokens into %d words: the destination is neither the rows' nor every stream's", n, len(dst))
+		g.fail(fmt.Sprintf("input rows of %d tokens into %d words: the destination is neither the rows' nor every stream's", n, len(dst)))
 		return false
 	}
 	eerr := bs.embedServes()
@@ -68,13 +68,13 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	case errors.Is(eerr, errEmbedRoom):
 		why = partNoRoom
 	case eerr != nil:
-		g.LastErr = eerr.Error()
+		g.fail(eerr.Error())
 		why = partNotFormed
 	}
 	if why == partServes && bs.embStreams() > 1 && len(dst) != n*bs.embW.k*bs.embStreams() {
 		// The streams past the first are the graph's too: the destination
 		// is the whole stream-major residual.
-		g.LastErr = fmt.Sprintf("input rows of %d tokens into %d words: the graph writes %d streams", n, len(dst), bs.embStreams())
+		g.fail(fmt.Sprintf("input rows of %d tokens into %d words: the graph writes %d streams", n, len(dst), bs.embStreams()))
 		return false
 	}
 	if why == partServes && !g.embedBufs(bs) {
@@ -228,7 +228,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 	for role, w := range p.Weights {
 		r, err := g.rowsWeight(p.File, w)
 		if err != nil {
-			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
+			g.fail(fmt.Sprintf("the input rows' %v: %v", role, err))
 			bs.embErr = errEmbedRoom
 			return
 		}
@@ -237,7 +237,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 	for role, v := range p.Vectors {
 		b, err := g.rowsVector(p.Graph.Block, role, v)
 		if err != nil {
-			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
+			g.fail(fmt.Sprintf("the input rows' %v: %v", role, err))
 			bs.embErr = errEmbedRoom
 			return
 		}
@@ -265,7 +265,7 @@ func (g *devTier) embedTable(f *jlm.File, w nn.Weight) (*resident, error) {
 	if held == nil || !held.ok {
 		own, release, err := g.ownWeight(f, w)
 		if err != nil {
-			g.LastErr = "the input rows' table: " + err.Error()
+			g.fail("the input rows' table: " + err.Error())
 			return nil, errEmbedRoom
 		}
 		defer release()
@@ -295,7 +295,7 @@ func (g *devTier) embedBufs(bs *blockScratch) bool {
 		}
 		nb, err := g.alloc(b.words * 4)
 		if err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return false
 		}
 		*b.buf = nb
@@ -417,7 +417,7 @@ func (g *devTier) materializeComposed(pe *embPend) bool {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	bs := g.bs
 	if bs == nil || !bs.embedServed() || !g.embedBufs(bs) {
-		g.LastErr = "the composer's input rows were promised and are no longer held"
+		g.fail("the composer's input rows were promised and are no longer held")
 		return false
 	}
 	R := g.embedRowsAt(bs, len(pe.ids))
@@ -429,20 +429,20 @@ func (g *devTier) materializeComposed(pe *embPend) bool {
 			continue
 		}
 		if need := g.footprint(b.words * 4); !g.room(need) {
-			g.LastErr = fmt.Sprintf("the composer's input rows need %d bytes, %d of %d used", need, g.used, g.limit)
+			g.fail(fmt.Sprintf("the composer's input rows need %d bytes, %d of %d used", need, g.used, g.limit))
 			g.Steps.Decline(pe.kind, partNoRoom)
 			return false
 		}
 		nb, err := g.alloc(b.words * 4)
 		if err != nil {
-			g.LastErr = err.Error()
+			g.fail(err.Error())
 			return false
 		}
 		*b.buf = nb
 	}
 	sv, err := g.servedEmbed(bs, R)
 	if err != nil {
-		g.LastErr = "the composed input rows: " + err.Error()
+		g.fail("the composed input rows: " + err.Error())
 		return false
 	}
 	rd := &g.embRd
@@ -487,7 +487,7 @@ func (g *devTier) readBack(pe *embPend, sv *servedPart, fn func(backend.Session)
 	err := rd.err
 	rd.pe, rd.sv, rd.err, rd.at = nil, nil, nil, nil
 	if err != nil {
-		g.LastErr = err.Error()
+		g.fail(err.Error())
 		return false
 	}
 	g.EmbedReadBacks++

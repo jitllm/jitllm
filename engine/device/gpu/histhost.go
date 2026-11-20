@@ -267,7 +267,7 @@ func (g *GPU) copyHostRows(sid uint64, src, h, base, from, start, to int, k, v [
 		dv.mu.Lock()
 		err := dv.writeHostRows(seqID{sid, base}, src, h, from, start, to, k, v)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", src, label(d.dev, d.ord), err)
+			dv.fail(fmt.Sprintf("block %d's history copy on %s: %v", src, label(d.dev, d.ord), err))
 		}
 		dv.mu.Unlock()
 		if err != nil {
@@ -668,7 +668,7 @@ func (g *GPU) readHostRows(sid uint64, src, h, base, from, to int, k, v []float3
 		err = ov.readEntries(seqID{sid, base}, histKey(ov.sessKey(sid, src), h), from, to, k)
 	}
 	if err != nil {
-		ov.LastErr = fmt.Sprintf("block %d's history read for the CPU device on %s: %v", src, label(o.dev, o.ord), err)
+		ov.fail(fmt.Sprintf("block %d's history read for the CPU device on %s: %v", src, label(o.dev, o.ord), err))
 	}
 	ov.mu.Unlock()
 	return err == nil
@@ -799,7 +799,7 @@ func (g *GPU) shareHostCopy(sid uint64, li, page int, key string, end int) bool 
 		dv.mu.Lock()
 		ok, err := dv.shareHostPage(s, li, page, key, end)
 		if err != nil {
-			dv.LastErr = fmt.Sprintf("block %d's history copy on %s: %v", keyBlock(li), label(d.dev, d.ord), err)
+			dv.fail(fmt.Sprintf("block %d's history copy on %s: %v", keyBlock(li), label(d.dev, d.ord), err))
 		}
 		dv.mu.Unlock()
 		if !ok {

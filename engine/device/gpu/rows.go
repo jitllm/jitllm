@@ -91,7 +91,7 @@ type rowGroups struct {
 func (g *devTier) layersRows(lo, hi int, rs *ragStep, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	fail := func(f string, a ...any) bool {
 		g.mu.Lock()
-		g.LastErr = fmt.Sprintf("rows: "+f, a...)
+		g.fail(fmt.Sprintf("rows: "+f, a...))
 		g.mu.Unlock()
 		return false
 	}
@@ -422,7 +422,7 @@ func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 		return false
 	}
 	if g.roomFaulted("nobuild") || g.roomFaulted("nobuild-room") {
-		g.LastErr = "a ragged step's twins do not build (roomFault)"
+		g.fail("a ragged step's twins do not build (roomFault)")
 		return false
 	}
 	defer g.scratchWin().close()
@@ -436,7 +436,7 @@ func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 	defer g.scratchWin().close()
 	R := bs.rows
-	fail := func(err error) bool { g.LastErr = "rows: " + err.Error(); return false }
+	fail := func(err error) bool { g.fail("rows: " + err.Error()); return false }
 	// A batch's rows read their history through the scratch's paged set
 	// (pagedDecode); what is left to build is the head.
 	if rowsHead == nil {
@@ -575,9 +575,9 @@ func (g *devTier) prepRowsReserved() {
 	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok {
 		return
 	}
-	e := g.LastErr
+	m := g.markErr()
 	_, ok := g.reservedBlocks()
-	g.LastErr = e
+	g.restoreErr(m)
 	if !ok {
 		return
 	}
@@ -585,7 +585,7 @@ func (g *devTier) prepRowsReserved() {
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
 	if !g.prepRowsHead(bb, &nn.Head{}, bb.rows) {
-		g.LastErr = "the reserved width's per-row head: " + g.LastErr
+		g.fail("the reserved width's per-row head: " + g.LastErr)
 	}
 }
 
@@ -681,7 +681,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 		// rows the runs before it wrote (histcopy.go).
 		if !g.appendRows(self, r.dev, r.lo, r.hi, pos, slot, sid) {
 			g.startRest(self, rs, i)
-			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.stats().LastErr)
+			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.reasonOf(self))
 			g.mu.Lock()
 			c.err = why
 			g.mu.Unlock()
@@ -701,7 +701,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 		if v == nil {
 			g.stageEnd(r.dev)
 			g.startRest(self, rs, i+1)
-			why = fmt.Sprintf("%s: no scratch for this session: %s", label(r.dev.dev, r.dev.ord), r.dev.stats().LastErr)
+			why = fmt.Sprintf("%s: no scratch for this session: %s", label(r.dev.dev, r.dev.ord), r.dev.reasonOf(self))
 			g.mu.Lock()
 			c.err = why
 			g.mu.Unlock()
@@ -720,7 +720,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 		g.stageEnd(r.dev)
 		if !ok {
 			g.startRest(self, rs, i+1)
-			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.stats().LastErr)
+			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.reasonOf(self))
 			g.mu.Lock()
 			c.err = why
 			g.mu.Unlock()
@@ -1000,7 +1000,7 @@ func (g *devTier) stepRoom(lo, n int, head *nn.Head) (bool, error) {
 	if g.NoScratchReserve || g.kvCompact(g.promisedBytes(), nil) {
 		return true, nil
 	}
-	g.LastErr = fmt.Sprintf("a %d-row step's scratch passes the budget (%d of %d bytes charged)", w, g.used, g.limit)
+	g.fail(fmt.Sprintf("a %d-row step's scratch passes the budget (%d of %d bytes charged)", w, g.used, g.limit))
 	return false, nil
 }
 
@@ -1026,8 +1026,8 @@ func (g *devTier) rowsHeadRoom(bs *blockScratch, head *nn.Head) bool {
 	if need == 0 || g.kvCompact(need+g.promisedBytes(), nil) {
 		return true
 	}
-	g.LastErr = fmt.Sprintf("a %d-row step's per-row head (%d bytes) does not fit the budget (%d of %d bytes charged)",
-		min(R, g.headRows(bs, vocab)), need, g.used, g.limit)
+	g.fail(fmt.Sprintf("a %d-row step's per-row head (%d bytes) does not fit the budget (%d of %d bytes charged)",
+		min(R, g.headRows(bs, vocab)), need, g.used, g.limit))
 	return false
 }
 
@@ -1117,7 +1117,7 @@ func (g *devTier) resetRecRows(sid uint64, rows []int) bool {
 			continue // a row the batch has not grown to holds nothing yet
 		}
 		if err := g.recZeroLayers(ls, st.base+row, 1); err != nil {
-			g.LastErr = "rows: " + err.Error()
+			g.fail("rows: " + err.Error())
 			return false
 		}
 	}

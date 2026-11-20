@@ -106,19 +106,38 @@ func (s *gpuSession) step() []*devTier { return s.take(false) }
 
 // take is enter (excl) or step. Every caller takes the devices in one order,
 // so two calls cannot each hold one and wait for the other.
+// A call holding a device exclusively is the session the device's own view
+// records a reason as (devTier.fail).
 func (s *gpuSession) take(excl bool) []*devTier {
 	s.g.mu.Lock()
 	ds := append(s.held[:0], s.g.devs...)
 	s.held = nil
 	s.g.mu.Unlock()
 	for _, d := range ds {
-		if excl {
-			d.busy.Lock()
-		} else {
+		if !excl {
 			d.busy.RLock()
+			continue
 		}
+		d.busy.Lock()
+		d.mu.Lock()
+		d.exclSess.Store(d.sessOf(s.sid))
+		d.mu.Unlock()
 	}
 	s.excl = excl
+	return ds
+}
+
+// offer is enter for a call offering the device something it may decline:
+// the session's reasons start empty, its rows call's and its own on each
+// device (devSess.own), so Err reads this call's.
+func (s *gpuSession) offer() []*devTier {
+	ds := s.enter()
+	s.g.mu.Lock()
+	s.rows.err = ""
+	s.g.mu.Unlock()
+	for _, d := range ds {
+		d.exclSess.Load().setOwn("")
+	}
 	return ds
 }
 
@@ -127,6 +146,7 @@ func (s *gpuSession) take(excl bool) []*devTier {
 func (s *gpuSession) leave(ds []*devTier) {
 	for i := len(ds) - 1; i >= 0; i-- {
 		if s.excl {
+			ds[i].exclSess.Store(nil)
 			ds[i].busy.Unlock()
 		} else {
 			ds[i].busy.RUnlock()
@@ -143,7 +163,7 @@ func (s *gpuSession) Layers(lo, hi, pos, n int, x []float32, cs nn.RopeTables, h
 }
 
 func (s *gpuSession) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
-	defer s.leave(s.enter())
+	defer s.leave(s.offer())
 	return s.g.prepLayer(s.sid, li, p, w)
 }
 
@@ -319,7 +339,7 @@ func (s *gpuSession) EmbedRows(ids []int32, pos int, dst []float32) bool {
 }
 
 func (s *gpuSession) PrepHead(h *nn.Head) bool {
-	defer s.leave(s.enter())
+	defer s.leave(s.offer())
 	return s.g.prepHead(s.sid, h)
 }
 
@@ -337,15 +357,33 @@ func (s *gpuSession) Reserve(maxRows, maxK int) bool {
 	return s.g.Reserve(maxRows, maxK)
 }
 
-func (s *gpuSession) Err() string { return s.g.errOf(&s.rows) }
+// Err is why the session's last call refused, its own: its rows call's
+// reason, or the one a device recorded for it, never another session's.
+func (s *gpuSession) Err() string {
+	s.g.mu.Lock()
+	e := s.rows.err
+	s.g.mu.Unlock()
+	if e != "" {
+		return e
+	}
+	for i := 0; ; i++ {
+		d := s.g.dev(i)
+		if d == nil {
+			return ""
+		}
+		if e := d.ownErr(s.sid); e != "" {
+			return e
+		}
+	}
+}
 
 func (s *gpuSession) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
-	defer s.leave(s.enter())
+	defer s.leave(s.offer())
 	return s.g.prepLayerOn(s.sid, name, li, p, w)
 }
 
 func (s *gpuSession) PrepHeadOn(name string, h *nn.Head) (bool, error) {
-	defer s.leave(s.enter())
+	defer s.leave(s.offer())
 	return s.g.prepHeadOn(s.sid, name, h)
 }
 
