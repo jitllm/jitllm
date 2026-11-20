@@ -59,11 +59,8 @@
     "mm.post_norm.weight": "v_proj_norm",
     "mm.post_norm.bias": "v_proj_norm.bias",
     "mm.gate.weight": "v_proj_gate",
-    "mm.gate.bias": "v_proj_gate.bias",
     "mm.up.weight": "v_proj_up",
-    "mm.up.bias": "v_proj_up.bias",
-    "mm.down.weight": "v_proj_down",
-    "mm.down.bias": "v_proj_down.bias"
+    "mm.down.weight": "v_proj_down"
    }
   },
   "hunyuanvl": {

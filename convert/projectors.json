@@ -645,10 +645,10 @@
      {"op": "linear", "w": ["v_proj", "v_proj.bias?"]},
      {"op": "layer_norm", "w": ["v_proj_norm", "v_proj_norm.bias?"], "eps": "1e-5"},
      {"op": "stated", "fn": "gelu_erf", "width": "v.proj_dim", "out": "g"},
-     {"op": "linear", "in": "g", "w": ["v_proj_gate", "v_proj_gate.bias?"], "out": "gate"},
-     {"op": "linear", "in": "g", "w": ["v_proj_up", "v_proj_up.bias?"], "out": "up"},
+     {"op": "linear", "in": "g", "w": "v_proj_gate", "out": "gate"},
+     {"op": "linear", "in": "g", "w": "v_proj_up", "out": "up"},
      {"op": "stated", "fn": "swiglu", "in": ["gate", "up"], "width": "dims['v_proj_gate'][1]"},
-     {"op": "linear", "w": ["v_proj_down", "v_proj_down.bias?"]}
+     {"op": "linear", "w": "v_proj_down"}
     ],
     "span": {"mark": "<|begin_of_image|><|image|><|end_of_image|>", "before_marks": ["<|begin_of_image|>"], "after_marks": ["<|end_of_image|>"], "grid_div": "v.scale"},
     "video": {

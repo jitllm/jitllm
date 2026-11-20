@@ -156,3 +156,27 @@ func TestEveryTensorHasARole(t *testing.T) {
 		}
 	}
 }
+
+// TestGLM4VMergerHasNoBiases: GLM-4.xV's merger, transformers'
+// Glm4vVisionPatchMerger as Glm4vVisionModel builds it (bias=False), has no
+// bias on its gate, up and down projections, and no published tower carries
+// one; a tower file that does is not GLM-4.xV's, so those names take no role
+// and its conversion is refused. The weights beside them take theirs.
+func TestGLM4VMergerHasNoBiases(t *testing.T) {
+	vocab, err := readTensorNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := towerVocabOf(&jlm.Vision{Projector: jlm.ProjGLM4V, NLayer: 2}, vocab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"gate", "up", "down"} {
+		if _, _, _, err := names.roleOf("mm." + part + ".weight"); err != nil {
+			t.Errorf("mm.%s.weight: %v", part, err)
+		}
+		if r, _, _, err := names.roleOf("mm." + part + ".bias"); err == nil {
+			t.Errorf("VIOLATION: a GLM-4.xV tower's mm.%s.bias takes role %v", part, r)
+		}
+	}
+}
