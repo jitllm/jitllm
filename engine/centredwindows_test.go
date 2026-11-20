@@ -33,6 +33,15 @@ func segmentWindows(n, span int) []nn.KeyRun {
 // run handed as a key run (nn.KeyRunDevice).
 func windowedRows(t *testing.T, m *model.Model, g *gpu.GPU, layers int, spans []model.Span, wins []nn.KeyRun) []float32 {
 	t.Helper()
+	return runRows(t, m, g, layers, spans, wins, wins != nil)
+}
+
+// runRows is windowedRows with the run named: readout runs it as a marker
+// readout's run hands it, with wins or none (nil), every block of a
+// non-causal decoder told the prompt is non-causal and no key run; else it
+// is the prompt's prefill.
+func runRows(t *testing.T, m *model.Model, g *gpu.GPU, layers int, spans []model.Span, wins []nn.KeyRun, readout bool) []float32 {
+	t.Helper()
 	n := model.SpanPositions(spans, m.Cfg.NEmbd)
 	in := testInstance(t, m, n+1, WithKVF16(false), withCPUFloat())
 	defer in.Close()
@@ -46,7 +55,7 @@ func windowedRows(t *testing.T, m *model.Model, g *gpu.GPU, layers int, spans []
 	}
 	out := make([]float32, n*m.Cfg.NEmbd)
 	in.Reset()
-	if wins == nil {
+	if !readout {
 		in.rowTap = func(base int, rows []float32) { copy(out[base*m.Cfg.NEmbd:], rows) }
 	} else {
 		in.mark = embedMode{bidir: true, whole: true, total: n, out: out, rows: true, rowWins: wins}

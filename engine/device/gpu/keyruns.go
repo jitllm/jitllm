@@ -39,10 +39,11 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) {
 	}
 }
 
-// SetRowWindows records one window a row for the NonCausal calls that follow
-// on every device (nn.RowWindowDevice): row r of a call attends inside
-// wins[r] on its Windowed blocks; the rows' windows may overlap, which
-// SetKeyRuns' partition cannot say.
+// SetRowWindows records one window a row for the calls that follow on every
+// device (nn.RowWindowDevice): row r of a call attends inside wins[r] on the
+// blocks whose graph reads the windows, and inside its full run (SetKeyRuns)
+// on every other; the rows' windows may overlap, which SetKeyRuns' partition
+// cannot say.
 func (g *GPU) SetRowWindows(wins []nn.KeyRun) {
 	g.setRowWindows(0, wins)
 }
@@ -55,7 +56,6 @@ func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) {
 	for _, d := range ds {
 		d.mu.Lock()
 		ss := d.sessOf(sid)
-		ss.bidir = ss.bidir[:0]
 		ss.winRuns = append(ss.winRuns[:0], wins...)
 		ss.winPerRow = true
 		d.mu.Unlock()
@@ -74,17 +74,18 @@ func bidirCount(runs []nn.KeyRun, at int) int {
 }
 
 // runEnd is the key count of row at, in a call whose rows end at end, under
-// the session's runs: its own window's end where the session has one a row
-// (SetRowWindows), else its run's end, 0 where it reads to itself -- in no
-// run, or in a run's first phase, which reads only keys written (GPU.phased).
-// The "runcut" fault ends a second phase's runs at the call's rows: the run
-// cut at the submission.
-func (g *devTier) runEnd(at, end int) int {
+// the session's runs: its own window's end where the call's blocks read the
+// windows (wins, rangeRule) and the session has one a row (SetRowWindows),
+// else its run's end, 0 where it reads to itself -- in no run, or in a run's
+// first phase, which reads only keys written (GPU.phased). The "runcut"
+// fault ends a second phase's runs at the call's rows: the run cut at the
+// submission.
+func (g *devTier) runEnd(at, end int, wins bool) int {
 	if g.runPhase == 1 {
 		return 0
 	}
 	e := bidirCount(g.bidir, at)
-	if w, ok := g.rowWindow(at); ok {
+	if w, ok := g.rowWindow(at); ok && wins {
 		e = w.Hi
 	}
 	if g.runPhase == 2 && e > end && g.rowsFaulted("runcut") {

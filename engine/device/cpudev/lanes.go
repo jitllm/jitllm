@@ -139,8 +139,9 @@ func (l *Lanes) ReadyRows(li int, f *Form, pos []int) (nn.Decline, error) {
 }
 
 // Rows runs block li's form f of rows over c, its weights read in t: each
-// row's history read from where it starts to where its bidirectional run or
-// its window ends, the history committed once the rows ran.
+// row's history read from where it starts to where its bidirectional run
+// ends, or its window where the block states windows, the history committed
+// once the rows ran.
 func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	n := len(c.Pos)
 	if f.Toks && c.Tok == nil {
@@ -156,9 +157,9 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 		}
 	}
 	var sideOff int
-	var bidir, whole bool
+	var bidir, windowed bool
 	if cb != nil {
-		sideOff, bidir, whole = cb.SideOff, cb.Bidir, cb.Whole
+		sideOff, bidir, windowed = cb.SideOff, cb.Bidir, cb.Windowed
 	}
 	runs := bidir && runsIn(l.runs, c.Pos[0], n)
 	if cap(l.spans) < 4*n {
@@ -174,11 +175,11 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 		if runs {
 			lo, hi := runOf(l.runs, p)
 			e = max(e, hi)
-			if l.windowed {
+			if l.windowed && windowed {
 				st = max(st, lo)
 			}
 		}
-		if w := l.wins; w != nil && !whole {
+		if w := l.wins; w != nil && windowed {
 			st, e = max(st, w[p].Lo), w[p].Hi
 		}
 		end = max(end, p+1)

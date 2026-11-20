@@ -270,7 +270,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	if k.Recurrent() && s.c.NonCausal {
 		p.Run = s.maxSeq
 	}
-	p.Whole = s.wholePicture(li)
+	p.Windowed = g.ReadsRowWindows()
 	return p
 }
 

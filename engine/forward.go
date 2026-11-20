@@ -2109,7 +2109,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.Recurrent = nn.RecurrentPlan{StateLen: state, ConvState: conv}
 	}
 	plan.NStreams = c.Streams()
-	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {
+	if s.runsWhole(li) {
 		// A bidirectional decoder and a tower: their blocks are non-causal
 		// blocks, as an encoder's are -- the sequence (a picture's rows) one
 		// call, every row over the call's rows. A window the attention
@@ -2128,6 +2128,15 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.Spec = &spec
 	}
 	return &plan
+}
+
+// runsWhole says block li runs as a non-causal block (nn.LayerPlan.NonCausal):
+// an encoder's, a bidirectional decoder's read out by a head of its own and
+// a tower's, each sequence one call. Another non-causal model's blocks keep
+// a history and read their run as a key run.
+func (s *Instance) runsWhole(li int) bool {
+	c := s.c
+	return c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase)
 }
 
 // place puts block li on route to, handing it over from the route it was on,

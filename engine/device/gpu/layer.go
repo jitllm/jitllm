@@ -79,6 +79,10 @@ type layer struct {
 	// bidirectional key runs (graph.Attrs.NoRuns). A call carries one set of
 	// key counts, so submit cuts a range where it changes.
 	noRuns bool
+	// rowWins is a block whose graph reads its rows' windows
+	// (graph.Graph.ReadsRowWindows): a call carries one set of descriptors,
+	// so submit cuts a range where it changes while the session has windows.
+	rowWins bool
 	// noFFN is a block that is its mixer alone (nn.LayerPlan.NoFFN): the
 	// emit ends it at the first residual.
 	noFFN bool
@@ -1885,6 +1889,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	l.recS, l.recC = p.Recurrent.StateLen, p.Recurrent.ConvState
 	l.withAttn = linear && graphAttends(p.Graph)
 	l.noRuns = p.Graph.AttendNoRuns()
+	l.rowWins = p.Graph.ReadsRowWindows()
 	l.noFFN = p.NoFFN
 	if linear {
 		if !g.addSessionRec(sid, l, p) {
@@ -3364,11 +3369,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		// phase wrote, whatever chunk its queries are.
 		n = uint32(g.ncKeys)
 	}
+	noRuns, wins := g.rangeRule(lo, hi)
 	if g.runPhase == 2 && !p.NonCausal {
 		// A run's second phase reads every key of its rows' runs, past the
 		// call's rows (GPU.phased).
 		for r := range nrow {
-			n = max(n, uint32(g.runEnd(pos+r, pos+nrow)))
+			n = max(n, uint32(g.runEnd(pos+r, pos+nrow, wins)))
 		}
 	}
 	if int(n) > p.MaxSeq {
@@ -3381,7 +3387,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	pn := append(g.subBytes.pn[:0], u32one(n)...)
 	if R == 1 {
 		n = uint32(pos + 1)
-		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && (!g.rangeNoRuns(lo, hi) || g.winPerRow) {
+		if e := g.runEnd(pos, pos+1, wins); g.runPhase == 2 && e > 0 && !p.NonCausal && (!noRuns || wins) {
 			n = uint32(e)
 		}
 		pn = binary.LittleEndian.AppendUint32(pn[:0], n)
@@ -3409,7 +3415,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		// above would otherwise invalidate -- so a batched call does not round.
 		pn = pn[:4]
 		binary.LittleEndian.PutUint32(pn, uint32(nCap))
-		noRuns := g.rangeNoRuns(lo, hi)
 		for r := 0; r < R; r++ {
 			// A padded row takes the last real row's count. It must be clamped,
 			// because AttnAcc walks each row's own count and an unclamped one runs
@@ -3432,7 +3437,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 			} else if r < nrow {
 				// A row of a bidirectional run counts keys to the run's end
 				// (bidir.go); bidirCheck has kept the run inside these rows.
-				if e := g.runEnd(pos+r, pos+nrow); e > 0 && (!noRuns || g.winPerRow) {
+				if e := g.runEnd(pos+r, pos+nrow, wins); e > 0 && (!noRuns || wins) {
 					n = e
 				}
 			}
@@ -3476,7 +3481,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		}
 		pk.st = nil
 		if pk.held {
-			g.pagedStage(pk, p, pk.rows, g.rangeNoRuns(lo, hi))
+			g.pagedStage(pk, p, pk.rows, noRuns, wins)
 			// A call over evicted history streams (pagedstream.go).
 			if e := g.pagedStreamPrep(sid, bs, pk.rows); e != nil {
 				g.noteRoom(e)
@@ -5434,32 +5439,39 @@ func (g *devTier) attendsIn(lo, hi int) bool {
 	return false
 }
 
-// rangeNoRuns is the key-run rule of [lo, hi)'s attention: whether it stays
-// causal inside the call's bidirectional runs. submit keeps a range to one
-// rule (cutsRuns), so the first attending block states it. Callers hold g.mu.
-func (g *devTier) rangeNoRuns(lo, hi int) bool {
+// rangeRule is the key-run rule of [lo, hi): whether its attention stays
+// causal inside the call's bidirectional runs, and whether its rows read
+// the windows the session handed one a row (SetRowWindows) in place of
+// their runs. submit keeps a range to one rule (cutsRuns), so the first
+// block that reads either states it. Callers hold g.mu.
+func (g *devTier) rangeRule(lo, hi int) (noRuns, wins bool) {
 	for li := lo; li < hi; li++ {
-		if l := g.layers[li]; l != nil && (!l.linear || l.withAttn) {
-			return l.noRuns
+		if l := g.layers[li]; l.ruled() {
+			return l.noRuns, g.winPerRow && l.rowWins
 		}
 	}
-	return false
+	return false, false
 }
 
+// ruled says block l reads its call's key runs or its rows' windows: it
+// attends, or its graph reads the windows (a centred convolution's).
+func (l *layer) ruled() bool { return l != nil && (!l.linear || l.withAttn || l.rowWins) }
+
 // cutsRuns reports that block end, joining [li, end), would put two key-run
-// rules in one call while the session has runs to honour: a call stages one
-// set of key counts for every block in it. Callers hold g.mu.
+// rules in one call while the session has runs or windows to honour: a call
+// stages one set of key counts and descriptors for every block in it.
+// Callers hold g.mu.
 func (g *devTier) cutsRuns(li, end int) bool {
-	if len(g.bidir) == 0 {
+	if len(g.bidir) == 0 && !g.winPerRow {
 		return false
 	}
 	l := g.layers[end]
-	if l == nil || l.linear && !l.withAttn {
+	if !l.ruled() {
 		return false
 	}
 	for k := li; k < end; k++ {
-		if m := g.layers[k]; m != nil && (!m.linear || m.withAttn) {
-			return m.noRuns != l.noRuns
+		if m := g.layers[k]; m.ruled() {
+			return m.noRuns != l.noRuns || g.winPerRow && m.rowWins != l.rowWins
 		}
 	}
 	return false

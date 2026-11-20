@@ -140,7 +140,7 @@ func (e *Exec) formBlock(p nn.BlockSpec) (*Block, [2]error) {
 	if cb.Why != nn.DeclineServes {
 		return cb, errs
 	}
-	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole, cb.Rec, cb.Cut = p.Source, p.SideOff, p.Bidir, p.Whole, p.Rec, p.Cut
+	cb.Graph, cb.SideOff, cb.Bidir, cb.Windowed, cb.Rec, cb.Cut = p.Source, p.SideOff, p.Bidir, p.Windowed, p.Rec, p.Cut
 	// The two forms are independent: the rows' forms beside the row's. The
 	// target is probed first, before both read it.
 	e.comp.Device()

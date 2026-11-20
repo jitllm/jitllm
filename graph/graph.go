@@ -1238,6 +1238,21 @@ func (g *Graph) AttendNoRuns() bool {
 	return false
 }
 
+// ReadsRowWindows reports that an op of g reads each row's window from the
+// step's window table (Attrs.RowWindows): its attention or its centred
+// convolution. A block that states none reads its rows' runs, whatever
+// windows its call was handed.
+func (g *Graph) ReadsRowWindows() bool {
+	if g != nil {
+		for _, o := range g.Ops {
+			if o.Attr.RowWindows {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // AttendWindow is the window g's attention states (Attrs.Window) and whether
 // it is an aligned chunk (Attrs.Chunked): 0 for a nil graph, one that does
 // not attend, or one whose attention sees every key.

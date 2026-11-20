@@ -69,7 +69,6 @@ type TowerGraphs struct {
 	Marks int
 	// Tail is the class rows after the patches (TOpTailRow).
 	Tail int
-	Full []bool
 	// Geometry is how a picture becomes the tower's squares
 	// (jlm.PictureGeometry, PictureSquares).
 	Geometry *jlm.PictureGeometry
@@ -601,7 +600,6 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		}
 	} else {
 		for i := range int(v.NLayer) {
-			tg.Full = append(tg.Full, window == 0 || slices.Contains(t.Block.Full, int32(i)))
 			g, err := towerBlock(m.TowerBase+i, i, t, v, m.TowerFacts(int32(i)))
 			if err != nil {
 				return nil, fmt.Errorf("model: the tower's block %d: %w", i, err)
@@ -1385,7 +1383,7 @@ func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, n, base int, e *graph
 		if err := graph.Verify(b.G, f); err != nil {
 			return fmt.Errorf("model: the tower's block %d: %w", i, err)
 		}
-		tg.Blocks, tg.Full = append(tg.Blocks, b.G), append(tg.Full, true)
+		tg.Blocks = append(tg.Blocks, b.G)
 		o := b.G.Values[out]
 		rows, width = o.Rows, o.Width
 		outs[i] = [2]int{rows, width}

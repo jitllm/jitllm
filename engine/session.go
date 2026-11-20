@@ -84,6 +84,7 @@ type Session struct {
 	// readout or of an embedding's (embedPrefill).
 	req      []uint32
 	mark     embedMode
+	embRun   [1]nn.KeyRun
 	ldRoom   nn.RoomReporter
 	ldSpill  nn.Spiller
 	ldStep   nn.SessionStepper

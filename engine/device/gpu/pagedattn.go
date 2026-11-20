@@ -371,7 +371,7 @@ func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error
 		end := keys
 		for _, r := range rows {
 			if !r.pad {
-				keys = max(keys, g.runEnd(r.pos, end))
+				keys = max(keys, g.runEnd(r.pos, end, false), g.runEnd(r.pos, end, true))
 			}
 		}
 	}
@@ -389,9 +389,9 @@ type pagedRow struct {
 
 // pagedStage fills pg's descriptor slabs for a call's rows, full and
 // windowed: each row's sequence run, the same offset in every layer's arena.
-// noRuns is the call's blocks' key-run rule (rangeNoRuns).
+// noRuns and wins are the call's blocks' key-run rule (rangeRule).
 // Callers hold g.mu and have run pagedPrep for the same rows.
-func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow, noRuns bool) {
+func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow, noRuns, wins bool) {
 	kp := g.kvPages()
 	pg.desc, pg.descW = pg.desc[:0], pg.descW[:0]
 	callEnd := pagedKeys(rows)
@@ -408,10 +408,12 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow,
 		// A row of a bidirectional run attends to the run's end (bidir.go);
 		// its window still starts from its own position, as the reference's
 		// does, which the start word here carries apart from the end. A row
-		// with a window of its own (SetRowWindows) reads inside it.
+		// with a window of its own (SetRowWindows) reads inside it where the
+		// call's blocks read the windows.
 		last, first := end, uint32(0)
 		win, own := g.rowWindow(r.pos)
-		if e := g.runEnd(r.pos, callEnd); e > 0 && (!noRuns || own) {
+		own = own && wins
+		if e := g.runEnd(r.pos, callEnd, wins); e > 0 && (!noRuns || own) {
 			last = uint32(e)
 		}
 		if own {

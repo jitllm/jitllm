@@ -506,8 +506,9 @@ func RowTableRoles(ts []RowTable) []jlm.Role {
 // states its own device to the composer), where its side input starts, the
 // tables of rows its rows read (Tables, any number, each by its role),
 // whether its history is kept at f32, whether it reads both ways inside a
-// prompt's runs (Bidir: attends, or convolves centred), reads the whole
-// picture (Whole) or steps a recurrent state in order (Rec) -- or why it is
+// prompt's runs (Bidir: attends, or convolves centred), reads the windows
+// its rows were handed (Windowed: its graph states them) or steps a
+// recurrent state in order (Rec) -- or why it is
 // not to be asked (Why), and where that is the statement broken, what broke
 // it (Err). Run is the most rows a run of a block reading both ways holds,
 // the instance's.
@@ -542,10 +543,10 @@ type BlockSpec struct {
 	KVRow   int
 	KVBlock graph.BlockFmt
 	// KVBF16 is a bfloat16 history's: its pools hold bfloat16 halves.
-	KVBF16       bool
-	Bidir, Whole bool
-	Rec          bool
-	Run          int
+	KVBF16          bool
+	Bidir, Windowed bool
+	Rec             bool
+	Run             int
 }
 
 type LayerPlan struct {
@@ -960,8 +961,9 @@ type KeyRunDevice interface {
 // windows may overlap, so they are not a partition KeyRunDevice can state. A
 // window an attention states with Bidir is not this: the block's form clips
 // each row's keys to it. No windows (nil) is every row over its call. It
-// replaces whatever runs SetKeyRuns gave, and false is a device that cannot
-// take them.
+// replaces the windowed runs SetKeyRuns gave and keeps its full runs, which
+// a block that states no windows reads; false is a device that cannot take
+// them.
 type RowWindowDevice interface {
 	SetRowWindows(wins []KeyRun)
 }

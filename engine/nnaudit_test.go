@@ -56,7 +56,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	defer g.Close()
 	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
-	ran, executed, last, held := 0, 0, "", [2]uint64{}
+	ran, last, held := 0, "", [2]uint64{}
 	// seen says a relocation has moved an instance's account: the count
 	// composedNothing reads can see a composition.
 	seen := false
@@ -73,7 +73,6 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 		heldAfter(t, g, last, &held)
 		last = src.name
 		t.Run(src.name, func(t *testing.T) {
-			executed++
 			path := src.path
 			if src.hf {
 				path = jlmOfSafetensors(t, src.path)
@@ -190,30 +189,76 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			stepsTogetherOnCard(t, st, m, g)
 			// The violation, once: a block moved to the CPU composes there,
 			// and the account composedNothing reads must see it.
-			if !seen && m.Cfg.NLayer > 1 {
-				was := instanceAsks(st)
-				if st.SetGPULayers(m.Cfg.NLayer-1) == m.Cfg.NLayer-1 {
-					if instanceAsks(st)[nn.CPU] == was[nn.CPU] {
-						t.Fatalf("moving block %d to the CPU asked it for no form: composedNothing cannot see a composition", m.Cfg.NLayer-1)
-					}
-					seen = true
-				}
+			if !seen {
+				seen = movedComposes(t, st, m)
 			}
 		})
 	}
 	if ran == 0 {
 		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
 	}
-	// Over a slice of the list (-run), the slices together hold the models
-	// that move a block to the CPU: each says whether it saw one.
-	switch {
-	case seen:
+	if seen {
 		t.Logf("a model moved a block to the CPU: composedNothing saw a composition")
-	case executed < ran:
-		t.Logf("no model of these %d of %d moved a block to the CPU", executed, ran)
-	default:
-		t.Fatal("no model moved a block to the CPU: composedNothing was never shown to see a composition")
+		return
 	}
+	// No model of this run moved a block to the CPU -- a marker head's and
+	// an embedder's return before it, a slice (-run) may hold none -- so
+	// the sweep's own model shows the account composedNothing reads sees
+	// a composition.
+	heldAfter(t, g, last, &held)
+	last = composeWitness
+	cpuSeesAComposition(t, g)
+}
+
+// composeWitness is the model TestEveryModelRunsOnACard moves a block of to
+// the CPU where none of the run did: a small dense model whose every block
+// the card takes beside the CPU.
+const composeWitness = "synth-olmo2.gguf"
+
+// movedComposes moves instance st's last block of m to the CPU and fails t
+// where that asked the CPU for no form: composedNothing could not see a
+// composition. False is a move not made (one block, or the card listed
+// alone).
+func movedComposes(t *testing.T, st *Instance, m *model.Model) bool {
+	t.Helper()
+	was := instanceAsks(st)
+	if m.Cfg.NLayer < 2 || st.SetGPULayers(m.Cfg.NLayer-1) != m.Cfg.NLayer-1 {
+		return false
+	}
+	if instanceAsks(st)[nn.CPU] == was[nn.CPU] {
+		t.Fatalf("moving block %d to the CPU asked it for no form: composedNothing cannot see a composition", m.Cfg.NLayer-1)
+	}
+	return true
+}
+
+// cpuSeesAComposition places composeWitness's every block on card g beside
+// the CPU, steps it, and moves its last block to the CPU (movedComposes).
+func cpuSeesAComposition(t *testing.T, g *gpu.GPU) {
+	t.Helper()
+	src, ok := existingModel(testmodels.Path(composeWitness))
+	if !ok {
+		testmodels.Missing(t, "MODEL MISSING: %s (see docs/testing.md) -- composedNothing was never shown to see a composition", testmodels.Path(composeWitness))
+	}
+	m, err := model.Open(jlmOf(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	st := testInstance(t, m, 16)
+	defer st.Close()
+	if err := st.SetDeviceLayers(g, -1); err != nil {
+		t.Fatalf("%s: placement: %v (%s)", composeWitness, err, g.Err())
+	}
+	if st.GPULayers() != m.Cfg.NLayer {
+		t.Fatalf("%s: the card took %d of %d blocks: %v (%s)", composeWitness, st.GPULayers(), m.Cfg.NLayer, st.DeviceDeclines(), g.Err())
+	}
+	if _, err := st.Forward(1); err != nil {
+		t.Fatalf("%s: Forward on the card: %v (%s)", composeWitness, err, g.Err())
+	}
+	if !movedComposes(t, st, m) {
+		t.Fatalf("%s: its block %d did not move to the CPU: composedNothing was never shown to see a composition", composeWitness, m.Cfg.NLayer-1)
+	}
+	t.Logf("no model of the run moved a block to the CPU; %s's did, and composedNothing saw a composition", composeWitness)
 }
 
 // instanceAsks is how many forms instance s has asked of each device it runs

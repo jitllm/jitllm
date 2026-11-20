@@ -133,8 +133,9 @@ type Block struct {
 	// RowsWhy is why the rows' form is not served, where it is not.
 	RowsWhy nn.Decline
 	// Bidir says the block attends bidirectionally inside a prompt's runs,
-	// Whole that its rows read the whole picture whatever their windows.
-	Bidir, Whole bool
+	// Windowed that its rows read the windows the call was handed
+	// (nn.BlockSpec.Windowed).
+	Bidir, Windowed bool
 	// Rec is a linear block (nn.BlockSpec.Rec).
 	Rec bool
 }

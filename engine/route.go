@@ -275,7 +275,7 @@ func (s *Instance) openPrompt(r *route, slot, base, p0, n, chunkRows int, bidir 
 // the chunk (bidirTellOn). false is a device that cannot honour them.
 func (s *Instance) callTellOn(r *route, li, p0, n int) bool {
 	if s.emb != nil && s.emb.bidir {
-		return s.embedTellOn(r, li, n)
+		return s.embedTellOn(r, li, p0, n)
 	}
 	return s.bidirTellOn(r, p0, n)
 }
@@ -296,12 +296,23 @@ func (s *Instance) bidirTellOn(r *route, p0, n int) bool {
 }
 
 // embedTellOn is embedTell for route r's device: the rows' windows where the
-// run states them (a tower's windowed blocks), none where it does not; a
+// run states them (a tower's windowed blocks), none where it does not. A
 // device not told the prompt is non-causal (nn.PromptRows) reserves the
-// chunk's rows first.
-func (s *Instance) embedTellOn(r *route, li, n int) bool {
-	if r.prompt == nil && r.resv != nil && !r.resv.ReserveRows(li, n) {
-		return false
+// chunk's rows first and, where the blocks keep a history (runsWhole), is
+// handed the chunk's rows p0..p0+n-1 as one key run, which a block that
+// states no windows reads as the CPU device's does.
+func (s *Instance) embedTellOn(r *route, li, p0, n int) bool {
+	if r.prompt == nil {
+		if r.resv != nil && !r.resv.ReserveRows(li, n) {
+			return false
+		}
+		if !s.runsWhole(li) {
+			if r.keys == nil {
+				return false
+			}
+			s.embRun[0] = nn.KeyRun{Lo: p0, Hi: p0 + n}
+			r.keys.SetKeyRuns(s.embRun[:], nil)
+		}
 	}
 	if r.wins == nil {
 		return r.prompt != nil

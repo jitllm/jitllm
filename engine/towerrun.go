@@ -597,12 +597,6 @@ func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []f
 	return tr.s.towerSquare(tr, sq, len(tg.Classes)+sq.Class, model.PairKey(pl.Px, pl1.Px), words, dst, deep, 0)
 }
 
-// wholePicture says tower block li attends the whole picture though its
-// rows carry windows (TowerBlock.Full).
-func (s *Instance) wholePicture(li int) bool {
-	return s.towered() && s.m.Tower.Full[li-s.lo]
-}
-
 // towerBlocks runs the tower's blocks over the patch rows of a gw x gh grid,
 // one run in which every row's keys are every row's, leaving the last
 // block's rows in blk: the tower instance's prefill (embedMode.rows), each
