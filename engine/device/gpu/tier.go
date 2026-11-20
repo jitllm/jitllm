@@ -1703,9 +1703,6 @@ type devShared struct {
 	aCap, axCap, outCap int
 	xfBuf               backend.Buf // a float weight's activation
 	xfCap               int
-	// lastSub is when the device last started or finished a submission
-	// (unix ns): the background tuner waits for tuneQuiet past it.
-	lastSub atomic.Int64
 	// gatherCopies is a page gather's copy list (gatherInto), reused.
 	gatherCopies []backend.CopyRange
 	pcache       *persistCache // composed persistent kernels; see persist.go

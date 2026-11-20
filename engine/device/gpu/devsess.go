@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
@@ -403,13 +402,11 @@ func (g *devTier) runSub(f func(backend.Session)) {
 		g.ranFn = g.ran
 	}
 	g.runF = f
-	g.lastSub.Store(time.Now().UnixNano())
 	if g.q != nil {
 		g.qd.SessionOn(g.q, g.ranFn)
 	} else {
 		g.dev.Session(g.ranFn)
 	}
-	g.lastSub.Store(time.Now().UnixNano())
 	g.runF = nil
 }
 
