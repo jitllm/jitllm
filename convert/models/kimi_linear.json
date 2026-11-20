@@ -1,5 +1,5 @@
 {
-  "describe": {"KimiLinearForCausalLM": "Kimi Linear (Kimi Delta Attention beside MLA; safetensors only)"},
+  "describe": {"KimiLinearForCausalLM": "Kimi Linear (Kimi Delta Attention beside MLA)"},
   "classes": ["KimiLinearForCausalLM"],
   "config": {
     "defaults": {
@@ -27,7 +27,7 @@
       "embedding_length": {"uint": "hidden_size"},
       "feed_forward_length": {"uint": "intermediate_size"},
       "attention.head_count": {"uint": "num_attention_heads"},
-      "attention.head_count_kv": {"int32s": "linear_attn_config != null ? each_layer(num_hidden_layers, linear_attn_config.full_attn_layers, 1, num_attention_heads, 0) : each_match(layer_types, 'full_attention', num_attention_heads, 0)"},
+      "attention.head_count_kv": {"int32s": "linear_attn_config != null ? each_layer(num_hidden_layers, linear_attn_config.full_attn_layers, 1, 1, 0) : each_match(layer_types, 'full_attention', 1, 0)"},
       "rope.freq_base": {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps"},
       "ssm.conv_kernel": {"uint": "linear_attn_config.short_conv_kernel_size ?? linear_conv_kernel_dim ?? 4"},
@@ -46,7 +46,7 @@
       "expert_shared_count": {"uint": "num_shared_experts ?? n_shared_experts ?? 1"},
       "expert_weights_scale": {"float": "routed_scaling_factor"},
       "expert_weights_norm": {"bool": "moe_renormalize ?? norm_topk_prob ?? true"},
-      "expert_group_count": {"uint": "num_expert_group ?? n_group ?? 1"},
+      "expert_group_count": {"uint": "num_expert_group ?? n_group ?? 1", "if": "(num_expert_group ?? n_group ?? 1) > 1"},
       "expert_group_used_count": {"uint": "topk_group"}
     },
     "vocab": "vocab_size",

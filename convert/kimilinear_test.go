@@ -347,3 +347,13 @@ func TestKimiReadsMoonshotsConfigForm(t *testing.T) {
 	}
 	klSameTensors(t, a, s)
 }
+
+// TestKimiLinearSafetensorsMatchesItsGGUF converts synth-kimilinear from its
+// HuggingFace directory and from the F32 GGUF llama.cpp's converter wrote from
+// the same weights (scripts/kimilineargguf.py), and demands the same container
+// (kimiSameContainer): the kimi-linear statement in
+// convert/models/latent_delta.json reads the GGUF's tensors and keys into what
+// KimiLinearForCausalLM's statement reads the checkpoint into.
+func TestKimiLinearSafetensorsMatchesItsGGUF(t *testing.T) {
+	kimiSameContainer(t, testmodels.Path(klDir), testmodels.Path(klDir+"-f32.gguf"))
+}

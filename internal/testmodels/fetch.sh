@@ -62,6 +62,9 @@
 #
 #   tiny-qwen3moe-f32.gguf -- scripts/tiny-moe-gguf.py, from tiny-qwen3moe-hf/.
 #
+#   synth-kimilinear-f32.gguf -- scripts/kimilineargguf.py, llama.cpp's own
+#     converter (LCPP_SRC) on synth-kimilinear/ in Moonshot's checkpoint layout.
+#
 #   kimik3/Kimi-K3-0.40B-F32.gguf and kimik3/Kimi-K3-0.40B-Kazakh-CPT-59M-F16.gguf
 #     -- llama.cpp's own converter (a build with conversion/kimi_k3.py) on the
 #     safetensors checkpoints inference-optimization/Kimi-K3-0.40B (model.safetensors

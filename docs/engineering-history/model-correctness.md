@@ -7591,6 +7591,60 @@ grepping for the capability.
 gates chain two matvecs through a quantized activation of rank width, and
 `kernels.Quantize` works in 32-element blocks.
 
+### From a GGUF: kimi-linear, a statement and no code
+
+★★★ **A GGUF LABELLED `kimi-linear` CONVERTS INTO THE SAME CONTAINER AS ITS
+SAFETENSORS, AND THE CHANGE IS DATA ONLY.** `convert/models/latent_delta.json`
+names the architecture beside kimi-k3 and states its container: kimilinear's
+statement (latent ranks, no positional encoding, the sigmoid router, the kinds
+read off head_count_kv, the KDA geometry) with the GGUF's tensors read as
+Kimi-K3's are -- split q, k and v and their three convolutions joined in the
+checkpoint's order, the linear blocks' attn_output the KDA output, and ssm_a,
+which llama.cpp's converter already writes as -exp(A_log) per head, repeated
+over the head's channels. The real file's table was read with the repository's
+reader first: 610 tensors, 27 blocks, head_count_kv `[0,0,0,1,...]` (one per
+latent block, llama.cpp's MQA restatement of MLA), no expert_weights_norm and
+no group count. Absent keys take the class's defaults (renormalised,
+ungrouped).
+
+★ **TWO VALUES THE SAFETENSORS STATEMENT WROTE DIFFERENTLY, AND NEITHER WAS
+READ.** The containers disagreed on three Config fields and nothing else: the
+safetensors statement wrote the latent blocks' kv heads as the attention's
+(4 on the fixture, 32 on the 48B) and one expert group of one used. Under MLA
+the cache row is the latent plus the rotary key, one per position whatever the
+kv head count (`Instance.kvl`), and one group with all of it used is the
+ungrouped selection, so the statement now writes llama.cpp's 1 and no group
+count, as Kimi-K3's does. The gates read the same before and after:
+synth-kimilinear against transformers 3.89e-12, on the card 8.154e-12 (CUDA)
+and 7.308e-12 (Vulkan), the KDA gate 4.72e-08.
+
+★ **THE FIXTURE IS hfgold.py's WEIGHTS THROUGH llama.cpp's OWN CONVERTER.**
+`scripts/kimilineargguf.py` restates synth-kimilinear in Moonshot's checkpoint
+layout -- `linear_attn_config` and `first_k_dense_replace` beside
+transformers' keys, the dense block's MLP as `mlp.*` where transformers saves
+`block_sparse_moe.*` -- and runs `convert_hf_to_gguf.py --outtype f32`. Every
+parameter and buffer is the fixture's, so transformers' golden is the golden
+of both containers. `convert.TestKimiLinearSafetensorsMatchesItsGGUF`: every
+Config field equal, 56 tensors byte-identical (red on a statement fusing k
+before q: attn_qkv's bytes differ in both linear blocks); the scratch entry
+diff, expert banks read sheet by sheet from their pages, reads 56 of 56
+entries equal. `engine.TestKimiLinearGGUFMatchesTransformers`: 8 positions,
+worst NMSE 3.89e-12 against the 1e-9 bound (2.297 on the same violation).
+`TestNoPEMLAOnEveryDevice` runs both sources with every block on the card and
+at each partial seam: identical worsts on both, 7.3e-12 to 9.3e-12.
+`TestGreedyMatchesLlamaCpp` on the fixture GGUF: 20 of 20 teacher-forced
+tokens against llama.cpp (0 of 20 on the same violation).
+
+★★ **THE REAL 48B-A3B Q8_0 AGREES WITH THE GGUF ORACLE, AND THE ORACLE PARTED
+FROM ITSELF FIRST.** On "The capital of France is", llama-completion -ngl 0
+-c 512 reads " Paris. The capital of Italy is Rome. ..." and the same command
+saving its session (--prompt-cache-all), whose ids are the teacher-forced
+golden, " Paris." and end of text. jitllm reads " The" at that position by
+0.568, the ordinary run's token: the teacher-forced arm now takes the oracle's
+ordinary run as its other arm from the same ids, as cpuSays does for an
+offloaded oracle, and the greedy chain agrees with the ordinary run for 20 of
+20 tokens.
+
 ## The chat template, applied
 
 ★ **AND THE CHAT TEMPLATE WAS PARSED, CONVERTED, STORED AND NEVER APPLIED.

@@ -1,5 +1,5 @@
 {
-  "describe": {"kimi-k3": "Kimi-K3", "KimiK3ForConditionalGeneration": "Kimi-K3's text model, its experts compressed-tensors MXFP4"},
+  "describe": {"kimi-k3": "Kimi-K3", "kimi-linear": "Kimi-Linear 48B-A3B (Kimi Delta Attention beside MLA)", "KimiK3ForConditionalGeneration": "Kimi-K3's text model, its experts compressed-tensors MXFP4"},
   "classes": ["KimiK3ForConditionalGeneration"],
   "template": "kimi_k3_chat.jinja",
   "config": {
@@ -121,7 +121,7 @@
     ],
     "ignore_prefix": ["vision_tower.", "mm_projector."]
   },
-  "gguf": ["kimi-k3"],
+  "gguf": ["kimi-k3", "kimi-linear"],
   "container": {
     "kimi-k3": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)", "norm_eps": "1e-6"},
       "flags": {"no_pos_enc": "true"}, "router": {"gate": "sigmoid"},
@@ -143,6 +143,23 @@
       "delta_decay_bound": "src['kda.gate_lower_bound'] | default(none)",
       "attn_res_block": "src['attn_res.block_size'] | default(0)", "expert_latent": "src['expert_latent_length'] | default(0)",
       "situ": {"beta": "src['activation.situ_beta'] | default(0)", "linear_beta": "src['activation.situ_linear_beta'] | default(0)"}},
+    "kimi-linear": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)", "norm_eps": "1e-6"},
+      "flags": {"no_pos_enc": "true"}, "router": {"gate": "sigmoid"},
+      "layers_by_kv_heads": true, "stop": ["<|im_end|>"],
+      "tensors": {
+        "block_linear": {
+          "attn_q.weight": "attn_qkv.weight", "attn_k.weight": "attn_qkv.weight", "attn_v.weight": "attn_qkv.weight",
+          "ssm_conv1d_q.weight": {"role": "ssm_conv1d.weight", "do": [{"reshape": [-1, "ssm.conv_kernel"]}]},
+          "ssm_conv1d_k.weight": {"role": "ssm_conv1d.weight", "do": [{"reshape": [-1, "ssm.conv_kernel"]}]},
+          "ssm_conv1d_v.weight": {"role": "ssm_conv1d.weight", "do": [{"reshape": [-1, "ssm.conv_kernel"]}]},
+          "attn_output.weight": "ssm_out.weight",
+          "ssm_a": {"role": "ssm_a", "do": [{"reshape": [-1]}, {"repeat": [0, "kda.head_dim"]}]}
+        },
+        "fuse": {"attn_qkv.weight": ["attn_q.weight", "attn_k.weight", "attn_v.weight"],
+                 "ssm_conv1d.weight": ["ssm_conv1d_q.weight", "ssm_conv1d_k.weight", "ssm_conv1d_v.weight"]}
+      },
+      "recurrent": {"conv_kernel": "src['ssm.conv_kernel']", "groups": "src['attention.head_count']", "heads_v": "src['attention.head_count']",
+                    "state_size": "src['kda.head_dim']", "inner": "src['attention.head_count'] * src['kda.head_dim']"}},
     "kimilinear": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)", "norm_eps": "1e-6"},
       "flags": {"no_pos_enc": "true"}, "router": {"gate": "sigmoid"},
       "layers_by_kv_heads": true,

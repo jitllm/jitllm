@@ -90,7 +90,7 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 	}
 	paths := languageModels(t)
 	// JITLLM_GREEDY_PAIR=<gguf>=<container> holds a container converted from
-	// safetensors (e.g. Kimi-Linear) against a GGUF used only as the oracle.
+	// safetensors against a GGUF used only as the oracle.
 	var pair map[string]string
 	if p := os.Getenv("JITLLM_GREEDY_PAIR"); p != "" {
 		g, c, ok := strings.Cut(p, "=")
@@ -397,6 +397,13 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), the GGUF oracle offloaded %q and on "+
 								"the CPU %q from the same ids: the GGUF oracle disagrees with itself here",
 								i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]), m.Vocab.Text(bi))
+						case best-second > tieMargin && strings.HasPrefix(text, prompt+m.Vocab.Decode(append(slices.Clone(want[:i]), bi))):
+							// Saving the session changes the GGUF oracle's
+							// reduction order, and its ordinary run, the
+							// greedy text, is the other arm from the same ids.
+							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), the GGUF oracle %q saving its session "+
+								"and %q in its ordinary run from the same ids: the GGUF oracle disagrees with itself here",
+								i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]), m.Vocab.Text(bi))
 						case best-second > tieMargin:
 							t.Errorf("teacher-forced position %d: jitllm %q (margin %.3f), "+
 								"the GGUF oracle %q -- fed its own ids, so both engines saw "+
@@ -520,8 +527,8 @@ func llamaCppCoverage() map[string]int {
 		"gemma-2-2b-it-Q4_K_M.gguf":         18, // arm64 untuned (TuneOff), 0.089 tie at token 18
 		"gemma-2b.gguf":                     17,
 		"gemma-3-1b-it-Q4_K_M.gguf":         7,
-		// Held against the container streamed from safetensors, through
-		// JITLLM_GREEDY_PAIR: jitllm takes Kimi-Linear only from safetensors.
+		// The container converted from this GGUF, on a GPU server's host
+		// tier (JITLLM_GREEDY_MODEL).
 		"moonshotai_Kimi-Linear-48B-A3B-Instruct-Q8_0-00001-of-00002.gguf": 20,
 		// A GPU server, host tier, against the GGUF oracle's CPU path: 20 of 20
 		// teacher-forced as well.

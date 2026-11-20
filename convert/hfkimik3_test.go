@@ -105,40 +105,47 @@ func TestK3SafetensorsMatchesItsGGUF(t *testing.T) {
 		{"synth-kimik3", filepath.Join(c6HFDir(), "synth-kimik3"), testmodels.Path("synth-kimik3.gguf")},
 		{"Kimi-K3-0.40B", testmodels.Path("kimik3/Kimi-K3-0.40B-hf"), testmodels.Path("kimik3/Kimi-K3-0.40B-F32.gguf")},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			hf, gg := k3Sources(t, c.dir, c.gguf)
-			same, ulp := 0, 0
-			for k, e := range gg {
-				x := hf[k]
-				if x == nil {
-					continue
-				}
-				switch {
-				case x.Type != e.Type || x.NDim != e.NDim || x.Dims != e.Dims:
-					t.Errorf("%v block %d: safetensors %v %v, gguf %v %v", k.role, k.block,
-						x.Type, x.Dims[:x.NDim], e.Type, e.Dims[:e.NDim])
-				case bytes.Equal(x.Data, e.Data):
-					same++
-				case k.role == jlm.RoleSSMA && e.Type == jlm.TypeF32:
-					a, b := k3Values(t, x), k3Values(t, e)
-					for i := range a {
-						d := int64(math.Float32bits(a[i])) - int64(math.Float32bits(b[i]))
-						if d < -1 || d > 1 {
-							t.Errorf("ssm_a block %d [%d]: %g against %g, past one ulp", k.block, i, a[i], b[i])
-							break
-						}
-					}
-					ulp++
-				default:
-					t.Errorf("%v block %d: the bytes differ", k.role, k.block)
-				}
-			}
-			if same == 0 {
-				t.Fatal("no tensor compared -- this gate proved nothing")
-			}
-			t.Logf("every Config field equal; %d tensors identical, %d decay rates within one ulp", same, ulp)
-		})
+		t.Run(c.name, func(t *testing.T) { kimiSameContainer(t, c.dir, c.gguf) })
 	}
+}
+
+// kimiSameContainer holds the container converted from a HuggingFace
+// directory and the one converted from the F32 GGUF convert_hf_to_gguf.py
+// wrote from the same checkpoint to one another: every Config field (k3Sources)
+// and every tensor byte for byte, the decay rates within one ulp.
+func kimiSameContainer(t *testing.T, dir, gp string) {
+	t.Helper()
+	hf, gg := k3Sources(t, dir, gp)
+	same, ulp := 0, 0
+	for k, e := range gg {
+		x := hf[k]
+		if x == nil {
+			continue
+		}
+		switch {
+		case x.Type != e.Type || x.NDim != e.NDim || x.Dims != e.Dims:
+			t.Errorf("%v block %d: safetensors %v %v, gguf %v %v", k.role, k.block,
+				x.Type, x.Dims[:x.NDim], e.Type, e.Dims[:e.NDim])
+		case bytes.Equal(x.Data, e.Data):
+			same++
+		case k.role == jlm.RoleSSMA && e.Type == jlm.TypeF32:
+			a, b := k3Values(t, x), k3Values(t, e)
+			for i := range a {
+				d := int64(math.Float32bits(a[i])) - int64(math.Float32bits(b[i]))
+				if d < -1 || d > 1 {
+					t.Errorf("ssm_a block %d [%d]: %g against %g, past one ulp", k.block, i, a[i], b[i])
+					break
+				}
+			}
+			ulp++
+		default:
+			t.Errorf("%v block %d: the bytes differ", k.role, k.block)
+		}
+	}
+	if same == 0 {
+		t.Fatal("no tensor compared -- this gate proved nothing")
+	}
+	t.Logf("every Config field equal; %d tensors identical, %d decay rates within one ulp", same, ulp)
 }
 
 // TestK3MXFP4ExpertsMatchTheGGUF converts inference-optimization's

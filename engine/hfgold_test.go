@@ -62,6 +62,28 @@ func hfGoldLarge(g string) bool {
 // whose norm weights are all one; qwen3 is the exception.
 func TestSafetensorsMatchTransformers(t *testing.T) { safetensorsMatchTransformers(t) }
 
+// TestKimiLinearGGUFMatchesTransformers holds the container converted from
+// synth-kimilinear's GGUF, which llama.cpp's converter wrote from the fixture's
+// weights (scripts/kimilineargguf.py), to transformers' golden of those weights
+// over every position it records: the kimi-linear statement
+// (convert/models/latent_delta.json) against KimiLinearForCausalLM.
+func TestKimiLinearGGUFMatchesTransformers(t *testing.T) {
+	m, err := model.Open(jlmOf(t, testmodels.Path("synth-kimilinear-f32.gguf")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if !m.Cfg.MLA() || !m.Cfg.NoPosEnc || !m.Cfg.Hybrid() {
+		t.Fatalf("MLA %v, no positional encoding %v, hybrid %v: not Kimi-Linear's graph",
+			m.Cfg.MLA(), m.Cfg.NoPosEnc, m.Cfg.Hybrid())
+	}
+	worst := hfWorst(t, m, "synth-kimilinear")
+	if !(worst <= hfNMSE) {
+		t.Fatalf("worst NMSE %.3e against transformers (bound %.0e)", worst, hfNMSE)
+	}
+	t.Logf("worst NMSE %.2e against transformers", worst)
+}
+
 // safetensorsMatchTransformers is TestSafetensorsMatchTransformers with opts on every model it opens.
 func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 	golds, _ := filepath.Glob(filepath.Join("..", "testdata", "golden", "hf", "*.json"))

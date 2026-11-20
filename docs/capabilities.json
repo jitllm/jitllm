@@ -201,6 +201,10 @@
       "graph": "latent_delta"
     },
     {
+      "name": "kimi-linear",
+      "graph": "latent_delta"
+    },
+    {
       "name": "lfm2",
       "graph": "shortconv"
     },

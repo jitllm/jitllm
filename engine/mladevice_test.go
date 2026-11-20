@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -441,10 +442,22 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 // identity) and wrong after, so the gate runs several positions. Where the
 // rotation is skipped the device must copy those channels instead (mlaRopeK and
 // mlaRopeQ write into the cache row and the absorbed query).
+//
+// It runs the fixture from both sources, the safetensors directory and the
+// GGUF llama.cpp's converter wrote from it (scripts/kimilineargguf.py), each
+// with every block on the device and at each seam that leaves blocks on the
+// host.
 func TestNoPEMLAOnEveryDevice(t *testing.T) {
+	t.Run("synth-kimilinear", func(t *testing.T) {
+		noPEMLAOnEveryDevice(t, "synth-kimilinear", hfContainer(t, "synth-kimilinear"))
+	})
+	t.Run("synth-kimilinear-f32.gguf", func(t *testing.T) {
+		noPEMLAOnEveryDevice(t, "synth-kimilinear-f32.gguf", jlmOf(t, testmodels.Path("synth-kimilinear-f32.gguf")))
+	})
+}
+
+func noPEMLAOnEveryDevice(t *testing.T, name, src string) {
 	ids := []int32{5, 11, 23, 41, 67, 89, 101, 127}
-	const name = "synth-kimilinear"
-	src := hfContainer(t, name)
 	instOpts := []Option{WithKVF16(false)}
 	m, err := model.Open(src)
 	if err != nil {
@@ -515,6 +528,23 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 			t.Logf("%s: %d of %d blocks on %s (%d linear), %d positions, worst logit "+
 				"NMSE %.3e, worst |dlogit| %.3f", name, wantPlaced, m.Cfg.NLayer, spec,
 				linear, len(want), worst, worstD)
+			for k := 1; k < m.Cfg.NLayer; k++ {
+				st := testInstance(t, m, len(ids)+1, instOpts...)
+				st.SetDeviceLayers(gpux, k)
+				if n := st.GPULayers(); n != k {
+					st.Close()
+					t.Fatalf("a seam of %d: %s took %d block(s): %v (tier: %q)", k, spec, n, declineList(st), gpux.Err())
+				}
+				got := runIDs(t, st, ids)
+				if n := st.GPULayers(); n != k {
+					st.Close()
+					t.Fatalf("a seam of %d: the session fell to the host (%d blocks left): %v", k, n, gpux.Err())
+				}
+				st.Close()
+				worst, worstD := compare(t, want, got)
+				t.Logf("%s: a seam of %d of %d blocks on %s, worst logit NMSE %.3e, worst |dlogit| %.3f",
+					name, k, m.Cfg.NLayer, spec, worst, worstD)
+			}
 		})
 	}
 	if ran == 0 {
