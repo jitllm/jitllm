@@ -352,11 +352,17 @@ func (s *Instance) crossMap(sess *Session, src, from, end int) int {
 	kv := sess.kv
 	pg := &kv.layers[src]
 	d := kv.copyAt
-	if kv.share == nil || d == nil || from%pg.p != 0 {
+	if kv.share == nil || d == nil {
 		return from
 	}
 	dev := d(src)
-	if dev == nil || dev.SharePage(src) != pg.p {
+	if dev == nil {
+		return from
+	}
+	if pc := dev.SharePage(src); pc > 0 && pc != pg.p {
+		return crossMapApart(kv, dev, src, pc, from, end)
+	}
+	if from%pg.p != 0 || dev.SharePage(src) != pg.p {
 		return from
 	}
 	for j := from / pg.p; (j+1)*pg.p <= end && pg.isShared(j); j++ {
@@ -369,6 +375,27 @@ func (s *Instance) crossMap(sess *Session, src, from, end int) int {
 			pg.sent = map[int]int{}
 		}
 		pg.sent[0] = max(pg.sent[0], from)
+	}
+	return from
+}
+
+// crossMapApart is crossMap where the card cuts the copy into pages of pc
+// positions apart from the CPU device's (nameCopyApart): from the card's
+// page from falls in, each page whose last position the prefix cache
+// shares, mapped by the key of the positions up to its end.
+func crossMapApart(kv *kvCache, dev nn.KVShareDevice, src, pc, from, end int) int {
+	pg := &kv.layers[src]
+	for j := from / pc; (j+1)*pc <= end && pg.isShared(((j+1)*pc-1)/pg.p); j++ {
+		key := kv.pageKeyP(pc, j)
+		if key == "" || !dev.MapKV(src, j, key, (j+1)*pc) {
+			break
+		}
+		from = (j + 1) * pc
+		if pg.sent == nil {
+			pg.sent = map[int]int{}
+		}
+		pg.sent[0] = max(pg.sent[0], from)
+		pg.copyApart, pg.copyApartSealed = pc, max(pg.copyApartSealed, j+1)
 	}
 	return from
 }

@@ -214,6 +214,10 @@ type kvPages struct {
 	// it runs on where that card cuts it apart from p, and apartSealed the
 	// first of those pages not yet named there (kvCache.nameApart).
 	apart, apartSealed int
+	// copyApart and copyApartSealed are apart and apartSealed for the copy
+	// a card holds of the block's history while it runs on the CPU device
+	// (kvCache.nameCopyApart).
+	copyApart, copyApartSealed int
 }
 
 // keyStart is the first key position pos attends on this layer: the start of
@@ -508,6 +512,9 @@ type kvCache struct {
 	// walkWindow is the prefix gate's violation (TestPrefixCacheRestoresAWindowedLayer):
 	// a windowed layer's coverage is walked from zero, as a full layer's is.
 	walkWindow bool
+	// apartWalked says the last restore was decided by blocks paging apart
+	// on a card (restoreApart), which mapped their pages as they walked.
+	apartWalked bool
 	// share is the store this session's sealed pages are held once in
 	// (Instance.ShareKV), nil when it shares nothing.
 	share *SharedStore
@@ -993,6 +1000,7 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 		}
 	}
 	best := -1
+	kc.apartWalked = false
 	for li := kc.lo; li < len(kc.layers); li++ {
 		pg := &kc.layers[li]
 		if pg.p == 0 {
@@ -1029,7 +1037,9 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 		}
 	}
 	if best < 0 {
-		return 0, 0, nil
+		n, tail := kc.restoreApart(limit)
+		kc.apartWalked = n > 0
+		return n, tail, nil
 	}
 	// The partial tail (sealTail's page, keyed by its fill), which is the whole
 	// prompt on a short chat turn. The fill is probed downward from this
@@ -1165,6 +1175,7 @@ func (kc *kvCache) unsealPast(n int) {
 			pg.lastSealed = min(pg.lastSealed, n/pg.p)
 			pg.copySealed = min(pg.copySealed, n/pg.p)
 			pg.apartSealed = min(pg.apartSealed, n/max(pg.apart, 1))
+			pg.copyApartSealed = min(pg.copyApartSealed, n/max(pg.copyApart, 1))
 		}
 	}
 }
@@ -1213,8 +1224,14 @@ func (kc *kvCache) recFloor(limit int) int {
 // restores: every attention layer but a windowed one, which keeps (and
 // stores) only what its window reaches, and one reading another block's
 // history, which keeps none. A range of blocks that is all windowed has
-// nothing else to decide by, and walks them as before.
-func (kc *kvCache) covers(li int) bool {
+// nothing else to decide by, and walks them as before. A block on a card
+// paging apart from this cache walks the card's pages instead (walksApart).
+func (kc *kvCache) covers(li int) bool { return kc.walks(li) && kc.apartAt(li) == 0 }
+
+// walksApart is covers for a block on a card paging apart from this cache.
+func (kc *kvCache) walksApart(li int) bool { return kc.walks(li) && kc.apartAt(li) > 0 }
+
+func (kc *kvCache) walks(li int) bool {
 	s := &kc.layers[li]
 	if s.p == 0 || kc.src[li] != li {
 		return false
@@ -1234,15 +1251,17 @@ func (kc *kvCache) covers(li int) bool {
 // positions reads from (the page its window starts in on: nothing rewinds
 // behind a restored prompt), out of a store whose prefix covers
 // cover >= n positions: a page wholly inside cover was stored whole, the one
-// straddling it by its fill. It reports false, having kept nothing it
-// faulted, when any of them is missing.
+// straddling it by its fill. A block on a card paging apart from this
+// cache, windowed or not, maps its card's pages (mapApart), unless it
+// decided the coverage (restoreApart). It reports false, having kept
+// nothing it faulted, when any of them is missing.
 func (kc *kvCache) restoreWin(n, cover int) (bool, error) {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
-		if s.p == 0 || kc.src[li] != li || kc.covers(li) || n <= 0 {
+		if s.p == 0 || kc.src[li] != li || kc.covers(li) || n <= 0 || kc.apartWalked && kc.walksApart(li) {
 			continue
 		}
-		if kc.share != nil && kc.devAt(li) != nil && kc.cardPage(li) == nil {
+		if kc.apartAt(li) > 0 {
 			if !kc.mapApart(li, n, cover) {
 				kc.dropWin()
 				return false, nil
@@ -1755,6 +1774,9 @@ func (kc *kvCache) seal(pos int) {
 			kc.publishCopies(li, cur)
 			continue
 		}
+		// The copy a card keeps of it for a block there, where the card
+		// pages it apart from this cache, is named there at the card's page.
+		kc.nameCopyApart(li, pos)
 		// lastSealed means "stored", not "walked past": stop at the first page
 		// that cannot be stored, so a later pull-down from the card can still
 		// seal it, and trim (which evicts below the mark) never drops a page
@@ -1985,10 +2007,10 @@ func kvChunkFills(fill int) []int {
 	return out
 }
 
-// queuePublish is a name for page n of block li on the card, sent with the
-// prompt's others (flushPublish).
+// queuePublish is a name for page n of block li on the card, at the card's
+// page (namedPage), sent with the prompt's others (flushPublish).
 func (kc *kvCache) queuePublish(li, n int, key string) {
-	if key == "" || kc.cardPage(li) == nil {
+	if key == "" || kc.cardPage(li) == nil && kc.apartAt(li) == 0 {
 		return
 	}
 	kc.pubLi = append(kc.pubLi, int32(li))
@@ -2028,12 +2050,12 @@ func (kc *kvCache) retireTail(pos int) {
 	}
 	kc.publishTail(pos, false)
 	for li := kc.lo; li < len(kc.layers); li++ {
-		s := &kc.layers[li]
-		if s.p == 0 || s.p%kvChunk != 0 {
+		p := kc.namedPage(li)
+		if p == 0 || p%kvChunk != 0 {
 			continue
 		}
-		for e := pos/s.p*s.p + kvChunk; e <= pos; e += kvChunk {
-			kc.aliasPage(li, pos/s.p, kc.chunkKey(e))
+		for e := pos/p*p + kvChunk; e <= pos; e += kvChunk {
+			kc.aliasPage(li, pos/p, kc.chunkKey(e))
 		}
 	}
 	kc.flushPublish()
@@ -2050,9 +2072,10 @@ func (kc *kvCache) publishTail(pos int, cardOnly bool) int {
 		}
 		cur := pos / s.p
 		if d := kc.devAt(li); d != nil {
-			// On the card, named where it lives.
-			if f := pos - cur*s.p; f > 0 && d != nil {
-				kc.queuePublish(li, cur, kc.pageKeyFill(li, cur, f))
+			// On the card, named where it lives, at the card's page.
+			p := kc.namedPage(li)
+			if c, f := pos/p, pos%p; f > 0 {
+				kc.queuePublish(li, c, kc.pageKeyFillP(p, c, f))
 				n++
 			}
 			continue
@@ -2086,15 +2109,15 @@ func (kc *kvCache) aliasChunks(pos int) int {
 	}
 	added := 0
 	for li := kc.lo; li < len(kc.layers); li++ {
-		s := &kc.layers[li]
-		if s.p == 0 || s.p%kvChunk != 0 {
+		p := kc.namedPage(li)
+		if p == 0 || p%kvChunk != 0 {
 			continue
 		}
 		for e := from + kvChunk; e <= to; e += kvChunk {
-			if e%s.p == 0 {
+			if e%p == 0 {
 				continue // a whole page is named by its own key
 			}
-			if kc.aliasPage(li, (e-1)/s.p, kc.chunkKey(e)) {
+			if kc.aliasPage(li, (e-1)/p, kc.chunkKey(e)) {
 				added++
 			}
 		}
@@ -2103,7 +2126,8 @@ func (kc *kvCache) aliasChunks(pos int) int {
 	return added
 }
 
-// aliasPage names shared page n of layer li by key as well (SharedStore.alias).
+// aliasPage names shared page n of layer li by key as well (SharedStore.alias):
+// on a card, its page n there (namedPage).
 func (kc *kvCache) aliasPage(li, n int, key string) bool {
 	s := &kc.layers[li]
 	if key == "" {

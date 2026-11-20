@@ -620,11 +620,135 @@ func (kc *kvCache) nameApart(li, pos int) {
 	}
 }
 
+// nameCopyApart is nameApart for the copy a card holds of block li's history
+// while the block runs on the CPU device (histcross.go), where the card
+// cuts the copy apart from this cache: each page of the copy pos has passed
+// named there by the key of the positions up to its end at the card's
+// page, from the first not yet named, until one the copy does not hold
+// whole yet.
+func (kc *kvCache) nameCopyApart(li, pos int) {
+	s := &kc.layers[li]
+	if kc.share == nil || kc.copyAt == nil || kc.ns == "" || s.p == 0 {
+		return
+	}
+	d := kc.copyAt(li)
+	if d == nil {
+		return
+	}
+	pc := d.SharePage(li)
+	if pc <= 0 || pc == s.p {
+		return
+	}
+	if s.copyApart != pc {
+		s.copyApart, s.copyApartSealed = pc, 0
+	}
+	for ; (s.copyApartSealed+1)*pc <= pos; s.copyApartSealed++ {
+		key := kc.pageKeyP(pc, s.copyApartSealed)
+		if key == "" || !d.PublishKV(li, s.copyApartSealed, key) {
+			return
+		}
+	}
+}
+
+// apartAt is the positions one of block li's pages holds on the card it runs
+// on where that card cuts its history apart from this cache, 0 where the
+// block is on no card or the card pages it alike.
+func (kc *kvCache) apartAt(li int) int {
+	if kc.share == nil || kc.layers[li].p == 0 {
+		return 0
+	}
+	d := kc.devAt(li)
+	if d == nil {
+		return 0
+	}
+	if pc := d.SharePage(li); pc > 0 && pc != kc.layers[li].p {
+		return pc
+	}
+	return 0
+}
+
+// namedPage is the positions a page of block li that this cache names
+// holds: the card's where it pages the block apart (apartAt), else its own.
+func (kc *kvCache) namedPage(li int) int {
+	if pc := kc.apartAt(li); pc > 0 {
+		return pc
+	}
+	return kc.layers[li].p
+}
+
+// restoreApart is restore where every block deciding the coverage pages
+// apart from this cache on one card page (walksApart): each maps its card's
+// pages from the first by their keys (nameApart) while the card names them,
+// and then the page the coverage ends in by the longest fill the first of
+// them finds, probed downward from the prompt's remainder as restore probes
+// a tail, every other block taking the same or the fill given up. It
+// returns the positions mapped and the fill among them.
+func (kc *kvCache) restoreApart(limit int) (int, int) {
+	best, pc, first := -1, 0, -1
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if !kc.walksApart(li) {
+			continue
+		}
+		d := kc.devAt(li)
+		p := d.SharePage(li)
+		if pc != 0 && p != pc {
+			return 0, 0
+		}
+		pc = p
+		if first < 0 {
+			first = li
+		}
+		n := 0
+		for !kc.recurrent || (n+1)*pc <= limit {
+			key := kc.pageKeyP(pc, n)
+			if key == "" || !d.MapKV(li, n, key, (n+1)*pc) {
+				break
+			}
+			n++
+		}
+		if cov := n * pc; best < 0 || cov < best {
+			best = cov
+		}
+	}
+	if best < 0 {
+		return 0, 0
+	}
+	tail := 0
+	if !kc.recurrent && best < len(kc.seq) {
+		j := best / pc
+		kc.probes = appendProbes(kc.probes, min(len(kc.seq)-best, pc-1), kvChunk)
+		for _, f := range kc.probes {
+			key := kc.pageKeyFillP(pc, j, f)
+			if f%kvChunk == 0 && pc%kvChunk == 0 {
+				key = kc.chunkKey(best + f)
+			}
+			if key == "" || !kc.devAt(first).MapKV(first, j, key, best+f) {
+				continue
+			}
+			tail = f
+			for li := first + 1; li < len(kc.layers) && tail > 0; li++ {
+				if kc.walksApart(li) && !kc.devAt(li).MapKV(li, j, key, best+f) {
+					tail = 0
+				}
+			}
+			break
+		}
+	}
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if kc.walksApart(li) {
+			kc.layers[li].apart, kc.layers[li].apartSealed = pc, best/pc
+		}
+	}
+	return best + tail, tail
+}
+
 // mapApart maps into block li's history on the card it runs on, where that
 // card cuts it apart from this cache (nameApart), the pages of it there the
-// first n positions' window reads, from a store whose prefix covers cover
-// >= n positions: each named whole, so each must lie inside cover. It
-// reports false at the first the card names by no key.
+// first n positions' window reads -- every page of a block reading its whole
+// history -- from a store whose prefix covers cover >= n positions: a page
+// inside cover named whole, the one straddling it by the chunk cover ends
+// (aliasChunks) or its fill (publishTail). It reports false at the first
+// the card names by no key.
 func (kc *kvCache) mapApart(li, n, cover int) bool {
 	s := &kc.layers[li]
 	d := kc.devAt(li)
@@ -637,8 +761,13 @@ func (kc *kvCache) mapApart(li, n, cover int) bool {
 	}
 	for j := s.keyStart(n) / pc; j*pc < n; j++ {
 		key := ""
-		if (j+1)*pc <= cover {
+		switch fill := cover - j*pc; {
+		case fill >= pc:
 			key = kc.pageKeyP(pc, j)
+		case fill%kvChunk == 0 && pc%kvChunk == 0:
+			key = kc.chunkKey(cover)
+		default:
+			key = kc.pageKeyFillP(pc, j, fill)
 		}
 		if key == "" || !d.MapKV(li, j, key, n) {
 			return false

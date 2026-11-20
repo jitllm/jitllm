@@ -5090,6 +5090,29 @@ CUDA and Vulkan, where the commit before restored 0. Seal had also named
 such a card's pages by the CPU's keys, a 64-position page under the key of
 its first 32: it names nothing at the CPU's geometry there now.
 
+That restored only a windowed block, and only whole pages of the card's: a
+block reading its whole history on a card paging apart was walked from
+page 0 by the CPU's keys (kvCache.covers), found nothing, and took the
+whole prefix's coverage to 0; and a restore point inside a card's page
+mapped nothing. The chunk and fill names that let a prompt part from
+another inside a page were given at the CPU's page (aliasChunks,
+publishTail, retireTail), and queuePublish dropped every name for a block
+whose card pages it apart, so none reached the card. A block on a card
+paging apart now walks the card's pages instead, by their keys
+(walksApart): where the CPU device's blocks decide the coverage,
+restoreWin maps the card's pages up to it, windowed or not; where every
+block deciding it pages apart on a card, restoreApart walks them and
+probes the page the coverage ends in as restore probes a tail. The chunk
+a restore point ends and a prompt's fill are named at the card's page
+(namedPage). The card's copy of a CPU device's block whose card pages it
+apart is named the same way (nameCopyApart) and mapped (crossMapApart).
+TestAHistoryReadAcrossTheCPU's shared-apart arms page the CPU device at 32
+positions and the card at 64 and share a prefix of 160 positions, two and
+a half of the card's pages: at the commit before, the readers on
+the card mapped none of the first session's pages there and the readers
+on the CPU device restored 0, on every fixture, CUDA and Vulkan; now each
+restores the 160, mapping 2 to 10 pages on the card.
+
 A failed restore -- the store's pages found, then a miss where a windowed
 layer's were not, or a move to the card that would not happen -- left each
 layer's lastSealed at the pages it had found, so the prompt run again from

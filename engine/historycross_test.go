@@ -78,7 +78,10 @@ func TestAHistoryReadAcrossTheCPU(t *testing.T) {
 						continue
 					}
 					t.Run(fmt.Sprintf("%s/shared-readers-on-the-card-%t", dev, readersUp), func(t *testing.T) {
-						historySharedAcrossTheCPU(t, m, io, dev, readersUp)
+						historySharedAcrossTheCPU(t, m, io, dev, readersUp, 0)
+					})
+					t.Run(fmt.Sprintf("%s/shared-apart-readers-on-the-card-%t", dev, readersUp), func(t *testing.T) {
+						historySharedAcrossTheCPU(t, m, io, dev, readersUp, 32)
 					})
 				}
 			}
@@ -470,13 +473,21 @@ func historyStepAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev stri
 // on the card, which pages it apart from the CPU device (64 positions
 // against a window of 4 keys' 32), restores through the CPU device's copy
 // of it, its pages named at the CPU's geometry.
-func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev string, readersUp bool) {
+//
+// With hostPage set the CPU device pages every block at hostPage positions
+// and the card at 64, so every block on the card pages apart from the CPU
+// device, those that see their whole history among them, and the shared
+// prefix of five host pages ends inside a card's page: the card restores its
+// blocks from its own pages, the one the prefix ends in by the name of the
+// positions it shares.
+func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev string, readersUp bool, hostPage int) {
 	nl := m.Cfg.NLayer
 	_, cut := historyCut(t, m)
-	// A page of the host's and of the card's pool alike for the blocks that
-	// see their whole history: the prefix is named by pages, so the two must
-	// cut it at the same positions.
 	const page, ntok, seq = 64, 6, 1024
+	hp, shared := page, 4*page
+	if hostPage > 0 {
+		hp, shared = hostPage, 5*hostPage
+	}
 	g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.KVPage = page }))
 	if err != nil || g == nil {
@@ -489,7 +500,7 @@ func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev st
 	}
 	prompts := make([][]int32, 2)
 	for i := range prompts {
-		p := crossPrompt(m, 4*page, 0)
+		p := crossPrompt(m, shared, 0)
 		prompts[i] = append(p, crossPrompt(m, shareSuffix, i+1)...)
 	}
 	// One CPU device for both sessions: a shared page is a slot of its arena.
@@ -499,7 +510,7 @@ func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev st
 	firsts := make([][]float32, len(prompts))
 	m0 := g.Stats().KVPagesMapped
 	for i, p := range prompts {
-		st := testInstance(t, m, seq, append(append([]Option(nil), io...), crossPlace(nl, cut, lower, upper), withKVPage(page), cpu)...)
+		st := testInstance(t, m, seq, append(append([]Option(nil), io...), crossPlace(nl, cut, lower, upper), withKVPage(hp), cpu)...)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatalf("session %d: blocks [0,%d) on %s and [%d,%d) on %s: %v (%s)", i, cut, lower, cut, nl, upper, err, g.Err())
@@ -514,8 +525,8 @@ func historySharedAcrossTheCPU(t *testing.T, m *model.Model, io []Option, dev st
 		}
 		sess[i], firsts[i] = st, lg
 	}
-	if sess[1].KVRestored() < 4*page {
-		t.Fatalf("the second session restored %d positions of the shared %d", sess[1].KVRestored(), 4*page)
+	if sess[1].KVRestored() < shared {
+		t.Fatalf("the second session restored %d positions of the shared %d", sess[1].KVRestored(), shared)
 	}
 	for i, st := range sess {
 		want, ids := crossWant(t, m, io, prompts[i], ntok, seq)
