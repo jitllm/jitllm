@@ -682,8 +682,9 @@ func typedHistoryTypes() []model.KVType {
 // the reference against the f32 arm: a card that writes a row it does not
 // narrow, or reads the type's words through the wrong layout, moves the
 // answer as far as the type's loss. A second instance of another history
-// type offering the blocks the typed one holds is declined by name, and the
-// first instance's next step is its own without it.
+// type offering the blocks the typed one holds takes every one of them, its
+// history in pool layers of its own type (TestTwoHistoryTypesShareABlock),
+// and the first instance's next step stays finite beside it.
 func TestACardHoldsATypedHistorysBytes(t *testing.T) {
 	const nctx = 192
 	gguf := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
@@ -756,8 +757,8 @@ func TestACardHoldsATypedHistorysBytes(t *testing.T) {
 		s2.SetDeviceFallback(false)
 		err = s2.SetDevice(g)
 		t.Logf("a %v instance offering %s the blocks a %v instance holds: %d placed, %v (%s)", *other, dev, kt, s2.GPULayers(), err, g.Err())
-		if s2.GPULayers() != 0 || !strings.Contains(g.Err(), "its history is held here as") {
-			t.Errorf("a %v instance offering %s the blocks a %v instance holds placed %d of them (%s): a block's pool holds one type", *other, dev, kt, s2.GPULayers(), g.Err())
+		if err != nil || s2.GPULayers() != m.Cfg.NLayer {
+			t.Errorf("a %v instance offering %s the blocks a %v instance holds placed %d of %d (%v, %s): a block's pool holds a layer per history type", *other, dev, kt, s2.GPULayers(), m.Cfg.NLayer, err, g.Err())
 		}
 		lg, err := s.Forward(tk[nctx-1])
 		if err != nil {
@@ -768,21 +769,7 @@ func TestACardHoldsATypedHistorysBytes(t *testing.T) {
 		}
 		return a
 	}
-	gap := func(a, b [][]float32) float64 {
-		var sum float64
-		n := 0
-		for i := range a {
-			for j := range a[i] {
-				if math.IsInf(float64(a[i][j]), -1) || math.IsInf(float64(b[i][j]), -1) || a[i][j] < -15 && b[i][j] < -15 {
-					continue
-				}
-				d := float64(a[i][j] - b[i][j])
-				sum += d * d
-				n++
-			}
-		}
-		return math.Sqrt(sum / float64(n))
-	}
+	gap := lpGap
 	const spread, arena = 0.15, 0.05
 	for _, dev := range devs {
 		t.Run(dev, func(t *testing.T) {
@@ -821,6 +808,190 @@ func TestACardHoldsATypedHistorysBytes(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// lpGap is the root mean square difference of two runs' log-probabilities,
+// the entries both put below -15 left out.
+func lpGap(a, b [][]float32) float64 {
+	var sum float64
+	n := 0
+	for i := range a {
+		for j := range a[i] {
+			if math.IsInf(float64(a[i][j]), -1) || math.IsInf(float64(b[i][j]), -1) || a[i][j] < -15 && b[i][j] < -15 {
+				continue
+			}
+			d := float64(a[i][j] - b[i][j])
+			sum += d * d
+			n++
+		}
+	}
+	return math.Sqrt(sum / float64(n))
+}
+
+// typedArm is one history type's run in twoHistoryTypes: the scored half's
+// log-probabilities, and on a card the blocks it placed of the model's and
+// the card's history pool at the end.
+type typedArm struct {
+	lp             [][]float32
+	placed, blocks int
+	bytes          uint64
+}
+
+// twoHistoryTypes runs Llama 3.2 1B over a document's first 192 tokens,
+// teacher-forced, holding its history as each of kts: on the CPU device, each
+// alone on dev, and both on dev at once -- an instance of each over one
+// model, every block offered to the card by both, their steps interleaved.
+// opts are the card's further options.
+func twoHistoryTypes(t *testing.T, dev string, kts [2]model.KVType, opts ...gpu.Option) (cpu, alone, both [2]typedArm) {
+	const nctx = 192
+	gguf := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
+	if !fileExists(gguf) {
+		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
+	}
+	text, err := os.ReadFile("testdata/prompt-28k.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := model.Open(jlmOf(t, gguf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	tk := m.Vocab.Encode(string(text[:6000]), true)
+	if len(tk) < nctx {
+		t.Fatalf("the document is %d tokens, want %d", len(tk), nctx)
+	}
+	card := func() *gpu.GPU {
+		g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, append(testTierOpts(t), opts...)...)...)
+		if err != nil || g == nil {
+			noDevice(t, dev, err)
+		}
+		return g
+	}
+	inst := func(kt model.KVType, g *gpu.GPU, a *typedArm) *Instance {
+		s := testInstance(t, m, nctx, WithKVType(kt))
+		if s.KVType() != kt {
+			t.Fatalf("a %v cache was asked for and %v selected", kt, s.KVType())
+		}
+		if g == nil {
+			return s
+		}
+		s.SetDeviceFallback(false)
+		err := s.SetDevice(g)
+		a.placed, a.blocks = s.GPULayers(), m.Cfg.NLayer
+		t.Logf("a %v instance on %s: %d of %d blocks placed (%v, %s)", kt, dev, a.placed, a.blocks, err, g.Err())
+		return s
+	}
+	step := func(ss []*Instance, arms []*typedArm) {
+		for i := 0; i < nctx-1; i++ {
+			for j, s := range ss {
+				lg, err := s.Forward(tk[i])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i >= nctx/2 {
+					arms[j].lp = append(arms[j].lp, logSoftmax(lg))
+				}
+			}
+		}
+	}
+	for j, kt := range kts {
+		func() {
+			s := inst(kt, nil, nil)
+			defer s.Close()
+			step([]*Instance{s}, []*typedArm{&cpu[j]})
+		}()
+		func() {
+			g := card()
+			defer g.Close()
+			s := inst(kt, g, &alone[j])
+			defer s.Close()
+			step([]*Instance{s}, []*typedArm{&alone[j]})
+			alone[j].bytes = g.Stats().KVPoolBytes
+		}()
+	}
+	g := card()
+	defer g.Close()
+	sa := inst(kts[0], g, &both[0])
+	defer sa.Close()
+	sb := inst(kts[1], g, &both[1])
+	defer sb.Close()
+	step([]*Instance{sa, sb}, []*typedArm{&both[0], &both[1]})
+	both[0].bytes = g.Stats().KVPoolBytes
+	both[1].bytes = both[0].bytes
+	return cpu, alone, both
+}
+
+// twoTypesApart is what TestTwoHistoryTypesShareABlock finds wrong with
+// twoHistoryTypes' arms on dev, nothing where the two types share the card.
+func twoTypesApart(t *testing.T, dev string, kts [2]model.KVType, cpu, alone, both [2]typedArm) []string {
+	const spread, arena = 0.15, 0.05
+	var bad []string
+	loss := lpGap(cpu[0].lp, cpu[1].lp)
+	if !(loss > 0) {
+		t.Fatalf("%v and %v on the CPU device are %.3g apart: the types move nothing to tell them apart by", kts[0], kts[1], loss)
+	}
+	for j, kt := range kts {
+		for _, a := range []typedArm{alone[j], both[j]} {
+			if a.placed != a.blocks {
+				bad = append(bad, fmt.Sprintf("a %v instance placed %d of %d blocks on %s", kt, a.placed, a.blocks, dev))
+			}
+		}
+		if len(both[j].lp) != len(alone[j].lp) {
+			continue
+		}
+		apart := lpGap(both[j].lp, alone[j].lp)
+		own, band, other := lpGap(both[j].lp, cpu[j].lp), lpGap(alone[j].lp, cpu[j].lp), lpGap(both[j].lp, cpu[1-j].lp)
+		t.Logf("%v beside %v on %s: %.4g from its run alone (%.3f of the types' distance %.4f); %.4g from its CPU reference, alone %.4g; %.4g from the other type's", kt, kts[1-j], dev, apart, apart/loss, loss, own, band, other)
+		if !(apart <= spread*loss) {
+			bad = append(bad, fmt.Sprintf("%v beside %v on %s is %.4g from its run alone, past %.2f of the types' distance %.4f", kt, kts[1-j], dev, apart, spread, loss))
+		}
+		if !(own <= band+spread*loss) {
+			bad = append(bad, fmt.Sprintf("%v beside %v on %s is %.4g from its CPU reference, where alone it is %.4g", kt, kts[1-j], dev, own, band))
+		}
+	}
+	sum := alone[0].bytes + alone[1].bytes
+	got := float64(both[0].bytes) / float64(sum)
+	t.Logf("%v and %v on %s: the history pool %d bytes, alone %d and %d, %.4f of their sum", kts[0], kts[1], dev, both[0].bytes, alone[0].bytes, alone[1].bytes, got)
+	if !(math.Abs(got-1) <= arena) {
+		bad = append(bad, fmt.Sprintf("%v and %v on %s hold %.4f of the history pools they hold alone: each type's history is not its own", kts[0], kts[1], dev, got))
+	}
+	return bad
+}
+
+// twoTypePairs is the history types TestTwoHistoryTypesShareABlock puts
+// beside each other: floats and q8 rows, bfloat16 and q4_0 blocks.
+func twoTypePairs() [][2]model.KVType {
+	return [][2]model.KVType{{model.KVF32, model.KVQ8_0}, {model.KVBF16, model.KVQ4_0}}
+}
+
+// TestTwoHistoryTypesShareABlock holds two instances of one model on one
+// card, each holding its history as another type (twoTypePairs), to the
+// card's pool keeping a layer per block and type. Teacher-forced over a
+// document on Llama 3.2 1B, every block of each instance on each listed
+// card and their steps interleaved: both place every block; each answers
+// within 0.15 of the two types' distance (their CPU runs' log-probabilities
+// apart) of its own run alone on the card, and as close to its own CPU
+// reference as that run, plus the same; and the card's history pool is the
+// sum of the pools each holds alone, within 0.05. A pool that seats the
+// second type in the first's layer (TestTwoHistoryTypesShareABlock-
+// Discriminates) moves the second instance's answer by the types' distance
+// and the pool by a type's pages.
+func TestTwoHistoryTypesShareABlock(t *testing.T) {
+	devs := stepDevices()
+	if len(devs) == 0 {
+		t.Fatal("no card listed (JITLLM_TEST_DEVICES): the gate holds two instances' histories on a card")
+	}
+	for _, dev := range devs {
+		for _, kts := range twoTypePairs() {
+			t.Run(dev+"/"+kts[0].String()+"+"+kts[1].String(), func(t *testing.T) {
+				cpu, alone, both := twoHistoryTypes(t, dev, kts)
+				for _, b := range twoTypesApart(t, dev, kts, cpu, alone, both) {
+					t.Error(b)
+				}
+			})
+		}
 	}
 }
 

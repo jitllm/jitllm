@@ -57,14 +57,131 @@ func (k kvGeom) kWords(p int) int {
 	return p * k.kvRow
 }
 
-// histShift places a history's index above its block's in a pool key:
 // histKey(li, h) is block li's history h, histKey(li, 0) == li its rows',
-// keyBlock the block a key is of: nn.HistoryKey, the engine's name for it.
-const histShift = nn.HistoryShift
+// keyBlock the block a key is of, keyHist its history: nn.HistoryKey, the
+// engine's name for it. typedKey adds the type its sessions hold it as
+// (poolCode, nn.HistoryTyped) and keyType reads it back: a block keeps a pool
+// layer of each type, so two instances of it holding their histories as
+// different types share its weights and not its pages.
 
 func histKey(li, h int) int { return nn.HistoryKey(li, h) }
 
 func keyBlock(key int) int { return nn.HistoryBlock(key) }
+
+func keyHist(key int) int { return nn.HistoryIndex(key) }
+
+func typedKey(key, t int) int { return nn.HistoryTyped(key, t) }
+
+func keyType(key int) int { return nn.HistoryType(key) }
+
+// poolCode is a history type as a pool key's type: the same on every
+// device, so a copy of a session's history on another is keyed alike.
+func poolCode(p composer.Pool) int {
+	c := int(p.Block) | p.Row<<11
+	for i, f := range [3]bool{p.Half, p.BF16, p.ByDim} {
+		if f {
+			c |= 1 << (8 + i)
+		}
+	}
+	return c
+}
+
+// codePool is the history type poolCode names.
+func codePool(c int) composer.Pool {
+	return composer.Pool{Block: graph.BlockFmt(c & 0xff), Half: c>>8&1 != 0, BF16: c>>9&1 != 0, ByDim: c>>10&1 != 0, Row: c >> 11}
+}
+
+// histType is the type session sid holds block li's history as here
+// (pagedLayer, a copy's making), 0 -- floats -- where it holds none.
+// Callers hold g.mu.
+func (g *devTier) histType(sid uint64, li int) int {
+	if ds := g.sess[sid]; ds != nil && !g.pagedFaulted("histtype") {
+		return ds.hist[keyBlock(li)]
+	}
+	return 0
+}
+
+// setHistType records t as the type session sid holds block li's history
+// as here. Callers hold g.mu.
+func (g *devTier) setHistType(sid uint64, li, t int) {
+	ds := g.sessOf(sid)
+	if ds.hist[li] == t {
+		return
+	}
+	if ds.hist == nil {
+		ds.hist = map[int]int{}
+	}
+	ds.hist[li] = t
+}
+
+// sessKey is session sid's pool key of block li's rows: the block at the
+// type the session holds it as. histKey(sessKey(sid, li), h) is its
+// history h's. Callers hold g.mu.
+func (g *devTier) sessKey(sid uint64, li int) int {
+	return typedKey(li, g.histType(sid, li))
+}
+
+// viewKey is sessKey for this view's session, or for the type a placement
+// forms its parts at (formingAs, eachHistType).
+func (g *devTier) viewKey(li int) int {
+	switch {
+	case g.formAs > 0:
+		return typedKey(li, g.formAs-1)
+	case g.pagedFaulted("histtype"):
+		return li
+	}
+	return typedKey(li, g.devSess.hist[keyBlock(li)])
+}
+
+// formingAs has this device's parts formed for the type session sid holds
+// block li's history as, until the returned func restores the one before.
+// Callers hold g.mu.
+func (g *devTier) formingAs(sid uint64, li int) func() {
+	was := g.formAs
+	g.formAs = 1 + g.histType(sid, g.histSrc(li))
+	return func() { g.formAs = was }
+}
+
+// eachHistType runs f with this device's parts formed for each type block
+// li's history is held as here, once as they are where it holds none.
+// Callers hold g.mu.
+func (g *devTier) eachHistType(li int, f func()) {
+	src, ran := g.histSrc(li), false
+	if g.kvp != nil {
+		for key := range g.kvp.layers {
+			if keyBlock(key) != src || keyHist(key) != 0 {
+				continue
+			}
+			was := g.formAs
+			g.formAs = 1 + keyType(key)
+			f()
+			g.formAs = was
+			ran = true
+		}
+	}
+	if !ran {
+		f()
+	}
+}
+
+// holdsRows reports that kp holds block li's rows at some type.
+func (kp *kvPool) holdsRows(li int) bool {
+	for key := range kp.layers {
+		if keyBlock(key) == li && keyHist(key) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// histSrc is the block whose history block li reads: its own, or the
+// source it shares.
+func (g *devTier) histSrc(li int) int {
+	if l := g.layers[li]; l != nil {
+		return l.kvSrc
+	}
+	return li
+}
 
 // layerOf is kp's pool layer of key, nil where kp is or it holds none.
 func (kp *kvPool) layerOf(key int) *kvLayerPool {
@@ -277,7 +394,7 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 		return nil
 	}
 	n = max(n, 1)
-	if h := li >> histShift; h > 0 {
+	if h := keyHist(li); h > 0 {
 		kp.hists[keyBlock(li)] = max(kp.hists[keyBlock(li)], h+1)
 	}
 	l := &kvLayerPool{geom: geom, n: n, owned: map[seqID][]uint32{}, clk: &g.clk}

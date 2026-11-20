@@ -75,20 +75,42 @@ func keptGeom(k graph.KeptHistory) kvGeom {
 	return kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
 }
 
-// hostHistsOf is hostHists for placed block l reading block src.
-func (g *devTier) hostHistsOf(dst []hostHist, l *layer, src int) []hostHist {
-	return hostHists(dst, src, l.kvSrc, l.rgeom, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound, g.KVF16)
+// hostHistsOf is hostHists for placed block l reading block src for
+// session sid: its rows at the type the session's copy of them holds, where
+// it holds one, the type l was placed with otherwise. Callers hold g.mu.
+func (g *devTier) hostHistsOf(dst []hostHist, sid uint64, l *layer, src int) []hostHist {
+	rg := l.rgeom
+	if ds := g.sess[sid]; ds != nil {
+		if t, ok := ds.hist[src]; ok {
+			rg.pool = codePool(t)
+			rg.f16 = g.KVF16 && !rg.mla && t == 0
+		}
+	}
+	return hostHists(dst, src, l.kvSrc, rg, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound, g.KVF16)
 }
 
-// lacksHists reports that this device holds no pool layer of one of the
-// histories hs of block src. Callers hold g.mu.
-func (g *devTier) lacksHists(src int, hs []hostHist) bool {
+// lacksHists reports that this device holds no pool layer of one of
+// session sid's histories hs of block src. Callers hold g.mu.
+func (g *devTier) lacksHists(sid uint64, src int, hs []hostHist) bool {
+	k0 := typedKey(src, g.hostType(sid, src, hs))
 	for _, x := range hs {
-		if g.kvp == nil || g.kvp.layers[histKey(src, x.h)] == nil {
+		if g.kvp == nil || g.kvp.layers[histKey(k0, x.h)] == nil {
 			return true
 		}
 	}
 	return false
+}
+
+// hostType is the type session sid's copy hs of block src's histories
+// holds its rows as: their geometry's where hs reads them, the type the
+// session holds them as here otherwise. Callers hold g.mu.
+func (g *devTier) hostType(sid uint64, src int, hs []hostHist) int {
+	for _, x := range hs {
+		if x.h == 0 {
+			return poolCode(x.geom.pool)
+		}
+	}
+	return g.histType(sid, src)
 }
 
 // makeHostCopy gives d a copy of session sid's histories hs of block src,
@@ -105,8 +127,10 @@ func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, hs []hostHist, p *nn
 		dv.initKVCap(p)
 	}
 	kp := dv.kvPages()
+	t := dv.hostType(sid, src, hs)
+	dv.setHistType(sid, src, t)
 	for _, x := range hs {
-		key, geom := histKey(src, x.h), x.geom
+		key, geom := histKey(typedKey(src, t), x.h), x.geom
 		if geom.kvRow <= 0 {
 			return fmt.Errorf("block %d's history %d is read on %s at no width", src, x.h, label(d.dev, d.ord))
 		}
@@ -214,9 +238,10 @@ func (g *GPU) hostCopyFrom(sid uint64, src, h, base, start int) (int, bool) {
 		return 0, false
 	}
 	from := max(start, 0)
-	s, key := seqID{sid, base}, histKey(src, h)
+	s := seqID{sid, base}
 	for _, d := range ds {
 		d.mu.Lock()
+		key := histKey(d.sessKey(sid, src), h)
 		if d.kvp == nil || d.kvp.layers[key] == nil {
 			d.mu.Unlock()
 			return 0, false
@@ -258,7 +283,7 @@ func (g *devTier) writeHostRows(s seqID, src, h, from, start, to int, k, v []flo
 	if g.pagedFaulted("copystale") {
 		return nil
 	}
-	key := histKey(src, h)
+	key := histKey(g.sessKey(s.sid, src), h)
 	var pages int
 	var err error
 	if h == 0 {
@@ -291,13 +316,13 @@ func (g *devTier) writeHostRows(s seqID, src, h, from, start, to int, k, v []flo
 // Callers hold g.mu.
 func (g *devTier) writeRows(s seqID, src, from, start, to int, k, v []float32) (int, error) {
 	kp := g.kvp
-	if kp == nil || kp.layers[src] == nil {
+	if kp == nil || kp.layers[g.sessKey(s.sid, src)] == nil {
 		return 0, fmt.Errorf("no copy of block %d's history", src)
 	}
 	if to <= from {
 		return 0, nil
 	}
-	tl := kp.layers[src]
+	tl := kp.layers[g.sessKey(s.sid, src)]
 	P, kvRow := kp.p, tl.geom.kvRow
 	if len(k) < (to-from)*kvRow || len(v) < (to-from)*kvRow {
 		return 0, fmt.Errorf("%d positions of %d floats do not fit the rows' %d/%d", to-from, kvRow, len(k), len(v))
@@ -417,13 +442,14 @@ func copyRepaged(sv, dv *devTier, s seqID, src, from, start, to int) error {
 			return err
 		}
 	}
+	sk, dk := sv.sessKey(s.sid, src), dv.sessKey(s.sid, src)
 	for h := range sv.kvp.blockHists(src) {
-		key := histKey(src, h)
+		key, dkey := histKey(sk, h), histKey(dk, h)
 		fl := sv.kvp.layers[key]
 		if fl == nil {
 			continue
 		}
-		if dv.kvp.layers[key] == nil {
+		if dv.kvp.layers[dkey] == nil {
 			return fmt.Errorf("block %d's history %d has no copy on %s", src, h, label(dv.dev, dv.ord))
 		}
 		to := min(to, len(fl.owned[s])*sv.kvp.p)
@@ -442,7 +468,7 @@ func copyRepaged(sv, dv *devTier, s seqID, src, from, start, to int) error {
 				pages, err = dv.writeRows(s, src, from, -1, to, k, v)
 			}
 		} else if err = sv.readEntries(s, key, from, to, k); err == nil {
-			pages, err = dv.writeEntries(s, key, from, -1, to, k)
+			pages, err = dv.writeEntries(s, dkey, from, -1, to, k)
 		}
 		dv.HistoryCopyPages += pages
 		if err != nil {
@@ -482,7 +508,7 @@ func entryFloats(geom kvGeom, from, to int) int {
 func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
 	kp := g.kvp
 	if kp == nil || kp.layers[key] == nil {
-		return fmt.Errorf("block %d keeps no history %d here", keyBlock(key), key>>histShift)
+		return fmt.Errorf("block %d keeps no history %d here", keyBlock(key), keyHist(key))
 	}
 	pl := kp.layers[key]
 	P, per, w := kp.p, max(1, pl.geom.period), pl.geom.kvRow
@@ -549,7 +575,7 @@ func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
 func (g *devTier) writeEntries(s seqID, key, from, start, to int, e []float32) (int, error) {
 	kp := g.kvp
 	if kp == nil || kp.layers[key] == nil {
-		return 0, fmt.Errorf("no copy of block %d's history %d", keyBlock(key), key>>histShift)
+		return 0, fmt.Errorf("no copy of block %d's history %d", keyBlock(key), keyHist(key))
 	}
 	if to <= from {
 		return 0, nil
@@ -639,7 +665,7 @@ func (g *GPU) readHostRows(sid uint64, src, h, base, from, to int, k, v []float3
 	if h == 0 {
 		err = ov.readRows(seqID{sid, base}, src, from, to, k, v)
 	} else {
-		err = ov.readEntries(seqID{sid, base}, histKey(src, h), from, to, k)
+		err = ov.readEntries(seqID{sid, base}, histKey(ov.sessKey(sid, src), h), from, to, k)
 	}
 	if err != nil {
 		ov.LastErr = fmt.Sprintf("block %d's history read for the CPU device on %s: %v", src, label(o.dev, o.ord), err)
@@ -652,13 +678,13 @@ func (g *GPU) readHostRows(sid uint64, src, h, base, from, to int, k, v []float3
 // g.mu.
 func (g *devTier) readRows(s seqID, src, from, to int, k, v []float32) error {
 	kp := g.kvp
-	if kp == nil || kp.layers[src] == nil {
+	pl := kp.layerOf(g.sessKey(s.sid, src))
+	if pl == nil {
 		return fmt.Errorf("block %d keeps no history here", src)
 	}
 	if to <= from {
 		return nil
 	}
-	pl := kp.layers[src]
 	P, kvRow := kp.p, pl.geom.kvRow
 	if len(k) < (to-from)*kvRow || len(v) < (to-from)*kvRow {
 		return fmt.Errorf("%d positions of %d floats do not fit the rows' %d/%d", to-from, kvRow, len(k), len(v))
@@ -786,6 +812,7 @@ func (g *GPU) shareHostCopy(sid uint64, li, page int, key string, end int) bool 
 // shareHostPage is shareHostCopy on one device. Callers hold g.mu.
 func (g *devTier) shareHostPage(s seqID, li, page int, key string, end int) (bool, error) {
 	kp := g.kvp
+	li = g.sessKey(s.sid, li)
 	if kp == nil || kp.layers[li] == nil {
 		return false, nil
 	}

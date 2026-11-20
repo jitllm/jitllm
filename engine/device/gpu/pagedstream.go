@@ -442,7 +442,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 					}
 				}
 				for h := range kp.blockHists(src) {
-					l := kp.layers[histKey(src, h)]
+					l := kp.layers[histKey(g.viewKey(src), h)]
 					if l == nil {
 						continue
 					}

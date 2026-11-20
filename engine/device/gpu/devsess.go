@@ -37,6 +37,9 @@ import (
 // devSess is one session's per-call state on one device.
 type devSess struct {
 	sid uint64
+	// hist is, per block, the type the session holds its history as here
+	// (poolCode), absent for floats: its pool key's type (sessKey).
+	hist map[int]int
 	// cur is the lane the session's current call holds, nil between calls,
 	// and depth how many entries deep that call is (as, done); last is the
 	// lane its previous call ran in, which the next prefers -- its
@@ -268,6 +271,10 @@ type devTier struct {
 	*Stats
 	// subFn is layersSession bound to this view, built once (layersOnce).
 	subFn func(backend.Session)
+	// formAs is one past the history type a placement forms its parts at
+	// on this view (formingAs), 0 outside one: the view's session's
+	// otherwise (viewKey).
+	formAs int
 }
 
 // newDevice builds the device's view over sh: lane0, the zero session, and

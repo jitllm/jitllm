@@ -1128,7 +1128,16 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	g.initKVCap(p)
 	if g.pagedPlan(p) {
 		// The pages are the sequence's, taken as its rows are written; the
-		// block's layer is already in the pool.
+		// block's layer of the session's history type is in the pool, or
+		// made here as the block's first session of that type makes it.
+		g.setHistType(sid, l.kvSrc, poolCode(g.kvGeomOf(p).pool))
+		if g.kvPages().layers[g.sessKey(sid, l.kvSrc)] == nil {
+			if err := g.pagedLayer(sid, l, l.kvSrc, p); err != nil {
+				g.LastErr = err.Error()
+				return false
+			}
+			return true
+		}
 		if l.kv == nil {
 			l.kv = map[uint64]*kvPair{}
 		}
@@ -1414,6 +1423,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			// width fitReserved reached, does not fit beside the blocks placed
 			// is declined here rather than met by its first step or prompt; a
 			// mixture's is offered again streamed.
+			// The forms are of the history type the session holds the block
+			// as: another instance's type has its own.
+			formed := g.formingAs(sid, li)
 			why := g.prewarmComposedBlock(li, true)
 			if why == "" {
 				why = g.unserved(li)
@@ -1421,6 +1433,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			if why == "" {
 				why = g.promptRoomless(li)
 			}
+			formed()
 			if why != "" && !g.sharedBeyond(li, sid) {
 				g.dropGraph()
 				g.releaseBlock(li)
@@ -1500,12 +1513,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// another model's.
 		if p.Graph != l.graph {
 			g.LastErr = fmt.Sprintf("block %d: offered with a graph other than the one this device holds for it", li)
-			return false
-		}
-		// The block's history is one pool of one type: a session holding
-		// another type's is declined before anything of it is taken.
-		if pl := g.kvp.layerOf(li); pl != nil && l.kvSrc == li && g.pagedPlan(p) && pl.geom != g.kvGeomOf(p) {
-			g.LastErr = fmt.Sprintf("block %d: its history is held here as %+v, and this session's is %+v", li, pl.geom, g.kvGeomOf(p))
 			return false
 		}
 		defer func() {
@@ -4745,14 +4752,16 @@ func (g *devTier) releaseBlock(li int) {
 	// The block's layer leaves the pool, and with it every session's pages
 	// there -- but a session's that a block here reads as a copy, the block
 	// running on another device for it now (histcopy.go).
-	if g.kvp != nil {
-		for h := g.kvp.blockHists(li) - 1; h >= 0; h-- {
-			if len(g.histCopies[li]) > 0 {
-				g.keepCopies(histKey(li, h), li)
-				continue
+	switch {
+	case g.kvp == nil:
+	case len(g.histCopies[li]) > 0:
+		for key := range g.kvp.layers {
+			if keyBlock(key) == li {
+				g.keepCopies(key, li)
 			}
-			g.dropKVLayer(g.kvp, histKey(li, h))
 		}
+	default:
+		g.dropBlockPools(g.kvp, li)
 	}
 	if n := l.recBytes; n > 0 {
 		g.refund(n)
@@ -4934,9 +4943,10 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 		}
 		// Pages a block here reads as the session's copy stay, with the
 		// copy (histcopy.go).
+		k0 := g.sessKey(sid, li)
 		for h := range n {
 			if !g.histCopies[li][sid] {
-				g.pagedLeave(histKey(li, h), sid, l)
+				g.pagedLeave(histKey(k0, h), sid, l)
 			}
 		}
 		freed = true

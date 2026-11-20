@@ -5689,9 +5689,45 @@ every type and goes red on the bytes while the answer passes: the float
 holding answers as the type does, which is why the bytes are asserted.
 
 A second instance of another history type offering a block a card holds was
-declined because a block has one graph; the graph is one now, and what
-declines it is the pool: one pool layer a block, one type each
-(kvPool.layers keyed by block). That is this code's choice, not a limit of
-the card, and the decline names it ("its history is held here as"); a pool
-layer a block and type is open-questions.md's "two history types in one
-block's pool on a card".
+declined, first because a block had one graph and then because its pool did:
+one pool layer a block, one type each (kvPool.layers keyed by block). That
+was this code's choice, not a limit of the card, and it is gone. A pool key
+is the engine's one name of a history, nn.HistoryKey, the block and the
+history's index, with the type above both (nn.HistoryTyped: the engine names
+a history untyped and the card adds the type its session holds it as; the
+type is poolCode, the same on every device, so a copy of a session's history on
+another card or of the CPU's is keyed alike). Each session records the type
+it holds each block's history as on a device (devSess.hist, set where its
+history is made: pagedLayer, a copy's making), and every lookup of a block's
+pool for a session goes through it (sessKey, viewKey); a placement forms the
+block's parts at the placing session's type (formingAs), and a reshape at
+every type the block holds (eachHistType). The weights stay one, the pages
+are each type's: a seat, a page taken for a step (heldLayers), a prefix
+named for the cache (sharedLayer) and a recording are of one type, so a
+shared prefix is held once per device per type.
+
+TestTwoHistoryTypesShareABlock, two instances of Llama 3.2 1B on one card,
+every block of each placed and their steps interleaved, against each type
+alone on the card and on the CPU device:
+
+| pair | pool bytes | of the two alone | each from its run alone | each from its CPU run (alone on the card) |
+|---|---|---|---|---|
+| f32 + q8_0 | 55083008 | 1.0000 | 0, 0 | 0.102, 0.111 (0.102, 0.111) |
+| bf16 + q4_0 | 26902528 | 1.0000 | 0, 0 | 0.101, 0.500 (0.101, 0.500) |
+
+The figures are cuda:0's on box 43; vulkan:0's are the same bytes and a
+gap of 0 from each run alone. Both instances placed all 16 blocks. The
+bound is 0.15 of the types' distance on the CPU device (0.1197 and 0.6092).
+
+Run with the type dropped from the key (gpu.Faults "histtype",
+TestTwoHistoryTypesShareABlockDiscriminates), the second instance is seated
+in the first's pool and runs its forms: q8_0 beside f32 reads 0.90 (cuda:0)
+and 0.97 (vulkan:1) of the types' distance from its run alone, q4_0 beside
+bf16 1.15 and 1.14, and the pool 1.3709 and 1.4038 of the sum, on both
+backends.
+
+On a card q4_0 alone reads 0.50 from the CPU device's q4_0 run (cuda:0 and
+vulkan:1 alike), where f32, q8_0 and bf16 read 0.10-0.12: q4_0's distance
+from f32 on the card is 0.69-0.70, so the coarse type amplifies the f32
+band the others show. Whether that is the band or a divergence between the
+CPU device's and the card's q4_0 attention is unmeasured.

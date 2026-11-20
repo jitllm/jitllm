@@ -14,7 +14,7 @@ import (
 // read there. Callers hold g.mu.
 func (g *devTier) historyMigrate(sid uint64, li, h int, e []float32, pos int, toDevice bool) error {
 	kp := g.kvPages()
-	pl, ok := kp.layers[histKey(li, h)]
+	pl, ok := kp.layers[histKey(g.sessKey(sid, li), h)]
 	if h < 1 || !ok {
 		return fmt.Errorf("block %d keeps no history %d on this device", li, h)
 	}

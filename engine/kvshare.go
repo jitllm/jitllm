@@ -871,7 +871,7 @@ func (s *Instance) kvShareDevice() bool {
 // where the history's block runs on the CPU device (histcross.go); nil
 // otherwise.
 func (s *Instance) kvCopyAt(key int) nn.KVShareDevice {
-	if src := nn.HistoryBlock(key); s.devAt(src) || !s.cardReads(src, key>>nn.HistoryShift) {
+	if src := nn.HistoryBlock(key); s.devAt(src) || !s.cardReads(src, nn.HistoryIndex(key)) {
 		return nil
 	}
 	d, _ := s.ld.(nn.KVShareDevice)

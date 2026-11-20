@@ -206,7 +206,7 @@ func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) e
 		return nil
 	}
 	for li, l := range g.kvp.layers {
-		if s, ok := g.stagedFor[keyBlock(li)]; ok && s == sid {
+		if s, ok := g.stagedFor[keyBlock(li)]; ok && s == sid || keyType(li) != g.histType(sid, li) {
 			continue
 		}
 		held := g.histCopies[keyBlock(li)][sid]
@@ -504,17 +504,17 @@ func pagedKeys(rows []pagedRow) int {
 // block is the marker kvPair{paged: true}. Callers hold g.mu.
 func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) error {
 	kp := g.kvPages()
+	want := g.kvGeomOf(p)
+	t := poolCode(want.pool)
 	seats := 1
 	for o, kvp := range l.kv {
-		if kvp.paged && o != sid {
+		if kvp.paged && o != sid && g.histType(o, li) == t {
 			seats++
 		}
 	}
-	want := g.kvGeomOf(p)
-	if pl := kp.layers[li]; pl != nil && pl.geom != want {
-		return fmt.Errorf("block %d's history is held here as %+v, and this session's is %+v", li, pl.geom, want)
-	}
-	if err := g.addKVLayer(kp, li, want, 1+seats); err != nil {
+	g.setHistType(sid, li, t)
+	key0 := g.sessKey(sid, li)
+	if err := g.addKVLayer(kp, key0, want, 1+seats); err != nil {
 		return err
 	}
 	// A binary16 V pool's and a typed history's pages are narrowed and
@@ -522,17 +522,18 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// on the CPU device reading this one's history reads it a page at a time
 	// (readRows): their forms at the pool's page are formed here, with the
 	// block, and a move or a read only runs them.
-	if c, _, ok := kp.layers[li].geom.convOf(kp.p); ok {
+	pl := kp.layers[key0]
+	if c, _, ok := pl.geom.convOf(kp.p); ok {
 		if err := g.formConv(c); err != nil {
 			return err
 		}
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
-	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
+	pl.win, pl.chunked = l.win, l.chunked
 	if l.win > 0 {
 		kp.chunked = l.chunked
 	}
-	kp.layers[li].tail = historyTail(p.Graph)
+	pl.tail = historyTail(p.Graph)
 	if l.kv == nil {
 		l.kv = map[uint64]*kvPair{}
 	}
@@ -542,7 +543,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// at its rows' seats, and sends them home with its rows.
 	for _, k := range p.Graph.KeptHistories() {
 		eg := kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
-		if err := g.addKVLayer(kp, histKey(li, k.Hist), eg, 1+seats); err != nil {
+		if err := g.addKVLayer(kp, histKey(key0, k.Hist), eg, 1+seats); err != nil {
 			if fresh {
 				delete(l.kv, sid)
 			}
@@ -550,7 +551,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 		}
 	}
 	for h := range kp.blockHists(li) {
-		key := histKey(li, h)
+		key := histKey(key0, h)
 		if _, ok := kp.layers[key]; ok {
 			if err := g.pagedSeat(kp, key, l); err != nil {
 				if fresh {
@@ -608,18 +609,33 @@ func contextPages(kp *kvPool, maxSeq, seats int) int {
 // there. Callers hold g.mu.
 func (g *devTier) pagedSeat(kp *kvPool, li int, bl *layer) error {
 	l := kp.layers[li]
-	seats := 0
-	for sid, kvp := range bl.kv {
-		if kvp.paged && !g.histCopies[keyBlock(li)][sid] {
-			seats++
-		}
-	}
-	seats += len(g.histCopies[keyBlock(li)])
+	seats := g.typedSeats(li, bl)
 	l.floor = 1 + seats*max(l.ctx, 1)
 	if l.n < l.floor {
 		return g.growKVLayer(kp, l, l.floor)
 	}
 	return nil
+}
+
+// typedSeats is the sessions holding pool key li's type of its block's
+// history here: those running block bl, nil where it is not placed here,
+// and those holding a copy of it. Callers hold g.mu.
+func (g *devTier) typedSeats(li int, bl *layer) int {
+	b, t := keyBlock(li), keyType(li)
+	seats := 0
+	if bl != nil {
+		for sid, kvp := range bl.kv {
+			if kvp.paged && !g.histCopies[b][sid] && g.histType(sid, b) == t {
+				seats++
+			}
+		}
+	}
+	for sid := range g.histCopies[b] {
+		if g.histType(sid, b) == t {
+			seats++
+		}
+	}
+	return seats
 }
 
 // pagedLayerBytes is what placing another attention block costs: a layer at
@@ -646,8 +662,8 @@ func (g *devTier) dropKVLayer(kp *kvPool, li int) {
 	}
 	g.freeKVLayer(l)
 	delete(kp.layers, li)
-	if li == keyBlock(li) {
-		delete(kp.hists, li)
+	if keyHist(li) == 0 && !kp.holdsRows(keyBlock(li)) {
+		delete(kp.hists, keyBlock(li))
 	}
 	for s := range l.owned {
 		kp.dropRange(s)
@@ -749,7 +765,7 @@ func (kp *kvPool) trimSeq(s seqID, pos int) bool {
 // into one buffer by a generated kernel and read back. Callers hold g.mu.
 func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) error {
 	kp := g.kvPages()
-	pl, ok := kp.layers[li]
+	pl, ok := kp.layers[g.sessKey(sid, li)]
 	if !ok {
 		return fmt.Errorf("block %d has no pages on this device", li)
 	}

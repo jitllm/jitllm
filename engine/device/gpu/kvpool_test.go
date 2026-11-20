@@ -7,7 +7,50 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
+
+// TestPoolKeysTellTheTypesApart holds a pool key to naming its block, its
+// history and its type apart (nn.HistoryTyped): every history type a card holds
+// -- floats, q8 rows, each GGUF block type and bfloat16, at head rows up to
+// a wide latent's -- has a code of its own that reads back as the type, and
+// a key built of a block, a history and a code reads back as each.
+func TestPoolKeysTellTheTypesApart(t *testing.T) {
+	types := []composer.Pool{{}}
+	for _, row := range []int{32, 64, 128, 576} {
+		types = append(types, composer.Pool{Row: row}, composer.Pool{Row: row, Half: true, BF16: true})
+		for f := graph.BlockQ4_0; f <= graph.BlockIQ4NL; f++ {
+			types = append(types, composer.Pool{Row: row, Block: f})
+		}
+	}
+	seen := map[int]composer.Pool{}
+	for _, p := range types {
+		c := poolCode(p)
+		if q, ok := seen[c]; ok {
+			t.Fatalf("%+v and %+v share the code %d", p, q, c)
+		}
+		seen[c] = p
+		if codePool(c) != p {
+			t.Fatalf("%+v's code %d reads back as %+v", p, c, codePool(c))
+		}
+		for _, li := range []int{0, 1, 47, 1<<nn.HistoryShift - 1} {
+			for _, h := range []int{0, 1, 3, 1<<(nn.HistoryTypeShift-nn.HistoryShift) - 1} {
+				key := histKey(typedKey(li, c), h)
+				if keyBlock(key) != li || keyHist(key) != h || keyType(key) != c {
+					t.Fatalf("block %d's history %d as %+v keys %#x, which reads back as block %d, history %d, type %d", li, h, p, key, keyBlock(key), keyHist(key), keyType(key))
+				}
+				if typedKey(histKey(li, h), c) != key {
+					t.Fatalf("the engine's key of block %d's history %d, typed as %+v, is %#x, not %#x", li, h, p, typedKey(histKey(li, h), c), key)
+				}
+			}
+		}
+	}
+	if poolCode(composer.Pool{}) != 0 {
+		t.Fatal("floats are not the type a pool key without one names")
+	}
+}
 
 // TestKVPoolPages holds the device page pool to its contract
 // (docs/design/device-kv-paging.md): ids are each layer's own, never alias

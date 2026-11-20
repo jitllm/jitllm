@@ -1043,7 +1043,6 @@ bug	engine/device/gpu/layer.go	"block %d: %s"
 bug	engine/device/gpu/layer.go	"block %d: %v"
 bug	engine/device/gpu/layer.go	"block %d: a call of %d rows reached a streamed block whose pages hold %d: it was not cut (pagedCall)"
 bug	engine/device/gpu/layer.go	"block %d: a ragged step over a latent block needs the paged cache"
-refusal	engine/device/gpu/layer.go	"block %d: its history is held here as %+v, and this session's is %+v"	two history types in one block's pool are not built: a card's pool layer is a block's (kvPool.layers), one type each, and a session of another type is declined by name
 bug	engine/device/gpu/layer.go	"block %d: offered with a graph other than the one this device holds for it"	a model's block changed under its placement: a loaded model's graphs are fixed (model.FrontGraphs), so only a model edited in place reaches it
 context	engine/device/gpu/layer.go	"conv"
 context	engine/device/gpu/layer.go	"graphs disabled: %v"
@@ -1142,7 +1141,6 @@ bug	engine/device/gpu/pagedattn.go	"MigrateKVSeq: block %d, sequence at %d: %v"
 bug	engine/device/gpu/pagedattn.go	"MigrateKVSeq: this device keeps the contiguous cache"
 bug	engine/device/gpu/pagedattn.go	"ReserveKVSeqs: this device keeps the contiguous cache"
 bug	engine/device/gpu/pagedattn.go	"block %d has no pages on this device"
-refusal	engine/device/gpu/pagedattn.go	"block %d's history is held here as %+v, and this session's is %+v"	two history types in one block's pool are not built: a card's pool layer is a block's (kvPool.layers), one type each, and a session of another type is declined by name
 bug	engine/device/gpu/pagedattn.go	"block %d: sequence %v holds %d page(s) and writes position %d"
 bug	engine/device/gpu/pagedattn.go	"block %d: sequence %v reads position %d's window from page %d, released behind it"
 bug	engine/device/gpu/pagedattn.go	"the sequence holds %d page(s) and %d positions need %d"

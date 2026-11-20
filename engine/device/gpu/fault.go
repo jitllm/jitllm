@@ -333,6 +333,9 @@ func (c *Config) formFaultedAsDevice() bool {
 //	"copystale" a copy of a history read on another device than its block's
 //	          takes none of the rows the block writes after it was made
 //	          (histcopy.go): the reader attends over what it was copied with
+//	"histtype" a block's pool keys drop the history type (kvpool.go's
+//	          typedKey): a session holding another type than the block's
+//	          first is seated in the first's pool and runs its forms
 //
 // SetPagedFault arms one violation for the calls after it; "" disarms.
 func (f *Faults) SetPagedFault(v string) { f.paged = v }

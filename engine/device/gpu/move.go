@@ -327,8 +327,9 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 	}
 	skp, dkp := sv.kvPages(), dv.kvPages()
 	s := seqID{sid, 0}
+	sk, dk := sv.sessKey(sid, li), dv.sessKey(sid, li)
 	for h := range skp.blockHists(li) {
-		key := histKey(li, h)
+		key := histKey(sk, h)
 		spl := skp.layers[key]
 		if spl == nil || len(spl.owned[s]) == 0 {
 			continue
@@ -338,12 +339,12 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 				return "", 0, nn.ErrNotDirect // a batch's rows: the instance moves them
 			}
 		}
-		dpl := dkp.layers[key]
+		dpl := dkp.layers[histKey(dk, h)]
 		if dpl == nil {
 			return "", 0, fmt.Errorf("tier: block %d has no pages on %s", li, label(dst.dev, dst.ord))
 		}
 		n := spl.positions(pos)
-		if key == li {
+		if h == 0 {
 			n = pos
 		}
 		P := skp.p
@@ -364,7 +365,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 			}
 			raw = len(dpl.home[s]) == 0 && len(dpl.owned[s]) >= npages && !slices.Contains(dpl.owned[s][:npages], 0)
 		}
-		if !raw && key != li {
+		if !raw && h > 0 {
 			// An entry history moves as its entries, keys then values each
 			// (historyMigrate), not as positions of rows.
 			ew := dpl.geom.kvRow
@@ -385,10 +386,10 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 		if !raw {
 			kv := dpl.geom.kvRow
 			k, v := make([]float32, n*kv), make([]float32, n*kv)
-			if err := sv.pagedMigrate(sid, key, 0, k, v, n, false); err != nil {
+			if err := sv.pagedMigrate(sid, li, 0, k, v, n, false); err != nil {
 				return "", 0, err
 			}
-			if err := dv.pagedMigrate(sid, key, 0, k, v, n, true); err != nil {
+			if err := dv.pagedMigrate(sid, li, 0, k, v, n, true); err != nil {
 				return "", 0, err
 			}
 			worse(nn.CPU)

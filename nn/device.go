@@ -1083,12 +1083,24 @@ type RowsRoomer interface {
 
 // HistoryKey names block li's history h on a device: history 0 is its
 // rows', HistoryKey(li, 0) == li, and a history past them is held where the
-// block runs. HistoryBlock is the block a key is of.
-const HistoryShift = 24
+// block runs. HistoryBlock is the block a key is of, HistoryIndex its
+// history. Above both is the type the history is held as (HistoryTyped): the
+// engine names a history untyped, and the device holding it adds the type
+// its session holds it as, so one block keeps a history of each type.
+const (
+	HistoryShift     = 24
+	HistoryTypeShift = 32
+)
 
 func HistoryKey(li, h int) int { return li | h<<HistoryShift }
 
 func HistoryBlock(key int) int { return key & (1<<HistoryShift - 1) }
+
+func HistoryIndex(key int) int { return key >> HistoryShift & (1<<(HistoryTypeShift-HistoryShift) - 1) }
+
+func HistoryTyped(key, t int) int { return key&(1<<HistoryTypeShift-1) | t<<HistoryTypeShift }
+
+func HistoryType(key int) int { return key >> HistoryTypeShift }
 
 // KVShareDevice is a device whose KV pages the prefix cache can name and map
 // (engine/device/gpu/kvshare.go): PublishKV names the session's page of block li

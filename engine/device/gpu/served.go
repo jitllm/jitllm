@@ -2579,7 +2579,7 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return nil
 	case l.nonCausal:
 		return g.towerServes(l, li, p, bs)
-	case pk == nil || g.kvp == nil || g.kvp.layers[l.kvSrc] == nil:
+	case pk == nil || g.kvp == nil || g.kvp.layers[g.viewKey(l.kvSrc)] == nil:
 		// A block sharing another's history reads its source's pool.
 		return fmt.Errorf("%w: no paged history on the device", errStepCond)
 	}
@@ -2689,7 +2689,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		}
 		keys = g.passKeys(bs, keys)
 	}
-	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, g.windowDesc(bs.pkv, l), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
+	sv, err = g.servedBlockAs(l, li, rcs, g.kvp.layers[g.viewKey(l.kvSrc)], bs.pkv.pRow, g.windowDesc(bs.pkv, l), qOff, bs.calls, bs.dRows, keys, g.kvp.p, R,
 		rowSeqs(R, one), run, bs)
 	if err != nil {
 		if run != nil {
@@ -2731,7 +2731,7 @@ func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
 func (g *devTier) prewarmComposed() {
 	g.prewarmComposedTables()
 	for li := range g.layers {
-		g.prewarmComposedBlock(li, false)
+		g.eachHistType(li, func() { g.prewarmComposedBlock(li, false) })
 	}
 	g.prewarmComposedHead(false)
 	g.prepRowsReserved()
@@ -2763,7 +2763,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	if g.blockServes(l, li, &bs.p, bs, false) == nil {
 		rcs := bs.cs
 		serve := func() (*servedPart, error) {
-			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, g.windowDesc(bs.pkv, l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
+			return g.servedBlock(l, li, rcs, g.kvp.layers[g.viewKey(l.kvSrc)], bs.pkv.pRow, g.windowDesc(bs.pkv, l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
 				g.kvp.p, 1, 0, bs)
 		}
 		sv, err := serve()
@@ -2898,7 +2898,7 @@ func (g *devTier) passesHeld(l *layer, bs *blockScratch) bool {
 		if seqs == 1 && bs.rows == 1 || seqs == 0 && bs.rows > 1 && !g.raggedAt(bs) {
 			continue
 		}
-		sv := g.served[g.blockKey(l, g.kvp.layers[l.kvSrc], g.passKeys(bs, bs.p.MaxSeq), g.kvp.p, bs.rows, seqs, true, bs)]
+		sv := g.served[g.blockKey(l, g.kvp.layers[g.viewKey(l.kvSrc)], g.passKeys(bs, bs.p.MaxSeq), g.kvp.p, bs.rows, seqs, true, bs)]
 		if sv == nil || bs.prompt[sv.f] == nil {
 			return false
 		}
@@ -2952,7 +2952,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		if seqs == 0 && !g.raggedAt(bb) {
 			continue
 		}
-		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, g.windowDesc(bb.pkv, l), bb.roff, bb.calls, bb.dRows,
+		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[g.viewKey(l.kvSrc)], bb.pkv.pRow, g.windowDesc(bb.pkv, l), bb.roff, bb.calls, bb.dRows,
 			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, bb)
 		if errors.Is(err, errFormedAhead) {
 			continue
@@ -3000,7 +3000,7 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 		if seqs == 1 && bb.rows == 1 || seqs == 0 && bb.rows > 1 && !g.raggedAt(bb) {
 			continue
 		}
-		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, g.windowDesc(bb.pkv, l), qOff, bb.calls, bb.dRows,
+		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[g.viewKey(l.kvSrc)], bb.pkv.pRow, g.windowDesc(bb.pkv, l), qOff, bb.calls, bb.dRows,
 			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run, bb)
 		if errors.Is(err, errFormedAhead) {
 			continue
@@ -3073,11 +3073,11 @@ func (g *devTier) promptForms(bb *blockScratch) {
 		// a sliding block's second table would bind nothing.
 		if g.geoUsed && g.geomFor(li, li+1) != g.geoCur {
 			prev := g.enterGeomOf(li)
-			g.prewarmPromptBlock(g.bbs[bb.rows], li)
+			g.eachHistType(li, func() { g.prewarmPromptBlock(g.bbs[bb.rows], li) })
 			g.useGeom(prev)
 			continue
 		}
-		g.prewarmPromptBlock(bb, li)
+		g.eachHistType(li, func() { g.prewarmPromptBlock(bb, li) })
 	}
 }
 
@@ -3217,7 +3217,7 @@ func (g *devTier) bindHists(t map[composer.TableKey]backend.Buf, src int) {
 		return
 	}
 	for h := 1; h < g.kvp.blockHists(src); h++ {
-		pe := g.kvp.layers[histKey(src, h)]
+		pe := g.kvp.layers[histKey(g.viewKey(src), h)]
 		if pe == nil {
 			continue
 		}
@@ -3234,7 +3234,7 @@ func (g *devTier) moreOf(r graph.HistoryRead) *kvLayerPool {
 	if g.kvp == nil {
 		return nil
 	}
-	return g.kvp.layers[histKey(r.Block, r.Hist)]
+	return g.kvp.layers[histKey(g.viewKey(r.Block), r.Hist)]
 }
 
 // bindMore binds into t every other block's history block l reads past
@@ -3303,7 +3303,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			keys: keys, page: page, seqs: seqs, paged: l.paged(), context: context}
 		for h := 1; h < nh; h++ {
 			var eh composer.History
-			if pe := g.kvp.layers[histKey(l.kvSrc, h)]; pe != nil {
+			if pe := g.kvp.layers[histKey(g.viewKey(l.kvSrc), h)]; pe != nil {
 				eh = entryHistory(pe.geom)
 			}
 			sl.more = append(sl.more, eh)

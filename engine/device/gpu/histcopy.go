@@ -87,22 +87,14 @@ func (g *devTier) holdsHistoryOf(sid uint64, src int) bool {
 }
 
 // copySeat raises block src's pool layers' floors to the sessions holding
-// them -- its own and the copies' -- and grows them there. Callers hold g.mu.
+// them -- its own and the copies', each type's layers its own -- and grows
+// them there. Callers hold g.mu.
 func (g *devTier) copySeat(kp *kvPool, src int) error {
-	seats := len(g.histCopies[src])
-	if l := g.layers[src]; l != nil {
-		for sid, kvp := range l.kv {
-			if kvp.paged && !g.histCopies[src][sid] {
-				seats++
-			}
-		}
-	}
-	for h := range kp.blockHists(src) {
-		l := kp.layers[histKey(src, h)]
-		if l == nil {
+	for key, l := range kp.layers {
+		if keyBlock(key) != src {
 			continue
 		}
-		l.floor = 1 + seats*max(l.ctx, 1)
+		l.floor = 1 + g.typedSeats(key, g.layers[src])*max(l.ctx, 1)
 		if l.n < l.floor {
 			if err := g.growKVLayer(kp, l, l.floor); err != nil {
 				return err
@@ -142,9 +134,13 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 	lockPair(sv, dv)
 	defer unlockPair(sv, dv)
 	fkp := sv.kvp
-	if fkp == nil || fkp.layers[src] == nil {
+	sk := sv.sessKey(sid, src)
+	if fkp == nil || fkp.layers[sk] == nil {
 		return fmt.Errorf("block %d keeps no history on %s", src, label(o.dev, o.ord))
 	}
+	// The copy is of the type the session holds the history as there, and
+	// keyed alike (poolCode).
+	dv.setHistType(sid, src, keyType(sk))
 	if p != nil {
 		dv.initKVCap(p)
 	}
@@ -153,7 +149,7 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 	}
 	dkp := dv.kvp
 	for h := range fkp.blockHists(src) {
-		key := histKey(src, h)
+		key := histKey(sk, h)
 		fl := fkp.layers[key]
 		if fl == nil {
 			continue
@@ -195,7 +191,7 @@ func (g *GPU) makeHistCopy(sid uint64, src int, o, d *devTier, p *nn.LayerPlan) 
 		dv.forgetCopy(sid, src)
 		return err
 	}
-	for s := range fkp.layers[src].owned {
+	for s := range fkp.layers[sk].owned {
 		if s.sid != sid {
 			continue
 		}
@@ -226,9 +222,9 @@ func (g *devTier) forgetCopy(sid uint64, src int) {
 	if kp == nil || g.ownsHistoryOf(sid, src) {
 		return
 	}
-	n := kp.blockHists(src)
-	for h := range n {
-		g.pagedLeave(histKey(src, h), sid, nil)
+	k0 := g.sessKey(sid, src)
+	for h := range kp.blockHists(src) {
+		g.pagedLeave(histKey(k0, h), sid, nil)
 	}
 	if g.layers[src] != nil || len(g.histCopies[src]) > 0 {
 		if err := g.copySeat(kp, src); err != nil {
@@ -236,8 +232,22 @@ func (g *devTier) forgetCopy(sid uint64, src int) {
 		}
 		return
 	}
-	for h := n - 1; h >= 0; h-- {
-		g.dropKVLayer(kp, histKey(src, h))
+	g.dropBlockPools(kp, src)
+}
+
+// dropBlockPools drops every pool layer of block src's histories, of every
+// type: the rows' last, which takes the block's history count with it
+// (dropKVLayer). Callers hold g.mu.
+func (g *devTier) dropBlockPools(kp *kvPool, src int) {
+	for key := range kp.layers {
+		if keyBlock(key) == src && keyHist(key) > 0 {
+			g.dropKVLayer(kp, key)
+		}
+	}
+	for key := range kp.layers {
+		if keyBlock(key) == src {
+			g.dropKVLayer(kp, key)
+		}
 	}
 }
 
@@ -283,10 +293,11 @@ func copySeqPages(sv, dv *devTier, s seqID, src, j0, j1, from int) error {
 		}
 	}
 	P := fkp.p
+	sk, dk := sv.sessKey(s.sid, src), dv.sessKey(s.sid, src)
 	if P != dkp.p {
 		end := 0
 		for h := range fkp.blockHists(src) {
-			if fl := fkp.layers[histKey(src, h)]; fl != nil {
+			if fl := fkp.layers[histKey(sk, h)]; fl != nil {
 				end = max(end, len(fl.owned[s])*P)
 			}
 		}
@@ -297,8 +308,7 @@ func copySeqPages(sv, dv *devTier, s seqID, src, j0, j1, from int) error {
 	}
 	pages := 0
 	for h := range fkp.blockHists(src) {
-		key := histKey(src, h)
-		fl, tl := fkp.layers[key], dkp.layers[key]
+		fl, tl := fkp.layers[histKey(sk, h)], dkp.layers[histKey(dk, h)]
 		if fl == nil {
 			continue
 		}
@@ -486,7 +496,7 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 		}
 		// A copy as the CPU's made for a reader placed before this one is
 		// widened by the histories this one reads that it lacks.
-		widen := have && o == nil && d.lacksHists(src, hs)
+		widen := have && o == nil && d.lacksHists(sid, src, hs)
 		d.mu.Unlock()
 		if have && !widen {
 			continue
@@ -563,7 +573,7 @@ func (g *GPU) settleCopies(sid uint64) error {
 				if o := at[src]; o != d {
 					want[src] = o
 					if o == nil {
-						by[src] = d.hostHistsOf(by[src], l, src)
+						by[src] = d.hostHistsOf(by[src], sid, l, src)
 					}
 				}
 			}
@@ -575,7 +585,7 @@ func (g *GPU) settleCopies(sid uint64) error {
 			if o, ok := want[src]; ok && (o == nil) == d.hostOf[src][sid] {
 				// A copy as the CPU's lacking a history a block here reads
 				// is widened (makeHostCopy).
-				if o != nil || !d.lacksHists(src, by[src]) {
+				if o != nil || !d.lacksHists(sid, src, by[src]) {
 					delete(want, src)
 				}
 				continue
@@ -692,7 +702,7 @@ func (g *GPU) shareCopies(sid uint64, li, page int, key string, end int) bool {
 // rows are copied into it.
 func shareCopy(sv, dv *devTier, s seqID, li, page int, key string, end int) error {
 	kp := dv.kvp
-	l := kp.layers[li]
+	l := kp.layers[dv.sessKey(s.sid, li)]
 	if l == nil {
 		return fmt.Errorf("no copy of block %d's history", keyBlock(li))
 	}
