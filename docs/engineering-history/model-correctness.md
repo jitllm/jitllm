@@ -11629,3 +11629,26 @@ it through cfgMut, which states the parts again over the field as set.
 Written into m.Cfg alone it reached nothing: TestComposedEmbeddingDecoderOnCPU's
 pooling violation read 0.9999998 against its golden on every embedding
 model until it did.
+
+## A llava tower's depth
+
+llama.cpp's llava builder runs a tower's blocks to `n_layer - 1`
+(`tools/mtmd/models/llava.cpp`, `il_last`), on the assumption that the
+mmproj keeps every layer of the vision model and the projector reads the
+second to last (`vision_feature_layer` -2). Two files break that assumption
+in opposite directions.
+
+moondream2's mmproj states 28 blocks, and block 27 is a byte copy of block
+26: padding. llama.cpp runs 27, which is the reference's depth; jitllm ran
+all 28, applying block 26 twice, and agreed with llama-mtmd-cli at 14 of 18
+positions once moondream2's own tokenizer.json was asserted (the GGUF states
+no pre-tokenizer, and llama.cpp's default splits " 1969" as " ", "196", "9").
+The MLP statement now says `"blocks": "padded"`: a last block that
+byte-repeats the one before it does not run. `TestMoondreamTowerMatchesLlamaCpp`
+reads relative RMS 0.052 against llama-mtmd-debug's tower rows (0.68 with the
+padding run), and the answers agree at 18 of 18.
+
+llava-phi-3-mini's mmproj stores 23 blocks, already cut at the reference's
+second to last of CLIP's 24. llama.cpp runs 22 of them, a block short of
+transformers' LLaVA. jitllm runs all 23, the reference's depth: the user's
+decision, recorded in docs/divergences.md.
