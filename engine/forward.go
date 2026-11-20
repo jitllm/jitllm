@@ -1395,11 +1395,11 @@ func (s *Instance) streamBelow(li int) (int, bool) {
 }
 
 // residentMixtureBelow is the highest block under hi on the card resident
-// with a routed bank and not pinned, -1 for none or where that block holds
-// no bank.
+// with a routed bank, not pinned and held by no other session, -1 for none
+// or where that block holds no bank.
 func (s *Instance) residentMixtureBelow(hi int) int {
 	for li := hi - 1; li >= s.lo; li-- {
-		if !s.devAt(li) || !s.c.MoEAt(li) || s.streamedAt(li) || s.pinnedOnDev(li) {
+		if !s.devAt(li) || !s.c.MoEAt(li) || s.streamedAt(li) || s.pinnedOnDev(li) || s.heldBeside(li) {
 			continue
 		}
 		if _, bank := s.m.BlockBytes(li); bank == 0 {
@@ -1438,6 +1438,29 @@ func (s *Instance) streamForHistory() bool {
 		return true
 	}
 	return streamed
+}
+
+// heldBeside says a session other than the bound one holds block li on the
+// device. The card keeps one copy of a block for every session that runs it
+// (its release leaves the block to the others), so re-placing it streamed
+// through this session's view frees nothing and leaves the others on the
+// resident copy, while the block is marked streamed for every later
+// placement.
+func (s *Instance) heldBeside(li int) bool {
+	if s.holdsOnDev(s.own, li) {
+		return true
+	}
+	for _, o := range s.hist {
+		if s.holdsOnDev(o, li) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdsOnDev says o, not the bound session, holds block li on the device.
+func (s *Instance) holdsOnDev(o *Session, li int) bool {
+	return o != nil && o != s.Session && o.ld != nil && li < len(o.held) && o.held[li] == routeView
 }
 
 // restream is streamResident with any history the block holds already

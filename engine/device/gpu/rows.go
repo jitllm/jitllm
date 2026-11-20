@@ -270,6 +270,11 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x []float32, cs nn.
 		g.pleHost, g.cutHost, g.stepToks = ple, cut, toks
 		g.mu.Unlock()
 	}()
+	// x is stream-major: each stream's rows, d words a row.
+	ns, d := 1, xw
+	if embd > 0 && xw%embd == 0 {
+		ns, d = xw/embd, embd
+	}
 	pw, cw, tw := 0, 0, 0
 	if len(ple)%n == 0 {
 		pw = len(ple) / n
@@ -311,12 +316,16 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x []float32, cs nn.
 		for t := range q.cs {
 			q.cs[t] = q.cs[t][:0]
 		}
+		for k := range ns {
+			for _, r := range gi {
+				q.x = append(q.x, x[(k*n+r)*d:(k*n+r+1)*d]...)
+			}
+		}
 		for _, r := range gi {
 			q.pos, q.slot = append(q.pos, rs.pos[r]), append(q.slot, rs.slot[r])
 			if rs.sid != nil {
 				q.sid = append(q.sid, rs.sid[r])
 			}
-			q.x = append(q.x, x[r*xw:(r+1)*xw]...)
 			for t, c := range cs {
 				if c != nil {
 					w := len(c) / n
@@ -368,8 +377,12 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x []float32, cs nn.
 		if !g.layersRows(lo, hi, &q.rs, q.x, qcs, h) {
 			return false
 		}
+		for k := range ns {
+			for i, r := range gi {
+				copy(x[(k*n+r)*d:(k*n+r+1)*d], q.x[(k*m+i)*d:(k*m+i+1)*d])
+			}
+		}
 		for i, r := range gi {
-			copy(x[r*xw:(r+1)*xw], q.x[i*xw:(i+1)*xw])
 			copy(cut[r*cw:(r+1)*cw], q.cut[i*cw:(i+1)*cw])
 		}
 		if h == nil {

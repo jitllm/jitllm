@@ -16,8 +16,10 @@ import (
 // bank one row's, a cache of slots a few -- so the step runs as steps of the
 // rows they hold, every row still across sessions (Stats.SessionRows) and
 // every block step served, and agrees with each session alone.
+// synth-kimik3's residual is several streams, stream-major, which a group
+// gathers stream by stream.
 func TestStepRunsOverStreamedExperts(t *testing.T) {
-	for _, file := range []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-qwen2moe-hf" + q8Suffix} {
+	for _, file := range []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-qwen2moe-hf" + q8Suffix, "synth-kimik3.gguf"} {
 		t.Run(file, func(t *testing.T) {
 			p := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(p)); err != nil {
