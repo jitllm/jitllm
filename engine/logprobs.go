@@ -37,7 +37,10 @@ func (s *Instance) SampledProbs(l *Logprobs, smp *Sampler, logits []float32, cho
 	if n != s.c.NVocab {
 		return 0, fmt.Errorf("model: sampled probabilities over %d logits, and the vocabulary is %d", n, s.c.NVocab)
 	}
-	k := min(max(l.N, 0), n)
+	k := n
+	if l.N < k {
+		k = max(l.N, 0)
+	}
 	l.Top = topOf(l.Top, k)
 	if smp == nil || smp.Temp <= 0 {
 		if k > 0 {

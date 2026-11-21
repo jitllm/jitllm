@@ -1220,11 +1220,11 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		XTCProbability: s.XTCProbability, XTCThreshold: s.XTCThreshold, TopNSigma: s.TopNSigma,
 		DynatempRange: s.DynatempRange, DynatempExponent: s.DynatempExponent, Mirostat: s.Mirostat,
 		MirostatTau: s.MirostatTau, MirostatEta: s.MirostatEta, TopK: max(s.TopK, 0),
-		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
+		RepeatPen: s.RepeatPenalty, RepeatLastN: llamaWindow(s.RepeatLastN, nctx), PresencePen: s.PresencePenalty,
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
 		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
 		Stages: llamaStages(s.Samplers), TempLast: true, DryMultiplier: s.DryMultiplier, DryBase: s.DryBase,
-		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: s.DryPenaltyLastN, DryBreakers: s.DrySequenceBreakers,
+		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: llamaWindow(s.DryPenaltyLastN, nctx), DryBreakers: s.DrySequenceBreakers,
 		MinKeep: s.MinKeep}
 	sm.Temp, sm.MinP = max(sm.Temp, 0), min(max(sm.MinP, 0), 1)
 	if sm.TopP <= 0 {
@@ -1233,22 +1233,23 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	if sm.TypicalP <= 0 {
 		sm.TypicalP = leastP
 	}
-	switch s.RepeatLastN {
-	case 0:
+	if s.RepeatLastN == 0 {
 		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0
-	case -1:
-		sm.RepeatLastN = nctx
-	}
-	if sm.DryPenaltyLastN == -1 {
-		sm.DryPenaltyLastN = nctx
-	}
-	if nctx > 0 {
-		sm.RepeatLastN, sm.DryPenaltyLastN = penaltyWindow(sm.RepeatLastN, nctx), penaltyWindow(sm.DryPenaltyLastN, nctx)
 	}
 	if s.Seed < 0 {
 		sm.Seed = rand.Int64()
 	}
 	return sm
+}
+
+// llamaWindow is a penalty window as llama.cpp reads it over a context of
+// nctx tokens: -1 is the context, and a window past the context sees no more
+// tokens than the context holds.
+func llamaWindow(n, nctx int) int {
+	if n == -1 {
+		return nctx
+	}
+	return penaltyWindow(n, nctx)
 }
 
 // llamaInfillIDs builds /infill's prompt from the model's fill-in-the-middle
