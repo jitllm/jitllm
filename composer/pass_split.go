@@ -78,14 +78,16 @@ func (s Split) groupSegments(n *Kernel, d Device) (S, G int, ok bool) {
 	}
 	T, E, limit := n.Loops[c].Trip, n.cutElements(), s.groupThreads(d)
 	for g := s.Max; g > 1; g-- {
-		if G := groupWidth(g); T%g == 0 && E*g < limit && groupFits(n.Elements(), T, g, G) {
+		if G := groupWidth(g, d); T%g == 0 && E*g < limit && groupFits(n.Elements(), T, g, G) {
 			return g, G, true
 		}
 	}
 	return 0, 0, false
 }
 
-func groupWidth(S int) int { return min(max(32*S, 128), 1024) }
+// groupWidth is the threads of a workgroup split in S segments on d: 32 a
+// segment, 128 to the most d's workgroups take.
+func groupWidth(S int, d Device) int { return min(max(32*S, 128), d.groupMost()) }
 
 func groupFits(E, T, S, G int) bool { return G%S == 0 && E%(G/S) == 0 && T%S == 0 }
 
@@ -180,11 +182,12 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 			T, E, slots := n.Loops[c].Trip, n.cutElements(), s.slots(d)
 			for S = 1; S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0; S *= 2 {
 			}
-			G = groupWidth(S)
+			G = groupWidth(S, d)
 		case s.Width > 0:
-			G = s.Width
+			G = min(s.Width, d.groupMost())
 		case width > 0:
-			S, G = segmentsAt(n, S, width), width
+			G = min(width, d.groupMost())
+			S = segmentsAt(n, S, G)
 		}
 		if S < 2 {
 			return nil, false, nil
@@ -209,9 +212,10 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 	if g, G, ok := s.groupSegments(n, d); ok {
 		switch {
 		case s.Width > 0:
-			G = s.Width
+			G = min(s.Width, d.groupMost())
 		case width > 0:
-			g, G = segmentsAt(n, g, width), width
+			G = min(width, d.groupMost())
+			g = segmentsAt(n, g, G)
 		}
 		if k, ok := groupSplit(n, c, f, term, st, g, G, s.Drop); ok {
 			return []*Kernel{k}, true, nil
@@ -224,7 +228,7 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	if s.Group {
-		if g, ok := groupSplit(n, c, f, term, st, S, groupWidth(S), s.Drop); ok {
+		if g, ok := groupSplit(n, c, f, term, st, S, groupWidth(S, d), s.Drop); ok {
 			return []*Kernel{g}, true, nil
 		}
 	}
@@ -503,7 +507,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	K, U := n.Loops[c].Trip, n.Space[0]
 	E := n.Elements() / U
 	S := 1
-	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && min(max(32*S*2, 128), 1024)*T <= splitShared {
+	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && groupWidth(S*2, d)*T <= splitShared {
 		S *= 2
 	}
 	if S == 1 {
@@ -523,7 +527,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	}
 	// A workgroup's segments hold whole elements of one unit: fewer
 	// elements than a 128-thread workgroup's share take a narrower one.
-	G := min(max(32*S, 128), 1024)
+	G := groupWidth(S, d)
 	for G > 32*S && E%(G/S) != 0 {
 		G /= 2
 	}

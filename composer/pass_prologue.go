@@ -215,7 +215,10 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 			read = true
 		}
 	}
-	return read && words <= p.Words && !readsASlice(pr, c) && (!whole || oneWave(c, 4*words, d) && p.short(pr, c))
+	// The device's workgroup memory bounds it as the lowering does: Metal's
+	// is 32 KiB, under the profile's words.
+	fits := words <= p.Words && (d.Shared <= 0 || 4*words <= d.Shared)
+	return read && fits && !readsASlice(pr, c) && (!whole || oneWave(c, 4*words, d) && p.short(pr, c))
 }
 
 // readsASlice says a workgroup of c reads only part of what pr writes: a

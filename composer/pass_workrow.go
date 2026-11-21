@@ -27,9 +27,9 @@ func (w WorkRow) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if !ok {
 			continue
 		}
-		group := w.Group
+		group := min(w.Group, d.groupMost())
 		if len(r.Space) > 1 {
-			group = w.Heads
+			group = min(w.Heads, d.groupMost())
 		}
 		if group == 0 {
 			continue

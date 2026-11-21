@@ -117,7 +117,11 @@ func (g *devTier) ErrCause() nn.FailCause {
 func (g *devTier) compile(k *ir.Kernel) (backend.Kernel, error) {
 	c, err := g.dev.Compile(k)
 	if err != nil {
-		g.noteCause(nn.FailBuild)
+		// A width the pipeline refused is formed again narrower
+		// (narrowGroups); the call notes a build failure only if that fails.
+		if !errors.Is(err, backend.ErrGroupTooWide) {
+			g.noteCause(nn.FailBuild)
+		}
 		return nil, &nn.BuildError{Layer: -1, Err: err}
 	}
 	return c, nil

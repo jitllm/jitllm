@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // Insn is one disassembled instruction: its bytes and its normalised text.
@@ -39,13 +37,13 @@ func Tool() (string, bool) {
 // Disasm disassembles code with objdump, one row per instruction and the
 // whole encoding on that row (--insn-width=16, so a long instruction's bytes
 // are not wrapped onto a continuation line). It keeps "(bad)" rows, because a
-// gate must see them. With no objdump that reads x86-64 it reports the tool
-// missing (testmodels.Missing).
+// gate must see them. With no objdump that reads x86-64 it fails t: a caller
+// checks Tool first and reports the tool missing.
 func Disasm(t testing.TB, dir, name string, code []byte) []Insn {
 	t.Helper()
 	tool, ok := Tool()
 	if !ok {
-		testmodels.Missing(t, "no GNU objdump that reads x86-64 (binutils, or binutils-x86-64-linux-gnu off x86)")
+		t.Fatal("no GNU objdump that reads x86-64 (binutils, or binutils-x86-64-linux-gnu off x86)")
 	}
 	p := filepath.Join(dir, name+".bin")
 	if err := os.WriteFile(p, code, 0o600); err != nil {

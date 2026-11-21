@@ -1099,8 +1099,7 @@ func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 		// The driver refuses the launch (too many resources requested); a
 		// refusal here lets the caller keep another kernel instead.
 		c.do(m.Unload)
-		return nil, fmt.Errorf("%w: %s at %d registers a thread launches at most %d threads, not %d",
-			ErrGroupTooWide, k.Name, a.Regs, a.MaxThreads, k.Group[0])
+		return nil, &GroupTooWide{Kernel: k.Name, Want: k.Group[0], Allowed: a.MaxThreads, Why: fmt.Sprintf("%d registers a thread", a.Regs)}
 	}
 	ck.m = m
 	if attrsOK {

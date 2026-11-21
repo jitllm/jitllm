@@ -41,9 +41,22 @@ func sessionSampler(own *engine.Sampler, lm *LoadedModel, maxSeq int, name strin
 
 // draw is the sampler a generate on s runs: the request's own, else the
 // session's, refused where the session has none to give (sessionSampler).
+// A request's penalty windows are held to the session's context: a window
+// past it sees no more tokens, and the engine reserves a window's length.
 func (s *Session) draw(own *engine.Sampler) (engine.Sampler, error) {
 	if own != nil {
-		return *own, nil
+		smp := *own
+		smp.RepeatLastN, smp.DryPenaltyLastN = penaltyWindow(own.RepeatLastN, s.maxSeq), penaltyWindow(own.DryPenaltyLastN, s.maxSeq)
+		return smp, nil
 	}
 	return s.sampling, s.undrawn
+}
+
+// penaltyWindow is a penalty window of n tokens held to a context of nctx:
+// past the context it sees no more tokens than the context holds.
+func penaltyWindow(n, nctx int) int {
+	if n <= nctx {
+		return n
+	}
+	return nctx
 }

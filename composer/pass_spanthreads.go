@@ -30,8 +30,8 @@ func (p SpanThreads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if k.Work || k.Group > 0 {
 			return nil, false, fmt.Errorf("jit: %s sums runs over a workgroup a pass bound before", k.Name)
 		}
-		if S > spanMost {
-			return nil, false, fmt.Errorf("jit: %s sums runs of %d, past the %d threads a workgroup holds", k.Name, S, spanMost)
+		if most := min(spanMost, d.groupMost()); S > most {
+			return nil, false, fmt.Errorf("jit: %s sums runs of %d, past the %d threads a workgroup holds", k.Name, S, most)
 		}
 		m := k.clone()
 		m.Spans = S

@@ -1051,6 +1051,9 @@ func TestComposedBlocksServe(t *testing.T) {
 									if n, d := bst.ServedPart(nn.ComposedBlock); n == 0 || d != 0 {
 										t.Fatalf("the arm with every page table swapping two experts served the blocks %d times and declined them %d", n, d)
 									}
+									if bst.StreamFills == 0 {
+										t.Fatalf("the arm with every page table swapping two experts streamed nothing (the arm's own run filled %d): its placement held every expert, so no page table was written", st0.StreamFills)
+									}
 									far := 0.0
 									for i := 1; i < len(got0); i++ {
 										if slices.Equal(out[i], got0[i]) {

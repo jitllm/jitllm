@@ -28,6 +28,7 @@ type RowView struct {
 	// the spans read in since the last Drop.
 	held []uint64
 	read []uint32
+	com  offheap.Committer
 }
 
 // NewRowView reserves row table e's view. It fails where e is not a row
@@ -48,7 +49,7 @@ func (f *Frames) NewRowView(e *Entry) (*RowView, error) {
 		return nil, fmt.Errorf("jlm: %s: no reservation of %d bytes for its rows (%v)", e.Name, n, err)
 	}
 	return &RowView{f: f, mem: mem, lo: lo, end: end, row0: e.QSOff - lo, rb: rb, rows: e.Dims[1],
-		held: make([]uint64, (n/Align+63)/64)}, nil
+		held: make([]uint64, (n/Align+63)/64), com: offheap.NewCommitter()}, nil
 }
 
 // Base is row 0's address; the rows follow at RowBytes apart.
@@ -85,7 +86,7 @@ func (v *RowView) readSpan(p uint64) error {
 	off := v.lo + p*Align
 	n := min(uint64(Align), v.end-off)
 	dst := v.mem[p*Align : p*Align+n]
-	if err := offheap.CommitOffHeap(dst); err != nil {
+	if err := v.com.Commit(dst); err != nil {
 		return fmt.Errorf("jlm: row span at %d: %w", off, err)
 	}
 	v.f.rowReads.Add(1)
@@ -117,7 +118,7 @@ func (v *RowView) Drop() {
 			j++
 		}
 		a, b := uint64(v.read[i])*Align, uint64(v.read[j-1]+1)*Align
-		offheap.DropOffHeap(v.mem[a:min(b, uint64(len(v.mem)))])
+		v.com.Drop(v.mem[a:min(b, uint64(len(v.mem)))])
 		i = j
 	}
 	for _, p := range v.read {

@@ -251,6 +251,33 @@ func threadRegs(d backend.Device) int {
 	return 0
 }
 
+// narrowGroups lowers the most threads the composer gives this device's
+// workgroups to the widest power of two a pipeline that refused its form's
+// width allows (backend.GroupTooWide), and says whether it lowered it: the
+// form is asked again under it. Every request after takes it, so a device
+// whose pipelines hold fewer threads than the composer's bound refuses one
+// form, not one a part.
+func (g *devTier) narrowGroups(err error) bool {
+	var wide *backend.GroupTooWide
+	if !errors.As(err, &wide) {
+		return false
+	}
+	w := 1
+	for w*2 <= wide.Allowed {
+		w *= 2
+	}
+	most := int(g.groupMost.Load())
+	if most == 0 {
+		most = wide.Want
+	}
+	if w < ir.SubgroupLanes || w >= most {
+		return false
+	}
+	g.groupMost.Store(int32(w))
+	g.Stats.NarrowedGroups++
+	return true
+}
+
 // askPart asks r for sl at a step of rows: the request's Key, and what it
 // forms.
 func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (composer.Key, []composer.Code, error) {
@@ -276,7 +303,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 		Regs: threadRegs(g.dev), ExactDiv: composer.ExactDivOn(g.dev.API()), ExactArith: composer.ExactArithOn(g.dev.API()),
 		Matrix: g.composedMatrix(), HalfPairs: composer.HalfPairsOn(g.dev.API()),
 		VectorLoads: composer.VectorLoadsOn(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords(),
-		Buffers: backend.Bindings(g.dev)}
+		Buffers: backend.Bindings(g.dev), Group: int(g.groupMost.Load())}
 	if dev.Matrix[0] > 0 {
 		dev.Fragment = backend.Fragment(g.dev)
 		dev.ScaleRows = g.composedScale()
@@ -1519,20 +1546,28 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		sl.tables[tableKey(composer.TableCall)] = every
 	}
 	t0 := time.Now()
-	key, codes, err := g.askPart(r, &sl, sk.rows)
-	if err != nil {
-		return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
-	}
-	g.FormAsks++
-	f, ok := g.servedForms[key]
-	if !ok {
-		if f, err = g.compilePart(&sl, codes, sk.rows); err != nil {
+	var key composer.Key
+	var f *partForm
+	for {
+		var codes []composer.Code
+		if key, codes, err = g.askPart(r, &sl, sk.rows); err != nil {
 			return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
 		}
-		g.PartsFormed++
-		g.PartKernels += len(codes)
-		f.key = key
-		g.servedForms[key] = f
+		g.FormAsks++
+		var ok bool
+		if f, ok = g.servedForms[key]; ok {
+			break
+		}
+		if f, err = g.compilePart(&sl, codes, sk.rows); err == nil {
+			g.PartsFormed++
+			g.PartKernels += len(codes)
+			f.key = key
+			g.servedForms[key] = f
+			break
+		}
+		if !g.narrowGroups(err) {
+			return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
+		}
 	}
 	g.FormTook += time.Since(t0)
 	var in *partInst

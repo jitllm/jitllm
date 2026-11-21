@@ -1722,7 +1722,7 @@
     let tokens = []
     let nextToken = 0
     // The hero reads the machine it runs on and draws it in the field.
-    let machine = isHero ? SCENES[scene]() : null
+    let machine = isHero ? makeScene() : null
     let stamps = []
     let open = new Float32Array(0) // 0 beside the copy, 1 clear of it
     // warp's stars: a position on the screen plane and a depth.
@@ -2086,7 +2086,7 @@
     })
     if (isHero)
       addEventListener(HERO_EVENT, () => {
-        machine = SCENES[scene]()
+        machine = makeScene()
         if (measure()) redraw()
       })
 
@@ -2119,6 +2119,11 @@
     top: () => makeTop(MACHINE),
     swarm: () => makeSwarm(MACHINE),
     compile: () => makeCompile(),
+  }
+  // The scene named now, built; a name that is not one of SCENES' own builds compile.
+  const makeScene = () => {
+    const make = Object.hasOwn(SCENES, scene) ? SCENES[scene] : null
+    return typeof make === 'function' ? make() : SCENES.compile()
   }
   const HERO_EVENT = 'jitllm:hero'
   const heroQuery = new URLSearchParams(location.search)

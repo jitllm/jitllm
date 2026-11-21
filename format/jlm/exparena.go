@@ -41,7 +41,7 @@ func (f *Frames) expFrame(li int, size uint64) ([]byte, error) {
 			f.expNone = true
 			return nil, nil
 		}
-		f.exp = b
+		f.exp, f.expCom = b, offheap.NewCommitter()
 	}
 	if f.exp == nil {
 		return nil, nil
@@ -53,7 +53,7 @@ func (f *Frames) expFrame(li int, size uint64) ([]byte, error) {
 	b := f.exp[at : at+size : at+size]
 	// A bank's view reads this frame and no other, so a frame it cannot commit
 	// fails the page-in.
-	if err := offheap.CommitOffHeap(b); err != nil {
+	if err := f.expCom.Commit(b); err != nil {
 		return nil, fmt.Errorf("jlm: expert page %d: %w", li, err)
 	}
 	placeMemory(b, f.noHuge, f.nodeMask)
@@ -74,7 +74,7 @@ func (f *Frames) inExp(b []byte) bool {
 // hold f.mu.
 func (f *Frames) dropExp(b []byte) {
 	f.retire(b)
-	offheap.DropOffHeap(b[:cap(b)])
+	f.expCom.Drop(b[:cap(b)])
 	f.expHeld -= uint64(cap(b))
 }
 

@@ -877,7 +877,7 @@ func auditList(t *testing.T, towers bool) []auditModel {
 	// hold fails here rather than leaving the list.
 	listed := map[string]bool{}
 	missing := t.Errorf
-	if os.Getenv("JITLLM_AUDIT_MODEL") != "" {
+	if os.Getenv("JITLLM_AUDIT_MODEL") != "" || testmodels.Free() {
 		missing = t.Logf
 	}
 	for _, lm := range library.Models() {

@@ -36,7 +36,7 @@ func (s GroupExtreme) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	G := ir.SubgroupLanes
-	for G < 1024 && G*s.Trips < T {
+	for G < d.groupMost() && G*s.Trips < T {
 		G *= 2
 	}
 	term := n.extremeTerm(ext)

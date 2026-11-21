@@ -2,10 +2,7 @@
 
 package offheap
 
-import (
-	"syscall"
-	"unsafe"
-)
+import "syscall"
 
 // mapAligned returns n bytes of zeroed host memory whose base address is page
 // aligned, and therefore at least HostAlign() aligned.
@@ -62,12 +59,3 @@ func ReserveOffHeap(n int) ([]byte, bool, error) {
 // caller may write. A range here commits when it is written, so there is
 // nothing to do.
 func CommitOffHeap(b []byte) error { return nil }
-
-// DropOffHeap hands the memory behind b, a range of a ReserveOffHeap
-// reservation, back to the system: what it held is gone, and the range is
-// written again before it is read.
-func DropOffHeap(b []byte) {
-	if len(b) > 0 {
-		syscall.Syscall(syscall.SYS_MADVISE, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), syscall.MADV_DONTNEED)
-	}
-}

@@ -1242,6 +1242,9 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	if sm.DryPenaltyLastN == -1 {
 		sm.DryPenaltyLastN = nctx
 	}
+	if nctx > 0 {
+		sm.RepeatLastN, sm.DryPenaltyLastN = penaltyWindow(sm.RepeatLastN, nctx), penaltyWindow(sm.DryPenaltyLastN, nctx)
+	}
 	if s.Seed < 0 {
 		sm.Seed = rand.Int64()
 	}

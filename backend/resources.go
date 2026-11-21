@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 )
@@ -132,6 +133,21 @@ func (l *resLedger) list() []KernelResources {
 // would fail with too many resources requested, so the compile says so first
 // and a caller with another kernel for the job keeps that one.
 const ErrGroupTooWide backendError = "backend: the workgroup is wider than the kernel's registers allow"
+
+// GroupTooWide is ErrGroupTooWide for one kernel: the threads it declared
+// and the most its built pipeline launches, which a caller forms the kernel
+// again under (composer.Device.Group).
+type GroupTooWide struct {
+	Kernel        string
+	Want, Allowed int
+	Why           string
+}
+
+func (e *GroupTooWide) Error() string {
+	return fmt.Sprintf("%s: %s wants a %d-thread workgroup and %s allows %d", ErrGroupTooWide, e.Kernel, e.Want, e.Why, e.Allowed)
+}
+
+func (e *GroupTooWide) Is(target error) bool { return target == ErrGroupTooWide }
 
 // backendError is a sentinel error of this package, a constant so errors.Is
 // and == hold on it.

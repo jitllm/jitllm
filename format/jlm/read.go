@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // ReadThreads is how many concurrent ReadAt calls one page-in issues.
@@ -189,6 +191,8 @@ type frameCore struct {
 	// none.
 	exp     []byte
 	expNone bool
+	// expCom commits and drops the reservation's frames.
+	expCom  offheap.Committer
 	expHeld uint64
 	// recycle is told the address range of every buffer whose bytes stop being
 	// the ones a caller may have copied (OnRecycle), and recycled holds those

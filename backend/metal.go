@@ -176,8 +176,7 @@ func (m *mtlDev) Compile(k *ir.Kernel) (Kernel, error) {
 	maxT, simd := kern.Limits()
 	if wg := k.Group[0] * max(k.Group[1], 1) * max(k.Group[2], 1); wg > maxT {
 		kern.Close()
-		return nil, fmt.Errorf("metal: %s wants a %d-thread threadgroup and its pipeline allows %d on %s",
-			k.Name, wg, maxT, m.c.Name())
+		return nil, &GroupTooWide{Kernel: k.Name, Want: wg, Allowed: maxT, Why: "its pipeline on " + m.c.Name()}
 	}
 	if k.Lanes != 0 && simd != k.Lanes {
 		kern.Close()

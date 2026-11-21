@@ -21,6 +21,7 @@ type Arena struct {
 	set    *Arenas
 	kb, vb []byte
 	k, v   []float32
+	com    offheap.Committer
 	pp     int
 	slots  int
 	mu     sync.Mutex
@@ -38,24 +39,35 @@ type Arena struct {
 const ArenaElems = 1 << 31
 
 // MapArena is an arena of slots pages of pp floats each, its keys and its
-// values -- one span where latent, MLA's value the key's prefix.
+// values -- one span where latent, MLA's value the key's prefix. It is
+// reserved, and a slot is committed when it is first taken: an arena is sized
+// to the host's whole budget, which a platform that commits a mapping at once
+// (Windows) cannot hold for every layer.
 func MapArena(pp, slots int, latent bool) (*Arena, error) {
 	n := 4 * pp * slots
-	a := &Arena{pp: pp, slots: slots}
+	a := &Arena{pp: pp, slots: slots, com: offheap.NewCommitter()}
 	var err error
-	if a.kb, _, err = offheap.MapOffHeap(n); err != nil {
+	if a.kb, err = reserve(n); err != nil {
 		return nil, err
 	}
 	a.k = unsafe.Slice((*float32)(unsafe.Pointer(&a.kb[0])), pp*slots)
 	if latent {
 		a.vb, a.v = a.kb, a.k
+		if err := a.commit(0); err != nil {
+			a.unmap()
+			return nil, err
+		}
 		return a, nil
 	}
-	if a.vb, _, err = offheap.MapOffHeap(n); err != nil {
+	if a.vb, err = reserve(n); err != nil {
 		offheap.UnmapOffHeap(a.kb)
 		return nil, err
 	}
 	a.v = unsafe.Slice((*float32)(unsafe.Pointer(&a.vb[0])), pp*slots)
+	if err := a.commit(0); err != nil {
+		a.unmap()
+		return nil, err
+	}
 	return a, nil
 }
 
@@ -82,6 +94,9 @@ func (a *Arena) Take() (int, bool) {
 	if n := len(a.free); n > 0 {
 		i, a.free = int(a.free[n-1]), a.free[:n-1]
 	} else if a.next < a.slots {
+		if a.commit(a.next) != nil {
+			return 0, false
+		}
 		i = a.next
 		a.next++
 	}
@@ -94,6 +109,29 @@ func (a *Arena) Take() (int, bool) {
 	a.holds[i] = 1
 	a.live++
 	return i, true
+}
+
+// reserve is n bytes of an arena's span: a reservation where the platform
+// makes one, else memory mapped whole.
+func reserve(n int) ([]byte, error) {
+	b, mapped, err := offheap.ReserveOffHeap(n)
+	if err == nil && !mapped {
+		b, _, err = offheap.MapOffHeap(n)
+	}
+	return b, err
+}
+
+// commit makes slot i's key and value memory the arena may write; a slot
+// released since keeps its commitment.
+func (a *Arena) commit(i int) error {
+	lo, hi := 4*i*a.pp, 4*(i+1)*a.pp
+	if err := a.com.Commit(a.kb[lo:hi]); err != nil {
+		return err
+	}
+	if &a.vb[0] == &a.kb[0] {
+		return nil
+	}
+	return a.com.Commit(a.vb[lo:hi])
 }
 
 // Hold adds a holder to slot i.

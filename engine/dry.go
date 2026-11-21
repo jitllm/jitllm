@@ -113,7 +113,13 @@ func (s *Instance) dryRow(smp *Sampler) bool {
 	if window < 0 {
 		window = s.maxSeq
 	}
-	nr := min(len(last), window, s.maxSeq)
+	nr := len(last)
+	if window < nr {
+		nr = window
+	}
+	if s.maxSeq < nr {
+		nr = s.maxSeq
+	}
 	allowed := smp.DryAllowedLength
 	if nr <= allowed {
 		return false

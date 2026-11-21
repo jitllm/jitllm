@@ -494,6 +494,10 @@ type Stats struct {
 	// parts in, by part: what Steps, counted where a step is emitted,
 	// does not see.
 	PartsReplayed [nn.NumParts]int
+	// NarrowedGroups counts the times a pipeline refused a form's workgroup
+	// width and the device's workgroups were narrowed under it
+	// (narrowGroups).
+	NarrowedGroups int
 	// UnformedAtStep counts the parts a step asked for that no placement or
 	// PrepHead formed, each declined unformed (servedFor): a step composes
 	// nothing.
@@ -1698,6 +1702,11 @@ type devShared struct {
 	// several sessions' rows holds until it completes, before its own first
 	// stage.
 	actWin atomic.Int32
+	// groupMost is the most threads a workgroup the composer forms for this
+	// device takes, 0 for the composer's own bound: set once a pipeline
+	// allowed fewer than a form's (narrowGroups), and read by every request
+	// after.
+	groupMost atomic.Int32
 	// recCap caches whether sessions can capture: 0 unknown, 1 yes, -1 no.
 	recCap int
 	// servedForms are the forms of the parts the composer serves, by the

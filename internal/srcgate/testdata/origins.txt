@@ -18,7 +18,6 @@ bug	backend/backend.go	"backend: copy of %d bytes from offset %d to %d of one bu
 bug	backend/backend.go	"backend: copy of %d bytes from offset %d to %d: negative"
 bug	backend/backend.go	"backend: copy of %d bytes from offset %d to %d: not whole 4-byte words"
 bug	backend/backend.go	"backend: copy of %d bytes to offset %d of a %d-byte buffer"
-context	backend/cuda.go	"%w: %s at %d registers a thread launches at most %d threads, not %d"	a block past the threads its registers allow (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK): the device's limit
 limit	backend/cuda.go	"a CUDA warp is %d lanes and ptx emits shfl.sync over exactly those; %d cannot be asked for"	a CUDA warp is 32 lanes: the hardware's width
 limit	backend/cuda.go	"backend: cuda: %s has no grid barrier"
 bug	backend/cuda.go	"backend: cuda: a copy between buffers this device did not allocate"
@@ -30,6 +29,7 @@ limit	backend/cuda.go	"backend: cuda: this driver has no cuMemcpyPeer"
 limit	backend/cuda.go	"backend: cuda: this driver has no non-blocking streams"
 limit	backend/cuda.go	"backend: cuda: this driver has no stream capture"
 context	backend/cuda.go	"ptx"
+limit	backend/cuda.go	"%d registers a thread"	a pipeline or a register file launching fewer threads than the kernel declares (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, maxTotalThreadsPerThreadgroup): the device's limit, which the card forms narrower under
 context	backend/cuda/api.go	"cuCtxCreate"
 context	backend/cuda/api.go	"cuCtxDestroy"
 context	backend/cuda/api.go	"cuCtxGetCurrent"
@@ -174,10 +174,10 @@ bug	backend/metal.go	"backend: msl: a copy between buffers this backend did not 
 limit	backend/metal.go	"backend: msl: the IORegistry states no gpu-core-count, and Metal no co-residency"	a device's limit: no core count, no co-residency (RULE 13)
 context	backend/metal.go	"metal"
 limit	backend/metal.go	"metal: %s is written for %d-lane simdgroups and %s runs it at %d"
-limit	backend/metal.go	"metal: %s wants a %d-thread threadgroup and its pipeline allows %d on %s"
 bug	backend/metal.go	"metal: writing %d bytes at offset %d of a %d-byte buffer"
 context	backend/metal.go	"msl"
 limit	backend/metal.go	"msl: %s is in no GPU family with simdgroup_matrix (MTLGPUFamilyApple7, MTLGPUFamilyMac2)"	the device's GPU family (-supportsFamily:): simdgroup_matrix is Apple7 and Mac2
+limit	backend/metal.go	"its pipeline on %v"	a pipeline or a register file launching fewer threads than the kernel declares (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, maxTotalThreadsPerThreadgroup): the device's limit, which the card forms narrower under
 limit	backend/metal/groups.go	"metal: dispatch of %d threadgroups; the kernel's threadgroup index is 32-bit, so a dispatch holds at most %d"	a dispatch past the 32-bit threadgroup count: the API's limit
 context	backend/metal/metal_darwin.go	"blit command buffer"
 context	backend/metal/metal_darwin.go	"command buffer"
@@ -209,6 +209,7 @@ context	backend/metal/metal_darwin.go	"newLibraryWithSource"
 context	backend/metal/metal_darwin.go	"newResidencySetWithDescriptor"
 limit	backend/metal/metal_other.go	"metal: not available on this platform"	Metal outside Apple's platforms
 limit	backend/resources.go	"backend: the workgroup is wider than the kernel's registers allow"
+limit	backend/resources.go	"%s: %s wants a %d-thread workgroup and %s allows %d"	a pipeline or a register file launching fewer threads than the kernel declares (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, maxTotalThreadsPerThreadgroup): the device's limit, which the card forms narrower under
 context	backend/restrict.go	"backend: %w"
 skip	backend/tiles.go	"backend: %s states no collective tile"
 bug	backend/tiles.go	"backend: %v is not a well-formed tile type"

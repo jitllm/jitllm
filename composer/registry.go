@@ -79,6 +79,20 @@ type Device struct {
 	// Buffers, where known, is the buffers one launch binds at most
 	// (backend.Bindings): Phases merges no launch past it.
 	Buffers int
+	// Group, where set, is the most threads a workgroup takes: a device
+	// whose pipelines allowed fewer than the composer's own bound
+	// (groupMost) once one was built (a Metal pipeline's
+	// maxTotalThreadsPerThreadgroup, which register use lowers).
+	Group int
+}
+
+// groupMost is the most threads a workgroup formed for d takes: 1024, every
+// backend's workgroup bound here, or fewer where d states fewer.
+func (d Device) groupMost() int {
+	if d.Group > 0 {
+		return min(d.Group, 1024)
+	}
+	return 1024
 }
 
 // warp is the threads a combine by lane shuffles takes whole on d: its

@@ -135,7 +135,10 @@ func (s *Instance) Logprobs(l *Logprobs, logits []float32, chosen int32) (float3
 	if !ok {
 		return 0, s.sampleDeclined("the logprobs")
 	}
-	k := min(max(l.N, 0), len(ids))
+	k := len(ids)
+	if l.N < k {
+		k = max(l.N, 0)
+	}
 	l.Top = topOf(l.Top, k)
 	for _, id := range ids[:k] {
 		l.Top = append(l.Top, TopLogprob{ID: int32(id), Logprob: row[id]})

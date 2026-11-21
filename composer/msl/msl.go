@@ -194,6 +194,12 @@ func Emit(k *ir.Kernel, opts ...Option) (string, error) {
 	if k.Comment != "" {
 		fmt.Fprintf(&l.b, "\n// %s\n", k.Comment)
 	}
+	// The threads it launches with, as PTX's .maxntid states them: a
+	// pipeline is otherwise free to allow fewer than the kernel declares
+	// once its registers are counted (Apple's paravirtual GPU allowed 704).
+	if wg := k.Group[0] * max(k.Group[1], 1) * max(k.Group[2], 1); wg > 0 {
+		fmt.Fprintf(&l.b, "\n[[max_total_threads_per_threadgroup(%d)]]", wg)
+	}
 	fmt.Fprintf(&l.b, "\nkernel void %s(", k.Name)
 	for i, p := range k.Params {
 		if i > 0 {
