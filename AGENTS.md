@@ -53,7 +53,7 @@ gate below before it counts.
 
 | principle | what it means | the gate |
 |---|---|---|
-| **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device code only from the composer's forms (no hand-written kernels) |
+| **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`, `srcgate.TestOnlyTheComposerEmitsCode`, `srcgate.TestNoKernelTextOutsideTheComposer`, `srcgate.TestKernelsReachADeviceOnlyAsIR`, `srcgate.TestTheAssemblersHoldOnlyTheHostReads`; device code only from the composer's forms (no hand-written kernels) |
 | **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `engine.TestEveryModelRunsGenerated` |
 | **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`, `TestTwoInstancesRunABlockOnTwoCards` (one block on two cards, each instance on its own copy), `TestAHistoryReadAcrossCards` (a block reading another's history on another card, its card holding a copy), `TestAHistoryReadAcrossTheCPU` (the same across the CPU and a card, each side holding the copy its readers read); decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes`; embedding models and Laya's marker head: the first three gates' `embed/` and `laya/` arms |
 | **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place per device: no page a session holds beside the prefix cache's on its device, no host mirror of a card's history), `TestSharedPrefixMovesToTheCard`, `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer`; embedding models: the first three gates' `embed/` arms (the third's on a session's lease) |
@@ -517,8 +517,18 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
   (stated by the user), and there is no kernel in any other language either
   (PTX, CUDA, OpenCL, Metal, the shader languages, C); the C under `scripts/`
   drives llama.cpp, the reference, and the gate names each file. Every kernel
-  is emitted at run time for the device in front of it.
-  `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
+  is emitted at run time for the device in front of it, and none is written
+  into a Go literal or handed to a device as anything but the composer's IR.
+  The one other boundary is the host's ISA reads, `composer/x86`'s
+  `CPUIDRead` and `XCR0Read`: they read the hardware's identity before
+  anything is formed, and there is no op to compose them from. Gates:
+  `cpu.TestNoAssemblyBesidesTheTrampolines` (files),
+  `srcgate.TestOnlyTheComposerEmitsCode` (assemblers and IR builders outside
+  `composer/`), `srcgate.TestNoKernelTextOutsideTheComposer` (device code in
+  a literal), `srcgate.TestKernelsReachADeviceOnlyAsIR` (a backend's raw
+  loader called outside `backend/`) and
+  `srcgate.TestTheAssemblersHoldOnlyTheHostReads` (a whole routine in an
+  assembler).
 - **Gate the tail.** Every kernel gate sweeps ragged widths (1 through a few
   vectors) with a guard after the output, and is run against a violation --
   a tail kernel that is right at whole vectors and wrong at 7 is the shape
