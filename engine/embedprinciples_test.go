@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -534,9 +535,10 @@ func openEncoder(t *testing.T, path string) *model.Model {
 // encoder: every block on card a, then moved between inputs (each move
 // prepared while an input runs and committed after it) to card b, the upper
 // half back to a, every block to the CPU and back to a. Each move lands its
-// blocks where it sent them; an input run with every block on the cards is
-// the unmoved control's bit for bit (two cards running the same kernels),
-// and every readout sits within the device band of the host's.
+// blocks where it sent them; an input run with every block on cards of a's
+// backend is the unmoved control's bit for bit (the same kernels), and every
+// readout sits within the device band of the host's -- the band, not the
+// bits, between two backends.
 func embedBlocksMoveBetweenDevices(t *testing.T, path string) {
 	a, b := moveDevices(t)
 	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
@@ -589,19 +591,19 @@ func embedBlocksMoveBetweenDevices(t *testing.T, path string) {
 		if want == nn.CPU {
 			want = ""
 		}
-		cards := true
+		same := true
 		for li := 0; li < nb; li++ {
 			at, _ := in.DeviceOf(li)
 			if li >= mv.lo && li < mv.hi && at != want {
 				t.Fatalf("block %d is on %q, sent to %s", li, at, mv.to)
 			}
-			cards = cards && at != ""
+			same = same && at != "" && strings.SplitN(at, ":", 2)[0] == strings.SplitN(a, ":", 2)[0]
 		}
 		got := [][]float32{before}
 		for i := 1; i < r.n; i++ {
 			got = append(got, r.run(t, in, i))
 		}
-		if cards {
+		if same {
 			sameVectors(t, what, control[1:], got[1:])
 		}
 		d := r.near(t, what, host, got)
