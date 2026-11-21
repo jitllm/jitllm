@@ -1385,7 +1385,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	tierDev := lm.device()
 	ms, err := lm.pool.NewSession(maxSeq)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("server: open a session of %d positions on model %q: %w", maxSeq, lm.called(o.modelName), err)
 	}
 	lm.ttft.sessionsOpened.Add(1)
 	// Placement is the instance's: a session's placement options move it, and
