@@ -29,7 +29,7 @@ const (
 func virtualAlloc(at unsafe.Pointer, n int, kind, protect uintptr) ([]byte, error) {
 	addr, _, err := kernel32("VirtualAlloc").Call(uintptr(at), uintptr(n), kind, protect)
 	if addr == 0 {
-		return nil, err
+		return nil, hostErr(err)
 	}
 	return unsafe.Slice((*byte)(unsafe.Add(nil, addr)), n), nil
 }

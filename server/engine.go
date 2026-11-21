@@ -271,8 +271,6 @@ type Engine struct {
 	demandMu sync.Mutex
 }
 
-// New builds an Engine. It does not touch the hardware; the first ListDevices
-// or LoadModel does.
 // manifest is the engine's capability manifest, built once: it reads the
 // model library, which a health probe must not wait on per request.
 func (e *Engine) manifest() (capabilities.Manifest, error) {
@@ -280,6 +278,8 @@ func (e *Engine) manifest() (capabilities.Manifest, error) {
 	return e.caps, e.capsErr
 }
 
+// New builds an Engine. It does not touch the hardware; the first ListDevices
+// or LoadModel does.
 func New(cfg Config) *Engine {
 	cfg.withDefaults()
 	// One fetch bound for the whole server, shared by every surface.
@@ -1385,7 +1385,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	tierDev := lm.device()
 	ms, err := lm.pool.NewSession(maxSeq)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("server: open a session of %d positions on model %q: %w", maxSeq, lm.called(o.modelName), err)
 	}
 	lm.ttft.sessionsOpened.Add(1)
 	// Placement is the instance's: a session's placement options move it, and

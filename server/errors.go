@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/offheap"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -56,6 +57,10 @@ func connectErr(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, ErrOverloaded):
 		// Nothing ran; the caller retries after the queue drains.
+		return connect.NewError(connect.CodeResourceExhausted, err)
+	case errors.Is(err, offheap.ErrNoMemory):
+		// The host has no memory for it now: a retry once sessions close or
+		// models unload is correct, the identical request unchanged.
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	case errors.Is(err, ErrQueueTimeout):
 		// ResourceExhausted, not Unavailable: the caller stopped waiting for
