@@ -18,6 +18,15 @@ import (
 // allocates nothing on either goroutine, and the tier's StageOverlaps says
 // the groups ran on the two cards at once. Two physical cards where
 // JITLLM_TEST_DEVICES names them.
+//
+// A card builds a lane for a session's call the first time it finds every
+// lane held (takeLane), so its lanes are warm once the two groups have
+// called on it at once: one lane past lane0 a card (LaneBuilds). The groups
+// pipelined call on one card at once only where a stage runs late, which
+// 128 steps did not always reach on one card under CUDA and Vulkan; the
+// lane then came in the counted steps (3629 allocations, every one
+// cloneLane's). The warm-up steps the groups in lockstep, each step's
+// calls begun together, until every card has built its lane.
 func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
 	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
@@ -44,12 +53,13 @@ func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	defer m.Close()
 	prompts := []string{"The capital of France is", "Water boils at a temperature of",
 		"The clerk counted barrels of salt on the upper floor, and", "Once upon a time"}
-	const warm, n = 128, 64
+	// A lockstep round is 8 steps, 16 rounds at most.
+	const warm, n, lock = 128, 64, 16 * 8
 	groups := [2][]Run{}
 	toks := make([][1]int32, len(prompts))
 	for i, pr := range prompts {
 		ids := m.Vocab.Encode(pr, true)
-		st := testInstance(t, m, len(ids)+warm+n+8, instOpts2...)
+		st := testInstance(t, m, len(ids)+warm+lock+n+8, instOpts2...)
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
@@ -99,7 +109,39 @@ func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 		}
 		done.Wait()
 	}
+	lanes0 := g.Stats().LaneBuilds
 	cycle(warm)
+	for k, err := range fail {
+		if err != nil {
+			t.Fatalf("group %d: %v", k, err)
+		}
+	}
+	together := func(steps int) {
+		for s := range steps {
+			var wg sync.WaitGroup
+			for k := range groups {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for _, r := range groups[k] {
+						r.Tokens[0] = int32(3 + (s+k)%64)
+					}
+					if _, err := StepJoint(groups[k], nil); err != nil && fail[k] == nil {
+						fail[k] = err
+					}
+				}()
+			}
+			wg.Wait()
+		}
+	}
+	want := g.PipelineDepth() * (len(groups) - 1)
+	for round := 0; g.Stats().LaneBuilds-lanes0 < want; round++ {
+		if round*8 == lock {
+			t.Fatalf("%d lane(s) built over %d steps, %d in lockstep: the groups never called on every card at once",
+				g.Stats().LaneBuilds-lanes0, warm+lock, lock)
+		}
+		together(8)
+	}
 	for k, err := range fail {
 		if err != nil {
 			t.Fatalf("group %d: %v", k, err)
@@ -111,6 +153,11 @@ func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	c0 := g.Stats()
 	r0 := m.Container.Reads()
 	w := countAllocs(func() { cycle(n) })
+	for k, err := range fail {
+		if err != nil {
+			t.Fatalf("group %d: %v", k, err)
+		}
+	}
 	c1 := g.Stats()
 	// Filling the pipeline, nearly every stage begins beside the other
 	// group's (127 of 128 on the laptop); half a group's steps is the floor.
