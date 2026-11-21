@@ -913,6 +913,7 @@ func (s *Stats) add(o Stats) {
 	s.PassesUnheld += o.PassesUnheld
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
+	s.NarrowedGroups += o.NarrowedGroups
 	s.LaneBuilds += o.LaneBuilds
 	if o.ReservedRows > 0 && (s.ReservedRows == 0 || o.ReservedRows < s.ReservedRows) {
 		s.ReservedRows = o.ReservedRows

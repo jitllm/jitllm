@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
-	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
@@ -535,11 +534,11 @@ func (p *gpuProbe) time(f *gpuForm, n int) (float64, error) {
 	}
 	var times []float64
 	for range n {
-		t0 := time.Now()
+		t0 := mark()
 		if err := f.launch(); err != nil {
 			return 0, err
 		}
-		times = append(times, time.Since(t0).Seconds())
+		times = append(times, since(t0))
 	}
 	slices.Sort(times)
 	return times[len(times)/2], nil
@@ -632,14 +631,14 @@ func (p *gpuProbe) wall(f *gpuForm, n int) (float64, error) {
 			if errs = s.Sync(); errs != nil {
 				return
 			}
-			t0 := time.Now()
+			t0 := mark()
 			for range n {
 				if errs = f.run(s); errs != nil {
 					return
 				}
 			}
 			errs = s.Sync()
-			times = append(times, time.Since(t0).Seconds()/float64(n))
+			times = append(times, since(t0)/float64(n))
 		})
 		if errs != nil {
 			return 0, errs

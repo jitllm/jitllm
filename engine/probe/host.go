@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"slices"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -253,9 +252,9 @@ func retention(r *reader, c cost.Cache, rate, start float64, evict []byte) (floa
 	for range 4 * rounds {
 		at.run()
 		out.run()
-		t0 := time.Now()
+		t0 := mark()
 		at.run()
-		times = append(times, time.Since(t0).Seconds()-clock)
+		times = append(times, since(t0)-clock)
 	}
 	runtime.KeepAlive(buf)
 	slices.Sort(times)
@@ -278,9 +277,9 @@ func cycling(r *reader, c cost.Cache, rate float64, evict []byte) (float64, erro
 	}
 	var times []float64
 	for range 2 * rounds {
-		t0 := time.Now()
+		t0 := mark()
 		at.run()
-		times = append(times, time.Since(t0).Seconds())
+		times = append(times, since(t0))
 	}
 	runtime.KeepAlive(evict)
 	slices.Sort(times)
@@ -296,8 +295,8 @@ func cycling(r *reader, c cost.Cache, rate float64, evict []byte) (float64, erro
 func clockCost() float64 {
 	var times []float64
 	for range 1000 {
-		t0 := time.Now()
-		times = append(times, time.Since(t0).Seconds())
+		t0 := mark()
+		times = append(times, since(t0))
 	}
 	slices.Sort(times)
 	return times[len(times)/2]
@@ -329,9 +328,9 @@ func streamStart(r *reader, rate float64, evict []byte) (float64, error) {
 	for range 4 * rounds {
 		at.run()
 		out.run()
-		t0 := time.Now()
+		t0 := mark()
 		at.run()
-		times = append(times, time.Since(t0).Seconds()-clock)
+		times = append(times, since(t0)-clock)
 	}
 	runtime.KeepAlive(buf)
 	runtime.KeepAlive(evict)
@@ -387,11 +386,11 @@ func parallel(threads int, run func(t int)) float64 {
 				run(t)
 			}()
 		}
-		t0 := time.Now()
+		t0 := mark()
 		close(start)
 		wg.Wait()
 		if r > 0 {
-			times = append(times, time.Since(t0).Seconds())
+			times = append(times, since(t0))
 		}
 	}
 	slices.Sort(times)
