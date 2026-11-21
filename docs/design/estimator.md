@@ -107,7 +107,7 @@ synth-ernie45, one decode step, `scripts/cap`:
 |---|---|---|---|---|
 | laptop, one P-core (i9-12900HK, AVX2) | caches swept between steps | 1.00-1.03 | 53-54 of 64 | 1.28-1.42x |
 | laptop, one P-core | steady (step after step) | 0.92-1.20 | 40-57 of 64 | 1.26-1.83x |
-| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 0.94-0.96 | 67 of 67 | 1.09x |
+| V100-SXM2-16GB (CUDA, sm_70) | steady | 0.94-0.96 | 67 of 67 | 1.09x |
 | Apple M4 (Metal) | steady | 0.97 | 60 of 67 | 1.22x |
 
 The device clocks were checked against the wall (`-estimate-clock`): on the

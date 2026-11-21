@@ -243,7 +243,7 @@ The composed CPU decodes a mixture well below llama.cpp on the Xeon (olmoe
 about 12 tok/s against about 60). The first lever measured against it walks
 a bank's expert sheet with a cursor (composer: "a bank's expert sheet is
 walked by a cursor, and a refused kernel retries with copies"). RULE 2 rows:
-box 49's second socket (Xeon E5-2680 v4, 12 cores, numactl --membind=1
+the Xeon E5-2680 v4's second socket (Xeon E5-2680 v4, 12 cores, numactl --membind=1
 taskset -c 14-25), jitllm's CPU decode against itself, tg64 after pp128, 20
 ABBA rounds, one process a sample, each A/B after a same-binary A/A. Medians
 of the per-round ratios, IQR/median in brackets:

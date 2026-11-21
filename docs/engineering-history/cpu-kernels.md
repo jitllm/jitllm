@@ -5270,7 +5270,7 @@ both arms built on one HEAD, each A/B after its A/A:
 | Llama-3.2-1B Q4_K_M (dense) | 0.9977 (0.0284) | 1.0168 (0.0626) | 57.36 -> 58.34 |
 
 The misses had moved, and the rate at twelve cores had not. Counted later
-on box 50's E5-2680 v4 at one core (jitllm at `JITLLM_CORES=1` beside
+on an E5-2680 v4 at one core (jitllm at `JITLLM_CORES=1` beside
 llama.cpp's CPU build at `-t 1`, OLMoE-1B-7B-0924-Instruct Q4_K_M, a decode
 token as the 400-token run less the 16-token run over 384, both engines in
 one pass beside a census lane on the box):
@@ -5306,7 +5306,7 @@ and spills more: 104/185/310 -> 241/193/256. Not landed.
 **A late worker's rows, tried.** A Share kernel's rows were cut into one
 call a worker, and the pool claims calls one at a time, so a worker that
 started late held the phase for its share. Cut into four calls a worker
-(`ShareRows(part*4)`), box 49's second socket (twelve cores, tg64 after
+(`ShareRows(part*4)`), the Xeon E5-2680 v4's second socket (twelve cores, tg64 after
 pp128, 20 ABBA rounds a process a sample, each after its A/A self-control),
 twice:
 
@@ -5593,7 +5593,7 @@ iteration is the trip's first element, which a general register holds and
 a vector reading it gets broadcast. A probe at Vectorize's admission found
 202 vector loops in the composer's CPU gates reading their iteration so.
 With Induction skipping vector loops, 9 of 48 gates over those loops fail
-on box 51 (PosResampleAntialias, RelativeAttention, RowsAttend,
+on a V100 host (PosResampleAntialias, RelativeAttention, RowsAttend,
 RowsAttendGrouped, RowsAttendInARange, and Select's blocks, blocksJ and
 blocksFirst), and these pass: AttendBlocks and BlockRows, where the index
 feeds the softmax's running maximum, a stabiliser the result cancels;
@@ -5617,12 +5617,12 @@ output, reading it, took it too where it had to take x. The block's answer
 went to a scratch no caller binds.
 
 The measurements, Falcon-H1-0.5B-Instruct-Q4_K_M teacher-forced against the
-GGUF oracle's CPU arm (TestSSMRealModelsTeacherForced, box 50): 92 of 96
+GGUF oracle's CPU arm (TestSSMRealModelsTeacherForced, an E5-2680 v4): 92 of 96
 positions without the pair, 4 of 96 with it, 92 of 96 with it and the
 fix. Taking the pair's joins one name at a time, only the residual's
 (sum.27 + x) moved the text; with InPlace off it read 92. On two cards
 the composed CPU control read 6.4 NMSE from a card that never moved
-(TestBlocksMoveToTheCPUAndBack, box 43, the tree before the pair was
+(TestBlocksMoveToTheCPUAndBack, a V100 host, the tree before the pair was
 dropped), where the card reads 3.1e-4 from a correct control. GPT-NeoX's
 and OPT's Q8 containers (opt-125m, pythia-160m, synth-hf-gptneox,
 synth-hf-opt) fail TestSafetensorsQ8MatchTransformers with the pair and

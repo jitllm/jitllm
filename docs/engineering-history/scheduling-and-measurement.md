@@ -1856,7 +1856,7 @@ formation -- unrolls, copies at an initializer, crowded and streamed walks,
 split dots, jams, pairs, wide jams, cursors, then a term or the fusion --
 for every refused kernel that has that kind, and no other kind until it is
 spent. Every formation forms the whole graph again. Counted over
-`TestComposesOnlyWithAnInstance`'s models on box 51's CPU, a formation each
+`TestComposesOnlyWithAnInstance`'s models on a V100 host's CPU, a formation each
 retry:
 
 | model | formations again | refused kernels |
@@ -1885,7 +1885,7 @@ part that only fits once many are split forms the graph as many times.
 Admitting every sum of words to the vector loop (not only a sum of loaded
 words, which b60b837c7 admits) put the infill walk's counts at 16
 candidates under register pressure: 148 formations, 147 of them the last
-rung over three or four parts, 2 min 45 s against 1.07 s (box 50; each
+rung over three or four parts, 2 min 45 s against 1.07 s (an E5-2680 v4; each
 pass's time grew about 150 times, the fusion before the vectorizer as much
 as the binding after it). On HEAD's admission the composer's 362 CPU gates
 form again 412 times -- unrolls 119, crowded and streamed walks 114,
@@ -1895,7 +1895,7 @@ dots 8 -- so the last rung's one-at-a-time is rare there, and the cost is
 the whole graph formed again per retry.
 
 **What a mixture's start costs.** OLMoE-1B-7B Q4_K_M's CPU instance, made
-on box 50 beside a census lane (the times a direction, the counts not):
+on an E5-2680 v4 beside a census lane (the times a direction, the counts not):
 33 s to the instance at JITLLM_CORES 12 and at 1 alike (composition does not
 run on the engine's workers), 124 forms asked, 48 retries of the ladder,
 13 min of composing summed over the asks. The register pass took 1 min 45 s
@@ -1941,7 +1941,7 @@ What changed, each a commit of its own:
     the read-only operand walks read in place
     ShiftChain, FoldLoads and the order's depths walk the kernel once
 
-The CPU-only start (jitllm run -devices cpu, box 50's first socket), the
+The CPU-only start (jitllm run -devices cpu, an E5-2680 v4's first socket), the
 three side-by-side commits in turn:
 
                            before   blocks   + parts   + both forms
@@ -1974,7 +1974,7 @@ line), before against every change, twice each:
 
 The host probe's single-thread rows are short: an L1 walk of 2^20 steps is
 1.7 ms, a read round of 256 MiB at L1 about 3 ms. Under schedutil with
-turbo on (box 49, E5-2680 v4), an A/B of the composed probe against the
+turbo on (E5-2680 v4), an A/B of the composed probe against the
 hand-built one read the same walking kernel, in both arms, at 4 cycles of
 2.4 GHz in one arm (1.68 ns) and 4 cycles of 3.3 GHz in the other (1.22 ns,
 spread 0.38): the arms met the core at different clocks, the governor's
@@ -2017,7 +2017,7 @@ composed/built:
 | group, a thread | | | | 0.90 | 0.72 |
 | group delay | | | | 1.10 | 1.41 |
 
-The Xeon is box 49 under the performance governor. On arm64 the composer's
+The Xeon is an E5-2680 v4 under the performance governor. On arm64 the composer's
 vector is two NEON registers, so a sum's exchange is four instructions the
 estimator counts as one, where the built pairwise add was one. On a card a
 thread issues the sum's add beside its exchange. The delays part by

@@ -4625,7 +4625,7 @@ at 1e-2 from the CPU device and on Vulkan at 5.5e-3, Gemma 3 and InternVL3
 past 1e-3 on CUDA. Over 23-27 blocks each device's int8 activations part it
 from the others by more than the band, and the falsifiable statement is each
 device's distance from the reference: no device further from it than twice
-the CPU device is (V100, box 42):
+the CPU device is (V100):
 
     rows' NMSE from transformers   CPU       CUDA all / half    Vulkan all / half
     gemma3 (27 blocks)             3.9e-3    5.2e-4 / 7.2e-4    4.0e-3 / 4.1e-3
@@ -4871,7 +4871,7 @@ The tower's GELU is the erf form now, as SigLIP's vision config states
 (docs/divergences.md). The converter states it for Janus-Pro and HunyuanVL
 alike (`convert.erfGELU`, refusing a tower whose flags state another
 activation; `convert.TestGELUTowersStateTheExactForm`, which fails with the
-tanh form stated). On the CPU device (box 43), erf against tanh: Janus-Pro's
+tanh form stated). On the CPU device (a V100 host), erf against tanh: Janus-Pro's
 aligner rows against transformers 1.39e-2 against 1.43e-2 on the photo and
 2.20e-2 against 2.95e-2 on the square; synth-hunyuanvl's 20 tower rows
 3.35e-4 against 2.97e-4 from transformers' f32 tower and its logits 5.9e-4
@@ -7169,7 +7169,7 @@ LFM2-VL's model joined the gate after, its golden the fixture's own
 continuation and transformers' logits beside the fixture, with every piece's
 projector rows at f32 and at the engine's arithmetic): the picture cut into
 3x2 tiles and a thumbnail, each piece's marker row from the container's
-table and then its rows, 1783 rows in all. On box 42, the rows 2.2e-4 from
+table and then its rows, 1783 rows in all. On a V100 host, the rows 2.2e-4 from
 transformers' f32 rows, the six decoded rows' logits 5.9e-4 on the CPU
 device, 5.8e-4 under CUDA and Vulkan, every block on a V100, against a bound
 of 1.1e-3, no flips; the rows reversed 1374x the bound. The marker rows are
@@ -7815,7 +7815,7 @@ on `<|endoftext|>`, Qwen2.5/Qwen3 on their FIM pieces or `</s>`, and gpt-oss's
 
 The first library lists left families out, and their GGUFs lost a piece their
 own generation_config.json lists. The stop set the old code built and the
-one the statements build were compared over the 319 GGUFs of box 51's model
+one the statements build were compared over the 319 GGUFs of a V100 host's model
 tree, and every model losing an id was held to its publisher's
 generation_config.json: phimoe now states `<|endoftext|>`, `<|assistant|>`,
 `<|end|>` (Phi-mini-MoE, Phi-tiny-MoE: [32000, 32001, 32007]); glm4
@@ -8057,7 +8057,7 @@ were taken before the bound and the loop-head memo below, and not since.)
 **A pattern and a prompt are both untrusted, so both are bounded.** A counted
 repetition compiles to that many copies of its body and nested ones multiply:
 `(?:(?:(?:ab){1000}){1000}){10}`, 33 characters, compiled to 20,000,001
-instructions, 3.6 GB and 17 s on box 50. The compiler now sizes the parse
+instructions, 3.6 GB and 17 s on an E5-2680 v4. The compiler now sizes the parse
 first and refuses past 65,536 instructions, naming the pattern; the largest a
 shipped stage compiles to is under a hundred. A lookahead re-run from every
 start of a digit run was quadratic in the run: counted in the engine's steps
@@ -9972,7 +9972,7 @@ keyword beside it by name, and a $ref folded into itself is refused by name.
 Folding the keywords beside an anyOf into each branch made compiling
 exponential: each branch built the properties beside it again, so every
 level of nested objects carrying an anyOf doubled the work (a 1.5 KB schema of
-18 such levels took 40.6 s and wrote a 767 MB grammar on box 49). A schema
+18 such levels took 40.6 s and wrote a 767 MB grammar on an E5-2680 v4). A schema
 object is now built once, by identity, however many folds reach it, so the
 work grows with the depth rather than as 2 to its power. A fold that still
 multiplies -- branches that each close the object below with an
@@ -10474,7 +10474,7 @@ the sixteen to the RGBA pair's rows bit for bit, on frames made gray and
 held gray, paletted, YCbCr and RGBA.
 
 On the CPU device with every block of Clef's VL fixture
-(`TestDecisionOverVideoMatchesItsGolden`, box 43): 8.8e-4 from Clef's own
+(`TestDecisionOverVideoMatchesItsGolden`, a V100 host): 8.8e-4 from Clef's own
 answers with the CPU's int8 activations, 4.1e-4 with its float forms,
 1.1e-3 on a V100 with every block placed, 395 prompt rows as the
 reference counts them; the video's tokens are the reference prompt's run
@@ -10875,7 +10875,7 @@ on the real file 9 x 4 x 2560 floats and two words a sequence a block.
 activations in blocks of 32, and the real rank is 320. The golden was
 regenerated from transformers, not edited.
 
-**The real file's graph**, from `llama-eval-callback` on cato (blocks 0, 2
+**The real file's graph**, from `llama-eval-callback` on a V100 host (blocks 0, 2
 and 3 of UD-Q4_K_XL at llama.cpp de7fa0a, `/mnt/models/qwen4exp/evalcb.log`):
 the hyper-connection read is `hc_norm` (2560 x 4) -> `hc_attn_up` (320 x
 10240 after the down) -> `DSV4_HC_PRE`; the placement `hc_attn_inject`
@@ -11007,7 +11007,7 @@ row's table row from a slot. The converter states what joint_schema_model.py
 hardcodes (`jlm.JointHead`); the prompt is the GGUF's systemone template
 rendered with sentinels, each piece encoded alone.
 
-Measured (`engine.TestJointDecisionMatchesTheReference`, box 51):
+Measured (`engine.TestJointDecisionMatchesTheReference`, a V100 host):
 
 - The fixture: 627 and 535 prompt ids and every question and option span
   equal Clef's own code's; logits within 1.2e-6 (CPU) and 1.4e-4 (CUDA, every
@@ -11321,7 +11321,7 @@ of 1, 7, 20, 31, 32, 33 and 144 elements on the CPU, PTX and SPIR-V, the CPU
 arm through a matrix whose padded columns are not zero (a pad whose tail
 repeats the row's last element fails it; a tail of ones fails both).
 TestTinyOpenJevTowerMatchesLlamaCpp holds the tower's projector output on
-llama-mtmd-debug's 512x512 checkerboard (built on box 41 from b10825's
+llama-mtmd-debug's 512x512 checkerboard (built on a V100 host from b10825's
 source, the boxes having no build of it) to llama.cpp's dump: relative RMS
 0.028 over 36 sampled values, the sum 0.43% off, against SmolVLM's 5% bound;
 the shipping normalisation reads 0.98. TestTinyOpenJevTowerRunsOnTheCard

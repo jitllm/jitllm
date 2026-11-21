@@ -5715,7 +5715,7 @@ alone on the card and on the CPU device:
 | f32 + q8_0 | 55083008 | 1.0000 | 0, 0 | 0.102, 0.111 (0.102, 0.111) |
 | bf16 + q4_0 | 26902528 | 1.0000 | 0, 0 | 0.101, 0.500 (0.101, 0.500) |
 
-The figures are cuda:0's on box 43; vulkan:0's are the same bytes and a
+The figures are cuda:0's on a V100 host; vulkan:0's are the same bytes and a
 gap of 0 from each run alone. Both instances placed all 16 blocks. The
 bound is 0.15 of the types' distance on the CPU device (0.1197 and 0.6092).
 
