@@ -26,13 +26,15 @@ import (
 // kernelText is what marks a string as device code: PTX's header and entry,
 // Metal's library and entry, GLSL's version and group size, CUDA C's entry,
 // SPIR-V's assembly and LLVM's AMDGPU entry.
-var kernelText = []string{
-	".version ", ".target sm_", ".entry ",
-	"metal_stdlib", "kernel void",
-	"#version ", "local_size_x",
-	"__global__",
-	"OpCapability", "OpEntryPoint",
-	"amdgpu_kernel",
+func kernelText() []string {
+	return []string{
+		".version ", ".target sm_", ".entry ",
+		"metal_stdlib", "kernel void",
+		"#version ", "local_size_x",
+		"__global__",
+		"OpCapability", "OpEntryPoint",
+		"amdgpu_kernel",
+	}
 }
 
 // spirvMagic is a SPIR-V module's first word.
@@ -107,7 +109,7 @@ func kernelLiterals(af *ast.File) []*ast.BasicLit {
 			if err != nil {
 				return true
 			}
-			for _, m := range kernelText {
+			for _, m := range kernelText() {
 				if strings.Contains(s, m) {
 					out = append(out, l)
 					break
@@ -125,12 +127,14 @@ func kernelLiterals(af *ast.File) []*ast.BasicLit {
 
 // rawLoaders is each backend's entry point that takes device code as text or
 // a code object rather than as the composer's IR, by receiver type.
-var rawLoaders = map[string]string{
-	"github.com/jitllm/jitllm/backend/cuda.Device": "Load",
-	"github.com/jitllm/jitllm/backend/metal.Ctx":   "Compile",
-	"github.com/jitllm/jitllm/backend/vulkan.Ctx":  "Compile",
-	"github.com/jitllm/jitllm/backend/hip.Device":  "Load",
-	"github.com/jitllm/jitllm/backend/hip.Comgr":   "Compile",
+func rawLoaders() map[string]string {
+	return map[string]string{
+		"github.com/jitllm/jitllm/backend/cuda.Device": "Load",
+		"github.com/jitllm/jitllm/backend/metal.Ctx":   "Compile",
+		"github.com/jitllm/jitllm/backend/vulkan.Ctx":  "Compile",
+		"github.com/jitllm/jitllm/backend/hip.Device":  "Load",
+		"github.com/jitllm/jitllm/backend/hip.Comgr":   "Compile",
+	}
 }
 
 // listed is one package as go list states it.
@@ -240,7 +244,7 @@ func TestKernelsReachADeviceOnlyAsIR(t *testing.T) {
 }
 
 func isRawBackend(dep string) bool {
-	for k := range rawLoaders {
+	for k := range rawLoaders() {
 		if dep == k[:strings.LastIndex(k, ".")] {
 			return true
 		}
@@ -264,7 +268,7 @@ func rawCalls(fset *token.FileSet, info *types.Info) []string {
 		if !ok || n.Obj().Pkg() == nil {
 			continue
 		}
-		if rawLoaders[n.Obj().Pkg().Path()+"."+n.Obj().Name()] == sel.Sel.Name {
+		if rawLoaders()[n.Obj().Pkg().Path()+"."+n.Obj().Name()] == sel.Sel.Name {
 			out = append(out, fset.Position(sel.Pos()).String()+": "+n.Obj().Name()+"."+sel.Sel.Name)
 		}
 	}
