@@ -97,6 +97,14 @@ func shiftEmbed(d, p, vocab int) func(*Instance) {
 // its device is attached.
 func composedDecodeWith(t *testing.T, m *model.Model, io []Option, dev string, ids, toks []int32, parts nn.Parts, noGraph, float bool, after func(*Instance), extra ...gpu.Option) ([][]float32, gpu.Stats, bool) {
 	t.Helper()
+	out, st, head, _ := composedDecodeSteps(t, m, io, dev, ids, toks, parts, noGraph, float, after, extra...)
+	return out, st, head
+}
+
+// composedDecodeSteps is composedDecodeWith, with the device's StreamFills
+// after each of the logits it returns.
+func composedDecodeSteps(t *testing.T, m *model.Model, io []Option, dev string, ids, toks []int32, parts nn.Parts, noGraph, float bool, after func(*Instance), extra ...gpu.Option) ([][]float32, gpu.Stats, bool, []int) {
+	t.Helper()
 	// The prompt is one chunk of a few rows: every arm reserves and warms the
 	// widths up to 64, each a form of the composer's where it serves them.
 	opts := append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
@@ -128,17 +136,18 @@ func composedDecodeWith(t *testing.T, m *model.Model, io []Option, dev string, i
 		t.Fatal(err)
 	}
 	var out [][]float32
+	var fills []int
 	for _, tok := range toks {
-		out = append(out, append([]float32(nil), l...))
+		out, fills = append(out, append([]float32(nil), l...)), append(fills, g.Stats().StreamFills)
 		if l, err = s.Forward(tok); err != nil {
 			t.Fatal(err)
 		}
 	}
-	out = append(out, append([]float32(nil), l...))
+	out, fills = append(out, append([]float32(nil), l...)), append(fills, g.Stats().StreamFills)
 	if s.DeviceDemotions() != 0 {
 		t.Fatalf("the device failed %d time(s) and its blocks moved home", s.DeviceDemotions())
 	}
-	return out, g.Stats(), s.HeadOnDevice()
+	return out, g.Stats(), s.HeadOnDevice(), fills
 }
 
 // servedSince is the steps of the parts of k the composer served or a
@@ -1046,35 +1055,34 @@ func TestComposedBlocksServe(t *testing.T) {
 								// arm's own run, and the band's page violation is the
 								// stale page (2.23). At the highest budget that streams,
 								// the block may stream only once its history wants the
-								// room (streamForRoom): on gpt-oss-20b its first prompt's
-								// run fills 24 times where the others' fill 151 to 212.
-								// Every step from the first one moved must move.
+								// room (streamForHistory), and a step before that reads no
+								// page table: on gpt-oss-20b 24 of its first prompt's 192
+								// decoded steps fill pages, each moved by the swap. Every
+								// step whose decode filled the block's pages must move.
 								if a.stream == streamBudget {
 									p := panel[0]
-									out, bst, _ := composedDecodeWith(t, m, io, dev, p.ids, p.toks, parts, noGraph, false, nil, slices.Concat([]gpu.Option{tile, gpu.WithPageFault(gpu.PageFaultSwap)}, soptsOf(p))...)
+									out, bst, _, fills := composedDecodeSteps(t, m, io, dev, p.ids, p.toks, parts, noGraph, false, nil, slices.Concat([]gpu.Option{tile, gpu.WithPageFault(gpu.PageFaultSwap)}, soptsOf(p))...)
 									if n, d := bst.ServedPart(nn.ComposedBlock); n == 0 || d != 0 {
 										t.Fatalf("the arm with every page table swapping two experts served the blocks %d times and declined them %d", n, d)
 									}
 									if bst.StreamFills == 0 {
 										t.Fatalf("the arm with every page table swapping two experts streamed nothing (the arm's own run filled %d): its placement held every expert, so no page table was written", st0.StreamFills)
 									}
-									far, first := 0.0, 0
+									far, streamed := 0.0, 0
 									for i := 1; i < len(got0); i++ {
-										same := slices.Equal(out[i], got0[i])
-										switch {
-										case same && first > 0:
-											t.Fatalf("step %d: with every page table swapping two experts the logits are the arm's own, where step %d moved: the streamed block's page table is not read", i, first)
-										case !same && first == 0:
-											first = i
+										if fills[i] == fills[i-1] {
+											continue
 										}
-										if !same {
-											far = max(far, nmse(out[i], got0[i]))
+										streamed++
+										if slices.Equal(out[i], got0[i]) {
+											t.Fatalf("step %d filled the streamed block's pages, and with every page table swapping two experts its logits are the arm's own: the page table is not read", i)
 										}
+										far = max(far, nmse(out[i], got0[i]))
 									}
-									if first == 0 {
-										t.Fatalf("with every page table swapping two experts no decoded step of %d moves from the arm's own (%d fills): the streamed block's page table is not read", len(got0)-1, bst.StreamFills)
+									if streamed == 0 {
+										t.Fatalf("with every page table swapping two experts no decoded step of %d filled a page (%d fills at the prompt): the arm streamed nothing to swap", len(got0)-1, fills[0])
 									}
-									t.Logf("with every page table swapping two experts every decoded step from %d of %d moves from the arm's own (%d fills), %.3g at the farthest", first, len(got0)-1, bst.StreamFills, far)
+									t.Logf("with every page table swapping two experts each of the %d decoded steps of %d that filled pages moves from the arm's own, %.3g at the farthest", streamed, len(got0)-1, far)
 								} else if a.stream != 0 {
 									violated("every page table swapping two experts", nn.ComposedBlock, nil, gpu.WithPageFault(gpu.PageFaultSwap))
 								}
