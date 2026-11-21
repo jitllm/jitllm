@@ -1043,8 +1043,12 @@ func TestComposedBlocksServe(t *testing.T) {
 								// the second's page 1.48, inside the band. Every block
 								// reads its pages in the cached arm, where the swap
 								// reads 53.3. On the budget arm the swap is held to the
-								// arm's own run, every decoded step moved, and the
-								// band's page violation is the stale page (2.23).
+								// arm's own run, and the band's page violation is the
+								// stale page (2.23). At the highest budget that streams,
+								// the block may stream only once its history wants the
+								// room (streamForRoom): on gpt-oss-20b its first prompt's
+								// run fills 24 times where the others' fill 151 to 212.
+								// Every step from the first one moved must move.
 								if a.stream == streamBudget {
 									p := panel[0]
 									out, bst, _ := composedDecodeWith(t, m, io, dev, p.ids, p.toks, parts, noGraph, false, nil, slices.Concat([]gpu.Option{tile, gpu.WithPageFault(gpu.PageFaultSwap)}, soptsOf(p))...)
@@ -1054,14 +1058,23 @@ func TestComposedBlocksServe(t *testing.T) {
 									if bst.StreamFills == 0 {
 										t.Fatalf("the arm with every page table swapping two experts streamed nothing (the arm's own run filled %d): its placement held every expert, so no page table was written", st0.StreamFills)
 									}
-									far := 0.0
+									far, first := 0.0, 0
 									for i := 1; i < len(got0); i++ {
-										if slices.Equal(out[i], got0[i]) {
-											t.Fatalf("step %d: with every page table swapping two experts the logits are the arm's own: the streamed block's page table is not read", i)
+										same := slices.Equal(out[i], got0[i])
+										switch {
+										case same && first > 0:
+											t.Fatalf("step %d: with every page table swapping two experts the logits are the arm's own, where step %d moved: the streamed block's page table is not read", i, first)
+										case !same && first == 0:
+											first = i
 										}
-										far = max(far, nmse(out[i], got0[i]))
+										if !same {
+											far = max(far, nmse(out[i], got0[i]))
+										}
 									}
-									t.Logf("with every page table swapping two experts every decoded step moves from the arm's own, %.3g at the farthest", far)
+									if first == 0 {
+										t.Fatalf("with every page table swapping two experts no decoded step of %d moves from the arm's own (%d fills): the streamed block's page table is not read", len(got0)-1, bst.StreamFills)
+									}
+									t.Logf("with every page table swapping two experts every decoded step from %d of %d moves from the arm's own (%d fills), %.3g at the farthest", first, len(got0)-1, bst.StreamFills, far)
 								} else if a.stream != 0 {
 									violated("every page table swapping two experts", nn.ComposedBlock, nil, gpu.WithPageFault(gpu.PageFaultSwap))
 								}

@@ -1213,6 +1213,10 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	probe.Close()
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true, budget: 3 * page})
 	defer m.Close()
+	// The device steps an empty binary16 history down to f32 as it attaches,
+	// so the host arms hold f32 too: among 4096 experts with one used, the
+	// rounding alone flips a near tie (position 2 on arm64, NMSE 0.36).
+	openOpts2 = append(openOpts2, WithKVF16(false))
 	t.Logf("page %d bytes (%.2f MiB), chunk %d", page, float64(page)/(1<<20), jlm.Chunk)
 	if b := 3 * page; !budgetEvicts(m, b) {
 		t.Skipf("the budget is %d bytes against 8 pages of %d, so nothing is evicted", b, page)
@@ -1237,6 +1241,9 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	want := make([][]float32, len(ids))
 	host := testInstance(t, m, 16, openOpts2...)
+	if host.KVIsF16() {
+		t.Fatal("the host arm holds a binary16 history where f32 was asked")
+	}
 	for i, id := range ids {
 		l, err := host.Forward(id)
 		if err != nil {
@@ -1253,6 +1260,9 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	dev.SetDeviceLayers(g, 8)
 	if dev.GPULayers() == 0 {
 		t.Skipf("the device took no block of this fixture: %s", g.Err())
+	}
+	if dev.KVIsF16() {
+		t.Fatal("the device arm holds a binary16 history where f32 was asked")
 	}
 	t.Logf("%d block(s) placed after a host decode", dev.GPULayers())
 	for p, id := range ids {
@@ -1387,9 +1397,14 @@ func TestDevicePagingSurvivesTheHostPager(t *testing.T) {
 func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 	m, openOpts := hybridModelOpt(t, o)
 	defer m.Close()
+	// f32 on both arms, as TestMoEDeviceUploadReadsTheWholeBank holds them.
+	openOpts = append(openOpts, WithKVF16(false))
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	host := testInstance(t, m, 16, openOpts...)
 	defer host.Close()
+	if host.KVIsF16() {
+		t.Fatal("the host arm holds a binary16 history where f32 was asked")
+	}
 	if host.fr.Budget() == 0 {
 		t.Skip("the host page budget did not apply, so only one pager is live")
 	}
