@@ -18,7 +18,7 @@ import (
 )
 
 // The host probe's measuring kernels are the composer's forms of graphs of
-// ops, each gated against the hand-built kernel it replaced (hostforms.go):
+// ops (hostforms.go), held to their orders by TestHostMeasures:
 // the reads, the chase, each class's rate and delay, the lanes class's an
 // iteration's sums over pairs of a vector's lanes, the mix and a call, each
 // rate the instructions of its class the estimator counts in a form over
