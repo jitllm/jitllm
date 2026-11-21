@@ -62,7 +62,10 @@ func GPU(d backend.Device) (cost.Device, error) {
 		out.Units = u.Multiprocessors()
 	}
 	threads := out.Slots
-	p := newGPUProbe(d)
+	p, err := newGPUProbe(d)
+	if err != nil {
+		return out, err
+	}
 	defer p.close()
 
 	free, _, err := d.Mem()
@@ -260,6 +263,7 @@ type gpuProbe struct {
 	walked int
 	walkOn backend.Buf
 	start  backend.Buf
+	clk    clock
 }
 
 // gpuForm is kernels launched in order, each with its workgroups, width and
@@ -273,7 +277,11 @@ type gpuForm struct {
 	args   [][]backend.Buf
 }
 
-func newGPUProbe(d backend.Device) *gpuProbe {
+func newGPUProbe(d backend.Device) (*gpuProbe, error) {
+	clk, err := newClock()
+	if err != nil {
+		return nil, err
+	}
 	lanes := 1
 	if ok, _ := backend.GuaranteedLanes(d, ir.SubgroupLanes); ok {
 		lanes = ir.SubgroupLanes
@@ -286,7 +294,7 @@ func newGPUProbe(d backend.Device) *gpuProbe {
 	if s, ok := d.(backend.SharedMemoryDevice); ok {
 		dev.Shared = s.SharedPerMultiprocessor()
 	}
-	return &gpuProbe{d: d, reg: composer.Default(), dev: dev}
+	return &gpuProbe{d: d, reg: composer.Default(), dev: dev, clk: clk}, nil
 }
 
 func (p *gpuProbe) close() {
@@ -534,11 +542,11 @@ func (p *gpuProbe) time(f *gpuForm, n int) (float64, error) {
 	}
 	var times []float64
 	for range n {
-		t0 := mark()
+		t0 := p.clk.mark()
 		if err := f.launch(); err != nil {
 			return 0, err
 		}
-		times = append(times, since(t0))
+		times = append(times, p.clk.since(t0))
 	}
 	slices.Sort(times)
 	return times[len(times)/2], nil
@@ -553,7 +561,10 @@ func ReadRate(d backend.Device, set int64, rounds int) (float64, error) {
 	if threads == 0 {
 		threads = defaultSlots
 	}
-	p := newGPUProbe(d)
+	p, err := newGPUProbe(d)
+	if err != nil {
+		return 0, err
+	}
 	defer p.close()
 	in, err := p.alloc(int(set))
 	if err != nil {
@@ -631,14 +642,14 @@ func (p *gpuProbe) wall(f *gpuForm, n int) (float64, error) {
 			if errs = s.Sync(); errs != nil {
 				return
 			}
-			t0 := mark()
+			t0 := p.clk.mark()
 			for range n {
 				if errs = f.run(s); errs != nil {
 					return
 				}
 			}
 			errs = s.Sync()
-			times = append(times, since(t0)/float64(n))
+			times = append(times, p.clk.since(t0)/float64(n))
 		})
 		if errs != nil {
 			return 0, errs

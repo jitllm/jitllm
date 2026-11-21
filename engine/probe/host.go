@@ -50,7 +50,10 @@ func HostOn(h *cpu.Target) (cost.Device, error) {
 	if err != nil {
 		return d, err
 	}
-	fm := newFormer(h)
+	fm, err := newFormer(h)
+	if err != nil {
+		return d, err
+	}
 	read := &reader{fm: fm, forms: map[int]*formed{}}
 	defer read.close()
 	const dram = 512 << 20
@@ -150,6 +153,7 @@ type emitter struct{ sse bool }
 // walk is the chase's two forms, chaseShort and chaseLong steps of
 // chaseGraph over a table of up to words words, and its values.
 type walk struct {
+	clk           clock
 	forms         [2]*formed
 	words         int
 	at, tab, next graph.ValueID
@@ -157,7 +161,7 @@ type walk struct {
 
 // newWalk forms the chase over a table of up to bytes bytes.
 func newWalk(fm former, bytes int64) (*walk, error) {
-	w := &walk{words: int(bytes / 4)}
+	w := &walk{clk: fm.clk, words: int(bytes / 4)}
 	for i, trips := range [2]int{chaseShort, chaseLong} {
 		g, tab, at := chaseGraph(w.words, trips)
 		f, err := fm.form(g, 1)
@@ -214,7 +218,7 @@ func chaseLatency(w *walk, set int64) (float64, error) {
 		if err != nil {
 			return 0, err
 		}
-		secs[i] = parallel(1, func(int) {
+		secs[i] = w.clk.parallel(1, func(int) {
 			for range chaseCalls {
 				b.run()
 			}
@@ -247,14 +251,15 @@ func retention(r *reader, c cost.Cache, rate, start float64, evict []byte) (floa
 	if err != nil {
 		return 0, err
 	}
-	clock := clockCost()
+	clk := r.fm.clk
+	clock := clk.cost()
 	var times []float64
 	for range 4 * rounds {
 		at.run()
 		out.run()
-		t0 := mark()
+		t0 := clk.mark()
 		at.run()
-		times = append(times, since(t0)-clock)
+		times = append(times, clk.since(t0)-clock)
 	}
 	runtime.KeepAlive(buf)
 	slices.Sort(times)
@@ -277,9 +282,9 @@ func cycling(r *reader, c cost.Cache, rate float64, evict []byte) (float64, erro
 	}
 	var times []float64
 	for range 2 * rounds {
-		t0 := mark()
+		t0 := r.fm.clk.mark()
 		at.run()
-		times = append(times, since(t0))
+		times = append(times, r.fm.clk.since(t0))
 	}
 	runtime.KeepAlive(evict)
 	slices.Sort(times)
@@ -291,12 +296,12 @@ func cycling(r *reader, c cost.Cache, rate float64, evict []byte) (float64, erro
 	return h * float64(n) / float64(c.Bytes), nil
 }
 
-// clockCost is the seconds reading the clock twice adds to what it times.
-func clockCost() float64 {
+// cost is the seconds reading the clock twice adds to what it times.
+func (c clock) cost() float64 {
 	var times []float64
 	for range 1000 {
-		t0 := mark()
-		times = append(times, since(t0))
+		t0 := c.mark()
+		times = append(times, c.since(t0))
 	}
 	slices.Sort(times)
 	return times[len(times)/2]
@@ -323,14 +328,15 @@ func streamStart(r *reader, rate float64, evict []byte) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	clock := clockCost()
+	clk := r.fm.clk
+	clock := clk.cost()
 	var times []float64
 	for range 4 * rounds {
 		at.run()
 		out.run()
-		t0 := mark()
+		t0 := clk.mark()
 		at.run()
-		times = append(times, since(t0)-clock)
+		times = append(times, clk.since(t0)-clock)
 	}
 	runtime.KeepAlive(buf)
 	runtime.KeepAlive(evict)
@@ -362,7 +368,7 @@ func readRate(r *reader, set int64, threads int) (float64, error) {
 		}
 		runtime.KeepAlive(bufs[t])
 	}
-	secs := parallel(threads, run)
+	secs := r.fm.clk.parallel(threads, run)
 	return float64(set) * float64(reps) * float64(threads) / secs, nil
 }
 
@@ -371,7 +377,7 @@ func readRate(r *reader, set int64, threads int) (float64, error) {
 // thread the fastest round, since an operating system may place a lone
 // thread on a slower core for some rounds (macOS does, at default
 // priority), and a thread's capability is its fastest placement.
-func parallel(threads int, run func(t int)) float64 {
+func (c clock) parallel(threads int, run func(t int)) float64 {
 	var times []float64
 	for r := range rounds + 1 {
 		var wg sync.WaitGroup
@@ -386,11 +392,11 @@ func parallel(threads int, run func(t int)) float64 {
 				run(t)
 			}()
 		}
-		t0 := mark()
+		t0 := c.mark()
 		close(start)
 		wg.Wait()
 		if r > 0 {
-			times = append(times, since(t0))
+			times = append(times, c.since(t0))
 		}
 	}
 	slices.Sort(times)

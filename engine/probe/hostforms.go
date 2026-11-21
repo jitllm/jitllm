@@ -229,7 +229,7 @@ func hostWork(fm former, graphAt func(size int) *graph.Graph, v uint32, short, l
 				return 0, 0, err
 			}
 		}
-		secs[i] = parallel(threads, func(t int) {
+		secs[i] = fm.clk.parallel(threads, func(t int) {
 			for range calls {
 				runs[t].run()
 			}
@@ -458,7 +458,7 @@ func callCost(fm former) (float64, error) {
 		return 0, err
 	}
 	const calls = 1 << 20
-	secs := parallel(1, func(int) {
+	secs := fm.clk.parallel(1, func(int) {
 		for range calls {
 			b.run()
 		}

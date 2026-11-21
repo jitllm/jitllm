@@ -14,7 +14,11 @@ import (
 // buffer, so a read that covers less than the bytes a rate counts stores
 // another sum.
 func TestTheReadSumsItsWholeBuffer(t *testing.T) {
-	r := &reader{fm: newFormer(cpu.New()), forms: map[int]*formed{}}
+	fm, err := newFormer(cpu.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &reader{fm: fm, forms: map[int]*formed{}}
 	defer r.close()
 	for _, n := range []int{64, 192, 4096, 1 << 18} {
 		words := make([]uint32, n)

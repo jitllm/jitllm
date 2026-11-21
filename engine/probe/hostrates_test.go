@@ -40,7 +40,10 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 		t.Fatal(err)
 	}
 	e := emitter{sse: h.Tier() == cpu.TierSSE}
-	fm := newFormer(h)
+	fm, err := newFormer(h)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mapped := func(code []byte, err error) *cpu.Code {
 		if err != nil {
 			t.Fatal(err)
@@ -58,10 +61,10 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 	for _, cl := range []cost.Class{cost.ClassFloat, cost.ClassSpecial, cost.ClassInt, cost.ClassIndex} {
 		rk, ck := mapped(e.rateKernel(cl)), mapped(e.chainKernel(cl))
 		rate := rateCase{name: names[cl] + " rate",
-			built:    func() (float64, error) { return issueRate(rk, 8, 1), nil },
+			built:    func() (float64, error) { return issueRate(fm.clk, rk, 8, 1), nil },
 			composed: func() (float64, error) { return stepRate(fm, cl, lanes, 1) }}
 		delay := rateCase{name: names[cl] + " delay",
-			built: func() (float64, error) { return 1 / issueRate(ck, 8, 1), nil },
+			built: func() (float64, error) { return 1 / issueRate(fm.clk, ck, 8, 1), nil },
 			composed: func() (float64, error) {
 				r, err := chainRate(fm, cl, lanes)
 				return 1 / r, err
@@ -81,7 +84,7 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 	}
 	lrk, lck := mapped(e.rateKernel(cost.ClassLanes)), mapped(e.chainKernel(cost.ClassLanes))
 	lanesRate := rateCase{name: "lanes rate",
-		built:    func() (float64, error) { return issueRate(lrk, 8, 1), nil },
+		built:    func() (float64, error) { return issueRate(fm.clk, lrk, 8, 1), nil },
 		composed: func() (float64, error) { return lanesStepRate(fm, lanes, 1) }}
 	if runtime.GOARCH == "arm64" {
 		lanesRate.lo, lanesRate.hi = 0.3, 0.5
@@ -89,17 +92,17 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 	}
 	cases = append(cases, lanesRate,
 		rateCase{name: "lanes delay",
-			built:    func() (float64, error) { return 1 / issueRate(lck, 8, 1), nil },
+			built:    func() (float64, error) { return 1 / issueRate(fm.clk, lck, 8, 1), nil },
 			composed: func() (float64, error) { return lanesDelay(fm, lanes) }})
 	mk := mapped(e.mixKernel())
 	cases = append(cases, rateCase{name: "mix rate", lo: 0.5, hi: 0.85,
 		why:      "(the composed mix's values are all words: index adds and reads, each read loading its table's address too, which the estimator does not count, where the built issues float work beside them; measured 0.64 on a Xeon at AVX2, 0.73 at SSE, 0.59 on an M4)",
-		built:    func() (float64, error) { return issueRate(mk, 24, 1), nil },
+		built:    func() (float64, error) { return issueRate(fm.clk, mk, 24, 1), nil },
 		composed: func() (float64, error) { return mixAt(fm, 1) }})
 	ek := mapped(e.emptyKernel())
 	cases = append(cases, rateCase{name: "call", lo: 1, hi: 3.5,
 		why:      "(the smallest form reads its argument words, its element and its constant and stores its element, where the built returns at once; measured 3.0 on a Xeon, a hand-built call of two loads and a store 1.7)",
-		built:    func() (float64, error) { return builtCallCost(ek), nil },
+		built:    func() (float64, error) { return builtCallCost(fm.clk, ek), nil },
 		composed: func() (float64, error) { return callCost(fm) }})
 	const rounds = 5
 	built := make([][]float64, len(cases))
@@ -142,7 +145,7 @@ func ratesMatch(t *testing.T, h *cpu.Target) {
 // cache line of its own: a load that crosses a line is a cost of its own,
 // and the mix's loads from a block 40 bytes into a line issued at a third
 // of the core's rate.
-func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
+func issueRate(c clock, k *cpu.Code, perTrip float64, threads int) float64 {
 	const trips = 1 << 22
 	words := make([]uint64, 8*(threads+1))
 	first := (64 - int(uintptr(unsafe.Pointer(&words[0]))%64)) % 64 / 8
@@ -151,15 +154,15 @@ func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
 		block[0] = trips
 		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
 	}
-	return perTrip * trips * float64(threads) / parallel(threads, run)
+	return perTrip * trips * float64(threads) / c.parallel(threads, run)
 }
 
 // builtCallCost is the seconds a call of the hand-built empty kernel k
 // costs.
-func builtCallCost(k *cpu.Code) float64 {
+func builtCallCost(c clock, k *cpu.Code) float64 {
 	const calls = 1 << 20
 	var block [8]uint64
-	return parallel(1, func(int) {
+	return c.parallel(1, func(int) {
 		for range calls {
 			k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
 		}

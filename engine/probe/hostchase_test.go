@@ -48,7 +48,11 @@ func chaseMatches(t *testing.T, h *cpu.Target) {
 		t.Fatal(err)
 	}
 	const dram = 512 << 20
-	w, err := newWalk(newFormer(h), dram)
+	fm, err := newFormer(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := newWalk(fm, dram)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +75,7 @@ func chaseMatches(t *testing.T, h *cpu.Target) {
 	for l, set := range sets {
 		var b, ratios []float64
 		for range rounds {
-			x, err := builtChaseLatency(built, set)
+			x, err := builtChaseLatency(w.clk, built, set)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -104,7 +108,7 @@ func chaseMatches(t *testing.T, h *cpu.Target) {
 // builtChaseLatency is the chase as the probe took it before it was
 // composed: the hand-built kernel k following pointers through a random
 // cycle of set bytes' lines, one call of at least a million steps.
-func builtChaseLatency(k *cpu.Code, set int64) (float64, error) {
+func builtChaseLatency(c clock, k *cpu.Code, set int64) (float64, error) {
 	const line = 64
 	lines := int(max(2, set/line))
 	raw, free, err := hugeBuffer(lines * line)
@@ -120,7 +124,7 @@ func builtChaseLatency(k *cpu.Code, set int64) (float64, error) {
 	}
 	steps := max(1<<20, 4*lines)
 	block := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[order[0]*line/8]))), uint64(steps)}
-	secs := parallel(1, func(int) {
+	secs := c.parallel(1, func(int) {
 		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
 	})
 	return secs / float64(steps), nil

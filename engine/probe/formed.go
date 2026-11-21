@@ -18,11 +18,16 @@ type former struct {
 	h   *cpu.Target
 	r   *composer.Registry
 	dev composer.Device
+	clk clock
 }
 
 // newFormer is the former for the CPU h states.
-func newFormer(h *cpu.Target) former {
-	return former{h: h, r: composer.Default(), dev: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(h.ISA()), ExactDiv: true}}
+func newFormer(h *cpu.Target) (former, error) {
+	clk, err := newClock()
+	if err != nil {
+		return former{}, err
+	}
+	return former{h: h, r: composer.Default(), dev: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(h.ISA()), ExactDiv: true}, clk: clk}, nil
 }
 
 // formed is a probe's kernel: the composer's codes for its graph in launch

@@ -4,12 +4,14 @@ package probe
 
 import "time"
 
-// origin is where the probe's clock counts from.
-var origin = time.Now()
+// clock is the probe's clock: time's monotonic reading, which resolves well
+// under a microsecond here.
+type clock struct{ origin time.Time }
 
-// mark reads the probe's clock: time's monotonic reading, which resolves
-// well under a microsecond here.
-func mark() int64 { return int64(time.Since(origin)) }
+func newClock() (clock, error) { return clock{origin: time.Now()}, nil }
+
+// mark reads the clock.
+func (c clock) mark() int64 { return int64(time.Since(c.origin)) }
 
 // since is the seconds from mark m to now.
-func since(m int64) float64 { return float64(mark()-m) * 1e-9 }
+func (c clock) since(m int64) float64 { return float64(c.mark()-m) * 1e-9 }
