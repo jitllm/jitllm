@@ -51,7 +51,7 @@ type smolvlmVideoGolden struct {
 // and the prompt's last row and each decoded row's logits within twice what
 // a tower error of the engine's size moves them by. The frames are resized
 // as the picture is, the golden's rows over the engine's pixels
-// (docs/divergences.md). Each part has its violation: no second skipped,
+// (.notes/divergences.md). Each part has its violation: no second skipped,
 // mtmd's picture markers, the video's text encoded alone, and the frames'
 // rows reversed.
 func TestSmolVLMVideoMatchesTransformers(t *testing.T) {

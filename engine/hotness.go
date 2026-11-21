@@ -9,7 +9,7 @@ package engine
 //
 // It is measured rather than shipped because the hot set depends on the
 // workload (prose and code prompts share little of it; see
-// docs/engineering-history/model-correctness.md). The cost is one increment per
+// .notes/engineering-history/model-correctness.md). The cost is one increment per
 // selected expert per layer per token.
 type Hotness struct {
 	// count[layer*NExpert+e] is how many tokens selected that expert.

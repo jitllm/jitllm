@@ -17,7 +17,7 @@ import (
 // attention history: the budget, the backend's buffer limit or the index
 // width stops a layer's pool growing. Nothing changed; the caller may evict,
 // move blocks, wait for room or give up, and the model is not down. See
-// docs/design/device-kv-paging.md.
+// .notes/design/device-kv-paging.md.
 const ErrKVCapacity tierError = "tier: no room for another page of attention history"
 
 // tierError is a sentinel error of the tier: a constant, matched with

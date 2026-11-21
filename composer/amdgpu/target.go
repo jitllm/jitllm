@@ -3,7 +3,7 @@
 // It is the fourth lowering beside ptx, spirv and msl. The text is handed to
 // comgr (jit_old/gpu/hip.Comgr.Compile), whose AMDGPU code generator owns
 // instruction selection, register allocation and scheduling, as ptxas does for
-// PTX. See docs/design/amd-hip.md for why the target is LLVM IR and not GCN
+// PTX. See .notes/design/amd-hip.md for why the target is LLVM IR and not GCN
 // assembly.
 package amdgpu
 

@@ -17,7 +17,7 @@ import (
 //
 // It descends from the load-time placement ("as many as the card would take"),
 // asking only whether fewer blocks would be faster, e.g. on a contended or slow
-// device. It is off by default; see docs/engineering-history/placement.md.
+// device. It is off by default; see .notes/engineering-history/placement.md.
 type seamTuner struct {
 	on      bool
 	settled bool

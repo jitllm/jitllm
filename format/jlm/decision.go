@@ -3,7 +3,7 @@ package jlm
 import "fmt"
 
 // A decision model answers typed questions about a state in one forward pass
-// and generates nothing (docs/design/decision-models.md). What makes a model
+// and generates nothing (.notes/design/decision-models.md). What makes a model
 // one is not its graph -- Lev is qwen35 and d1 is lfm2 -- but how its answer is
 // read out and calibrated, which the reference hardcodes per model and the
 // container therefore states: a label readout (DecisionLabels), a marker

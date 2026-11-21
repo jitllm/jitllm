@@ -13,7 +13,7 @@ import (
 // every unconfigured machine. The probe is cheap (CPUID, once per process), so
 // it is not cached to disk; what is cached is the expensive decision (pack
 // width, split), keyed on the bytes EmitNative produces, which moves when the
-// capability set moves. See docs/design/inferred-kernels.md.
+// capability set moves. See .notes/design/inferred-kernels.md.
 type Features struct {
 	// The SSE family, all from CPUID leaf 1 (SSE2 is EDX bit 26; the rest are
 	// ECX). They are what the SSE tier is built on (tier.go): SSSE3 carries

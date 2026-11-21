@@ -8,7 +8,7 @@ import (
 )
 
 // The flagship architectures (MiniMax-M2 and the group around it).
-// docs/design/model-coverage.md section 9 is the survey they were chosen
+// .notes/design/model-coverage.md section 9 is the survey they were chosen
 // from, with what each needs and what it costs.
 
 // Gemma 4 is transformers' Gemma4ForCausalLM,
@@ -22,7 +22,7 @@ import (
 // (PLEDim), KV sharing (NKVShared) and a double-width FFN on the sharing
 // layers, each block's width in its geometry.
 //
-// The reference-to-container table: docs/engineering-history/
+// The reference-to-container table: .notes/engineering-history/
 // model-correctness.md, "convert/flagship.go: gemma4Config"; the gemma4
 // statement states all of it but each block's geometry.
 

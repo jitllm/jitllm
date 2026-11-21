@@ -214,7 +214,7 @@ func probeDevices(rocm string, admit backend.Restriction) ([]DeviceInfo, error) 
 // but only the unmarked entry is counted. The unmarked one is the preferred
 // backend by backend.APIRank (CUDA or Metal over Vulkan), not the first
 // listed, since Vulkan is enumerated first. See
-// docs/engineering-history/placement.md 15u.
+// .notes/engineering-history/placement.md 15u.
 func markSameDevice(devs []DeviceInfo) int {
 	primary := map[string]int{} // identity -> index of the entry that counts
 	n := 0

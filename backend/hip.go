@@ -12,7 +12,7 @@ import (
 
 // hipDev is one AMD GPU through ROCm. Its kernels are jitllm's IR lowered to
 // LLVM IR (composer/amdgpu) and turned into a code object by comgr in process;
-// see docs/design/amd-hip.md.
+// see .notes/design/amd-hip.md.
 //
 // HIP keeps a current device per OS thread, so every call runs inside
 // hip.Device.On, which pins the goroutine and selects the device. A Session

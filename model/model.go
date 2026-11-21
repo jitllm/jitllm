@@ -1055,7 +1055,7 @@ func (m *Model) MappedBytes(fr *jlm.Frames) uint64 {
 // WithHugePages sets whether this model's page frames are advised onto
 // transparent huge pages. On by default: the plane layout jumps a whole plane
 // per payload word, and on 4 KB pages that walks the page tables on nearly
-// every access (docs/engineering-history/cpu-kernels.md, "Huge pages for the
+// every access (.notes/engineering-history/cpu-kernels.md, "Huge pages for the
 // frames").
 func WithHugePages(on bool) Option {
 	return func(l *ModelLoad) { l.place.NoHugePages = !on }
@@ -1668,7 +1668,7 @@ func (m *Model) PageInRanges(fr *jlm.Frames, li int, rs []jlm.Range, l *Layer) e
 // device is handed the entire bank at PrepLayer and cannot come back for an
 // expert later, so it must be read first; otherwise the upload takes whatever
 // the frame held (zeros, or another block's bytes). See
-// docs/engineering-history/placement.md 15j.
+// .notes/engineering-history/placement.md 15j.
 func (m *Model) EnsureBlockExperts(fr *jlm.Frames, li int) error {
 	return m.ensureBlockRanges(fr, li, true)
 }
@@ -1932,7 +1932,7 @@ func bindSheet(c *jlm.Frames, b *Tensor, nrow, x int, v *Tensor) {
 // ExpertIO is what the routed expert read has cost: wall the decode path spent
 // blocked on it, the I/O part of that, readAt calls, bytes, and how many
 // layer-steps asked. On a model that fits it is a warm-up that converges to
-// zero; see docs/engineering-history/scheduling-and-measurement.md.
+// zero; see .notes/engineering-history/scheduling-and-measurement.md.
 func (m *Model) ExpertIO() (wait, io time.Duration, reads, bytes, calls int64) {
 	if m == nil {
 		return 0, 0, 0, 0, 0

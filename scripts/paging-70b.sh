@@ -562,7 +562,7 @@ if [ "$RATE" = 1 ]; then
   note "   READ, which both arms pay and which the upload term now carries: 40.10 GiB a pass"
   note "   at 1.61 GB/s against the host arm own 39.04 GiB/token at ~2.16. The link was"
   note "   never the competitor -- the read is in SERIES with it. See the breakdown above"
-  note "   and docs/design/block-paging.md."
+  note "   and .notes/design/block-paging.md."
   "$ROOT/scripts/paging-rate.sh" "$MODEL" "$DEV=$BUDGET" "$NTOK" "$ROUNDS" "$CAPMEM" | tee "$OUT/rate70"
   note ""
 fi

@@ -163,7 +163,7 @@ type job struct {
 //
 // A job is published by bumping seq and workers spin on it; a channel per
 // worker cost far more per empty region (see
-// docs/engineering-history/scheduling-and-measurement.md). The channel survives
+// .notes/engineering-history/scheduling-and-measurement.md). The channel survives
 // only as the parking fallback once the spin budget runs out.
 type Pool struct {
 	// labels is whether the pool's regions carry pprof labels
@@ -256,7 +256,7 @@ func (p *Pool) w() *Pool {
 // the tail of the gap between regions (layer boundaries, attention, sampling),
 // not its mean; spinning much past 1 ms gets worse again, because a worker that
 // never parks competes with the caller's serial stretches. The sweep is in
-// docs/engineering-history/scheduling-and-measurement.md.
+// .notes/engineering-history/scheduling-and-measurement.md.
 func spinBudget(c config) time.Duration {
 	if c.spinSet && c.spin >= 0 {
 		return c.spin

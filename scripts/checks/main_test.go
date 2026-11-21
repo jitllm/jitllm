@@ -107,7 +107,10 @@ func badChecks(t *testing.T, m Map, root string) []string {
 				bad = append(bad, e.Prefix+": check "+c+" is not defined")
 			}
 		}
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(e.Evidence))); err != nil {
+		// The engineering notes are kept out of the repository (.notes/, git-ignored): an entry naming one
+		// is held to it where a checkout carries them.
+		_, err := os.Stat(filepath.Join(root, filepath.FromSlash(e.Evidence)))
+		if err != nil && !(strings.HasPrefix(e.Evidence, ".notes/") && os.IsNotExist(err) && !notes(root)) {
 			bad = append(bad, e.Prefix+": evidence "+e.Evidence+" does not exist")
 		}
 	}
@@ -300,4 +303,10 @@ func quoteJSON(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// notes is whether root's checkout carries the engineering notes.
+func notes(root string) bool {
+	fi, err := os.Stat(filepath.Join(root, ".notes"))
+	return err == nil && fi.IsDir()
 }

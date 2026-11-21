@@ -8,7 +8,7 @@ import (
 
 // PictureGeometry is how a picture of w x h pixels becomes the tower's
 // squares, stated as expressions the host evaluates in float64, as Python
-// computes a processor's sizes (docs/design/picture-statement.md): bindings
+// computes a processor's sizes (.notes/design/picture-statement.md): bindings
 // in order, each a value or a choice from a table; the squares' count; each
 // square's sizes; and the bounds every square stays within, which size the
 // classes formed at placement.

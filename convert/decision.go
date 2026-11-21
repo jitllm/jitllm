@@ -13,7 +13,7 @@ import (
 // <arch>.decision.temperature.<type>[.<band>] the fitted temperatures, and the
 // prompt is the template tokenizer.chat_template.systemone, which the vocab
 // reader already carries by name. What each readout reads is its statement
-// in readouts.json; docs/design/decision-models.md has the family.
+// in readouts.json; .notes/design/decision-models.md has the family.
 
 func questionTypes(name string) (jlm.QuestionType, bool) {
 	switch name {

@@ -1,7 +1,7 @@
 # jitllm roadmap
 
 What is planned, in priority order. Each item carries its status. The
-engineering history behind a status lives in `docs/engineering-history/`; this
+engineering history behind a status lives in `.notes/engineering-history/`; this
 file says only where each item stands and what is left.
 
 ## 1. Optimized kernels for MoE
@@ -61,7 +61,7 @@ Done:
 - **Model, instance, session.** An instance is the model composed for one
   placement; a session holds one sequence's history and leases an instance
   per phase from a `engine.Scheduler` (an interface; `engine.Pool` is the
-  default). `docs/design/instances-and-sessions.md`.
+  default). `.notes/design/instances-and-sessions.md`.
 - **Continuous batching.** `engine.Batcher` admits sequences, steps every
   leased session's rows together (`StepRuns`), and retires them on a stop or
   a budget, on the CPU, on a card and across a seam.
@@ -109,7 +109,7 @@ Left:
   blocks are placed, rather than attending over history the card never saw).
 
 The backends, the adversarial audit of the cache and the prefix
-design are recorded in `docs/engineering-history/placement.md`.
+design are recorded in `.notes/engineering-history/placement.md`.
 
 ### 5a. The RAM prefill buffer (not started)
 

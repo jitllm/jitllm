@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestTheModelHoldsNoDevice holds docs/design/instance-paging.md's step 5: the
+// TestTheModelHoldsNoDevice holds .notes/design/instance-paging.md's step 5: the
 // model holds nothing of a device. No type of model/ has a field whose type
 // names one of nn's interfaces -- the devices' vocabulary -- itself or inside
 // a pointer, slice, map, channel or func type, and Model.Close calls nothing

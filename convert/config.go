@@ -601,7 +601,7 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 		// config.json says norm_topk_prob: true and DeepSeek-V2-Lite's says
 		// norm_topk_prob: false, so latent.json states no_expert_norm where the
 		// key is absent. Renormalising it generates fluent nonsense from the first
-		// token. See docs/engineering-history/model-correctness.md.
+		// token. See .notes/engineering-history/model-correctness.md.
 		// 1 is softmax, 2 is sigmoid; anything else is refused rather than
 		// approximated, because a wrong gate is a fluent model with another mixture.
 		if kv, ok := f.Key("expert_gating_func"); ok {

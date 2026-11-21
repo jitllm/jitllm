@@ -250,7 +250,7 @@ func WithPersist(on bool, grid int) Option {
 
 // WithPersistDeps is WithPersist with the persistent kernels' tasks ordered
 // by dependency counters rather than grid barriers (Config.PersistDeps,
-// docs/design/dep-block.md). Off by default.
+// .notes/design/dep-block.md). Off by default.
 func WithPersistDeps(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, on, grid })
 }

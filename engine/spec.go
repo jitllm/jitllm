@@ -24,7 +24,7 @@ import (
 // decode would have fed.
 //
 // The graph, the round and the row pairing, and why:
-// docs/engineering-history/model-correctness.md, "engine/spec.go".
+// .notes/engineering-history/model-correctness.md, "engine/spec.go".
 
 // SpecRollback is how a rejected verification takes a hybrid's recurrent state
 // back. Attention needs no choice: its rows are forgotten by position.

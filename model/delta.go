@@ -17,7 +17,7 @@ package model
 // The state is not a KV cache: it is the same size at every position, so
 // residency, paging and placement cannot treat it as KV.
 //
-// The node-by-node transcript: docs/engineering-history/model-correctness.md,
+// The node-by-node transcript: .notes/engineering-history/model-correctness.md,
 // "model/delta.go".
 
 // recTailLen is what each linear block's recurrent state carries per

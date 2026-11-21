@@ -94,7 +94,7 @@ func (tg *Target) ISA() ISA { return tg.f.ISA() }
 // It exists because a pre-AVX2 host would SIGILL on the first token: the
 // quantized path declined correctly, but the elementwise path asked a width
 // question where a capability question belonged. See
-// docs/engineering-history/cpu-kernels.md, "THE SSE TIER".
+// .notes/engineering-history/cpu-kernels.md, "THE SSE TIER".
 func (tg *Target) Baseline() error { return tg.baseline }
 
 // Map makes code executable on the Target, refusing first if the Target cannot

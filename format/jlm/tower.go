@@ -37,7 +37,7 @@ type Tower struct {
 	// after the record, in the vision section's tail.
 	Video *Video
 	// Geometry is how a picture becomes the tower's squares, nil where the
-	// steps say it (docs/design/picture-statement.md). It is written after
+	// steps say it (.notes/design/picture-statement.md). It is written after
 	// the video, in the tail.
 	Geometry *PictureGeometry
 }

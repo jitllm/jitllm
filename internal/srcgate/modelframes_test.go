@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestTheModelHoldsNoFrames holds docs/design/instance-paging.md's shape:
+// TestTheModelHoldsNoFrames holds .notes/design/instance-paging.md's shape:
 // the model is the weights as a file, and the frames a block's pages are
 // read into are the frames of the device running it. No type of model/ has
 // a field holding a jlm.Frames -- itself, or inside a pointer, slice, map,

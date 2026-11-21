@@ -53,7 +53,7 @@ func TestPoolKeysTellTheTypesApart(t *testing.T) {
 }
 
 // TestKVPoolPages holds the device page pool to its contract
-// (docs/design/device-kv-paging.md): ids are each layer's own, never alias
+// (.notes/design/device-kv-paging.md): ids are each layer's own, never alias
 // between sequences in a layer and never hand out the dummy; a sequence's run
 // has one offset in every layer's table; a released page is not reused before
 // the next completed submission; growth is all or nothing, refused with

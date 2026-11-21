@@ -498,7 +498,7 @@ func (l *lowerer) block(lo, hi int) error {
 		case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
 			// A workgroup spinning on another's counter needs that one to
 			// run, and Vulkan promises no forward progress between
-			// workgroups (docs/design/dep-block.md).
+			// workgroups (.notes/design/dep-block.md).
 			return fmt.Errorf("spirv: op %d: %s: dependency counters are not lowered for SPIR-V", i, o.Kind)
 		case ir.OpConst:
 			l.val[v] = l.constID(l.spvType(o.Type), uint32(o.Imm))

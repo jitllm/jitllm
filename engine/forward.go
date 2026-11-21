@@ -1028,7 +1028,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// The device stays attached even when it took nothing, so the seam can
 	// grow later. One session per instance: a tier offering Attach hands back a
 	// view carrying this instance's own KV cache (see
-	// docs/design/device-sessions.md); two instances must not share one cache.
+	// .notes/design/device-sessions.md); two instances must not share one cache.
 	if a, ok := ld.(nn.Attacher); ok {
 		ld = a.Attach()
 		// The single matvecs are the session's too: the tier's crossing
@@ -1223,7 +1223,7 @@ func (s *Instance) finishPlacement() error {
 // (crossing time times host read rate, over the share of a byte's cost that
 // moving it removes), measured on one host. It is a constant, not a probe,
 // and only breaks ties between placements of similar value; measure it before
-// giving it more work (see docs/engineering-history/placement.md).
+// giving it more work (see .notes/engineering-history/placement.md).
 const seamCrossBytes = 2 << 20
 
 // placeHead puts the vocabulary projection on the device, giving up blocks to
@@ -2690,7 +2690,7 @@ func (s *Instance) KVIsF16() bool { return s.kvFmt == nn.KVF16 }
 
 // attnPairShipped is what ships: share both the K walk and the V walk between
 // each pair of query heads. It is neutral at shallow depth and a win where
-// attention dominates (see docs/engineering-history/cpu-kernels.md).
+// attention dominates (see .notes/engineering-history/cpu-kernels.md).
 // WithAttnPair overrides it per model, so a scoreboard row can attribute it.
 const attnPairShipped = 3
 
@@ -2782,7 +2782,7 @@ func (s *Instance) DeviceBlocks() [][2]int { return s.devRuns() }
 // comes at CPU latency and each later one carries about one block's upload
 // (just the upload, with PrewarmGPU). As measured it has not paid: each grown
 // block also forces a graph re-capture, and the first-token cost it aimed at
-// was not block preparation (see docs/engineering-history/placement.md). It
+// was not block preparation (see .notes/engineering-history/placement.md). It
 // may pay with a cold page cache, a slow disk or large blocks.
 //
 // Zero disables growth. It does not shrink -- SetGPULayers does that,

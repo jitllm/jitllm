@@ -52,7 +52,7 @@ Kernels are specialised to the model's shapes and weight formats. On a GPU a
 whole block (attention, norms, feed-forward, expert routing) runs in one
 submission. Tuners measure kernel layouts, worker counts, prompt chunks and
 matrix tiles on the machine; applications can override every choice through Go
-options. [Kernel fusion and block bridging](fusion.md) explains how
+options. [Kernel fusion and block bridging](../.notes/fusion.md) explains how
 consecutive ops and resident blocks run as one unit without giving up
 relocation or paging.
 

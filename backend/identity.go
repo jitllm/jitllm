@@ -97,7 +97,7 @@ func APIRank(api string) int {
 		return 3
 	case "amdgcn", "hip":
 		// AMD's own compute stack over Vulkan on the same card: a decision
-		// until a same-card A/B decides it (docs/design/amd-hip.md).
+		// until a same-card A/B decides it (.notes/design/amd-hip.md).
 		return 2
 	case "spirv", "vulkan":
 		return 1

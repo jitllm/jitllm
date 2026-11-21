@@ -6,7 +6,7 @@
 // vocabulary tokens that keep the output inside the grammar.
 //
 // What runs per step, and which side of RULE 8 it is on, is in
-// docs/engineering-history/model-correctness.md, "grammar".
+// .notes/engineering-history/model-correctness.md, "grammar".
 package grammar
 
 import (

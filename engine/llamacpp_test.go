@@ -58,7 +58,7 @@ func sidesWithTheSessionRun(out, want []int32, i int) bool {
 // cache) and " Paris" at 0.80 on the M4 (its f32 cache), " best" at 0.87 with
 // the M4's cache at f16. Its residual stream reaches 2.6e4, and the two hosts'
 // 7e-4 apart after layer 0's MLP are 16% apart at the output norm
-// (docs/engineering-history/model-correctness.md, "Apertus").
+// (.notes/engineering-history/model-correctness.md, "Apertus").
 func recordedNearTies() map[string]map[string]int {
 	return map[string]map[string]int{
 		"swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf": {"The capital of France is": 11},
@@ -157,7 +157,7 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 		// A GGUF that converts only with its publisher's config.json states
 		// what convert_hf_to_gguf.py dropped -- synth-minicpmv's LongRoPE
 		// factors, which the GGUF oracle runs without: a different model
-		// (docs/divergences.md, "MiniCPM-V's text rotary"). Its oracle is
+		// (.notes/divergences.md, "MiniCPM-V's text rotary"). Its oracle is
 		// transformers (TestStatedTowerMatchesTransformersEndToEnd).
 		if engine.DivergesFromLlamaCppForTest(path) {
 			continue

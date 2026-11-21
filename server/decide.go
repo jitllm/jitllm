@@ -12,7 +12,7 @@ import (
 )
 
 // Decisions: TypeSafe's System One request, answered by a decision model's
-// label readout (docs/design/decision-models.md). /v1/systemone calls
+// label readout (.notes/design/decision-models.md). /v1/systemone calls
 // Engine.Decide and nothing else, so an answer served here is the answer
 // `jitllm decide` prints for the same model and request.
 

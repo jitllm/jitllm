@@ -21,7 +21,7 @@ import (
 // and both of the oracle's arms agree at every position. At Q4_K_M the story
 // prompt parts from every reference, because the 8-bit activations both engines
 // quantize are amplified by 26 recurrences; no engine's greedy answer there is
-// an oracle for another's (docs/engineering-history/model-correctness.md,
+// an oracle for another's (.notes/engineering-history/model-correctness.md,
 // Mamba-1).
 func ssmRealModels() []string {
 	return []string{

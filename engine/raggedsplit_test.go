@@ -15,7 +15,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
-// TestRaggedStepKernelSplit is the measurement docs/design/ragged-prefill.md
+// TestRaggedStepKernelSplit is the measurement .notes/design/ragged-prefill.md
 // starts from: the same prompts as rows of one batch session's steps
 // (Batcher, a ragged step) and each prompt alone (Prefill), every block on
 // the device, with each kernel's device time taken by the backend's own

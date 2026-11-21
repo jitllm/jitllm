@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The AMD backend's gates on a host with an AMD card and ROCm (docs/design/amd-hip.md).
+# The AMD backend's gates on a host with an AMD card and ROCm (.notes/design/amd-hip.md).
 #
 #   JITLLM_MODELS=/path/to/models ./scripts/hip-gates.sh
 #

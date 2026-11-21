@@ -13,7 +13,7 @@ import (
 // VRAM on a machine with 4. The opposite mistake, two different cards
 // reporting the same name, cannot occur on a one-card host, so it is
 // fabricated here: keying identity on the name would merge them and lose half
-// the machine's VRAM. See docs/engineering-history/placement.md 15u.
+// the machine's VRAM. See .notes/engineering-history/placement.md 15u.
 
 // card0 and card1 are two distinct pieces of hardware with the same name on
 // purpose; only the identity separates them.

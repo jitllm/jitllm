@@ -1,6 +1,6 @@
 // Package graph is the block graph: a versioned, typed SSA description of
 // one block's values and persistent state effects, built from what the
-// container states (docs/design/composer.md, "Above the recipes"). It holds
+// container states (.notes/design/composer.md, "Above the recipes"). It holds
 // data and a verifier and computes nothing: a graph is lowered to the
 // generated operations the engine already runs, never interpreted here.
 package graph
@@ -114,7 +114,7 @@ const (
 	// Width elements from Offset where Width is set, the whole vector where it
 	// is 0: Width 1 reads one element of a stored table as a scalar, a
 	// per-block constant a buffer holds. A primitive
-	// (docs/design/composer.md, "Decomposition").
+	// (.notes/design/composer.md, "Decomposition").
 	OpMap
 	// OpReduce combines each group of Span elements of In[0] (the whole row
 	// where Span is 0) by Fn (MapAdd, MapMax or MapMin) in Order: Out[0] one
@@ -1293,7 +1293,7 @@ func (g *Graph) op(o Op) {
 	g.Ops = append(g.Ops, o)
 }
 
-// String is the graph in the illustrative form docs/design/composer.md uses.
+// String is the graph in the illustrative form .notes/design/composer.md uses.
 func (g *Graph) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "block %d (graph v%d)\n", g.Block, g.Version)

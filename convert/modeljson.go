@@ -24,7 +24,7 @@ import (
 // (mjtransforms.go). It is data: the Go is the primitives and the generic
 // readers of its statements, and knows no model. What the converter cannot
 // express it refuses in code, by name, one rule for every file.
-// docs/design/model-json.md is the design.
+// .notes/design/model-json.md is the design.
 //
 // One is found, in order of authority: the caller's (WithModelJSON), the
 // model directory's own model.json, the library embedded here

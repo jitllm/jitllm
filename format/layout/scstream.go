@@ -11,7 +11,7 @@ const ScStreamWords = 3
 //
 // Container v27 stores the fields in 12 bytes, as the file does; the earlier
 // byte per field made Q4_K 148 bytes against the GGUF's 144, a cost on every
-// bandwidth-bound decode (docs/engineering-history/cpu-kernels.md).
+// bandwidth-bound decode (.notes/engineering-history/cpu-kernels.md).
 //
 // The fields run in the order a kernel consumes them -- sub-block 0's scale,
 // its minimum, sub-block 1's scale, ... -- at bit 6f of the stream, word f*6/32

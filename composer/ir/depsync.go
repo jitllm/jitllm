@@ -3,7 +3,7 @@ package ir
 import "fmt"
 
 // Dependency counters: the persistent kernel's other synchronisation
-// (docs/design/dep-block.md).
+// (.notes/design/dep-block.md).
 //
 // A grid barrier makes every workgroup wait for every other. A dependency
 // counter makes a workgroup wait only for the work it reads: a composed

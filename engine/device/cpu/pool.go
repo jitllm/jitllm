@@ -44,7 +44,7 @@ func WithSched(o ...sched.Option) PoolOption {
 // WithPrefillCPUs runs a prompt's regions on cpus. Without it the prompt
 // takes the host's default: the P and E cores on Apple Silicon, where
 // prefill is compute the E-cores add to, and the decode cores elsewhere,
-// where the split measured neutral (docs/engineering-history/cpu-kernels.md).
+// where the split measured neutral (.notes/engineering-history/cpu-kernels.md).
 func WithPrefillCPUs(cpus []int) PoolOption {
 	return func(c *poolConfig) { c.prefill = cpus }
 }

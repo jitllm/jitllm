@@ -998,7 +998,7 @@ context	engine/device/gpu/kvpool.go	"KV growth: %v"
 context	engine/device/gpu/kvpool.go	"tier: a KV layer could not grow to %d pages (it keeps its %d): %w"
 context	engine/device/gpu/kvpool.go	"tier: a KV layer freed for compaction could not be made again: %w"
 fault	engine/device/gpu/kvpool.go	"tier: carrying a KV layer across a resize failed: %s"
-limit	engine/device/gpu/kvpool.go	"tier: no room for another page of attention history"	a device's memory: a layer's attention pool past the card's budget, the backend's buffer limit or the index width, after eviction and streaming (docs/design/device-kv-paging.md)
+limit	engine/device/gpu/kvpool.go	"tier: no room for another page of attention history"	a device's memory: a layer's attention pool past the card's budget, the backend's buffer limit or the index width, after eviction and streaming (.notes/design/device-kv-paging.md)
 context	engine/device/gpu/kvshare.go	"%w: no page to copy a shared page into"
 bug	engine/device/gpu/kvshare.go	"MapKV: block %d: %v"
 limit	engine/device/gpu/layer.go	"block %d needs %d bytes and its pool %s has %d of %d used by its devices"	a card's memory under two backends: one pool both devices spend, sized at the larger of their caps (planSlots), and what the other device holds stays its own

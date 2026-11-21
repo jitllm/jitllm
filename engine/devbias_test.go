@@ -48,7 +48,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 		// gemma3 is fed its own BOS and a sentence, not id 1: id 1 is gemma's
 		// <eos>, and at position 0 it is so ill-conditioned that two host runs
 		// differing only in KV cache width disagree at NMSE ~1.7e-1 (see
-		// docs/engineering-history/model-correctness.md). The prompt also runs
+		// .notes/engineering-history/model-correctness.md). The prompt also runs
 		// the placed block at positions where the rotary base is not the
 		// identity.
 		{"gemma3-postnorm-splitrope", testmodels.Path("gemma-3-4b-it-Q4_K_M.gguf"), true, gemma3Prompt},

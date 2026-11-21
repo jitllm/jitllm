@@ -51,7 +51,7 @@ func obtainableExempt() map[string]string {
 			"Dots1ForCausalLM, and 18 of 20 teacher-forced by TestGreedyMatchesLlamaCpp (V100 box)",
 		"olmo": "the first OLMo, superseded by OLMo 2, which is listed; the GGUF converter states " +
 			"add_eos_token from tokenizer.json's template where OlmoForCausalLM's tokenizer appends " +
-			"nothing, so its GGUF ends every prompt with <|endoftext|> (docs/divergences.md); built " +
+			"nothing, so its GGUF ends every prompt with <|endoftext|> (.notes/divergences.md); built " +
 			"and gated on a synthetic fixture from transformers' own OlmoForCausalLM and on " +
 			"OLMo-1B-hf from safetensors",
 	}

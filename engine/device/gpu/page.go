@@ -11,7 +11,7 @@ import (
 
 // Block paging: a device holds N block slots and swaps, instead of declining a
 // block and losing it for the rest of the run, so a card smaller than the model
-// still runs every block. See docs/design/block-paging.md.
+// still runs every block. See .notes/design/block-paging.md.
 //
 // A block's weights have a backing store (the packed arena, or the container),
 // so they can leave the card and come back byte-identical. Its KV cache is this

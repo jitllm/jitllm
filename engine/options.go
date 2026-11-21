@@ -208,7 +208,7 @@ func WithBlockFusion(on bool) Option { return func(l *loadOpts) { l.opt.noFuse =
 // their fused runs to the decoder. On by default where the host has E-cores a
 // thread can be kept on (macOS on Apple Silicon): measured, the decoder beside
 // a prefill goes from 11 to 52 tok/s and the prefill beside it loses a quarter
-// of its rate (docs/engineering-history/scheduling-and-measurement.md). A
+// of its rate (.notes/engineering-history/scheduling-and-measurement.md). A
 // session with no other decoding is not affected, and nothing changes off
 // macOS. Off, a prefill beside a decoder shares the P-cores' crew as before.
 func WithServingSplit(on bool) Option { return func(l *loadOpts) { l.opt.noServingSplit = !on } }

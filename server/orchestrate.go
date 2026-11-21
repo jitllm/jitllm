@@ -11,7 +11,7 @@ import (
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// The orchestrator (docs/design/orchestrator.md): the server moving blocks
+// The orchestrator (.notes/design/orchestrator.md): the server moving blocks
 // itself. When a session starts a generate, its host blocks are offered to
 // its model's devices (promote); when a card declines for lack of room, the
 // least deserving idle sessions on the cards -- other models' first, lowest

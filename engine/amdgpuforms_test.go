@@ -35,7 +35,7 @@ func TestComposedFormsLowerForAMDGPU(t *testing.T) {
 	c, err := hip.LoadComgr(hip.Config{Path: os.Getenv("JITLLM_ROCM")})
 	if err != nil {
 		t.Skipf("NO COMGR: %v -- the AMDGPU code object gate did not run; set JITLLM_ROCM to a "+
-			"directory holding libamd_comgr.so.3 (docs/design/amd-hip.md)", err)
+			"directory holding libamd_comgr.so.3 (.notes/design/amd-hip.md)", err)
 	}
 	targets := make([]amdgpu.Target, len(amdTargets()))
 	for i, a := range amdTargets() {

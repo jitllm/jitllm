@@ -69,3 +69,4 @@ local-*
 # object the linker picks up, and the macOS bundles.
 /ui/*.syso
 /ui/dist-app/
+/.notes/

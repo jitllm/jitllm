@@ -217,7 +217,7 @@ type Config struct {
 	// cannot be packed without restructuring the rotation.
 	KVF16 bool
 	// Attention history is paged (tier/pagedattn.go,
-	// docs/design/device-kv-paging.md): a sequence grows by appending pages,
+	// .notes/design/device-kv-paging.md): a sequence grows by appending pages,
 	// and a page that does not fit is paged out or refused. KVPage is the
 	// positions a page holds, a power of two and a multiple of 64; 0 lets the
 	// pool pick from the context (devTier.kvPage).
@@ -1670,7 +1670,7 @@ type devShared struct {
 	// busy is the device's call lock: a session's step takes it shared, so
 	// steps of several sessions run at once, and a call that changes what
 	// every step reads (placement, a release, a migration) takes it
-	// exclusively (gpuSession.enter). See docs/design/device-sessions.md.
+	// exclusively (gpuSession.enter). See .notes/design/device-sessions.md.
 	busy sync.RWMutex
 	// roomGen moves every time this device may have gained room: a refund, or
 	// a budget raised. A caller that gave blocks up reads it to know when

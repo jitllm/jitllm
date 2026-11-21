@@ -21,7 +21,7 @@ import (
 // what decides on a family by its name: an identifier spelled as an
 // architecture constant was (archConstant), and a string literal naming a
 // class, a GGUF architecture or a projector the converter lists. The converter is becoming model.json files
-// composed of generic primitives (docs/design/model-json.md), so a count may
+// composed of generic primitives (.notes/design/model-json.md), so a count may
 // only fall: testdata/convertfamily.txt holds each function's count, and a
 // function above its line, or one with a count and no line, fails. A fall is
 // logged, and the file is lowered when the work lands.

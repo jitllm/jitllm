@@ -19,7 +19,7 @@ import (
 // comparison twice. Each arm is its own tier on the same card, with its own
 // Instance, so the two never share a pool or a scratch. It is what measured the
 // paged history against the contiguous cache it replaced
-// (docs/engineering-history/gpu-kernels.md, "The decode plan through the tier").
+// (.notes/engineering-history/gpu-kernels.md, "The decode plan through the tier").
 //
 //	JITLLM_PAGED_AB=1 JITLLM_MODEL=Llama-3.2-1B-Instruct-Q4_K_M.gguf \
 //	  [JITLLM_DEV=gpu] [JITLLM_AB_DEPTH=512] [JITLLM_AB_ROUNDS=20] [JITLLM_WALL=GB/s]

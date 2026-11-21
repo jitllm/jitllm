@@ -8,7 +8,7 @@ import (
 // A session is one sequence; a tier is one model. The per-sequence state (the
 // KV cache, the recurrent state) belongs to the session, so several model.instances
 // can share one tier's weights without writing each other's history. See
-// docs/design/device-sessions.md.
+// .notes/design/device-sessions.md.
 //
 // nn.LayerDevice does not grow a session argument: model.State obtains its
 // device through a type assertion, so Attach hands back a view that satisfies

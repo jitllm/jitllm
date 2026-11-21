@@ -32,7 +32,7 @@ func touch(b []byte, stopped func() bool, sink *atomic.Uint64) {
 // The parallelism is the point: an NVMe needs queue depth, a page fault is a
 // queue of one, and madvise(WILLNEED) does not build enough. Eight goroutines
 // fault a cold file at about twice the rate of one (see
-// docs/design/block-paging.md).
+// .notes/design/block-paging.md).
 //
 // The stop function is not optional: touching a mapping after munmap is a
 // use-after-free, and a Close during a warm would segfault.

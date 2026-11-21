@@ -22,7 +22,7 @@ const GCHeadroom = 1 << 30
 // live set sitting on the goal: the collector runs back to back and frees
 // nothing. The cliff is sharp (a few hundred MiB separate 6 cycles from 648),
 // so this is a reserve, not a tuning curve. The measurements are in
-// docs/engineering-history/scheduling-and-measurement.md (AGENTS.md RULE 2f).
+// .notes/engineering-history/scheduling-and-measurement.md (AGENTS.md RULE 2f).
 type GCPlan struct {
 	OnHeap  bool
 	Reserve uint64

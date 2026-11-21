@@ -10,7 +10,7 @@ import "github.com/jitllm/jitllm/format/jlm"
 // next token's well enough to be worth tracking.
 //
 // Eviction itself is jlm's (every expert is its own container page since v26);
-// this manager only tracks. See docs/engineering-history/placement.md.
+// this manager only tracks. See .notes/engineering-history/placement.md.
 type Residency struct {
 	// budget is the bytes of expert weights that may stay resident. Zero
 	// means track but never evict.

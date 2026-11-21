@@ -118,7 +118,7 @@ const (
 	// width at pipeline creation. VkPhysicalDeviceSubgroupProperties.subgroupSize
 	// is only the default width, not a promise: an Intel integrated GPU reports 32 and runs
 	// some shaders at 16, and an out-of-subgroup shuffle is undefined rather
-	// than reliably wrong. See docs/engineering-history/gpu-kernels.md.
+	// than reliably wrong. See .notes/engineering-history/gpu-kernels.md.
 	OpShuffleXor
 	// OpShared declares a workgroup-local array and yields a buffer value that
 	// Load and Store take exactly as they take a Param. Imm is the element

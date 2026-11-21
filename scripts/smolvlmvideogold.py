@@ -22,7 +22,7 @@ first and last second and truncates its linspace.
 The frames are resized as the engine resizes them -- torchvision's Lanczos
 straight to the square, the one pass of the picture op at torchvision's
 precision -- rather than as the video processor does (torchvision's Lanczos
-to the longer side, then to the square: docs/divergences.md); the golden
+to the longer side, then to the square: .notes/divergences.md); the golden
 holds everything else to the reference, and records that divergence's own
 size. It carries:
 

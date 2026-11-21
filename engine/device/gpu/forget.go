@@ -12,7 +12,7 @@ import (
 // read from this card's own frames, which hand one address to block after
 // block: a frame refilled, or memory given back and mapped again. The frames
 // say so (framesOf's OnRecycle), and every copy keyed inside the range goes;
-// see docs/engineering-history/placement.md 15v.
+// see .notes/engineering-history/placement.md 15v.
 
 // forget applies [lo, hi) now when the device is free and queues it when not.
 // It never waits for a device that is busy: a device whose lock is held -- by

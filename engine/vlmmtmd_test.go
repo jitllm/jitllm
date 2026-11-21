@@ -36,7 +36,7 @@ type mtmdOracle struct {
 // agree up to a near tie (tieMargin) and most of the rest must agree.
 //
 // InternVL's class token goes first here, as the reference puts it, and last in
-// the GGUF oracle (docs/divergences.md), which moves every patch's position:
+// the GGUF oracle (.notes/divergences.md), which moves every patch's position:
 // held to the reference, InternVL agrees with the GGUF oracle at 27 of 32
 // positions where the GGUF oracle's layout agreed at 31, and parts from it at
 // the fifth (a "vintage" before "newspaper"), so it is held to its lower share

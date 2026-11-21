@@ -594,7 +594,7 @@ const hybridDeviceBound = 5e-3
 // amplification grows steeply with the depth below the seam. The control is the
 // same geometry at two layers with the seam one block from the bottom. A fault
 // in the block moves both arms; amplification moves only the deep one. See
-// docs/engineering-history/placement.md 15i.
+// .notes/engineering-history/placement.md 15i.
 func hybridDeviceBlockOn(t *testing.T, o hyOpt, spec string, how hyDev) {
 	t.Helper()
 	v := hybridDeviceVerdict(t, o, spec, how)

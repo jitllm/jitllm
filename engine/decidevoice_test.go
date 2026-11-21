@@ -71,7 +71,7 @@ func TestD1OmniDecidesOverItsVoice(t *testing.T) {
 	}
 	worst := checkDecisions(t, qs, ans, readDecisionGold(t, "d1-omni.voice.reference.json"), 0.03)
 	// The GGUF oracle writes TypeSafe's confidence where d1-omni's code writes
-	// the largest probability (docs/divergences.md): its probabilities, nouls
+	// the largest probability (.notes/divergences.md): its probabilities, nouls
 	// and scores are held, its confidences replaced by the reference's.
 	ref, lc := readDecisionGold(t, "d1-omni.voice.reference.json"), readDecisionGold(t, "d1-omni-600M-F16.voice.llamacpp.json")
 	for id, a := range lc.Answers {

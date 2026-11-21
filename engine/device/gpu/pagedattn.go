@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// Paged attention history on the device (docs/design/device-kv-paging.md).
+// Paged attention history on the device (.notes/design/device-kv-paging.md).
 //
 // A device holds one kvPool: per attention layer its own pages (K and V
 // buffers, ids, free list) and a persistent table arena, a sequence's run at

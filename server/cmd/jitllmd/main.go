@@ -175,7 +175,7 @@ func serve(args []string) {
 	maxSeq := fs.Int("max-seq", 0, "default KV capacity per session, in positions (default: the model's context length)")
 	orchestrate := fs.Bool("orchestrate", true,
 		"move blocks between the host and the devices on the server's own initiative: a session that "+
-			"generates is promoted onto a card, idle ones demoted to make room (docs/design/orchestrator.md)")
+			"generates is promoted onto a card, idle ones demoted to make room (.notes/design/orchestrator.md)")
 	maxBatch := fs.Int("max-batch", 0,
 		"generates of one model that decode as rows of one step. 0 is the engine's "+
 			"bound (the widest step across sessions); 1 turns batching off")

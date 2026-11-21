@@ -48,7 +48,7 @@ func TestJointDecisionMatchesTheReference(t *testing.T) {
 		// CPU (a near tie), 0.040 and 0.058, 0.014 and 0.011 on a card; the
 		// GGUF oracle's answers sit 0.017 and 0.038 from the reference's. Not
 		// the GGUF oracle's answers: its confidence is not the chosen option's
-		// probability (docs/divergences.md).
+		// probability (.notes/divergences.md).
 		{"clef/Clef-Flash-Q8_0.gguf", "clef", "clef", 0.06, 0.2},
 	}
 	for _, c := range cases {

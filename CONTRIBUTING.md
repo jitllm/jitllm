@@ -86,7 +86,7 @@ golden from that class, a gate that fails when each of its graph features is
 removed, every tier (the host on amd64 and arm64, CUDA, Vulkan and Metal with
 every block placed), the five principles' gates with the model added to each
 list, and a real checkpoint against llama.cpp wherever one fits.
-[docs/design/model-coverage.md](docs/design/model-coverage.md) is the survey an
+[.notes/design/model-coverage.md](.notes/design/model-coverage.md) is the survey an
 addition is chosen from.
 
 ## Reporting results

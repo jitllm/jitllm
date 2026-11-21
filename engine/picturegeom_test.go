@@ -18,7 +18,7 @@ import (
 
 // TestPictureGeometryHoldsItsSweep holds every census tower's squares, as
 // its stated geometry gives them (jlm.PictureGeometry,
-// docs/design/picture-statement.md), over pictures from one pixel to past
+// .notes/design/picture-statement.md), over pictures from one pixel to past
 // the largest a tower reads -- every aspect past each threshold the
 // processors branch on -- to the sums the towers' own fits gave over the
 // same sweep (testdata/picturegeom.sums). The fits were held to the

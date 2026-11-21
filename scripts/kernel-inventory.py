@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate docs/kernel-inventory.csv from the source tree.
+"""Regenerate .notes/kernel-inventory.csv from the source tree.
 
-    scripts/kernel-inventory.py > docs/kernel-inventory.csv
+    scripts/kernel-inventory.py > .notes/kernel-inventory.csv
     scripts/kernel-inventory.py --summary          # the counts the .md quotes
     scripts/kernel-inventory.py --skip composer/kernels/x.go ...   # leave a file out
     scripts/kernel-inventory.py --root DIR         # read another checkout, e.g.

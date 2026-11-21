@@ -31,7 +31,7 @@ import (
 //
 // Nothing in it is the model's own syntax, so the reply is read from its text
 // by one scanner (readGeneric) and forced by one schema (genericGrammar).
-// docs/divergences.md records where the form departs from the convention it
+// .notes/divergences.md records where the form departs from the convention it
 // follows.
 
 const genericSystem = "Respond in JSON format, either with `tool_call` (a request to call tools) or with `response` reply to the user's request"

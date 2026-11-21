@@ -132,7 +132,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	// The assertion is the live heap and the device ledger, not RSS: RSS after a
 	// scavenge is the Go scavenger's opinion about returning pages and varies
 	// run to run by as much as the signal (see
-	// docs/engineering-history/scheduling-and-measurement.md). RSS stays in the
+	// .notes/engineering-history/scheduling-and-measurement.md). RSS stays in the
 	// log, where a divergence from the heap is worth seeing.
 	cycle() // warm: contexts, code mappings, tokenizer tables
 	runtime.GC()

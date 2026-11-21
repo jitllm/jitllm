@@ -32,7 +32,7 @@ import (
 // kernels see comes from a quantizer that scales by 127/amax, and every other
 // format masks its quants to a small unsigned range before the dot.
 // TestPackNeverEmitsInt8Min holds the packers to it. The measurements behind
-// both choices are in docs/engineering-history/gpu-kernels.md.
+// both choices are in .notes/engineering-history/gpu-kernels.md.
 const preamble = `#include <metal_stdlib>
 using namespace metal;
 
@@ -334,7 +334,7 @@ func (l *lowerer) block(lo, hi int) error {
 			l.line("jitllm_grid_barrier((device atomic_uint*)%s, jitllm_tid, jitllm_ngroups);", l.n(o.Args[0]))
 		case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
 			// Metal states no forward progress between threadgroups
-			// (docs/design/dep-block.md).
+			// (.notes/design/dep-block.md).
 			return fmt.Errorf("msl: op %d: %s: dependency counters are not lowered for Metal", i, o.Kind)
 		default:
 			if err := l.arith(i, o); err != nil {

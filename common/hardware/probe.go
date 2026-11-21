@@ -287,7 +287,7 @@ func ValidatePlacement(placement, spec string) error {
 //
 // It also warns about the collector: page frames are permanently live, so a
 // budget above gcCap (sched.GCBudgetCap) leaves the Go collector running back
-// to back. See docs/engineering-history/scheduling-and-measurement.md.
+// to back. See .notes/engineering-history/scheduling-and-measurement.md.
 func ValidateBudget(text string, fallback, gcCap uint64) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "default: " + session.Bytes(fallback), nil

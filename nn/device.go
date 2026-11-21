@@ -1134,7 +1134,7 @@ type RecShareDevice interface {
 }
 
 // SeqKVDevice is a LayerDevice that keeps attention history per sequence --
-// the device pages it (docs/design/device-kv-paging.md) -- rather than one
+// the device pages it (.notes/design/device-kv-paging.md) -- rather than one
 // cache laid out in RowsDevice's slots. A batch's rows then migrate one at a
 // time, each by the base of its slots (row r's is r*maxSeq), and a batch needs
 // no whole-context reservation: each row takes pages as it writes.

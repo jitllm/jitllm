@@ -383,7 +383,7 @@ func bandFloor(layers int) float64 { return 6 * 4 * float64(layers) / 3 / (1 << 
 // container's Q8_0 runs (serve q8, the class from the GGUF by
 // scripts/llama4hf.py). The oracle quantizes BitNet b1.58's activations per
 // 256-element block, where the release's class quantizes each token's row
-// whole (docs/divergences.md): its two arms sat 5.72e-05 from the float
+// whole (.notes/divergences.md): its two arms sat 5.72e-05 from the float
 // reference at their worst, and the composed arms a median 11.8 times that;
 // the class itself sits 0.0376 away at its worst, and the composed arms a
 // median 0.854 of its distance. Its GGUF states no pre-tokenizer, so the

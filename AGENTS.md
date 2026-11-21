@@ -1,8 +1,11 @@
 # jitllm — project rules
 
-**This file is the only place a binding requirement lives.** Everything under
-`docs/` is EVIDENCE: what was measured, what was tried, what was wrong. If a
-sentence there reads like an instruction, this file governs.
+**This file is the only place a binding requirement lives.** The repository
+keeps the principles and rules (this file) and the user-facing docs (`docs/`).
+The engineering notes -- what was measured, what was tried, what was wrong, the
+designs and the open items -- are EVIDENCE, kept out of the repository in
+`.notes/` (git-ignored). If a sentence there reads like an instruction, this
+file governs.
 
 That separation exists because a review of the single 415 KB file this
 was split out of named its real failure exactly: *"historical
@@ -20,19 +23,19 @@ matching evidence file and leave a pointer.
 
 | working on | read first |
 |---|---|
-| the scoreboard, any ratio against llama.cpp | `docs/perf/current.md` |
-| amd64/arm64 kernels, packing, attention on the host | `docs/engineering-history/cpu-kernels.md` |
-| PTX/SPIR-V/MSL, the IR, device prefill, tensor cores, Metal decode | `docs/engineering-history/gpu-kernels.md` |
-| a new architecture, tokenizer, MoE, the vision tower, the chat template | `docs/engineering-history/model-correctness.md` |
-| the pool, dispatch, the JIT's structure, benchmark harnesses, the measurement method | `docs/engineering-history/scheduling-and-measurement.md` |
-| CPU/GPU seam, VRAM budgets, what goes on the card, paging, the prefix cache | `docs/engineering-history/placement.md` |
-| what is open, and the levers shelved for being small | `docs/open-questions.md` |
-| the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey; instances and sessions | `docs/design/` |
+| the scoreboard, any ratio against llama.cpp | `.notes/perf/current.md` |
+| amd64/arm64 kernels, packing, attention on the host | `.notes/engineering-history/cpu-kernels.md` |
+| PTX/SPIR-V/MSL, the IR, device prefill, tensor cores, Metal decode | `.notes/engineering-history/gpu-kernels.md` |
+| a new architecture, tokenizer, MoE, the vision tower, the chat template | `.notes/engineering-history/model-correctness.md` |
+| the pool, dispatch, the JIT's structure, benchmark harnesses, the measurement method | `.notes/engineering-history/scheduling-and-measurement.md` |
+| CPU/GPU seam, VRAM budgets, what goes on the card, paging, the prefix cache | `.notes/engineering-history/placement.md` |
+| what is open, and the levers shelved for being small | `.notes/open-questions.md` |
+| the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey; instances and sessions | `.notes/design/` |
 | which models a test reads, and every model-selecting test variable | `docs/testing.md` |
 | every architecture, class and projector that converts, and the models each covers | `docs/models.md` (generated from the converter's lists) |
 | what this build converts, runs and serves, by machine; `jitllm doctor` | `docs/capabilities.md` (`docs/capabilities.json` is generated) |
 | which checks a change needs, and running them | `docs/checks.md` (`go run ./scripts/checks <paths or range>`) |
-| an architecture's or projector's gates and evidence; a recorded llama.cpp divergence | `docs/architectures.md`; `docs/divergences.md` |
+| an architecture's or projector's gates and evidence; a recorded llama.cpp divergence | `.notes/architectures.md`; `.notes/divergences.md` |
 
 Those files carry the reasoning and the failed attempts. Skipping them is how an
 idea gets proposed for the fourth time; several have a section that exists
@@ -104,10 +107,10 @@ correctness gates -- a gate that never runs a model does not cover it
   a row where one arm holds 14 GiB of weights and the other 26 is not an engine
   comparison.
 - **This file carries no scoreboard.** The current board is
-  `docs/perf/current.md`.
+  `.notes/perf/current.md`.
 
-Evidence: `docs/perf/current.md` ("Boards that stood in AGENTS.md RULE 1");
-`docs/engineering-history/scheduling-and-measurement.md` ("The 0.90 and 0.70
+Evidence: `.notes/perf/current.md` ("Boards that stood in AGENTS.md RULE 1");
+`.notes/engineering-history/scheduling-and-measurement.md` ("The 0.90 and 0.70
 readings, and the harness that produced them").
 
 ## RULE 2: a perf claim is paired, interleaved, and gated.
@@ -160,7 +163,7 @@ per-round ratios** with its IQR; **reject if IQR/median > 0.10**.
   gate, A/A control or second pass can see that. The harness takes llama.cpp's
   thread count from `$CORES`.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 2 as
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 2 as
 it stood in AGENTS.md", "The 0.90 and 0.70 readings").
 
 ## RULE 2f: the Go collector is part of the engine's budget.
@@ -187,7 +190,7 @@ budget 6 GC cycles, 8.99 GiB 648).
 - A gate that measures RSS is measuring the allocator. A leak gate reads the live
   heap and the tier's device ledger.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("THE GO
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("THE GO
 COLLECTOR WAS 42% OF THE ENGINE'S CPU", "RULE 2f as it stood in AGENTS.md").
 
 ## RULE 3: on the developer's machine, every heavy job runs under `scripts/cap`. Agents included.
@@ -231,7 +234,7 @@ uncapped is a trap.
    started before a context compaction keeps running afterwards and neither end
    knows.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 3 as
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 3 as
 it stood in AGENTS.md", "The cap is the developer machine's, not a
 measurement's").
 
@@ -267,7 +270,7 @@ coreset A/B: pe 0.864x, smt 0.965x, all 0.807x against p).
   evaporated or reversed at the real thread count eight times here — the single
   most repeated mistake in the evidence files.
 
-Evidence: `docs/engineering-history/cpu-kernels.md` ("RULE 5 as it stood in
+Evidence: `.notes/engineering-history/cpu-kernels.md` ("RULE 5 as it stood in
 AGENTS.md", "On the M4, prefill wants the E-cores and decode does not",
 "Prefill and the E-cores on the container path").
 
@@ -341,7 +344,7 @@ a name without one) and reruns `go run ./scripts/genmodels docs/models.md`;
 
 **Scope is jitllm's only defence.** llama.cpp has 176 `LLM_ARCH_` cases and 50
 graph builders; Ollama had a funded team, covered ~21 architectures, and deleted
-430,004 lines citing exactly this. `docs/design/model-coverage.md` is the survey
+430,004 lines citing exactly this. `.notes/design/model-coverage.md` is the survey
 an addition is chosen from and priced against.
 
 ### The bar a new entry meets before it counts
@@ -418,10 +421,10 @@ Further rules for every entry:
 
 ### The architectures and projectors
 
-The list is `docs/architectures.md`: every architecture and projector, what is
+The list is `.notes/architectures.md`: every architecture and projector, what is
 special about its graph, its gates and its evidence. A new architecture or
 projector adds one row there and its narrative in
-`docs/engineering-history/model-correctness.md` (MC in the evidence lines
+`.notes/engineering-history/model-correctness.md` (MC in the evidence lines
 below; GK is `gpu-kernels.md`, PL `placement.md`).
 
 ### The chat template
@@ -474,7 +477,7 @@ holds only names with no `tokenizer.json` to parse at all, each with the
 artefact that replaces it. The scope is conformance to an identified artefact,
 not provenance.
 
-The recorded divergences are `docs/divergences.md`, each with its measurement
+The recorded divergences are `.notes/divergences.md`, each with its measurement
 in the evidence file. A new divergence adds one row there.
 
 ## RULE 8: every op a token runs is generated code. There is no interpreted tier.
@@ -523,7 +526,7 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
 
 The history -- the arm64 24.5x that returned TRUE, the counters that could not
 see an op that never asked, the audits -- is in
-`docs/engineering-history/cpu-kernels.md`, "The reference tier, before it was
+`.notes/engineering-history/cpu-kernels.md`, "The reference tier, before it was
 removed".
 
 ## RULE 8b: f32 is the engine's precision. The oracle is f32 too.
@@ -542,7 +545,7 @@ exists. It is not a perf win and must not be quoted as one (decode is bound by
 weight traffic, and the conversions were not weights). The gate is
 `TestGreedyMatchesLlamaCpp` plus the teacher-forced diff on the clean models.
 
-Evidence: `docs/engineering-history/cpu-kernels.md` ("f32 is the engine's
+Evidence: `.notes/engineering-history/cpu-kernels.md` ("f32 is the engine's
 precision").
 
 ## RULE 8a: a BLOCK is the unit, and it must stay orchestrable.
@@ -626,7 +629,7 @@ constraint and leaves the next session to find it again.
 - **A gate that has been red since a refactor is that refactor's unfinished
   half**, and the commonest shape is a test that worked by accident.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 11b's
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 11b's
 cases").
 
 ## RULE 11d: a gate that never runs on an architecture does not cover it.
@@ -668,7 +671,7 @@ The SSE tier binds the same way on amd64:
   likewise), a `cpuArm` at `cpu.AtTier(cpu.TierSSE)` for a composer gate.
   Nothing forces a tier process-wide.
 
-Evidence: `docs/engineering-history/cpu-kernels.md` ("RULE 11d's cases", "THE
+Evidence: `.notes/engineering-history/cpu-kernels.md` ("RULE 11d's cases", "THE
 SSE TIER").
 
 ## RULE 11c: the kernels are gated. The tier's wiring of them is not.
@@ -693,8 +696,8 @@ that dies at conversion.
 - **A gate that pins a knob does not cover that knob's default.** Run the
   shipping default (the f16 KV cache on amd64) on a partial seam too.
 
-Evidence: `docs/engineering-history/gpu-kernels.md` ("RULE 11c's cases");
-`docs/engineering-history/placement.md` 15i.
+Evidence: `.notes/engineering-history/gpu-kernels.md` ("RULE 11c's cases");
+`.notes/engineering-history/placement.md` 15i.
 
 ## RULE 11e: do not invent constraints. Name a limit's source before obeying it.
 
@@ -713,7 +716,7 @@ best rate.
 - **A real limit is where the search starts, not where it ends**: batch,
   stage, queue or reorder around it before accepting its cost.
 
-Evidence: `docs/engineering-history/gpu-kernels.md` ("RULE 11e's cases").
+Evidence: `.notes/engineering-history/gpu-kernels.md` ("RULE 11e's cases").
 
 ## RULE 11f: before building anything, find what already does it.
 
@@ -725,7 +728,7 @@ with RULE 6's checklist. A PR reports all three, each under its own heading:
 evidence**. A PR that cannot name what it searched for first skipped the first
 step.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 11f's
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 11f's
 cases: a cache that existed, a store that existed").
 
 ## RULE 12: a comment explaining why something is NOT done is a claim about the code, and it rots.
@@ -739,7 +742,7 @@ it was retired, and one claiming the vision tower has no block pages. The same
 holds for a number cited as measured: check that the measurement it came from
 still stands.
 
-Evidence: `docs/engineering-history/placement.md` ("RULE 12's tower case").
+Evidence: `.notes/engineering-history/placement.md` ("RULE 12's tower case").
 
 ## RULE 13: device kernels — three invariants that do not bend.
 
@@ -792,7 +795,7 @@ Stated by the user, and the shape every entry point takes:
    parking a session moves its history alone and leaves the instance where it
    is (`Instance.Park`, `Instance.Settle`).
 
-Evidence: `docs/design/instances-and-sessions.md`.
+Evidence: `.notes/design/instances-and-sessions.md`.
 
 ## Scope
 
@@ -820,7 +823,7 @@ does for processes and threads, jitllm does for models and blocks:
 driven rather than self-running). Block placement puts BLOCKS onto compute
 resources with memory paged; it is the core. You cannot schedule what you cannot
 relocate, which is why block paging is primed whether or not the model fits
-(`docs/design/block-paging.md`).
+(`.notes/design/block-paging.md`).
 
 **Standing goal, not current work: a kernel composer.** Stated by the user:
 the JIT should eventually *compose* kernels, choosing and fusing from the
@@ -902,8 +905,8 @@ streamed back, and a session's state takes a streamed block's page.
   Tests find them through `JITLLM_MODELS` (default: the repo's `models/`);
   `docs/testing.md` has every model-selecting test variable.
 
-Evidence: `docs/engineering-history/placement.md` ("Scope as it stood in
-AGENTS.md", 15u); `docs/design/device-sessions.md`.
+Evidence: `.notes/engineering-history/placement.md` ("Scope as it stood in
+AGENTS.md", 15u); `.notes/design/device-sessions.md`.
 
 ## There is one model. Vision is not a second one.
 
@@ -930,7 +933,7 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
 - **The tower is a segment of the model, run by the one runner**: its blocks are
   `Model.layers[NBlocks:]`, run through the text runner's block body on the text
   State's JIT and pool. Two pools on six P-cores is the worst configuration this
-  engine has. `docs/design/vision-as-blocks.md` is the design.
+  engine has. `.notes/design/vision-as-blocks.md` is the design.
 - **A picture is a span of the prompt, not a stage before it**: the prefill
   encodes it through the tower's instance wherever its rows are not restored
   (`encodePictures`). It is named by a `RowsKey` (sha256 over what the tower
@@ -983,7 +986,7 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
 - **Its preprocessing is the reference processor's, to the bit**, stated as
   steps (`jlm.PreStep`), held to transformers' pixel values on real pictures
   (PNG -- a JPEG's decoders disagree first), or a divergence recorded in
-  `docs/divergences.md`. Every pixel and patch passes through generated code
+  `.notes/divergences.md`. Every pixel and patch passes through generated code
   (`graph.OpPicture`, `graph.OpPatchify`): the decoded rows, the resize, the
   normalisation, the patch gather and the position tables built per grid;
   what is Go is geometry from the sizes and the tower's constant tables
@@ -997,7 +1000,7 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   (`Span.Bidir`, `nn.KeyRunDevice`, `engine/bidir.go`): a prefill chunk
   never cuts one, and a device that cannot honour it does not run the chunk.
 
-Evidence: `docs/engineering-history/model-correctness.md` ("Vision as blocks:
+Evidence: `.notes/engineering-history/model-correctness.md` ("Vision as blocks:
 the tower on the one runner" and each family's section).
 
 ## No mmap of files. Anonymous memory is decided by measurement.
@@ -1020,11 +1023,11 @@ pages keep the MRU rule the cyclic scan makes optimal. Count reads by syscalls,
 not by `/proc/<pid>/io` `read_bytes`, which misses whatever the buffered handle
 serves from cache.
 
-Evidence: `docs/engineering-history/placement.md` ("No mmap of files: the
+Evidence: `.notes/engineering-history/placement.md` ("No mmap of files: the
 measurements, and expert pages"); `format/jlm/read.go`.
 
 ## Open questions and shelved levers
 
-They live in `docs/open-questions.md`, a work list rather than rules. RULE 6
+They live in `.notes/open-questions.md`, a work list rather than rules. RULE 6
 governs every entry: a number decides ORDER, never admission. A closed entry
 moves to the matching evidence file.

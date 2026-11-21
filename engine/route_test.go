@@ -19,7 +19,7 @@ import (
 // TestRoutingLocality prices speculative expert prefetch from a routing trace:
 // the previous-token and last-W-tokens predictors, a static hot set, coverage
 // by resident-set size, and an LRU/Belady replay of per-expert pages. See
-// docs/engineering-history/placement.md for the conclusions.
+// .notes/engineering-history/placement.md for the conclusions.
 //
 //	JITLLM_ROUTE_MODEL=models/Qwen3-MOE-4x0.6B-Q4_K_M.gguf \
 //	  ./scripts/cap 8G -- go test ./engine/model -run TestRoutingLocality -v

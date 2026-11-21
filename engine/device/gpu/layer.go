@@ -94,7 +94,7 @@ type layer struct {
 
 	// The KV cache is per sequence, not per block: nn.LayerDevice.Layers carries a
 	// position and no state identity, so two model.instances sharing one pair would
-	// silently corrupt each other. See docs/design/device-sessions.md.
+	// silently corrupt each other. See .notes/design/device-sessions.md.
 	//
 	// kv is keyed by session id; the weights, norms and biases above are the
 	// model's and stay shared. [MaxSeq*KVDim] f32 per entry.

@@ -703,7 +703,7 @@
       "package": "backend/hip",
       "implemented": true,
       "verified": [],
-      "note": "built and gated offline (every kernel compiles for gfx90a, gfx942, gfx1030, gfx1100 and gfx1201 through comgr); not yet run on an AMD card -- the device gates (TestHIPDeviceRunsTheIR) skip without one. An AMD card without ROCm runs through vulkan. See docs/design/amd-hip.md"
+      "note": "built and gated offline (every kernel compiles for gfx90a, gfx942, gfx1030, gfx1100 and gfx1201 through comgr); not yet run on an AMD card -- the device gates (TestHIPDeviceRunsTheIR) skip without one. An AMD card without ROCm runs through vulkan. See .notes/design/amd-hip.md"
     }
   ],
   "api": {

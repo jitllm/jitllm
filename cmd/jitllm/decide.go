@@ -14,7 +14,7 @@ import (
 
 // decideCmd is `jitllm decide <model.jlm> <request.json|->`: a decision
 // model's answers to a TypeSafe /v1/systemone request body, printed as the
-// response body the server returns for it (docs/design/decision-models.md).
+// response body the server returns for it (.notes/design/decision-models.md).
 // With -lines, every line of stdin is one request and gets one response line.
 func decideCmd(args []string) error {
 	fs := flag.NewFlagSet("decide", flag.ExitOnError)

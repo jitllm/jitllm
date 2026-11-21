@@ -163,7 +163,7 @@ where the grammar does. A schema keyword the compiler does not build
 (`uniqueItems`, a number's bounds, `multipleOf`, a oneOf whose branches may
 overlap, ...) is a 400 naming it;
 the supported subset is in
-[model-correctness.md](engineering-history/model-correctness.md),
+[model-correctness.md](../.notes/engineering-history/model-correctness.md),
 "grammar". A constrained generate decodes alone and without
 speculation, and refuses `ignore_eos`.
 

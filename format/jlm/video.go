@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-// Video is how a tower reads a video (Tower.Video; docs/design/
+// Video is how a tower reads a video (Tower.Video; .notes/design/
 // video-statement.md): which frames it samples, how many frames one picture
 // of the tower reads, how they are sized, and what the prompt writes around
 // them -- every one stated, none a processor's kind.

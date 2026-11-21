@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestTheModelImportsNothingOfTheEngine holds docs/design/model-and-engine.md's
+// TestTheModelImportsNothingOfTheEngine holds .notes/design/model-and-engine.md's
 // boundary: the model (model/) is weights and the graphs it states, and the
 // engine runs it, so nothing the model builds on -- directly or through the
 // packages it imports -- is under engine/. The violation is a model file

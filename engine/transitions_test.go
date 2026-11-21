@@ -43,7 +43,7 @@ func sameRows(got, want [][]float32) int {
 }
 
 // TestTwoInstancesReadAPageOnce is instance paging's held-once transition
-// (docs/design/instance-paging.md step 6): two instances of one model on one
+// (.notes/design/instance-paging.md step 6): two instances of one model on one
 // CPU device decode at once -- their scans overlapping -- each as an instance
 // alone does, bit for bit, and between them read every page once: the
 // file's page-ins are one decode's. Two instances on two CPU devices read
@@ -158,7 +158,7 @@ func TestTwoInstancesReadATowersPagesOnce(t *testing.T) {
 }
 
 // TestAnInstanceOnTheCPUAndOneOnACardShareTheFrames is instance paging's
-// first transition (docs/design/instance-paging.md step 6): two instances
+// first transition (.notes/design/instance-paging.md step 6): two instances
 // of one model on one CPU device -- one running every block on the CPU under
 // a quota of half its pages, the other with half its blocks on a card --
 // decode at once, each as the same instance alone does, bit for bit, from
@@ -237,7 +237,7 @@ func TestAnInstanceOnTheCPUAndOneOnACardShareTheFrames(t *testing.T) {
 }
 
 // TestAQuotaShrinksUnderARunningDecode is the quota-shrinking transition
-// (docs/design/instance-paging.md step 6): two instances on one CPU device
+// (.notes/design/instance-paging.md step 6): two instances on one CPU device
 // decode at once while their quotas fall to a page and rise back again and
 // again; each decodes as an instance alone does, bit for bit -- residency is
 // a memory decision, never an arithmetic one -- and once they are out the

@@ -14,7 +14,7 @@ import (
 )
 
 // A decision model answers typed questions about a state from one prompt's
-// next-token logits and generates nothing (docs/design/decision-models.md).
+// next-token logits and generates nothing (.notes/design/decision-models.md).
 // What its reference hardcodes -- the codes a question's options are shown
 // with, the token groups that score them, the order they are shown in -- is
 // the container's (jlm.DecisionLabels); the prompt is the container's

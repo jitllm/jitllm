@@ -39,7 +39,7 @@ import (
 //     at most maxIndent spaces and tabs of indentation: RFC 8259's ws, held to
 //     the shapes a JSON writer formats with. It bounds formatting, never a
 //     value. Unbounded, a sampled reply does not end; the measurement is in
-//     docs/engineering-history/model-correctness.md, "grammar".
+//     .notes/engineering-history/model-correctness.md, "grammar".
 //   - An object's properties come in the schema's order, the keys none of
 //     them names after them: a grammar admitting every order of n keys, each
 //     once, needs a rule for each of their 2^n subsets.

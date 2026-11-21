@@ -32,7 +32,7 @@ Things to know before using or changing it:
 - [Capabilities](https://github.com/jitllm/jitllm/blob/main/docs/capabilities.json): the machine-readable manifest of this build, generated from the code; [how it is kept true, and `jitllm doctor`](https://github.com/jitllm/jitllm/blob/main/docs/capabilities.md)
 - [Which checks a change needs](https://github.com/jitllm/jitllm/blob/main/docs/checks.md): `go run ./scripts/checks <paths or git range>` maps changed paths to the gates, and with `-run` reports pass, fail, and skips for a missing model or device distinctly
 - [Testing](https://github.com/jitllm/jitllm/blob/main/docs/testing.md): how tests find models (`JITLLM_MODELS`), and `internal/testmodels/fetch.sh`
-- [Performance scoreboard](https://github.com/jitllm/jitllm/blob/main/docs/perf/current.md): ratios against llama.cpp by host, backend and model
+- [Performance scoreboard](https://github.com/jitllm/jitllm/blob/main/.notes/perf/current.md): ratios against llama.cpp by host, backend and model
 
 ## Code
 
@@ -50,8 +50,8 @@ Things to know before using or changing it:
 
 ## Optional
 
-- [Engineering history](https://github.com/jitllm/jitllm/tree/main/docs/engineering-history): what was measured and tried per subsystem, including approaches that did not pay and the numbers behind them
-- [Design notes](https://github.com/jitllm/jitllm/tree/main/docs/design): block paging, device sessions, model coverage and prior art
-- [Kernel capabilities](https://github.com/jitllm/jitllm/blob/main/docs/kernel-capabilities.md): which kernels exist on which tier and backend
+- [Engineering history](https://github.com/jitllm/jitllm/tree/main/.notes/engineering-history): what was measured and tried per subsystem, including approaches that did not pay and the numbers behind them
+- [Design notes](https://github.com/jitllm/jitllm/tree/main/.notes/design): block paging, device sessions, model coverage and prior art
+- [Kernel capabilities](https://github.com/jitllm/jitllm/blob/main/.notes/kernel-capabilities.md): which kernels exist on which tier and backend
 - [Agent evaluations](https://github.com/jitllm/jitllm/blob/main/dev/agenteval/README.md): tasks, checked by machine, that measure whether an agent can start, integrate, diagnose and fix jitllm
 - [Desktop app](https://github.com/jitllm/jitllm/tree/main/ui): an in-process GUI for downloads, conversion and chat

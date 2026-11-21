@@ -7,7 +7,7 @@ import (
 )
 
 // Eviction: a pool that cannot grow sends pages to host memory rather than refusing
-// (docs/design/device-kv-paging.md, "Errors and eviction").
+// (.notes/design/device-kv-paging.md, "Errors and eviction").
 //
 // A sequence's pages leave each layer oldest first, each pool its own: a
 // layer's evicted prefix is its host copies (len(home[s])), and
