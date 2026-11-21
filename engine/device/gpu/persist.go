@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -346,7 +347,7 @@ func (g *devTier) persistPlanFor(h uint64, ps *persister, n int) *persistPlan {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, p := range c.plans[h] {
-		if equalSig(p.sig, ps.sig) {
+		if slices.Equal(p.sig, ps.sig) {
 			return p
 		}
 	}
@@ -359,132 +360,57 @@ func (g *devTier) persistPlanFor(h uint64, ps *persister, n int) *persistPlan {
 	return p
 }
 
-func equalSig(a, b []uint64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// persistJoins reports whether launch i can join a run of width w.
-func (ps *persister) joins(i, w int) error {
-	p := &ps.pend[i]
-	if p.src == nil {
-		return fmt.Errorf("no IR")
-	}
-	if err := ir.PersistJoins(p.src, w); err != nil {
-		return err
-	}
-	// A buffer bound to two parameters, one read and one written, is an
-	// in-place launch the composer's phases cannot see inside.
-	rs, ws := persistAccess(p.src)
-	for _, r := range rs {
-		for _, x := range ws {
-			if r != x && ps.bind[i][r] == ps.bind[i][x] {
-				return fmt.Errorf("%s binds one buffer as an input and an output", p.src.Name)
-			}
-		}
-	}
-	return nil
-}
-
-// persistAccess lists the parameters k reads and writes.
-func persistAccess(k *ir.Kernel) (reads, writes []int) {
-	isParam := func(v ir.Value) int {
-		if v == 0 || int(v) > len(k.Ops) || k.Ops[v-1].Kind != ir.OpParam {
-			return -1
-		}
-		return int(k.Ops[v-1].Imm)
-	}
-	for _, o := range k.Ops {
-		p := isParam(o.Args[0])
-		if p < 0 {
-			continue
-		}
-		switch o.Kind {
-		case ir.OpLoad, ir.OpLoadV, ir.OpTileLoad:
-			reads = append(reads, p)
-		case ir.OpStore, ir.OpStoreV, ir.OpTileStore:
-			writes = append(writes, p)
-		}
-	}
-	return reads, writes
-}
-
-// persistCompose cuts the launches into runs and composes each run of two or
-// more. Called once per signature, under the cache's lock.
+// persistCompose asks the composer for the launches' runs and composes each
+// run of two or more. Called once per signature, under the cache's lock.
 func (g *devTier) persistCompose(ps *persister, n int) []persistSeg {
+	parts := make([]ir.Part, n)
+	for i := range n {
+		p := &ps.pend[i]
+		parts[i] = ir.Part{K: p.src, Groups: p.groups, Width: p.width, Bind: slices.Clone(ps.bind[i][:p.nb])}
+	}
 	var segs []persistSeg
-	for i := 0; i < n; {
-		w := ps.pend[i].width
-		j := i
-		for j < n && ps.joins(j, w) == nil {
-			j++
-		}
-		if j-i < 2 {
-			hi := max(j, i+1)
-			segs = append(segs, persistSeg{lo: i, hi: hi})
-			if j == i {
+	for _, r := range ir.PersistRuns(parts) {
+		if !r.Composed() {
+			segs = append(segs, persistSeg{lo: r.Lo, hi: r.Hi})
+			if r.Why != nil {
 				name := "?"
-				if src := ps.pend[i].src; src != nil {
+				if src := parts[r.Lo].K; src != nil {
 					name = src.Name
 				}
-				g.pcache.why = fmt.Sprintf("%s alone: %v", name, ps.joins(i, w))
+				g.pcache.why = fmt.Sprintf("%s alone: %v", name, r.Why)
 			}
-			i = hi
 			continue
 		}
-		s, err := g.persistBuild(ps, i, j, w)
+		s, err := g.persistBuild(ps, parts[r.Lo:r.Hi], r)
 		if err != nil {
 			g.pcache.why = err.Error()
 			g.PersistFallbacks++
-			segs = append(segs, persistSeg{lo: i, hi: j})
+			segs = append(segs, persistSeg{lo: r.Lo, hi: r.Hi})
 		} else {
 			segs = append(segs, s)
 		}
-		i = j
 	}
 	return segs
 }
 
-// persistBuild composes launches [lo, hi) of width w and compiles the result
-// on a grid the device holds resident: composed once to learn the limit
-// (the occupancy calculator counts the kernel's registers and shared memory,
-// which do not depend on the grid), and again at the grid it chose when that
-// differs.
-func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error) {
-	parts := make([]ir.Part, 0, hi-lo)
-	most := 0
-	for i := lo; i < hi; i++ {
-		p := &ps.pend[i]
-		bind := make([]int, p.nb)
-		copy(bind, ps.bind[i][:p.nb])
-		parts = append(parts, ir.Part{K: p.src, Groups: p.groups, Bind: bind})
-		most = max(most, p.groups)
-	}
+// persistBuild composes run r and compiles the result on a grid the device
+// holds resident: composed once to learn the limit (the occupancy calculator
+// counts the kernel's registers and shared memory, which do not depend on the
+// grid), and again at the limit when the composer's grid is past it.
+func (g *devTier) persistBuild(ps *persister, parts []ir.Part, r ir.PersistRun) (persistSeg, error) {
 	// With dependency counters the kernel's region starts at the first word
 	// no plan holds; a plan that does not fit composes with grid barriers.
-	dep := g.PersistDeps && ps.dep != nil
-	base := g.pcache.depNext
+	var dep ir.DepRegion
+	if g.PersistDeps && ps.dep != nil {
+		dep = ir.DepRegion{Base: g.pcache.depNext, End: depWords}
+	}
 	compose := func(grid int) (*ir.Persisted, backend.Kernel, error) {
-		var pk *ir.Persisted
-		var err error
-		if dep {
-			pk, err = ir.PersistDeps(fmt.Sprintf("persistdep%d_%d", hi-lo, grid), parts, w, grid, base)
-			if err == nil && base+pk.Words > depWords {
-				dep = false
-			}
-		}
-		if !dep {
-			pk, err = ir.Persist(fmt.Sprintf("persist%d_%d", hi-lo, grid), parts, w, grid)
-		}
+		pk, err := ir.PersistAt(parts, r.W, grid, dep)
 		if err != nil {
 			return nil, nil, err
+		}
+		if !pk.Dep {
+			dep = ir.DepRegion{}
 		}
 		k, err := g.dev.Compile(pk.K)
 		if err != nil {
@@ -492,10 +418,7 @@ func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error)
 		}
 		return pk, k, nil
 	}
-	grid := most
-	if g.PersistGrid > 0 {
-		grid = min(grid, g.PersistGrid)
-	}
+	grid := ir.PersistGrid(parts, g.PersistGrid)
 	pk, k, err := compose(grid)
 	if err != nil {
 		return persistSeg{}, err
@@ -507,22 +430,15 @@ func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error)
 	}
 	if grid > limit {
 		k.Close()
-		grid = limit
-		if pk, k, err = compose(grid); err != nil {
+		if pk, k, err = compose(limit); err != nil {
 			return persistSeg{}, err
 		}
 	}
 	g.PersistCompiles++
-	tiles := 0
-	if dep {
-		g.pcache.depNext = base + pk.Words
-		for _, o := range pk.K.Ops {
-			if o.Kind == ir.OpDepWait && o.Imm&ir.DepTile != 0 {
-				tiles++
-			}
-		}
+	if pk.Dep {
+		g.pcache.depNext = dep.Base + pk.Words
 	}
-	return persistSeg{lo: lo, hi: hi, k: k, bufs: pk.Bufs, grid: pk.Grid, width: w, phases: pk.Phases, dep: dep, tiles: tiles}, nil
+	return persistSeg{lo: r.Lo, hi: r.Hi, k: k, bufs: pk.Bufs, grid: pk.Grid, width: r.W, phases: pk.Phases, dep: pk.Dep, tiles: pk.Tiles}, nil
 }
 
 // persistable reports whether block l's launches are held: a block whose
