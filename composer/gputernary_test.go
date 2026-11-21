@@ -17,6 +17,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // ternaryRows is rows rows of k random ternary blocks of t, each block's
@@ -226,7 +227,7 @@ func TestComposedGPUTernaryPerToken(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const guard = 64
 	for _, d := range devs {
@@ -346,7 +347,7 @@ func TestComposedGPUQuantMaps(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	xs := []float32{0, 0.5, 1.5, 2.5, -0.5, -2.5, 0.49999997, -0.49999997, 126.5, 127.49999, 8388607.5, 8388608, 16777217, 1e-40, 1e30, -3e-7}
 	rng := rand.New(rand.NewSource(41))
@@ -435,7 +436,7 @@ func TestComposedGPUDivision(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	xs, ds := divisionOperands()
 	for _, d := range devs {
@@ -466,7 +467,7 @@ func TestComposedGPUDivisionViolation(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	xs, ds := divisionOperands()
 	for _, d := range devs {

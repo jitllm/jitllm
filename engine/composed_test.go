@@ -322,7 +322,7 @@ func TestTierServesRowsItsBlocksDoNotDivide(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no device ran")
+		testmodels.Missing(t, "no device ran")
 	}
 }
 
@@ -480,7 +480,7 @@ func TestComposedBlocksServeApart(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
@@ -523,7 +523,7 @@ func TestComposedBlocksServeApart(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no arm ran")
+		testmodels.Missing(t, "no arm ran")
 	}
 }
 
@@ -620,7 +620,7 @@ func TestComposedBlocksServe(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			// The budget arm streams blocks the card does not hold: the trial
 			// against the CPU would move them mid-decode.
@@ -1085,7 +1085,7 @@ func TestComposedBlocksServe(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no arm ran")
+		testmodels.Missing(t, "no arm ran")
 	}
 }
 
@@ -1100,7 +1100,7 @@ func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
 	const file = "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"
 	path := testmodels.Path(file)
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {
@@ -1156,7 +1156,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 	const file, steps = "synth-qwen3vl.gguf", 6
 	path := testmodels.Path(file)
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {

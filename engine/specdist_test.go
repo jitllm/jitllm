@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -20,7 +21,7 @@ import (
 // definition somewhere, or this gate cannot tell the two apart.
 func TestSpecDistIsTheDrawsDistribution(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
-		t.Fatalf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUIterateSpans holds an iteration summing terms over runs of
@@ -22,7 +23,7 @@ func TestComposedGPUIterateSpans(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	for _, d := range devs {
 		defer d.Close()

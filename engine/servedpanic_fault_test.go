@@ -25,7 +25,7 @@ import (
 func TestServedPanicFailsTheStep(t *testing.T) {
 	p := testmodels.Path("stories15M-q8_0.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS)", err)
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

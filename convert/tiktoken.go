@@ -114,10 +114,10 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	const tiktokenReserved = 256 // TikTokenTokenizer.num_reserved_special_tokens
 	for k := range tc.AddedTokensDecoder {
 		id, err := strconv.Atoi(k)
-		if err == nil && uint32(id) >= nvocab && id >= len(byRank)+tiktokenReserved {
+		if err == nil && id >= int(nvocab) && id >= len(byRank)+tiktokenReserved {
 			continue
 		}
-		if err != nil || id < len(byRank) || uint32(id) >= nvocab {
+		if err != nil || id < len(byRank) || id >= int(nvocab) {
 			return nil, fmt.Errorf("convert: tokenizer_config.json names special %q, "+
 				"outside rows %d..%d", k, len(byRank), nvocab-1)
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // normQKV is a row's norm read by q, k and v, each Q4_K, or by q alone
@@ -82,7 +83,7 @@ func TestComposedGPUNormPrologueRuns(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const K, Q, KV = 2048, 1024, 0
 	rng := rand.New(rand.NewSource(5))

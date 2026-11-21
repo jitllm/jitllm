@@ -33,16 +33,19 @@ func goComputeAllowed() map[string]string {
 		// A draw's parameters: kernel scalars once a draw.
 		"engine/cpuhead.go:staged": "a draw's DRY base as its logarithm, a scalar the generated stage reads, once a stage of a draw",
 		// Composition: an op's statement checked as it is decomposed.
-		"composer/decompose_expr.go:exprPrim": "a term's constant checked to be a whole word as its expression is decomposed: composition, once a term",
+		"composer/decompose_expr.go:exprTerms": "a term's constant checked to be a whole word as its expression is decomposed: composition, once a term",
+		"graph/iterate.go:IterateElems":        "a term's constant checked to be a whole word as an iteration's terms are typed: composition, once a term",
 		// A clip's resample: libswresample's filter bank, once a pair of rates,
 		// as Pillow's taps are once a size (the sound op reads it).
 		"composer/swr.go:swrBank": "libswresample's polyphase filter bank, built once a pair of rates as resample.c builds it: a constant table the sound op reads",
 		"composer/swr.go:poly":    "av_bessel_i0's rational approximation, evaluated for the bank's Kaiser window once a tap",
 		// A request's and a picture's geometry, and a graph's attributes.
-		"engine/decide.go:answer":    "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
-		"graph/lower.go:LowerValues": "a tower op's attention scale, 1/sqrt of its head width, once an op as the tower is lowered: the graph's attribute",
-		"model/video.go:SampleVideo": "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
-		"model/video.go:evalTerms":   "a video's or a picture's stated size, count, index, stride or time, evaluated over its sides, frames and rate: geometry",
+		"engine/joint.go:decideJoint": "a question's temperature, 1/T for its type and option count, a scalar the decide kernel reads, once a question",
+		"engine/decide.go:answer":     "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
+		"graph/lower.go:LowerValues":  "a tower op's attention scale, 1/sqrt of its head width, once an op as the tower is lowered: the graph's attribute",
+		"model/video.go:SampleVideo":  "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
+		"model/video.go:evalTerms":    "a video's or a picture's stated size, count, index, stride or time, evaluated over its sides, frames and rate: geometry",
+		"model/video.go:groups":       "a frame group's index, first and last frame and their times (frame over rate), once a group, the values its prompt piece writes: text the prompt prints",
 	}
 }
 
@@ -87,7 +90,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 			files = append(files, f)
 		}
 		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
-		conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: func(error) {}}
+		conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: unresolved(t, pkg)}
 		conf.Check(pkg, fset, files, info)
 		if len(info.Types) == 0 {
 			t.Fatalf("%s: the type checker saw nothing -- this gate would pass by seeing no code", pkg)
@@ -300,4 +303,16 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		return false
 	})
 	return lines
+}
+
+// unresolved is a type checker's error handler that fails on an import it
+// could not load: the checker leaves that package's names untyped, so the
+// gate would pass by seeing less code (a test binary run with no GOROOT
+// behind it reads no standard library).
+func unresolved(t *testing.T, pkg string) func(error) {
+	return func(err error) {
+		if strings.Contains(err.Error(), "could not import") {
+			t.Fatalf("%s: %v -- the type checker cannot see this package whole (set GOROOT)", pkg, err)
+		}
+	}
 }

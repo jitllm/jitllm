@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUStatedReduce holds a stated expression whose reduction
@@ -25,7 +26,7 @@ func TestComposedGPUStatedReduce(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	const guard = 64
 	e := convert.SparseMixerWeight(mixerJitter)

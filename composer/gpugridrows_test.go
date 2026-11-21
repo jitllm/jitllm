@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // runGPUGraph forms nothing: it launches codes, formed from g, on d over x
@@ -210,7 +211,7 @@ func TestComposedGPUGridRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	kinds := []graph.OpKind{graph.OpMatVec, graph.OpNorm, graph.OpLayerNorm, graph.OpExpr, graph.OpAdd}
 	for _, d := range devs {
@@ -301,7 +302,7 @@ func TestComposedGPUUnfold(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	for _, d := range devs {
 		defer d.Close()
@@ -380,7 +381,7 @@ func TestComposedGPUGridAttend(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	for _, d := range devs {
 		defer d.Close()

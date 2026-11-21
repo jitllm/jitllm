@@ -419,7 +419,7 @@ func rangeOf(s string) (int, int) {
 }
 
 func hexOf(s string) int {
-	v, err := strconv.ParseUint(strings.TrimSpace(s), 16, 32)
+	v, err := strconv.ParseUint(strings.TrimSpace(s), 16, 31)
 	if err != nil || v > maxRune {
 		fail("code point %q", s)
 	}

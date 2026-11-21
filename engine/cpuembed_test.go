@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -22,7 +23,7 @@ func TestCPUInputRowsAreComposed(t *testing.T) {
 	plain := func(name string) func(t *testing.T) (*model.Model, []Option) {
 		return func(t *testing.T) (*model.Model, []Option) {
 			if _, err := os.Stat(models()[name]); err != nil {
-				t.Fatalf("MODEL MISSING: %v", err)
+				testmodels.Missing(t, "MODEL MISSING: %v", err)
 			}
 			m, err := model.Open(jlmOf(t, models()[name]))
 			if err != nil {

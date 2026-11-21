@@ -22,6 +22,7 @@ import (
 func imagePathAllowed() map[string]string {
 	return map[string]string{
 		"hotness.go:ExpertUses": "expert-use accounting for the report",
+		"joint.go:decideJoint":  "a question's temperature, 1/T for its type and option count, a scalar the decide kernel reads, once a question: no pixel's arithmetic",
 		"decide.go:answer":      "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
 		"cpuhead.go:staged":     "a draw's DRY base as its logarithm, a scalar the generated stage reads, once a stage of a draw: no pixel's arithmetic",
 		"dry.go:dryRow":         "the DRY penalty's repeat lengths, a row of counts the generated stage reads, and its exponent's bound from the log of its base, once a draw: no pixel's arithmetic",
@@ -29,6 +30,7 @@ func imagePathAllowed() map[string]string {
 		"video.go:evalTerms":    "a video's or a picture's stated sizes, count, indices, stride and times evaluated over its frames, rate and sides: geometry",
 		"video.go:formatValue":  "a value the video's prompt writes, rounded to its stated decimals: text the prompt prints",
 		"video.go:pieces":       "the video's prompt pieces, each value evaluated and written: text the prompt prints",
+		"video.go:groups":       "a frame group's index, first and last frame and their times (frame over rate), once a group, the values its prompt piece writes: text the prompt prints",
 		"picture.go:square":     "a picture square's fields, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
 		"picture.go:stage":      "a whole-picture resize stage's sides, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
 	}
@@ -41,6 +43,7 @@ func imagePathAllowed() map[string]string {
 func imagePathCallees() map[string]string {
 	return map[string]string{
 		"prefillstream.go:after":   "the prompt streamer's timing of a chunk, once a chunk (RULE 8b's measurement)",
+		"seamtune.go:seamStep":     "the seam tuner's timing of a token, once a token after its step (RULE 8b's measurement)",
 		"tower.go:towerEntry":      "a tower's entry stated as a graph, once at open: its constants are the graph's",
 		"tower.go:towerBlock":      "a tower's block stated as a graph, once a block at open: its constants are the graph's",
 		"tower.go:stageClass":      "a resize stage's class stated as graphs, its taps from the class's pixel bound, once a class at open",
@@ -238,7 +241,7 @@ func imagePathFindings(t *testing.T, fset *token.FileSet, pkgs []imagePkg, only 
 				return c, nil
 			}
 			return src.Import(path)
-		}), Error: func(error) {}}
+		}), Error: unresolved(t, p.path)}
 		pkg, _ := conf.Check(p.path, fset, p.files, info)
 		if len(info.Types) == 0 {
 			t.Fatalf("%s: the type checker saw nothing -- this gate would pass by seeing no code", p.path)

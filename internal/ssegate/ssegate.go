@@ -14,7 +14,6 @@ package ssegate
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -173,8 +172,8 @@ func WritesFirstOperand(mn string) bool {
 // execution half still runs on a host without objdump.
 func Require(t testing.TB, name string, code []byte) {
 	t.Helper()
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Logf("%s: objdump not installed -- the VEX-leak half of this gate did not run here", name)
+	if _, ok := objdump.Tool(); !ok {
+		t.Logf("%s: no objdump that reads x86-64 -- the VEX-leak half of this gate did not run here", name)
 		return
 	}
 	for _, p := range Problems(t, name, code) {

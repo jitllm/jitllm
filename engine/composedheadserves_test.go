@@ -96,6 +96,6 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no arm ran")
+		testmodels.Missing(t, "no arm ran")
 	}
 }

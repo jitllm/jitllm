@@ -22,7 +22,7 @@ import (
 func TestSessionMovesBetweenInstances(t *testing.T) {
 	path, ok := existingModel(testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"))
 	if !ok {
-		t.Fatal("model not present")
+		testmodels.Missing(t, "model not present")
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {

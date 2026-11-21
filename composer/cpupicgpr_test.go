@@ -5,7 +5,6 @@ package composer
 import (
 	"image/color"
 	"math"
-	"os/exec"
 	"strings"
 	"testing"
 	"unsafe"
@@ -14,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/objdump"
 	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedCPUScalarPictureKeepsItsWordsInGeneralRegisters composes the
@@ -27,8 +27,8 @@ import (
 // register. In vector registers they crowded the map out of the sixteen there
 // are, and the entry was refused.
 func TestComposedCPUScalarPictureKeepsItsWordsInGeneralRegisters(t *testing.T) {
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Fatal("objdump is not installed: this gate reads the machine code through it")
+	if _, ok := objdump.Tool(); !ok {
+		testmodels.Missing(t, "no GNU objdump that reads x86-64: this gate reads the machine code through it")
 	}
 	const W, side = 768, 512
 	rows := side * side * 3 / W

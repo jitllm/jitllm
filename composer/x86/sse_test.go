@@ -11,14 +11,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/objdump"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestSSEEncodingMatchesObjdump pins the legacy-SSE encoder against a
 // disassembler: a missing 0x66 turns PXOR into a valid MMX instruction, and a
 // wrong REX bit silently picks a different register.
 func TestSSEEncodingMatchesObjdump(t *testing.T) {
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Skip("objdump not installed")
+	if _, ok := objdump.Tool(); !ok {
+		testmodels.Missing(t, "no GNU objdump that reads x86-64")
 	}
 	cases := []struct {
 		name string
@@ -64,8 +67,8 @@ func TestSSEEncodingMatchesObjdump(t *testing.T) {
 // three-operand and legacy SSE is two-operand and destructive.
 func TestSSEThreeOperandLowering(t *testing.T) {
 	// Assert the instructions, not the byte count.
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Skip("objdump not installed")
+	if _, ok := objdump.Tool(); !ok {
+		testmodels.Missing(t, "no GNU objdump that reads x86-64")
 	}
 	dir := t.TempDir()
 	lower := func(name string, dst, src1, src2 Reg, commutes bool) []string {
@@ -103,7 +106,8 @@ func disasmIntel(t *testing.T, dir, name string, code []byte) string {
 	if err := os.WriteFile(p, code, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("objdump", "-D", "-b", "binary", "-m", "i386:x86-64",
+	tool, _ := objdump.Tool()
+	out, err := exec.Command(tool, "-D", "-b", "binary", "-m", "i386:x86-64",
 		"-M", "intel", p).Output()
 	if err != nil {
 		t.Fatalf("objdump: %v", err)
@@ -135,7 +139,8 @@ func disasmAll(t *testing.T, dir, name string, code []byte) []string {
 	if err := os.WriteFile(p, code, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("objdump", "-D", "-b", "binary", "-m", "i386:x86-64",
+	tool, _ := objdump.Tool()
+	out, err := exec.Command(tool, "-D", "-b", "binary", "-m", "i386:x86-64",
 		"-M", "intel", p).Output()
 	if err != nil {
 		t.Fatalf("objdump: %v", err)

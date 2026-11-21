@@ -23,7 +23,7 @@ import (
 func TestCardSharesPagesCutApartByItsOwnKeys(t *testing.T) {
 	g, err := openGPU(t)
 	if err != nil || g == nil {
-		t.Fatalf("no card: %v", err)
+		testmodels.Missing(t, "no card: %v", err)
 	}
 	defer g.Close()
 	const seq = 1024

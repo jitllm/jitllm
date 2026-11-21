@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestQwen4ExpServesComposedOnCPU runs each Qwen3.8-Flash-Next fixture on
@@ -418,7 +419,7 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no device on this host")
+		testmodels.Missing(t, "no device on this host")
 	}
 }
 

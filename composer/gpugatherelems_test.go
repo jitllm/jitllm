@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUGatherElems is an element gather on every device backend,
@@ -19,7 +20,7 @@ func TestComposedGPUGatherElems(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	const guard = 64
 	cases := [][2]int{{1, 1}, {2, 3}, {3, 5}, {4, 7}, {5, 33}}

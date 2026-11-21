@@ -871,7 +871,7 @@ type GetStatsResponse struct {
 	Sessions   []*SessionStats        `protobuf:"bytes,3,rep,name=sessions,proto3" json:"sessions,omitempty"`
 	Devices    []*Device              `protobuf:"bytes,4,rep,name=devices,proto3" json:"devices,omitempty"`
 	Host       *HostMemory            `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
-	// What the orchestrator (.notes/design/orchestrator.md) has done: its
+	// What the orchestrator has done: its
 	// counters, and its most recent moves, oldest first.
 	Orchestrator  *OrchestratorStats `protobuf:"bytes,6,opt,name=orchestrator,proto3" json:"orchestrator,omitempty"`
 	unknownFields protoimpl.UnknownFields

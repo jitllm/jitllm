@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUIterate holds an iteration on every card to its trips
@@ -19,7 +20,7 @@ func TestComposedGPUIterate(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	for _, d := range devs {
 		defer d.Close()

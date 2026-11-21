@@ -20,6 +20,9 @@ func (fixtureOpener) Set(string) error { return nil }
 
 func (fixtureOpener) Open(t *testing.T, name string) composer.Model {
 	t.Helper()
+	if _, err := os.Stat(testmodels.Path(name)); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", testmodels.Path(name))
+	}
 	fresh.Must(t, testmodels.Path(name))
 	m, err := model.Open(testmodels.Path(name))
 	if err != nil {

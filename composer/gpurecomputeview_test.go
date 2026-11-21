@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // squaresSummed is a row squared, then summed in spans of span: the
@@ -51,7 +52,7 @@ func TestComposedGPURecomputesThroughAView(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the card arm proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the card arm proved nothing")
 	}
 	for _, d := range devs {
 		defer d.Close()

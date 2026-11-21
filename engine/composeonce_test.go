@@ -103,7 +103,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 		})
 	}
 	if ahead == 0 && !t.Failed() {
-		t.Fatal("no placement's prompt walk formed a form ahead: the walk ahead never ran")
+		testmodels.Missing(t, "no placement's prompt walk formed a form ahead: the walk ahead never ran")
 	}
 }
 

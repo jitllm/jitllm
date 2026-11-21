@@ -29,7 +29,7 @@ func TestAContainerStatingNoFrontIsUpgraded(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			src := testmodels.Path(name)
 			if _, err := os.Stat(src); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", src)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", src)
 			}
 			fresh := jlmOf(t, src)
 			old := filepath.Join(t.TempDir(), "old"+jlm.Ext)
@@ -79,6 +79,6 @@ func TestAContainerStatingNoFrontIsUpgraded(t *testing.T) {
 		})
 	}
 	if ran != 5 {
-		t.Fatalf("%d of 5 models ran", ran)
+		testmodels.Missing(t, "%d of 5 models ran", ran)
 	}
 }

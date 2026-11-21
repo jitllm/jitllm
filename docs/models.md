@@ -14,7 +14,7 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
 - **4** embedding encoders, and pooling on any decoder
 - **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes()`)
-- **87** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
+- **88** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
 
 ## Text architectures
 
@@ -238,6 +238,7 @@ lists above, each entry downloaded, converted and made to generate before it was
 | `gpt-oss-120b` | gpt-oss 120B | `gpt-oss` | 117B-A5.1B | MXFP4 |  |
 | `all-minilm-l6-v2` | all-MiniLM-L6-v2 (embeddings) | `bert` | 22M | F16 |  |
 | `nomic-embed-text-v1.5` | nomic-embed-text v1.5 (embeddings) | `nomic-bert` | 137M | F16 |  |
+| `embeddinggemma-300m` | EmbeddingGemma 300M (embeddings) | `gemma-embedding` | 300M | BF16 |  |
 | `mxbai-embed-large-v1` | mxbai-embed-large v1 (embeddings) | `bert` | 335M | F16 |  |
 | `laya` | Laya (decision model) | `modern-bert` | 421M | BF16 |  |
 | `d1-3b` | d1-3B (decision model) | `lfm2` | 3B | Q8_0 |  |

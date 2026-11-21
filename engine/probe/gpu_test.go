@@ -12,6 +12,7 @@ import (
 // measures to the order physics allows: the last cache faster than memory
 // and nearer, a launch and a kernel's floor under a millisecond, a float chain slower than the float rate of one thread.
 func TestGPUMeasures(t *testing.T) {
+	quiet(t)
 	devs := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
 	defer func() {
 		for _, d := range devs {

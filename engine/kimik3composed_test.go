@@ -99,7 +99,7 @@ func TestKimiK3ServesComposed(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no device on this host")
+		testmodels.Missing(t, "no device on this host")
 	}
 }
 

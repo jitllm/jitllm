@@ -49,6 +49,9 @@ func obtainableExempt() map[string]string {
 		"dots1": "dots.llm1 is 142B, 96 GB at Q4_K_M in three GGUF parts, and a catalogue entry " +
 			"names one file; built and gated on a synthetic fixture from transformers' own " +
 			"Dots1ForCausalLM, and 18 of 20 teacher-forced by TestGreedyMatchesLlamaCpp (V100 box)",
+		"kimi-linear": "Kimi-Linear 48B-A3B is the one published size; built and gated on a synthetic " +
+			"fixture from Moonshot's own KimiLinearForCausalLM (synth-kimilinear), and no published quant " +
+			"has been converted and verified here, which is what a catalogue entry promises",
 		"olmo": "the first OLMo, superseded by OLMo 2, which is listed; the GGUF converter states " +
 			"add_eos_token from tokenizer.json's template where OlmoForCausalLM's tokenizer appends " +
 			"nothing, so its GGUF ends every prompt with <|endoftext|> (.notes/divergences.md); built " +

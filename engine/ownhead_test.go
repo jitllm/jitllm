@@ -19,7 +19,7 @@ func TestACardReadsTheHeadIntoItsOwnFrames(t *testing.T) {
 	src := testmodels.Path("tinyllama-1.1b-q3_K_M.gguf")
 	path, ok := existingModel(src)
 	if !ok {
-		t.Fatalf("model not present: %s (nor its container)", src)
+		testmodels.Missing(t, "model not present: %s (nor its container)", src)
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {

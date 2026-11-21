@@ -20,7 +20,7 @@ func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
 	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models()["qwen3moe"]} {
 		path, ok := existingModel(src)
 		if !ok {
-			t.Fatalf("model not present: %s (nor its container)", src)
+			testmodels.Missing(t, "model not present: %s (nor its container)", src)
 		}
 		t.Run(filepath.Base(path), func(t *testing.T) { instancesBlocksAreTheirOwn(t, path) })
 	}

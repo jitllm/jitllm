@@ -113,7 +113,7 @@ func TestKVSharingOnEveryBlockKind(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no model ran")
+		testmodels.Missing(t, "no model ran")
 	}
 }
 

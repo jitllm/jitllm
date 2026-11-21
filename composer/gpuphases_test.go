@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUPhasesExpertsSum runs a mixture's tail -- the experts'
@@ -21,7 +22,7 @@ func TestComposedGPUPhasesExpertsSum(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const K, W = 2, 64
 	for _, d := range devs {
@@ -93,7 +94,7 @@ func TestComposedGPURouterRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const E, K, capacity, rows, guard = 8, 2, 512, 3, 64
 	for _, d := range devs {
@@ -171,7 +172,7 @@ func TestComposedGPUPhases(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const K = 4
 	for _, d := range devs {

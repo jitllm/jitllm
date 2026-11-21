@@ -15,6 +15,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // tiledFormats are the weight formats the row-tile gates form a projection
@@ -168,7 +169,7 @@ func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const guard, n, k, R = 64, 65536, 64, 16
 	for _, d := range devs {
@@ -288,7 +289,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const guard, capacity = 64, 512
 	calls := []int{1, 3, 7, 31, 33, 100, 511, 512}

@@ -15,13 +15,16 @@ import (
 // for a model or fixture that is not there: it fails the gate, and skips
 // only in a run that asked for no models. A bare t.Skip on an absent model
 // is a green line that proved nothing (RULE 10), and a gate that never ran
-// on a box reads as passed there. The pattern must find the shape it
-// refuses.
+// on a box reads as passed there. A bare t.Fatal fails CI's model-free run,
+// which holds no models by design. The pattern must find both shapes.
 func TestAMissingModelFailsTheGate(t *testing.T) {
 	testmodels.SourceTree(t)
-	bare := regexp.MustCompile(`t\.Skipf?\("(MODEL MISSING|model not present|fixture not present)`)
+	bare := regexp.MustCompile(`t\.(Skip|Fatal)f?\("(MODEL MISSING|model not present|fixture not present)`)
 	if !bare.MatchString(`		t.Skipf("model not present: %s", path)`) {
 		t.Fatal("the pattern does not see a bare skip on an absent model")
+	}
+	if !bare.MatchString(`		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)`) {
+		t.Fatal("the pattern does not see a bare failure on an absent model")
 	}
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -49,7 +52,7 @@ func TestAMissingModelFailsTheGate(t *testing.T) {
 		t.Fatalf("read %d test files under %s: the tree was not found, so this gate proved nothing", read, root)
 	}
 	if len(found) > 0 {
-		t.Fatalf("%d test(s) skip on an absent model instead of failing through testmodels.Missing:\n%s",
+		t.Fatalf("%d test(s) skip or fail on an absent model instead of going through testmodels.Missing:\n%s",
 			len(found), strings.Join(found, "\n"))
 	}
 }

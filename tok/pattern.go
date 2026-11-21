@@ -587,7 +587,7 @@ func (p *patternParser) hex(n int) (rune, error) {
 	if p.i+n > len(p.src) {
 		return 0, p.errf("a short hex escape")
 	}
-	v, err := strconv.ParseUint(string(p.src[p.i:p.i+n]), 16, 32)
+	v, err := strconv.ParseUint(string(p.src[p.i:p.i+n]), 16, 31)
 	if err != nil {
 		return 0, p.errf("the hex escape %q", string(p.src[p.i:p.i+n]))
 	}

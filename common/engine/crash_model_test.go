@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
@@ -20,7 +21,7 @@ import (
 func TestAPanicMidReplyLeavesTheAppConsistent(t *testing.T) {
 	fresh.Must(t, modelPath())
 	if _, err := os.Stat(modelPath()); err != nil {
-		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}
 	sh := newTestShell()
 	sh.Crashes().OnReport(func(crash.Report) {})

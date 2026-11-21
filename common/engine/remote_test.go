@@ -4,8 +4,6 @@ package engine
 
 import (
 	"context"
-	"github.com/jitllm/jitllm/internal/testbin"
-	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"net"
 	"os"
 	"os/exec"
@@ -17,6 +15,9 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testbin"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // The connected engine is gated against a real jitllmd: the binary built from
@@ -75,7 +76,7 @@ func needModel(t *testing.T) {
 	t.Helper()
 	fresh.Must(t, modelPath())
 	if _, err := os.Stat(modelPath()); err != nil {
-		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}
 }
 

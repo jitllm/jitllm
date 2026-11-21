@@ -42,7 +42,7 @@ func TestRecurrentStateIsTheGraphs(t *testing.T) {
 		})
 	}
 	if blocks == 0 {
-		t.Fatal("no recurrent block was checked")
+		testmodels.Missing(t, "no recurrent block was checked")
 	}
 	t.Logf("%d recurrent blocks", blocks)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUPickedRowsAreTheRows forms a Q8_0 head of 4096 to 131072
@@ -26,7 +27,7 @@ func TestComposedGPUPickedRowsAreTheRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const guard, k, P = 64, 2048, 512
 	for _, d := range devs {

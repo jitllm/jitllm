@@ -95,7 +95,7 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no model holds a q8 history")
+		testmodels.Missing(t, "no model holds a q8 history")
 	}
 }
 
@@ -210,6 +210,6 @@ func TestCPUAttendsAQ8History(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no model holds a q8 history")
+		testmodels.Missing(t, "no model holds a q8 history")
 	}
 }

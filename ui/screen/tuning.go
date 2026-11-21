@@ -109,10 +109,10 @@ func knob(
 	// its fields would clobber each other. It reads and edits the settings as
 	// shown, so a knob moved off the model's own keeps the model's other
 	// values.
-	shown := func() app.Sampling { return sh.Store.Sampling.Get().Shown(sh.Store.OwnSampling.Get()) }
+	shown := func() app.Sampling { return sh.Store.Sampling.Get().Shown(sh.Store.Own.Get()) }
 	val := state.NewSignal(get(shown()))
 	cap := state.NewComputed(func() string { return caption(shown()) },
-		sh.Store.Sampling.AsReadonly(), sh.Store.OwnSampling.AsReadonly())
+		sh.Store.Sampling.AsReadonly(), sh.Store.Own.AsReadonly())
 	return primitives.VBox(
 		primitives.HBox(
 			// The caption shrinks, not the label; see above.
@@ -123,7 +123,7 @@ func knob(
 			slider.ValueSignal(val),
 			slider.Min(min), slider.Max(max), slider.Step(step),
 			slider.OnChange(func(v float32) {
-				set(sh, func(s *app.Sampling) { *s = s.Shown(sh.Store.OwnSampling.Get()); put(s, v) })
+				set(sh, func(s *app.Sampling) { *s = s.Shown(sh.Store.Own.Get()); put(s, v) })
 			}),
 			slider.PainterOpt(sh.P.Slider),
 		),

@@ -14,6 +14,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // recRuns is a step's rows as runs: each run's rows of the step, in the
@@ -688,7 +689,7 @@ func TestComposedGPUScanWidths(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	rng := rand.New(rand.NewSource(5))
 	for _, d := range devs {

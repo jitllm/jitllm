@@ -39,6 +39,7 @@ const l1Slower = 1.4
 // chaseMatches holds the chase of h to what
 // TestComposedHostChaseMatchesTheBuilt states.
 func chaseMatches(t *testing.T, h *cpu.Target) {
+	quiet(t)
 	if err := hostCheck(h); err != nil {
 		t.Fatal(err)
 	}

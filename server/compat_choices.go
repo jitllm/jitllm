@@ -26,14 +26,15 @@ func oaChoiceSeeds(n *int, seed *int64) ([]int64, error) {
 	if n == nil || *n == 1 {
 		return nil, nil
 	}
-	if *n < 1 || *n > maxChoices {
+	k := *n
+	if k < 1 || k > maxChoices {
 		return nil, fmt.Errorf("n must be between 1 and %d", maxChoices)
 	}
 	base := rand.Int64N(1 << 62)
 	if seed != nil {
 		base = *seed
 	}
-	out := make([]int64, *n)
+	out := make([]int64, k)
 	for i := range out {
 		out[i] = base + int64(i)
 	}

@@ -121,8 +121,8 @@ func (n *towerVocab) roleOf(name string) (jlm.Role, int32, int32, error) {
 			continue
 		}
 		num, part, ok := strings.Cut(rest, ".")
-		i, err := strconv.Atoi(num)
-		if !ok || err != nil || i < 0 || num != strconv.Itoa(i) {
+		i, err := strconv.ParseInt(num, 10, 32)
+		if !ok || err != nil || i < 0 || num != strconv.FormatInt(i, 10) {
 			return 0, 0, 0, fmt.Errorf("convert: %s: no index after %s", name, prefix)
 		}
 		r, known := parts[part]

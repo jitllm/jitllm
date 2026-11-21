@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // Insn is one disassembled instruction: its bytes and its normalised text.
@@ -18,17 +20,38 @@ type Insn struct {
 	Text  string
 }
 
+// Tool is a GNU objdump that reads x86-64, and whether there is one: the
+// cross binutils' x86_64-linux-gnu-objdump where a host's own objdump is for
+// another machine (an arm64 runner) or is LLVM's (macOS), else objdump.
+func Tool() (string, bool) {
+	for _, name := range []string{"x86_64-linux-gnu-objdump", "objdump"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		if out, err := exec.Command(path, "-i").Output(); err == nil && strings.Contains(string(out), "elf64-x86-64") {
+			return path, true
+		}
+	}
+	return "", false
+}
+
 // Disasm disassembles code with objdump, one row per instruction and the
 // whole encoding on that row (--insn-width=16, so a long instruction's bytes
 // are not wrapped onto a continuation line). It keeps "(bad)" rows, because a
-// gate must see them.
+// gate must see them. With no objdump that reads x86-64 it reports the tool
+// missing (testmodels.Missing).
 func Disasm(t testing.TB, dir, name string, code []byte) []Insn {
 	t.Helper()
+	tool, ok := Tool()
+	if !ok {
+		testmodels.Missing(t, "no GNU objdump that reads x86-64 (binutils, or binutils-x86-64-linux-gnu off x86)")
+	}
 	p := filepath.Join(dir, name+".bin")
 	if err := os.WriteFile(p, code, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("objdump", "-D", "-b", "binary", "-m", "i386:x86-64",
+	out, err := exec.Command(tool, "-D", "-b", "binary", "-m", "i386:x86-64",
 		"-M", "intel", "--insn-width=16", p).Output()
 	if err != nil {
 		t.Fatalf("objdump: %v", err)

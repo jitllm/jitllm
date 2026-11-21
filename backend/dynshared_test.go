@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/ptx"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestSharedPastTheStaticLimit runs, on every CUDA device, a workgroup whose
@@ -88,6 +89,6 @@ func TestSharedPastTheStaticLimit(t *testing.T) {
 		ran++
 	}
 	if ran == 0 {
-		t.Fatal("no CUDA device ran the kernel")
+		testmodels.Missing(t, "no CUDA device ran the kernel")
 	}
 }

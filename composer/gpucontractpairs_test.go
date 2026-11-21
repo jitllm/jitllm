@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUContractPairs runs a gated FFN's gate and up, 5632 rows of
@@ -22,7 +23,7 @@ import (
 func TestComposedGPUContractPairs(t *testing.T) {
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const K, F = 2048, 5632
 	rng := rand.New(rand.NewSource(11))

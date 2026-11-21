@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -12,7 +13,7 @@ import (
 // rest -- within the prompt forms' band of the decode forms, every row.
 func TestPrefillLogitsMatchesForward(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
-		t.Fatalf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {

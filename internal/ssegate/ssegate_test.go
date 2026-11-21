@@ -1,11 +1,12 @@
 package ssegate
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/x86"
+	"github.com/jitllm/jitllm/internal/objdump"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestProblemsFindsEveryViolation holds the gate to kernels it must pass and
@@ -13,8 +14,8 @@ import (
 // reload g and zero X15 after it), while a write to RBP or RSP, a push and a
 // VEX encoding each fail.
 func TestProblemsFindsEveryViolation(t *testing.T) {
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Skip("objdump not installed")
+	if _, ok := objdump.Tool(); !ok {
+		testmodels.Missing(t, "no GNU objdump that reads x86-64")
 	}
 	kernel := func(emit func(a *x86.Buf)) []byte {
 		var a x86.Buf

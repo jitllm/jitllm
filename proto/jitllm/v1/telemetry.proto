@@ -168,7 +168,7 @@ message GetStatsResponse {
   repeated SessionStats sessions = 3;
   repeated Device devices = 4;
   HostMemory host = 5;
-  // What the orchestrator (docs/design/orchestrator.md) has done: its
+  // What the orchestrator has done: its
   // counters, and its most recent moves, oldest first.
   OrchestratorStats orchestrator = 6;
 }

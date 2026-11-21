@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedEmbeddingDecoderOnCPU is the composed CPU arm of a decoder
@@ -92,7 +93,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no decoder embedding model among the goldens: the gate proved nothing")
+		testmodels.Missing(t, "no decoder embedding model among the goldens: the gate proved nothing")
 	}
 }
 

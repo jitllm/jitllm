@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // runGraphValues runs codes on d over the graph's values: vals holds the
@@ -151,7 +152,7 @@ func TestComposedGPUSampleTopK(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	cases := composer.SampleCases()
 	for _, d := range devs {
@@ -198,7 +199,7 @@ func TestComposedGPUEqual(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	for _, d := range devs {
 		defer d.Close()
@@ -274,7 +275,7 @@ func TestComposedGPUSampleGreedy(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	widths := []int{1, 7, 33, 1531, 4096, 32064, 128256, 151936, 201088, 262144}
 	for _, d := range devs {

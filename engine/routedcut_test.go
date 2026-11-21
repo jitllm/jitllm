@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestRoutedCutSplitsEveryMixture cuts each mixture fixture's blocks at the
@@ -68,6 +69,6 @@ func TestRoutedCutSplitsEveryMixture(t *testing.T) {
 		})
 	}
 	if total == 0 {
-		t.Fatal("no block was cut")
+		testmodels.Missing(t, "no block was cut")
 	}
 }

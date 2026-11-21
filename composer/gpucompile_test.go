@@ -14,6 +14,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // heldKB is the growth of the resident set over the side-by-side compiles
@@ -106,6 +107,6 @@ func TestComposedGPUCompilesSideBySide(t *testing.T) {
 			d.Name(), rounds, len(codes), failed, (residentKB()-base)>>10, base>>10)
 	}
 	if ran == 0 {
-		t.Fatal("no GPU device opened: the gate runs on one")
+		testmodels.Missing(t, "no GPU device opened: the gate runs on one")
 	}
 }

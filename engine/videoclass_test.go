@@ -1,6 +1,10 @@
 package engine
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
+)
 
 // TestEveryVideoPairHasAClassThatHoldsIt plans two-frame videos, from a few
 // pixels to past the frames' resize's most and from square to a long strip,
@@ -41,6 +45,6 @@ func TestEveryVideoPairHasAClassThatHoldsIt(t *testing.T) {
 		})
 	}
 	if past == 0 {
-		t.Fatal("no pair's frames reached past their tower's pictures: the gate saw no pair the pictures' classes cannot hold")
+		testmodels.Missing(t, "no pair's frames reached past their tower's pictures: the gate saw no pair the pictures' classes cannot hold")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // longEmbedText is a text of at least n of m's tokens whose sentences do not
@@ -120,6 +121,6 @@ func TestLongEmbeddingsRunWhole(t *testing.T) {
 		})
 	}
 	if long == 0 {
-		t.Fatalf("no embedding model takes %d tokens", want)
+		testmodels.Missing(t, "no embedding model takes %d tokens", want)
 	}
 }

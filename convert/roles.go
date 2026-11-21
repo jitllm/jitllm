@@ -160,7 +160,7 @@ func (v tensorNames) identify(name string) (role jlm.Role, block int32, index in
 			if i <= 0 {
 				return 0, 0, 0, fmt.Errorf("convert: %q: no block index", name)
 			}
-			n, e := strconv.Atoi(r[:i])
+			n, e := strconv.ParseInt(r[:i], 10, 32)
 			if e != nil || n < 0 {
 				return 0, 0, 0, fmt.Errorf("convert: %q: block index %q", name, r[:i])
 			}
@@ -184,7 +184,7 @@ func (v tensorNames) identify(name string) (role jlm.Role, block int32, index in
 	// The indexed per-expert form.
 	if f := strings.Split(rest, "."); len(f) == 3 && f[2] == "weight" {
 		if r, ok := indexedRole(f[0]); ok {
-			n, e := strconv.Atoi(f[1])
+			n, e := strconv.ParseInt(f[1], 10, 32)
 			if e == nil && n >= 0 {
 				return r, block, int32(n), nil
 			}

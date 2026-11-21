@@ -21,7 +21,7 @@ import (
 func TestSharedPrefixMovesToTheCard(t *testing.T) {
 	g, err := openGPU(t)
 	if err != nil || g == nil {
-		t.Fatalf("no card to move the blocks to: %v", err)
+		testmodels.Missing(t, "no card to move the blocks to: %v", err)
 	}
 	defer g.Close()
 	// A page of the host's and of the card's pool alike: the prefix is named

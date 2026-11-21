@@ -35,6 +35,7 @@ type rateCase struct {
 // ratesMatch holds the probe of h to what TestComposedHostRatesMatchTheBuilt
 // states.
 func ratesMatch(t *testing.T, h *cpu.Target) {
+	quiet(t)
 	if err := hostCheck(h); err != nil {
 		t.Fatal(err)
 	}

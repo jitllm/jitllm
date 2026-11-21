@@ -84,7 +84,7 @@ func TestPictureGeometryHoldsItsSweep(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no tower's geometry was held to its sum -- this gate proved nothing")
+		testmodels.Missing(t, "no tower's geometry was held to its sum -- this gate proved nothing")
 	}
 	t.Logf("%d towers' geometry held to their fits' sums", ran)
 }

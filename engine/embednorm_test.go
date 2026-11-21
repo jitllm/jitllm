@@ -4,6 +4,8 @@ import (
 	"math"
 	"slices"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // llamaNormalize is the GGUF oracle's normalisation of v, in float64, the
@@ -98,6 +100,6 @@ func TestEmbedNormFollowsLlamaCpp(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no golden text ran: this gate proved nothing")
+		testmodels.Missing(t, "no golden text ran: this gate proved nothing")
 	}
 }

@@ -185,27 +185,54 @@ func genericExample(render func([]ChatMessage, bool) (string, error), eos string
 // whose parameter schema the converter does not build takes any JSON object
 // for its arguments, as a forced call in any other form does.
 func genericGrammar(tools ToolSet, choice ToolChoice, names []string) (string, error) {
+	type str struct {
+		Type  string `json:"type"`
+		Const string `json:"const,omitempty"`
+	}
+	type callProps struct {
+		Name      str             `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	type object[P any] struct {
+		Type       string   `json:"type"`
+		Properties P        `json:"properties"`
+		Required   []string `json:"required"`
+		Additional bool     `json:"additionalProperties"`
+	}
+	type anyOf struct {
+		AnyOf []any `json:"anyOf"`
+	}
 	build := func(plain bool) (string, error) {
-		calls := make([]string, len(names))
+		calls := make([]any, len(names))
 		for i, n := range names {
-			params := string(bytes.TrimSpace(tools.schemas[n]))
-			if plain || params == "" || params == "null" {
-				params = `{"type":"object"}`
+			params := bytes.TrimSpace(tools.schemas[n])
+			if plain || len(params) == 0 || string(params) == "null" {
+				params = []byte(`{"type":"object"}`)
 			}
-			calls[i] = `{"type":"object","properties":{"name":{"type":"string","const":` + jsonName(n) +
-				`},"arguments":` + params + `},"required":["name","arguments"],"additionalProperties":false}`
+			calls[i] = object[callProps]{Type: "object", Properties: callProps{str{"string", n}, params},
+				Required: []string{"name", "arguments"}}
 		}
 		call := calls[0]
 		if len(calls) > 1 {
-			call = `{"anyOf":[` + strings.Join(calls, ",") + `]}`
+			call = anyOf{calls}
 		}
-		schema := `{"type":"object","properties":{"tool_call":` + call + `},"required":["tool_call"],` +
-			`"additionalProperties":false}`
+		var schema any = object[struct {
+			ToolCall any `json:"tool_call"`
+		}]{Type: "object", Properties: struct {
+			ToolCall any `json:"tool_call"`
+		}{call}, Required: []string{"tool_call"}}
 		if !choice.Forces() {
-			schema = `{"anyOf":[` + schema + `,{"type":"object","properties":{"response":{"type":"string"}},` +
-				`"required":["response"],"additionalProperties":false}]}`
+			schema = anyOf{[]any{schema, object[struct {
+				Response str `json:"response"`
+			}]{Type: "object", Properties: struct {
+				Response str `json:"response"`
+			}{str{Type: "string"}}, Required: []string{"response"}}}}
 		}
-		return grammar.FromJSONSchema([]byte(schema))
+		b, err := json.Marshal(schema)
+		if err != nil {
+			return "", err
+		}
+		return grammar.FromJSONSchema(b)
 	}
 	g, err := build(false)
 	var unsupported grammar.ErrUnsupported

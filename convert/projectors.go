@@ -648,6 +648,9 @@ func (st *audioStates) geometry(name string, src jinja.Value) (*jlm.Audio, error
 		if !ok {
 			return nil, fmt.Errorf("convert: projectors.json: audio %s: %q is no audio geometry field", name, k)
 		}
+		if f < 0 || f > math.MaxUint32 {
+			return nil, fmt.Errorf("convert: projectors.json: audio %s: %s is %v, outside a word", name, k, f)
+		}
 		*to = uint32(f)
 	}
 	if err := st.holds(name, src, a, st.Require); err != nil {

@@ -65,7 +65,7 @@ func composedPromptModel(t *testing.T, name string) (*model.Model, []int32, []fl
 	t.Helper()
 	src := testmodels.Path(name + ".gguf")
 	if !fileExists(src) {
-		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory)", src)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory)", src)
 	}
 	instOpts := []Option{WithKVF16(false)}
 	m, err := model.Open(jlmOf(t, src))

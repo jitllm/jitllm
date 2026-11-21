@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUUpsample is TestComposedCPUUpsample on every device
@@ -18,7 +19,7 @@ func TestComposedGPUUpsample(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	const guard = 64
 	cases := [][4]int{{3, 4, 5, 2}, {1, 1, 1, 2}, {1, 7, 3, 3}, {6, 2, 33, 2}, {24, 24, 40, 2}}

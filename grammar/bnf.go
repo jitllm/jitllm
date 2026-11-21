@@ -528,7 +528,7 @@ func (p *parser) char() (rune, error) {
 		if p.i+n > len(p.s) {
 			return 0, p.errf("a short \\%c escape", c)
 		}
-		v, err := strconv.ParseUint(p.s[p.i:p.i+n], 16, 32)
+		v, err := strconv.ParseUint(p.s[p.i:p.i+n], 16, 31)
 		if err != nil {
 			return 0, p.errf("a bad \\%c escape", c)
 		}

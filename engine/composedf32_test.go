@@ -26,7 +26,7 @@ import (
 func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 	dir := os.Getenv("JITLLM_LLAMACPP_CPU")
 	if dir == "" {
-		t.Fatal("JITLLM_LLAMACPP_CPU is unset: it names a GGUF oracle build holding llama-perplexity, the reference")
+		testmodels.Missing(t, "JITLLM_LLAMACPP_CPU is unset: it names a GGUF oracle build holding llama-perplexity, the reference")
 	}
 	text, err := os.ReadFile("testdata/prompt-28k.txt")
 	if err != nil {
@@ -43,7 +43,7 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 		t.Run(c.file, func(t *testing.T) {
 			gguf := testmodels.Path(c.file)
 			if !fileExists(gguf) {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
 			}
 			toks, ref := lcppLogProbs(t, dir, gguf, string(text), nctx, 0, "-ctk", "f32", "-ctv", "f32", "-fa", "off")
 			var at []int

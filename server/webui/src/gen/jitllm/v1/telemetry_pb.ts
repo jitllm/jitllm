@@ -534,7 +534,7 @@ export type GetStatsResponse = Message<"jitllm.v1.GetStatsResponse"> & {
   host?: HostMemory | undefined;
 
   /**
-   * What the orchestrator (docs/design/orchestrator.md) has done: its
+   * What the orchestrator has done: its
    * counters, and its most recent moves, oldest first.
    *
    * @generated from field: jitllm.v1.OrchestratorStats orchestrator = 6;

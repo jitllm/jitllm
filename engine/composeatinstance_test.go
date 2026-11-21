@@ -46,7 +46,7 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
-				t.Fatalf("model not present: %s (nor its container)", src)
+				testmodels.Missing(t, "model not present: %s (nor its container)", src)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
@@ -178,7 +178,7 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
-				t.Fatalf("model not present: %s (nor its container)", src)
+				testmodels.Missing(t, "model not present: %s (nor its container)", src)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {

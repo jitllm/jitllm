@@ -17,6 +17,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUPooledProjection forms a picture projector as Gemma 3's
@@ -30,7 +31,7 @@ func TestComposedGPUPooledProjection(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const E, S, N, R = 1152, 4, 2560, 256
 	b := graph.NewBlock(-1)

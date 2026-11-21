@@ -22,6 +22,10 @@ import (
 // model takes fails by name; with no models every one is a gap.
 func TestTheCensusCoversEveryFeature(t *testing.T) {
 	features, projectors := censusGaps(t, auditModels(t))
+	if testmodels.Free() && len(features)+len(projectors) > 0 {
+		testmodels.Missing(t, "%d features and %d projectors take no model here: the census's models are not in the model-free run",
+			len(features), len(projectors))
+	}
 	for _, f := range features {
 		by, err := convert.StatedBy(f)
 		if err != nil {

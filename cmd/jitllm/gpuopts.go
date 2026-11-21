@@ -27,8 +27,8 @@ func gpuOptions() []gpu.Option {
 	var o []gpu.Option
 	str := func(k string) string { return os.Getenv(k) }
 	num := func(k string) int {
-		n, _ := strconv.Atoi(os.Getenv(k))
-		return n
+		n, _ := strconv.ParseInt(os.Getenv(k), 10, 32)
+		return int(n)
 	}
 	set := func(k string) bool { return os.Getenv(k) != "" }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -29,7 +30,7 @@ const dryPrompt = "Tom had a red ball. Tom had a red ball. Tom had a red ball. T
 // leave.
 func TestDryRunsInTheChain(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
-		t.Fatalf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {
@@ -190,7 +191,7 @@ func TestDryRunsInTheChain(t *testing.T) {
 // holds one of them, and none of these one-byte breakers heads a tail.
 func TestDryBreakersAreTheVocabularys(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
-		t.Fatalf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {

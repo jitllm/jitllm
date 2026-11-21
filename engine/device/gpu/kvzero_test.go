@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestKVLayerZeroesOnTheCard holds a KV layer's new buffers to being zeroed
@@ -53,7 +55,7 @@ func TestKVLayerZeroesOnTheCard(t *testing.T) {
 	})
 	devs := realDevices(t)
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the card arm proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the card arm proved nothing")
 	}
 	for _, dv := range devs {
 		t.Run(dv.API(), func(t *testing.T) {

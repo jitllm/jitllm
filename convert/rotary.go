@@ -403,7 +403,11 @@ func (r *rotaryReading) settle(c *Config) ([]jlm.Tensor, error) {
 			return nil, fmt.Errorf("rope scaling %s: %w", r.name, err)
 		}
 	}
-	pairs := int(env["rotated"].(float64)) / 2
+	rotated := env["rotated"].(float64)
+	if rotated < 0 || rotated > math.MaxInt32 {
+		return nil, fmt.Errorf("rope scaling %s: %v rotated dimensions", r.name, rotated)
+	}
+	pairs := int(rotated) / 2
 	var out []jlm.Tensor
 	for _, k := range []string{"short", "long"} {
 		p, ok := r.src.Factors[k]
@@ -439,6 +443,9 @@ func (r *rotaryReading) divisors(c *Config) ([]float32, error) {
 		return nil, nil
 	}
 	rot := c.rotaryBound()["rotated"].(float64)
+	if rot < 0 || rot > math.MaxInt32 {
+		return nil, fmt.Errorf("rope scaling %s: %v rotated dimensions", r.name, rot)
+	}
 	return rotaryDivisors(r.name, int(rot)/2, rot, float64(c.RopeBase), r.params)
 }
 

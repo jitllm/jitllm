@@ -92,7 +92,7 @@ func prefillMatchesForward(t *testing.T, opts ...Option) {
 		tiny := testmodels.Path("tinyllama-1.1b-q3_K_M.gguf")
 		for _, p := range []string{llama, gemma, tiny} {
 			if _, ok := existingModel(p); !ok {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", p)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", p)
 			}
 		}
 		for _, dev := range stepDevices() {

@@ -65,7 +65,7 @@ func TestComposedRowsTokens(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			p := testmodels.Path(file)
 			if _, err := os.Stat(p); err != nil {
-				t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
+				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS)", err)
 			}
 			m, err := model.Open(jlmOf(t, p))
 			if err != nil {
@@ -80,7 +80,7 @@ func TestComposedRowsTokens(t *testing.T) {
 		})
 	}
 	if ran != 2 || capped == 0 {
-		t.Fatalf("%d of 2 models ran, %d with a final softcap", ran, capped)
+		testmodels.Missing(t, "%d of 2 models ran, %d with a final softcap", ran, capped)
 	}
 }
 
@@ -190,7 +190,7 @@ func composedRowsModel(t *testing.T) *model.Model {
 	t.Helper()
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS)", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS)", err)
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

@@ -429,7 +429,7 @@ func (p *rxParser) escape(inClass bool) (rune, runeSet, error) {
 		if p.i+n > len(p.s) {
 			return 0, fmt.Errorf("grammar: a pattern's \\%c escape is short", c)
 		}
-		v, err := strconv.ParseUint(string(p.s[p.i:p.i+n]), 16, 32)
+		v, err := strconv.ParseUint(string(p.s[p.i:p.i+n]), 16, 31)
 		if err != nil {
 			return 0, fmt.Errorf("grammar: a pattern's \\%c escape is not hex", c)
 		}

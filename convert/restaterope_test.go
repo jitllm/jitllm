@@ -31,7 +31,7 @@ func TestRestatedRotaryTableIsAFreshConversion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := testmodels.Path(tc.name)
 			if _, err := os.Stat(src); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", src)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", src)
 			}
 			dir := t.TempDir()
 			fresh := filepath.Join(dir, "fresh"+jlm.Ext)

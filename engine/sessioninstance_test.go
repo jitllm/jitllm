@@ -23,7 +23,7 @@ func TestSessionsShareAnInstance(t *testing.T) {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
-				t.Fatalf("model not present: %s (nor its container)", src)
+				testmodels.Missing(t, "model not present: %s (nor its container)", src)
 			}
 			// The reduction order pinned as hostStepNMSE says: the step runs the
 			// rows' forms and alone runs the one-row forms.
@@ -158,7 +158,7 @@ func TestSessionsStepWithinTheBandOnF16KV(t *testing.T) {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
-				t.Fatalf("model not present: %s (nor its container)", src)
+				testmodels.Missing(t, "model not present: %s (nor its container)", src)
 			}
 			instOpts := []Option{WithKVF16(true)}
 			m, err := model.Open(jlmOf(t, path))

@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUMatVecNormRows forms a pointwise projection and the row
@@ -26,7 +27,7 @@ func TestComposedGPUMatVecNormRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const K, N = 160, 160
 	rng := rand.New(rand.NewSource(16))

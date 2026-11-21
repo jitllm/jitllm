@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -60,7 +61,7 @@ func towerFixtures(t *testing.T) []auditModel {
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no tower fixture is here (see docs/testing.md)")
+		testmodels.Missing(t, "no tower fixture is here (see docs/testing.md)")
 	}
 	return out
 }

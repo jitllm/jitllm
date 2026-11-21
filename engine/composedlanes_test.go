@@ -37,7 +37,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(path); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
@@ -177,6 +177,6 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no arm ran")
+		testmodels.Missing(t, "no arm ran")
 	}
 }

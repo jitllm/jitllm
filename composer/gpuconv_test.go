@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUGridConv is TestComposedCPUGridConv on every device
@@ -22,7 +23,7 @@ func TestComposedGPUGridConv(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	const guard = 64
 	cases := [][5]int{{1, 1, 1, 3, 1}, {1, 7, 5, 3, 1}, {7, 1, 9, 3, 1}, {4, 6, 3, 3, 1}, {5, 5, 17, 5, 1}, {9, 7, 33, 3, 1},

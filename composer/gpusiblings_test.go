@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUSiblingWidths runs q, k and v of one row, 4096 and twice 1024
@@ -21,7 +22,7 @@ import (
 func TestComposedGPUSiblingWidths(t *testing.T) {
 	devs := openDevices()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate runs on one")
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
 	const K = 4096
 	rows := map[jlm.Role]int{jlm.RoleAttnQ: 4096, jlm.RoleAttnK: 1024, jlm.RoleAttnV: 1024}

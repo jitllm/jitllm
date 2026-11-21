@@ -2123,7 +2123,7 @@
   const HERO_EVENT = 'jitllm:hero'
   const heroQuery = new URLSearchParams(location.search)
   let scene = heroQuery.get('hero')
-  if (!SCENES[scene]) scene = 'compile'
+  if (!Object.hasOwn(SCENES, scene)) scene = 'compile'
   // The scene and noise switcher is for comparing heroes, not for visitors: it
   // shows only when the URL already names one (?hero=) or asks (?dev).
   if (['hero', 'dev'].some((k) => heroQuery.has(k))) {
@@ -2145,7 +2145,7 @@
     nav.addEventListener('click', (e) => {
       const b = e.target.closest('button')
       if (!b) return
-      if (b.dataset.scene !== scene) (scene = b.dataset.scene), dispatchEvent(new Event(HERO_EVENT))
+      if (Object.hasOwn(SCENES, b.dataset.scene) && b.dataset.scene !== scene) (scene = b.dataset.scene), dispatchEvent(new Event(HERO_EVENT))
       remember()
       mark()
     })

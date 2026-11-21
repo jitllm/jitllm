@@ -5,10 +5,10 @@ package x86
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/objdump"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestSSEOpsMatchObjdump pins every legacy-SSE method in sse_ops.go against a
@@ -22,8 +22,8 @@ import (
 // into an MMX op, a wrong REX bit names another register), which disassembles
 // cleanly into something else.
 func TestSSEOpsMatchObjdump(t *testing.T) {
-	if _, err := exec.LookPath("objdump"); err != nil {
-		t.Skip("objdump not installed")
+	if _, ok := objdump.Tool(); !ok {
+		testmodels.Missing(t, "no GNU objdump that reads x86-64")
 	}
 	type tc struct {
 		want string

@@ -1467,6 +1467,11 @@ fault	engine/probe/cache_darwin.go	"probe: hw.perflevel0.l1dcachesize: %w"	the h
 fault	engine/probe/cache_darwin.go	"probe: hw.perflevel0.l2cachesize: %w"	the host states no figure; the probe measures without it
 fault	engine/probe/cache_linux.go	"probe: no cache sizes under /sys/devices/system/cpu/cpu0/cache"	the host states no figure; the probe measures without it
 fault	engine/probe/cache_other.go	"probe: no cache sizes on %s"	the host states no figure; the probe measures without it
+context	engine/probe/cache_windows.go	"probe: %w"
+fault	engine/probe/cache_windows.go	"probe: GetLogicalProcessorInformationEx states no cache records"	the host states no figure; the probe measures without it
+fault	engine/probe/cache_windows.go	"probe: GetLogicalProcessorInformationEx: %w"	the host states no figure; the probe measures without it
+fault	engine/probe/cache_windows.go	"probe: a cache record of %d bytes at %d of %d"	the host states no figure; the probe measures without it
+fault	engine/probe/cache_windows.go	"probe: no data cache record names the first processor"	the host states no figure; the probe measures without it
 bug	engine/probe/formed.go	"probe: %s binds %+v, which no probe provides"
 bug	engine/probe/formed.go	"probe: %s has a call word at %d past the argument block"
 bug	engine/probe/formed.go	"probe: %s has no host code"

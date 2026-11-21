@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestStateSampleIsComposed requires every token Instance.Sample draws on the
@@ -33,7 +34,7 @@ import (
 // against the row's plain draw on a share of them.
 func TestMirostatIsComposed(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
-		t.Fatalf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {
@@ -88,7 +89,7 @@ func TestMirostatIsComposed(t *testing.T) {
 
 func TestStateSampleIsComposed(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
-		t.Fatalf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(jlmOf(t, models()["stories15M"]))
 	if err != nil {

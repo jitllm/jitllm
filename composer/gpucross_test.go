@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestComposedGPUCrossAttend is TestComposedCPUCrossAttend on every device
@@ -27,7 +28,7 @@ func TestComposedGPUCrossAttend(t *testing.T) {
 		}
 	}()
 	if len(devs) == 0 {
-		t.Fatal("no GPU backend on this host: the gate proved nothing")
+		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
 	const page = 32
 	ran := 0

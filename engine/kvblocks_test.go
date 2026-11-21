@@ -143,7 +143,7 @@ func TestCPUAttendsABlockHistory(t *testing.T) {
 				})
 			}
 			if ran == 0 {
-				t.Fatalf("no model holds a %v history", kt)
+				testmodels.Missing(t, "no model holds a %v history", kt)
 			}
 		})
 	}
@@ -214,7 +214,7 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 		dir = os.Getenv("JITLLM_LCPP")
 	}
 	if dir == "" {
-		t.Fatal("JITLLM_LLAMACPP_CPU and JITLLM_LCPP are unset: one names a GGUF oracle build holding llama-perplexity, the cross-check")
+		testmodels.Missing(t, "JITLLM_LLAMACPP_CPU and JITLLM_LCPP are unset: one names a GGUF oracle build holding llama-perplexity, the cross-check")
 	}
 	const nctx = 256
 	text, err := os.ReadFile("testdata/prompt-28k.txt")
@@ -223,7 +223,7 @@ func TestBlockHistoryFollowsItsReference(t *testing.T) {
 	}
 	gguf := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if !fileExists(gguf) {
-		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
 	}
 	doc := string(text[:8000])
 	toks, lcBase := lcppLogProbs(t, dir, gguf, doc, nctx, 0, "-ctk", "f32", "-ctv", "f32", "-fa", "on")
@@ -689,7 +689,7 @@ func TestACardHoldsATypedHistorysBytes(t *testing.T) {
 	const nctx = 192
 	gguf := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if !fileExists(gguf) {
-		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
 	}
 	text, err := os.ReadFile("testdata/prompt-28k.txt")
 	if err != nil {
@@ -847,7 +847,7 @@ func twoHistoryTypes(t *testing.T, dev string, kts [2]model.KVType, opts ...gpu.
 	const nctx = 192
 	gguf := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if !fileExists(gguf) {
-		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", gguf)
 	}
 	text, err := os.ReadFile("testdata/prompt-28k.txt")
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestStreamRowsServeOnTheCard holds the composer to the input rows and the
@@ -119,7 +120,7 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no device ran")
+		testmodels.Missing(t, "no device ran")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -250,6 +251,9 @@ func (st *readoutStates) state(name string, f *meta.File, c *Config) error {
 			x, err := num(h.name, h.expr)
 			if err != nil {
 				return err
+			}
+			if x < 0 || x > math.MaxUint32 {
+				return fmt.Errorf("convert: decision head %s is %v, outside a word", h.name, x)
 			}
 			*h.to = uint32(x)
 			head.AsDict().Set(h.name, jinja.NewInt(int64(*h.to)))

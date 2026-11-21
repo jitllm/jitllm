@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -96,7 +97,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no device on this host")
+		testmodels.Missing(t, "no device on this host")
 	}
 }
 

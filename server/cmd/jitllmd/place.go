@@ -242,7 +242,7 @@ func pagerBudget(ctx context.Context, c cli, cn *conn, modelID, maxmem string) e
 // blockRange parses FIRST:LAST, or a single index.
 func blockRange(spec string) (int32, int32, error) {
 	parse1 := func(s string) (int32, error) {
-		n, err := strconv.Atoi(strings.TrimSpace(s))
+		n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 32)
 		if err != nil {
 			return 0, usagef("-move %q: %q is not a block index", spec, s)
 		}

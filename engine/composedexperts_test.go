@@ -54,7 +54,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			src := jlmOf(t, path)
 			m, err := model.Open(src)
@@ -175,7 +175,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no mixture served its banks from pages: this gate proved nothing")
+		testmodels.Missing(t, "no mixture served its banks from pages: this gate proved nothing")
 	}
 }
 

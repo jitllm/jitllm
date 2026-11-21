@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -220,6 +221,6 @@ func TestComposedLatentViolations(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no device ran")
+		testmodels.Missing(t, "no device ran")
 	}
 }

@@ -23,7 +23,7 @@ func TestStepRunsOverStreamedExperts(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			p := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(p)); err != nil {
-				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", p)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS)", p)
 			}
 			m, err := model.Open(jlmOf(t, p))
 			if err != nil {
