@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-// q8Block is jit/cpu.Q8Block, which this package cannot import (the cpu tests
+// q8Block is engine/device/cpu.Q8Block, which this package cannot import (the cpu tests
 // import it).
 const q8Block = 32
 
@@ -47,19 +47,6 @@ func QuantizeQ8(dst []int8, pairs []float32, x []float32, biasC float64) error {
 	return nil
 }
 
-// QuantizeHalfSums fills per-16-element sums, which the 16-wide k-quants need
-// for their bias correction. Stored pre-divided by 4, because each half occupies
-// four of VPDPBUSD's eight lanes and the row ends in a horizontal sum.
-func QuantizeHalfSums(half []float32, q []int8, biasC float64) {
-	for h := 0; h*16+16 <= len(q); h++ {
-		s := 0
-		for _, v := range q[h*16 : h*16+16] {
-			s += int(v)
-		}
-		half[h] = float32(-float64(s) * biasC / 4)
-	}
-}
-
 // QuantizeQ8Range quantizes blocks [lo, hi). Split out so the pool can spread it
 // across cores: quantization is a quarter of decode time.
 func QuantizeQ8Range(dst []int8, pairs []float32, x []float32, biasC float64, lo, hi int) {
@@ -72,7 +59,7 @@ func QuantizeQ8Range(dst []int8, pairs []float32, x []float32, biasC float64, lo
 // It changes no layout, only a value: the pair array stays (d, -sum*biasC/8)
 // at stride 8 per 32 elements, and a wider window writes the same d into every
 // pair it covers. A kernel that knows can hoist the scale out of its sub-block
-// loop. 256 matches a k-quant super-block (llama.cpp's block_q8_K), so a whole
+// loop. 256 matches a k-quant super-block (Q8_K's), so a whole
 // super-block accumulates in int32 with one float multiply.
 //
 // It is a per-model decision: a wider amax is a coarser scale, so it is taken

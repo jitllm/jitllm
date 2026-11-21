@@ -112,7 +112,7 @@ func (o *options) applyChatTemplate(s *jlm.Source) error {
 	return nil
 }
 
-// ggufTemplates reads the chat templates llama.cpp's converter writes: a
+// ggufTemplates reads the chat templates a GGUF carries: a
 // single template under tokenizer.chat_template, or, from a tokenizer_config
 // list, the "default" entry there and every other one under
 // tokenizer.chat_template.<name>. A named set is stored as hfTemplates stores

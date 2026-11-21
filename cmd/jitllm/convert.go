@@ -34,8 +34,13 @@ func convertCmd(args []string) error {
 	chatTpl := fs.String("chat-template", "", "store this file's chat template(s) in place of "+
 		"the source's: a tokenizer_config.json, a chat_template.json, a .jinja file or a "+
 		"model directory")
+	modelCfg := fs.String("config", "", "GGUF only: the publisher's config.json (or its directory), "+
+		"which states what the GGUF dropped: a LongRoPE's factors, and the pictures' resampling filter "+
+		"from the preprocessor_config.json beside it")
 	head := fs.String("head", "", "a GGUF of the model's multi-token-prediction head, published "+
 		"apart from it (unsloth's MTP/mtp-*.gguf): converted as the model's prediction block")
+	modelJSON := fs.String("model-json", "", "safetensors only: convert by this model.json, ahead of "+
+		"the model's own and the built-in library's")
 	plan := fs.Bool("plan", false, "safetensors only: read the shards' headers (by range, for a "+
 		"repository) and print the container the conversion would write -- its size, tensor count "+
 		"and anything it would refuse -- without converting")
@@ -122,9 +127,15 @@ func convertCmd(args []string) error {
 	if *head != "" {
 		opts = append(opts, convert.WithHead(*head))
 	}
+	if *modelCfg != "" {
+		opts = append(opts, convert.WithModelConfig(*modelCfg))
+	}
 	if st {
 		if *q8 {
 			opts = append(opts, convert.WithQ8())
+		}
+		if *modelJSON != "" {
+			opts = append(opts, convert.WithModelJSON(*modelJSON))
 		}
 		if *plan {
 			return planConvert(sm, src, dst, *q8, opts)
@@ -145,6 +156,9 @@ func convertCmd(args []string) error {
 		if *q8 {
 			return fmt.Errorf("jitllm convert: -q8 quantizes a safetensors model; %s is a "+
 				"GGUF, whose weights are already quantized", src)
+		}
+		if *modelJSON != "" {
+			return fmt.Errorf("jitllm convert: -model-json reads a safetensors model; %s is a GGUF", src)
 		}
 		h, err = convert.FromGGUFs(src, mmproj, dst, fp, opts...)
 	}
@@ -248,8 +262,10 @@ func aliasCatalogName(args []string, dst string) {
 	}
 }
 
-// splitPart is llama.cpp's gguf-split naming, NAME-00001-of-00003.gguf.
-var splitPart = regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+// splitPart() is a split GGUF's shard naming, NAME-00001-of-00003.gguf.
+func splitPart() *regexp.Regexp {
+	return regexp.MustCompile(`^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+}
 
 // sourceBytes is how many bytes of model the input holds: the file's size for a
 // GGUF or a single shard, and the sum of the weight files for a HuggingFace
@@ -261,7 +277,7 @@ func sourceBytes(src string) (int64, error) {
 	}
 	if !fi.IsDir() {
 		// A split GGUF counts every part, not part 1 alone.
-		if m := splitPart.FindStringSubmatch(src); m != nil && m[2] == "00001" {
+		if m := splitPart().FindStringSubmatch(src); m != nil && m[2] == "00001" {
 			n, _ := strconv.Atoi(m[3])
 			total := fi.Size()
 			for i := 2; i <= n; i++ {

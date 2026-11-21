@@ -1,241 +1,13 @@
 package jlm
 
+import "fmt"
+
 // The container's model description: typed fields, not a key-value bag. The
 // source format's keys are namespaced by architecture, so reading one needs
 // the architecture and another project's vocabulary, and a key nobody wrote
 // looks like a key nobody read. Here the fields are fixed and their zero
 // values documented. The architecture is a code selecting a graph this engine
 // implements, so an unimplemented one is refused at conversion.
-
-// Arch selects the block graph.
-type Arch uint16
-
-const (
-	ArchNone Arch = 0
-
-	ArchLlama    Arch = 1 // llama, llama2, llama3
-	ArchQwen2    Arch = 2
-	ArchQwen3    Arch = 3
-	ArchQwen3MoE Arch = 4
-	ArchOLMoE    Arch = 5
-	ArchGemma    Arch = 6
-	ArchPhi3     Arch = 7 // phi3, phi4
-	ArchCLIP     Arch = 8 // a vision tower, not a language model
-	// ArchQwen3Next is the hybrid: most layers run a gated delta rule over a
-	// recurrent state and the rest run ordinary attention. See LayerKinds.
-	ArchQwen3Next Arch = 9
-	// ArchQwen2VL is qwen2's block with multimodal rope: position is a
-	// (t, h, w) triple split across RopeSections of the head's rotary pairs.
-	// For a text-only prompt all three are the token index, so M-RoPE equals
-	// NEOX until image rows occupy a span of positions.
-	ArchQwen2VL Arch = 10
-	// ArchGemma2 is gemma1's block plus two extra RMSNorms per block (after
-	// attention and after the FFN: RolePostAttnNorm/RolePostFFNNorm),
-	// sliding-window attention on alternating layers, and logit softcapping,
-	// x = c*tanh(x/c), on the attention scores and the output logits. Leaving
-	// the softcap out is fluent, since only extremes are pulled in.
-	ArchGemma2 Arch = 11
-	// ArchGemma3 is gemma2's block with the softcaps removed, plus QK-norm on
-	// each head before the rotary, a 5-local-1-global window (SWAPeriod 6), and
-	// two rotary bases: local layers at 10000, global at the file's
-	// rope.freq_base (1e6 on gemma-3-1b). The 10000 is an architecture constant
-	// llama.cpp hardcodes, not a key; falling back to the global base is fluent
-	// and wrong in five layers of six.
-	ArchGemma3 Arch = 12
-	// ArchGPTOSS is OpenAI's gpt-oss mixture. Attention carries a learned
-	// per-head sink (RoleAttnSinks) that joins each softmax's denominator; q, k,
-	// v and o are biased; alternate layers slide over 128 positions (SWAPeriod
-	// 2); the rotary is YaRN-scaled (Config.Yarn*). The router and every expert
-	// projection are biased, and the activation is FlagSwiGLUOAI.
-	ArchGPTOSS Arch = 13
-
-	// ArchDeepseek2 is DeepSeek-V2, V3 and R1, and the models that declare
-	// DeepseekV3ForCausalLM under another name: Kimi-K2, Moonlight-16B-A3B, and
-	// GLM-4.7-Flash (Glm4MoeLiteForCausalLM, same tensors). GLM-4.5-Air
-	// (Glm4MoeForCausalLM) has no kv_lora_rank, is not MLA, and is
-	// ArchGLM4MoE.
-	//
-	// MLA: the attention is MQA over a latent. kv_a projects the residual to
-	// KVLoraRank + NRot; the cache stores that row once per position for the
-	// layer, and the up-projections are absorbed into q (RoleAttnKB) and out
-	// (RoleAttnVB), so K and V have different head widths (see
-	// Config.HeadDimV).
-	//
-	// The router is sigmoid rather than softmax, carries a selection-only bias,
-	// scores experts in groups, and scales the surviving weights. See
-	// FlagExpertSigmoid, NExpertGroup and ExpertScale.
-	ArchDeepseek2 Arch = 14
-
-	// ArchKimiLinear is the second hybrid: ArchDeepseek2's MLA attention and
-	// router in its full layers, Kimi Delta Attention in its linear ones. It is
-	// an arch of its own rather than a deepseek2 flag because most blocks do not
-	// run attention at all (Config.LayerKinds says which). KDA is not
-	// qwen3next's delta rule: the decay is per channel, both gates come off a
-	// low-rank bottleneck, and beta arrives alone (kernels.GatedDeltaStepChan).
-	ArchKimiLinear Arch = 15
-
-	// ArchBERT is the BERT encoder, an embedding model. Token, token-type and
-	// learned position embeddings are summed and LayerNormed; every block is
-	// post-norm (LN(x + attn(x)), then LN(x + ffn(x))) with biased q/k/v/o, an
-	// ungated GELU MLP with biases, and bidirectional attention. There is no
-	// head: the last residual is pooled (Flags' pooling bits) and L2-normalised.
-	// all-minilm, mxbai-embed-large, bge-large and others declare this graph.
-	ArchBERT Arch = 16
-	// ArchNomicBERT is nomic-embed-text's encoder: ArchBERT's post-norm block
-	// with no position table (NEOX rotary on q and k), a SwiGLU MLP, and no
-	// projection biases. The converter unfuses its q|k|v as it does phi3's.
-	ArchNomicBERT Arch = 17
-
-	// ArchLlama4 is Meta's Llama 4 (Scout 16E, Maverick 128E): llama's block
-	// with five differences, each fluent when missed.
-	//
-	//	iRoPE          three layers in four rotate and attend within an
-	//	               8192-position chunk (FlagSWAChunked); the fourth has no
-	//	               positional encoding and attends to everything
-	//	               (FlagNoPEGlobal)
-	//	temperature    the NoPE layers scale q by 1 + s*ln(1 + floor((p+o)/f))
-	//	               (AttnTempScale, AttnTempFloor, AttnTempOffset)
-	//	QK L2 norm     a weightless RMSNorm of each q and k head after the
-	//	               rotary, on the rotating layers only (FlagQKL2Norm)
-	//	interleave     dense and mixture blocks alternate by a step (MoEStep)
-	//	router         top-1 sigmoid, not renormalised, weighting the expert's
-	//	               input (FlagExpertWeightIn)
-	//
-	// plus an ungated shared expert as wide as a routed one. None of the five
-	// is visible in a GGUF (llama.cpp hardcodes them against the name), so the
-	// container states them.
-	ArchLlama4 Arch = 18
-
-	// ArchGranite is IBM's Granite 3.x and 4.0 dense and mixture models
-	// (llama.cpp's "granite" and "granitemoe"): llama's block with four scaling
-	// constants:
-	//
-	//	embedding_scale    multiplies the embedding (EmbdScale)
-	//	residual_scale     multiplies every block's attention and FFN output
-	//	                   before its residual add (ResidualScale)
-	//	attention.scale    the score multiplier, in place of 1/sqrt(HeadDim)
-	//	                   (AttnScale)
-	//	logit_scale        divides the logits (LogitScale)
-	//
-	// An arch of its own so an older reader, which never reads the config's
-	// optional tail, refuses it by code rather than running every constant at
-	// one.
-	ArchGranite Arch = 19
-
-	// ArchPhi2 is Microsoft's phi-2 (and phi-1.5), the first classic
-	// transformer block (C6), GPT-2's shape rather than llama's:
-	//
-	//	LayerNorm with a bias      in place of RMSNorm (FlagLayerNorm)
-	//	one norm, two branches     attention and the FFN both read the same
-	//	                           normed input and both add into the
-	//	                           residual (FlagParallel)
-	//	an ungated FFN             up, GELU-tanh, down; the absent gate
-	//	                           tensor says so
-	//	biases on every matrix     q, k, v, o, up, down and the head
-	//	partial NEOX rotary        32 of 80 dimensions on phi-2
-	//
-	// An arch of its own so an older reader refuses it rather than running it
-	// as llama's block.
-	ArchPhi2 Arch = 20
-
-	// ArchStarcoder is BigCode's StarCoder / SantaCoder (GPTBigCode): GPT-2's
-	// block plus a learned absolute position table (RolePosEmbd) added to the
-	// embedding and no rotary (FlagNoPosEnc). Attention is multi-query, q|k|v
-	// is split at conversion, the FFN is ungated GELU-tanh, every matrix is
-	// biased, and the residual is sequential. An older reader would run it with
-	// no positional information.
-	ArchStarcoder Arch = 21
-
-	// ArchCommandR is Cohere's Command-R and Aya ("command-r") and Command-R7B /
-	// Command-A ("cohere2"): the C6 parallel block from one bias-free
-	// LayerNorm, a gated SwiGLU FFN, adjacent-pair rotary, tied embeddings, and
-	// a logit_scale that multiplies (stored as its reciprocal in LogitScale).
-	// cohere2 adds a sliding window on three layers in four (SWAPeriod) and no
-	// rotary on the global layer (FlagNoPEGlobal).
-	ArchCommandR Arch = 22
-
-	// ArchStarcoder2 is BigCode's StarCoder2: the classic sequential block with
-	// biased LayerNorms, biases on q/k/v/o and the ungated GELU-tanh FFN, full
-	// NEOX rotary and grouped kv heads. The code exists so an older reader
-	// refuses it. Its config.json's sliding window is not applied, following
-	// llama.cpp (RULE 7m): the GGUF carries no window key.
-	ArchStarcoder2 Arch = 23
-
-	// ArchStableLM is Stability's StableLM 2 and StableLM 3B: LayerNorm with
-	// biases, biased q/k/v and unbiased o, a gated SwiGLU FFN, NEOX rotary on a
-	// quarter of each head, and a residual that is sequential when the block
-	// carries an FFN norm and parallel when it does not (decided by the tensor,
-	// as llama.cpp does). StableLM 2 12B's per-head q/k LayerNorm is refused.
-	ArchStableLM Arch = 24
-
-	// ArchFalcon is TII's Falcon 7B/40B/180B: the parallel block with an
-	// ungated GELU FFN, MQA or GQA over NEOX rotary, LayerNorm with biases and
-	// no matrix biases. 7B normalises once; 40B and 180B normalise twice, which
-	// the converter writes as the block's attention and FFN norms.
-	ArchFalcon Arch = 25
-
-	// ArchNemotron is NVIDIA's Nemotron-4 family at the sizes llama.cpp runs
-	// (Minitron, Nemotron-Mini): the classic sequential block with LayerNorm
-	// (+bias), NEOX rotary on half of each head, and an ungated squared-ReLU FFN
-	// (FlagReLU2). Its LayerNorm1p's +1 is already in the file (llama.cpp's
-	// converter adds it), so a plain LayerNorm runs; adding it again is fluent.
-	ArchNemotron Arch = 26
-
-	// ArchDBRX is Databricks' DBRX (132B, 16 experts, 4 routed): the sequential
-	// block with bias-free LayerNorms (norm_2, the GGUF's attn_output_norm, is
-	// the FFN norm), a fused q|k|v split at conversion, NEOX rotary, a softmax
-	// top-k mixture of SwiGLU experts, an untied head, and CLIP_QKV: q, k and v
-	// clamped to [-ClampKQV, ClampKQV] after the projection. An arch of its own
-	// so an older reader refuses it instead of skipping the clamp.
-	ArchDBRX Arch = 27
-
-	// ArchGLM4MoE is Zhipu's GLM-4.5, GLM-4.6 and GLM-4.5-Air
-	// (Glm4MoeForCausalLM): a GQA block with biased q/k/v and an unbiased o,
-	// an optional per-head q/k RMSNorm, NEOX rotary on part of each head, and
-	// DeepSeek-V3's router without MLA -- sigmoid gating, a selection-only
-	// bias, renormalisation and a routed scale -- beside an ungated shared
-	// expert, after a dense lead. Its post_attention_norm is the FFN's input
-	// norm. It is not ArchDeepseek2: there is no kv_lora_rank. An arch of its
-	// own so an older reader refuses it by code.
-	ArchGLM4MoE Arch = 28
-
-	// ArchQwen2MoE is Qwen1.5-MoE and Qwen2-57B-A14B: qwen2's block (biased
-	// q/k/v, NEOX rotary) with a softmax top-k mixture that is not
-	// renormalised, beside a shared expert scaled by its own sigmoid gate
-	// (RoleShRouter, qwen3next's). An arch of its own so an older reader
-	// refuses it by code.
-	ArchQwen2MoE Arch = 29
-
-	// ArchErnie45MoE is Baidu's ERNIE 4.5 mixtures (21B-A3B, 300B-A47B):
-	// llama's block (interleaved rotary, a tied head) with a softmax top-k
-	// whose SELECTION adds a per-expert bias to the softmax probability
-	// (RoleExpProbsB), renormalised, beside shared experts, after a dense lead
-	// and interleaved by a step (MoEStep). An arch of its own because the step
-	// is the config's optional tail, which an older reader skips.
-	ArchErnie45MoE Arch = 30
-
-	// ArchHunyuan is Tencent's Hunyuan, dense (0.5B-7B) and mixture
-	// (Hunyuan-A13B): llama's block with NEOX rotary and a per-head q/k
-	// RMSNorm applied AFTER the rotary (FlagQKNormPostRope); the mixture is a
-	// renormalised softmax top-k beside one ungated shared expert in every
-	// block. An arch of its own so an older reader, which would norm before the
-	// rotary, refuses it by code.
-	ArchHunyuan Arch = 31
-
-	archMax = ArchHunyuan
-)
-
-var archNames = [...]string{
-	ArchLlama: "llama", ArchQwen2: "qwen2", ArchQwen3: "qwen3", ArchQwen3MoE: "qwen3moe",
-	ArchOLMoE: "olmoe", ArchGemma: "gemma", ArchPhi3: "phi3", ArchCLIP: "clip",
-	ArchQwen3Next: "qwen3next", ArchQwen2VL: "qwen2vl", ArchGemma2: "gemma2",
-	ArchGemma3: "gemma3", ArchGPTOSS: "gptoss", ArchDeepseek2: "deepseek2",
-	ArchKimiLinear: "kimilinear", ArchBERT: "bert", ArchNomicBERT: "nomic-bert", ArchLlama4: "llama4",
-	ArchGranite: "granite", ArchPhi2: "phi2", ArchStarcoder: "starcoder",
-	ArchCommandR: "command-r", ArchStableLM: "stablelm", ArchStarcoder2: "starcoder2", ArchFalcon: "falcon",
-	ArchNemotron: "nemotron", ArchDBRX: "dbrx", ArchGLM4MoE: "glm4moe",
-	ArchQwen2MoE: "qwen2moe", ArchErnie45MoE: "ernie4_5-moe", ArchHunyuan: "hunyuan",
-}
 
 // LayerKind says what one repeating unit is. The container stores one per
 // layer rather than a rule: the source carries no per-layer key, and engines
@@ -266,13 +38,13 @@ const (
 	// over NEmbd channels, C times that, out_proj. Its only state is the
 	// convolution's window.
 	LayerShortConv LayerKind = 10
-	// LayerMamba1 is Mamba-1's selective scan (Mamba, FalconMamba, Jamba): in
+	// LayerScan is Mamba-1's selective scan (Mamba, FalconMamba, Jamba): in
 	// the delta rule's terms every one of SSM.Inner channels is a value head
 	// of one row, with B and C shared by all of them and a decay that is a
 	// vector over the state (exp(dt*A), A one row of StateSize per channel).
 	// dt comes off a low-rank bottleneck of x (RoleSSMXDt, RoleSSMDtProj), B
 	// and C off x too, each optionally RMS-normed (Jamba, FalconMamba).
-	LayerMamba1 LayerKind = 11
+	LayerScan LayerKind = 11
 )
 
 // Recurrent reports whether a layer keeps a recurrent state in place of a KV
@@ -281,7 +53,7 @@ const (
 // prefix cache's restore point, a session's reset -- asks this, not one kind.
 func (k LayerKind) Recurrent() bool {
 	return k == LayerLinearAttn || k == LayerSSD || k == LayerSSDAttn || k == LayerShortConv ||
-		k == LayerMamba1
+		k == LayerScan
 }
 
 // Attends reports whether a layer runs softmax attention over a KV cache.
@@ -321,56 +93,19 @@ func (k LayerKind) String() string {
 		return "ssd+attn"
 	case LayerShortConv:
 		return "shortconv"
-	case LayerMamba1:
+	case LayerScan:
 		return "mamba1"
 	}
 	return "layer(" + itoa(uint64(k)) + ")"
 }
 
-func (a Arch) String() string {
-	if n := a.name(); n != "" {
-		return n
-	}
-	return "arch(" + itoa(uint64(a)) + ")"
-}
-
-func (a Arch) name() string {
-	if int(a) < len(archNames) && archNames[a] != "" {
-		return archNames[a]
-	}
-	if n := denseArchNames[a]; n != "" {
-		return n
-	}
-	if n := ssmArchNames[a]; n != "" {
-		return n
-	}
-	if n := moe2ArchNames[a]; n != "" {
-		return n
-	}
-	if n := flagshipArchNames[a]; n != "" {
-		return n
-	}
-	if n := encoderArchNames[a]; n != "" {
-		return n
-	}
-	return visionArchNames[a]
-}
-
-// Valid reports whether a is an architecture this format defines: a code
-// with a name, so a gap between two ranges of codes is not one.
-func (a Arch) Valid() bool { return a != ArchNone && (a <= archMax || a.name() != "") }
-
-// Encoder reports whether a is an embedding encoder (the BERT family): run by
-// the engine's encoder rather than its decoder graph, with no KV cache and no
-// logits. A decoder that pools (FlagPoolMean and its siblings) is not one.
-func (a Arch) Encoder() bool {
-	return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT || a == ArchLFM2Enc
-}
-
 // Config is the model description. Every field is written by the converter and
 // read by the engine; nothing is derived at load from a string.
 type Config struct {
-	Arch Arch
+	// legacy is the architecture code a record written before v31 named: an
+	// opaque number the migrations carry from one old version to the next
+	// and hand the converter's check (Stating). From v31 a record names none.
+	legacy uint16
 
 	NLayer  uint32
 	NEmbd   uint32
@@ -414,6 +149,16 @@ type Config struct {
 	// the sections must sum to NRot/2 (Qwen2-VL-2B: [16, 24, 24, 0], head_dim
 	// 128). Read as dimensions they rotate a quarter of each head, fluently.
 	RopeSections [4]uint32
+	// RopeTable is the text rotary's table where its pairs turn by several
+	// position axes: each entry's axis and frequency, in the order a row's
+	// table holds them (RopePairs). PictureRope is how a picture's rows lie
+	// on those axes. Together the twenty-ninth optional tail.
+	RopeTable   []RopePair
+	PictureRope PictureRope
+	// Generation is how the model generates when a caller asks nothing,
+	// stated at conversion: the thirtieth optional tail. Nil in a container
+	// written before it, which generates as ReferenceGeneration says.
+	Generation *Generation
 
 	// Sliding-window attention. Zero for either means every layer sees the
 	// whole history.
@@ -427,25 +172,24 @@ type Config struct {
 	AttnSoftcap  float32
 	FinalSoftcap float32
 
-	// YaRN rotary scaling. YarnFactor 0 means none. The per-pair frequency is
-	// base^(-2p/NRot) mixed toward that divided by YarnFactor by a linear ramp
-	// over pairs, from full extrapolation below the pair corr(YarnBetaFast) to
-	// full interpolation above corr(YarnBetaSlow), where
+	// YaRN rotary scaling. YarnFactor 0 means none. The rotary's angles turn
+	// by the factors the container states per pair (RoleRopeFreqs, and
+	// RoleRopeFactorsLong past YarnOrigCtx), where the converter states
+	// YaRN's divisors (convert.StateRotary); YarnFactor stays for the score's
+	// magnitude (YarnLogMul), which is not a frequency. YarnOrigCtx is the
+	// context the rotary was trained to, past which LongRoPE turns its long
+	// factors. The cos and sin magnitude is AttnFactor's.
 	//
-	//	corr(b) = NRot * ln(YarnOrigCtx / (2*pi*b)) / (2 * ln(RopeBase))
-	//
-	// floored and ceiled respectively unless FlagYarnExact is set, and clamped
-	// to [0, NRot-1]. The magnitude correction is not here: the converter folds
-	// it into AttnFactor, which already scales cos and sin.
+	// YarnBetaFast, YarnBetaSlow and RopeLinear are a scaling stated by its
+	// method, which an older writer kept: the correction range and a linear
+	// factor dividing every angle. A container carrying either is refused
+	// (UpgradeError) and converted again, since the rotary's per-pair
+	// factors it carries do not include them.
 	YarnFactor   float32
 	YarnOrigCtx  uint32
 	YarnBetaFast float32
 	YarnBetaSlow float32
-
-	// RopeLinear divides every rotary angle of the global layers by itself
-	// (linear position interpolation, gemma-3-4b's factor 8). Zero means none.
-	// Layers on the local rotary (RopeBaseSWA) are not scaled.
-	RopeLinear float32
+	RopeLinear   float32
 
 	// HeadDimV is the value head's width when it differs from HeadDim. Zero
 	// means they are equal, which is every architecture but MLA: its absorbed
@@ -492,8 +236,8 @@ type Config struct {
 	// YarnLogMul is the multiplier on YaRN's magnitude correction, ln(factor).
 	// Zero means the standard 0.1.
 	//
-	// It is 0.1*mscale_all_dim, the convention llama.cpp writes into
-	// rope.scaling.yarn_log_multiplier (and divides by 0.1 at load). It reaches
+	// It is 0.1*mscale_all_dim, the value a GGUF's
+	// rope.scaling.yarn_log_multiplier holds (mscale_all_dim is it over 0.1). It reaches
 	// two places: AttnFactor scales cos and sin, and the attention softmax is
 	// scaled by the square of the same correction.
 	YarnLogMul float32
@@ -513,21 +257,11 @@ type Config struct {
 	NExpertGroup     uint32
 	NExpertGroupUsed uint32
 
-	// NMTP is how many multi-token-prediction blocks follow the trunk: blocks
-	// NLayer..NLayer+NMTP-1 of the text page array. Zero means none. A block
-	// of that range is an ordinary attention block of this architecture (its
-	// layer kind is LayerFullAttn whatever LayerKinds says of the trunk, and a
-	// mixture where MoEAt says so) plus the roles only a prediction block has:
-	//
-	//	enorm(embedding of the next token)   RoleNextnENorm
-	//	hnorm(the trunk's normed hidden)     RoleNextnHNorm
-	//	eh_proj([enorm ; hnorm])             RoleNextnEHProj, 2*NEmbd -> NEmbd
-	//	the block, then its own head norm    RoleNextnHeadNorm (optional:
-	//	                                     the trunk's output norm otherwise)
-	//
-	// and the head is the trunk's unless the block carries RoleNextnHead. The
-	// blocks serve speculative drafting only; nothing in the trunk reads them.
-	NMTP uint32
+	// legacyPredict is the count of prediction blocks a record written before
+	// v33 carried, which the migration to v33 holds to the blocks the graph
+	// statement states past the trunk (PredictionBlocks). A v33 record
+	// carries no count.
+	legacyPredict uint32
 
 	// MoEStep interleaves dense and mixture blocks: block il has a mixture
 	// feed-forward when (il+1) % MoEStep == 0. Zero or one means every block
@@ -566,15 +300,16 @@ type Config struct {
 	// ArchDBRX; see encodeConfig.
 	ClampKQV float32
 
-	// The sliding layers' own attention geometry, when it is not the global
-	// layers': Gemma 4 runs its sliding layers at head_dim 256 and its global
-	// ones at 512, with different kv head counts on the 31B and 26B and a
-	// different rotary width. HeadDim, NKVHead and NRot above are the GLOBAL
-	// layers' (the source's key_length and rope.dimension_count); these apply
-	// where Config.SWA says a layer slides. Zero means the same as the global
-	// field. A fourth optional tail, written only for ArchGemma4; see
-	// encodeConfig.
-	HeadDimSWA, NKVHeadSWA, NRotSWA uint32
+	// DeltaDecay and DeltaGate are the delta rule's decay over its logits (one
+	// input, a row of decays in (0, 1)) and its output gate over the gate's
+	// projection and the normed output (two inputs), as the converter states
+	// them (DeltaDecaySoftplus and friends); nil on a model with no delta
+	// rule. A tail of their own; see encodeConfig.
+	DeltaDecay, DeltaGate *Program
+	// Geoms is each text block's own geometry where the blocks do not all
+	// attend and feed forward at the model's (NKVHead, HeadDim, NRot and NFFN
+	// above): one per block, or none. A tail of its own; see encodeConfig.
+	Geoms []Geom
 	// Flags2 are the quirks past the 32 bits of Flags, carried in the same
 	// tail. See Flag2VNorm.
 	Flags2 Flags2
@@ -591,13 +326,14 @@ type Config struct {
 	// written only for ArchDeepseek32; see encodeConfig.
 	IdxHeads, IdxHeadDim, IdxTopK uint32
 
-	// Gemma 3n (ArchGemma3n): AltUp parallel residual streams (zero for one,
+	// PredStreams residual streams each block predicts from all of them and
+	// corrects by its active stream's change (Gemma 3n's AltUp; zero for one,
 	// the ordinary residual), and a gaussian top-k on the gate of the first
 	// NSparse blocks' FFNs, which keeps what lies SparseStd standard
 	// deviations above the gate row's mean. A sixth optional tail, written
 	// only for ArchGemma3n; see encodeConfig.
-	AltUp, NSparse uint32
-	SparseStd      float32
+	PredStreams, NSparse uint32
+	SparseStd            float32
 
 	// MiniMax Sparse Attention (ArchMiniMaxM3): the indexer scores BLOCKS of
 	// IdxBlock positions, each block by its best position, one selection per
@@ -656,10 +392,9 @@ type Config struct {
 	NGramEOS, NGramImage         uint32
 	NGramMul, NGramOff, NGramVoc []uint64
 
-	// A decision model (decision.go): its readout, the head blocks that end
-	// the stack and the token budget of the question and options, and its
-	// fitted temperatures. A tenth optional tail; see encodeConfig.
-	Decision           DecisionKind
+	// A decision model (decision.go): the head blocks that end the stack and
+	// the token budget of the question and options, and its fitted
+	// temperatures. A tenth optional tail; see encodeConfig.
 	DecisionBlocks     uint32
 	DecisionHeadTokens uint32
 	DecisionTemps      []DecisionTemp
@@ -672,6 +407,63 @@ type Config struct {
 	// see encodeConfig.
 	DecisionRouting uint32
 	DecisionEps     float32
+	// DecisionLabels is a label readout's statement, nil for a readout of
+	// another mechanism. The twenty-fifth optional tail; see encodeConfig.
+	DecisionLabels *DecisionLabels
+	// MarkerPrompt is a marker head's prompt (Flag2HeadBlocks), nil for a
+	// readout of another mechanism. The twenty-sixth optional tail.
+	MarkerPrompt *MarkerPrompt
+	// JointHead is a joint head's statement (Clef's JointSchemaHead), nil
+	// for a readout of another mechanism. The twenty-seventh optional tail.
+	JointHead *JointHead
+	// Blocks are the blocks' graphs where the converter states them.
+	Blocks BlockGraphs
+	// Front are the graphs of the parts outside the blocks where the
+	// converter states them (FrontGraphs). The thirty-first optional tail.
+	Front FrontGraphs
+
+	// Acts are the FFN activations the blocks apply, each stated in the op
+	// language (Expr), and ActLayers each layer's index into them (none:
+	// Acts[0] for every layer). The converter states them; the engine reads
+	// no activation's formula. A thirteenth optional tail; see encodeConfig.
+	Acts      []Expr
+	ActLayers []uint8
+	// RouterScore is a mixture's score of each expert from its router's
+	// logits (operand 0, the row of every expert's logit), stated in the op
+	// language: what the selection ranks and the routed weights are taken
+	// from. Empty where the model has no mixture, or routes by weights that
+	// are not the selected scores. The converter states it; the engine reads
+	// no gating function's name. A fourteenth optional tail; see
+	// encodeConfig.
+	RouterScore Expr
+	// RouterWeight is a mixture's routed weight where it is not the
+	// selected score, stated in the op language over operand 0, the
+	// router's logits with the experts picked before this pick removed
+	// (-inf), and operand 1, this pick's logit: a row of every expert's, the
+	// pick's element its weight. Empty where the weights are the selected
+	// scores. A fifteenth optional tail; see encodeConfig.
+	RouterWeight Expr
+	// Streams is a residual of several streams, where the converter states
+	// them: their count, what each block's sublayers read and write, and
+	// the head's read (streams.go). The sixteenth optional tail; see
+	// encodeConfig.
+	Streams Streams
+	// Revision is the converter's statement revision the container was
+	// written at (StatementRevision), 0 for one written before it. With
+	// RopeScaleSWA and BidirLayers, the seventeenth optional tail.
+	Revision uint8
+	// RopeScaleSWA is the sliding layers' rotary magnitude (YaRN's attention
+	// factor) where it is not the full layers' (AttnFactor); 0 is theirs.
+	RopeScaleSWA float32
+	// BidirLayers is, per layer, whether a picture's rows see each other in
+	// its attention; nil is every layer.
+	BidirLayers []bool
+	// ActQuant is how every projection's input is quantized before the
+	// product, ActQuantNone for not at all. The eighteenth optional tail.
+	ActQuant ActQuant
+	// Selection is how the blocks' attention selects the history it reads,
+	// nil where it reads every position. The twentieth optional tail.
+	Selection *Selection
 
 	Flags Flags
 }
@@ -705,10 +497,12 @@ const (
 	// post-normed by RolePostFFNNorm2; its router reads an RMSNorm of the
 	// residual weighted by RoleRouterNorm; the two branches' sum is post-normed
 	// by RolePostFFNNorm before the residual add. The dense MLP is carried as
-	// the shared expert's roles (RoleShExpGate/Up/Down), ungated.
+	// the shared expert's roles (RoleShExpGate/Up/Down), ungated. The bit is
+	// the converter's: a reader takes the block from the roles it holds.
 	Flag2DenseMoE Flags2 = 1 << 1
-	// Flag2DoubleFFN makes the feed-forward of every KV-sharing layer twice
-	// NFFN wide (Gemma 4's use_double_wide_mlp).
+	// Flag2DoubleFFN is an older writer's statement that the feed-forward of
+	// every KV-sharing layer is twice NFFN wide; a reader takes it into Geoms
+	// (olderGeoms), and nothing writes it.
 	Flag2DoubleFFN Flags2 = 1 << 2
 	// Flag2SwiGLUClamp makes the gated activation DeepSeek V4's clamped
 	// SwiGLU: silu(min(gate, 10)) * clamp(up, -10, 10), in the experts and
@@ -723,54 +517,131 @@ const (
 	// where qwen3next's gate is silu(z) (Qwen3.8-Flash-Next's
 	// output_gate_type).
 	Flag2DeltaSigmoidGate Flags2 = 1 << 5
+	// Flag2CentredConv is an older writer's statement that a short
+	// convolution reads the rows on both sides of its own, which a
+	// non-causal model's does (FlagNonCausal); nothing reads or writes it.
+	Flag2CentredConv Flags2 = 1 << 6
+	// Flag2RopeTail is a rotary that turns each head's last NRot elements,
+	// the head's first HeadDim-NRot left as they are.
+	Flag2RopeTail Flags2 = 1 << 7
+	// Flag2KeyValue is an attention that reads its key as its value: the
+	// block stores no v projection, and the value is the key after its norm
+	// and rotary.
+	Flag2KeyValue Flags2 = 1 << 8
+	// Flag2QUnitNorm is q's heads RMS-normed with no weight before the
+	// rotary.
+	Flag2QUnitNorm Flags2 = 1 << 9
+	// Flag2OutUnrotated is an attention output turned back by the rotary at
+	// the query's position before the output projection (a value that is
+	// its rotated key carries the rotation).
+	Flag2OutUnrotated Flags2 = 1 << 10
+	// Flag2HeadBlocks is a marker head whose DecisionBlocks blocks after the
+	// trunk are the model's blocks: pre-norm, LayerNorms at DecisionEps,
+	// DecisionHeads heads attending both ways with no position encoding and
+	// no window, the first adding the question type's row of its
+	// RoleTokenTypes to its input; the trunk's last block closes on the
+	// trunk's final norm (RoleLayerOutNorm), and the model's head scores the
+	// marker rows.
+	Flag2HeadBlocks Flags2 = 1 << 11
+	// Flag2MarkerPointer is a pointer readout over the final rows: the output
+	// norm and RoleScorerOut's projection of the prompt's last row and of
+	// each option's marker row, an option's score the last row's first half
+	// dotted with its marker's second half over the root of their width.
+	// Its prompt is MarkerPrompt.
+	Flag2MarkerPointer Flags2 = 1 << 13
+	// Flag2MediaPrefix means a media prefix's rows -- a request's pictures
+	// before its text -- attend and convolve within the prefix alone, the
+	// text's rows over every row (d1-omni's encoder: its media queries mask
+	// the text keys, and its convolution's right tap stops at the prefix).
+	Flag2MediaPrefix Flags2 = 1 << 14
+	// Flag2MediaUncalibrated means a decision readout asked about media
+	// reads its logits at temperature 1, its stated temperatures the text
+	// alone's (d1-omni's calibrate).
+	Flag2MediaUncalibrated Flags2 = 1 << 15
+	// Flag2SWAGlobalFirst makes the first layer of each SWAPeriod the one
+	// attending to everything, the rest windowed (ModernBERT's), where the
+	// period's last is otherwise.
+	Flag2SWAGlobalFirst Flags2 = 1 << 12
 )
 
 // Has reports whether every bit of f2 is set.
 func (f Flags2) Has(f2 Flags2) bool { return f&f2 == f2 }
 
-// HeadDimAt, NKVHeadAt and NRotAt are text block b's attention geometry:
-// the sliding layers' own where the model has one (HeadDimSWA and friends),
-// the model's otherwise.
-func (c *Config) HeadDimAt(b int) uint32 { return c.swaOr(b, c.HeadDimSWA, c.HeadDim) }
+// Geom is one block's shape: its kv heads, their width, the rotary width it
+// turns and its feed-forward width.
+type Geom struct {
+	NKVHead, HeadDim, NRot, NFFN uint32
+}
 
-func (c *Config) NKVHeadAt(b int) uint32 { return c.swaOr(b, c.NKVHeadSWA, c.NKVHead) }
+// QKVAct is the element-wise function q, k and v pass through straight
+// after their projections (and biases), before any norm or rotary: the clamp
+// to [-ClampKQV, ClampKQV] where the container states a bound, nil where it
+// states none.
+func (c *Config) QKVAct() *Expr {
+	if c.ClampKQV == 0 {
+		return nil
+	}
+	b := c.ClampKQV
+	return &Expr{Terms: []Term{
+		{Fn: FnMax, Args: [3]Arg{{Kind: ArgIn}, {Kind: ArgConst, Value: -b}}},
+		{Fn: FnMin, Args: [3]Arg{{Kind: ArgTerm, Index: 0}, {Kind: ArgConst, Value: b}}},
+	}}
+}
 
-func (c *Config) NRotAt(b int) uint32 { return c.swaOr(b, c.NRotSWA, c.NRot) }
+// GeomAt is text block b's geometry: its own where Geoms states one, the
+// model's otherwise.
+func (c *Config) GeomAt(b int) Geom {
+	if b >= 0 && b < len(c.Geoms) {
+		return c.Geoms[b]
+	}
+	return Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot, NFFN: c.NFFN}
+}
+
+// HeadDimAt, NKVHeadAt and NRotAt are text block b's attention geometry
+// (GeomAt).
+func (c *Config) HeadDimAt(b int) uint32 { return c.GeomAt(b).HeadDim }
+
+func (c *Config) NKVHeadAt(b int) uint32 { return c.GeomAt(b).NKVHead }
+
+func (c *Config) NRotAt(b int) uint32 { return c.GeomAt(b).NRot }
 
 // KVShared reports that text block b computes no k and v of its own and
-// attends to KVSource(b)'s history.
+// attends to KVSource(b)'s history: an attending block of the trunk's last
+// NKVShared.
 func (c *Config) KVShared(b int) bool {
-	return c.NKVShared != 0 && uint32(b) >= c.NLayer-c.NKVShared
+	return c.NKVShared != 0 && uint32(b) >= c.NLayer-c.NKVShared && uint32(b) < c.NLayer && c.layerKind(b).Attends()
 }
 
 // KVSource is the block whose history block b attends to: b itself, or for a
-// KV-sharing block the last block before the shared run of b's own kind
-// (sliding or global), as transformers' store_full_length_kv picks it. -1
+// KV-sharing block the last attending block before the shared run of b's own
+// kind (sliding or global), as transformers' store_full_length_kv picks it. -1
 // when no such block exists, which a reader refuses.
 func (c *Config) KVSource(b int) int {
 	if !c.KVShared(b) {
 		return b
 	}
-	sliding := c.swaOr(b, 1, 0) == 1
 	for j := int(c.NLayer-c.NKVShared) - 1; j >= 0; j-- {
-		if (c.swaOr(j, 1, 0) == 1) == sliding {
+		if c.Sliding(j) == c.Sliding(b) && c.layerKind(j).Attends() {
 			return j
 		}
 	}
 	return -1
 }
 
-// NFFNAt is text block b's feed-forward width: twice NFFN on a KV-sharing
-// block under Flag2DoubleFFN.
-func (c *Config) NFFNAt(b int) uint32 {
-	if c.Flags2.Has(Flag2DoubleFFN) && c.KVShared(b) {
-		return 2 * c.NFFN
+// NFFNAt is text block b's feed-forward width (GeomAt).
+func (c *Config) NFFNAt(b int) uint32 { return c.GeomAt(b).NFFN }
+
+// HeadBlocks is how many blocks after the trunk are the model's blocks
+// (Flag2HeadBlocks's DecisionBlocks), before any prediction block.
+func (c *Config) HeadBlocks() uint32 {
+	if c.Flags2.Has(Flag2HeadBlocks) {
+		return c.DecisionBlocks
 	}
-	return c.NFFN
+	return 0
 }
 
 func (c *Config) swaOr(b int, swa, global uint32) uint32 {
-	if swa != 0 && c.SWAWindow > 0 && c.SWAPeriod > 0 && uint32(b)%c.SWAPeriod < c.SWAPeriod-1 {
+	if swa != 0 && c.Sliding(b) {
 		return swa
 	}
 	return global
@@ -824,10 +695,11 @@ const (
 	// both this and FlagGELU is refused at load.
 	FlagSwiGLUOAI Flags = 1 << 11
 
-	// FlagYarnExact uses YaRN's correction range as computed rather than
-	// floored and ceiled. gpt-oss's own configuration says so ("truncate":
-	// false), which matches OpenAI's reference implementation; llama.cpp always
-	// rounds. The source GGUF does not carry the choice.
+	// FlagYarnExact takes YaRN's correction range as computed rather than
+	// floored and ceiled, as gpt-oss's own configuration says ("truncate":
+	// false), matching OpenAI's reference implementation. It is the
+	// converter's: StateRotary states the range's divisors per pair and
+	// clears it.
 	FlagYarnExact Flags = 1 << 12
 
 	// FlagExpertSigmoid makes the router's gate sigmoid over each expert's
@@ -848,8 +720,8 @@ const (
 
 	// FlagNonCausal says every position attends to every position of its
 	// input: an encoder's attention (BERT, EmbeddingGemma). With a sliding
-	// window it is symmetric, |i - j| <= SWAWindow/2, as llama.cpp's
-	// LLAMA_SWA_TYPE_SYMMETRIC and transformers compute.
+	// window it is symmetric, |i - j| <= SWAWindow/2, as the model's
+	// transformers class computes.
 	FlagNonCausal Flags = 1 << 15
 
 	// The pooling bits say how an embedding is read out of the last residual,
@@ -887,9 +759,8 @@ const (
 	FlagExpertWeightIn Flags = 1 << 22
 	// FlagDeltaKeyTiled pairs value head vh of a gated delta rule with key head
 	// vh % n_k_heads (tiled) instead of vh / (n_v_heads/n_k_heads) (grouped).
-	// It records how the file orders its value heads: llama.cpp's qwen35
-	// converter reorders them to tiled (so ggml_repeat can broadcast the keys)
-	// and its qwen3next converter does not. Undoing the reorder would split
+	// It records how the file orders its value heads: a qwen35 GGUF
+	// holds them reordered to tiled and a qwen3next GGUF does not. Undoing the reorder would split
 	// Q4_K super-blocks of ssm_out, so the container states the pairing. With
 	// one value head per key head the pairings coincide and the flag is unset.
 	FlagDeltaKeyTiled Flags = 1 << 23
@@ -978,7 +849,7 @@ type SSMConfig struct {
 	NHeadV     uint32 // value heads, which is also how many decay rates there are
 }
 
-// Vision is the tower's description. Present only when Arch is ArchCLIP.
+// Vision is the tower's description. Present only in a tower's source.
 type Vision struct {
 	NLayer    uint32
 	NEmbd     uint32
@@ -1006,7 +877,7 @@ type Vision struct {
 
 	// WinPattern and WinSize are Qwen2.5-VL's window attention: every block
 	// attends inside windows of WinSize x WinSize pixels except each
-	// WinPattern'th, which attends to the whole image (llama.cpp's n_wa_pattern;
+	// WinPattern'th, which attends to the whole image (a GGUF's clip.vision.n_wa_pattern;
 	// transformers' fullatt_block_indexes are its multiples, less one). Zero
 	// for a tower whose every block sees every patch. An optional tail of the
 	// record, written only when set, so every other tower's section is the
@@ -1022,9 +893,15 @@ type Vision struct {
 	Tolerance float32
 
 	// Audio is the container's audio tower, nil for none: its blocks follow
-	// the vision blocks in the tower's page array (see Audio). The last
-	// optional tail of the record.
+	// the vision blocks in the tower's page array (see Audio). An optional
+	// tail of the record; a stated tower after it with no audio writes it
+	// as zeros, which reads back as none.
 	Audio *Audio
+
+	// Tower is the tower as the converter states it (Tower), nil for a
+	// container converted before towers were stated, which must be
+	// converted again. The last optional tail of the record.
+	Tower *Tower
 }
 
 // Projector is how tower embeddings become language-model tokens.
@@ -1041,13 +918,13 @@ const (
 	// two-matrix MLP. Scale x Scale neighbouring patches are concatenated into
 	// one row of NEmbd*Scale^2, then linear, GELU, linear.
 	//
-	// llama.cpp permutes the patch grid before block 0 so each 2x2 group lands
+	// The reference's processor orders the patches so each 2x2 group lands
 	// in consecutive rows; this keeps raster order and groups spatially at the
 	// merger. Attention is permutation-equivariant and the rotary takes each
 	// patch's own (row, column), so the embeddings are the same with no
 	// permutation kernels. The group's internal order must still match:
-	// row-major, dy outer and dx inner, as llama.cpp's permute chain
-	// {1280,8,8} -> {2560,4,8} -> {2560,4,2,4} -> {2560,2,4,4} spells out.
+	// row-major, dy outer and dx inner, as Qwen2VLImageProcessor's transpose
+	// (grid_h/2, grid_w/2, dy, dx) spells out.
 	ProjQwen2VL Projector = 3
 	// ProjGemma3 is Gemma 3's: the SigLIP grid average-pooled Scale x Scale
 	// (64x64 patches to 16x16 tokens), an RMSNorm, and one matrix with no
@@ -1066,7 +943,7 @@ const (
 	// groups CONSECUTIVE rows where qwen2vl_merger groups spatial ones, and the
 	// merged rows are put back into raster order at the end.
 	ProjQwen25VL Projector = 6
-	// ProjResampler is MiniCPM-V's (llama.cpp's "resampler"): a fixed set of
+	// ProjResampler is MiniCPM-V's (a GGUF's projector type "resampler"): a fixed set of
 	// learned queries cross-attends over the tower's patches, keys carrying a
 	// 2-D sin/cos position, so every image or slice becomes the same number of
 	// tokens whatever its grid. The tower's own positions are a learned table
@@ -1101,11 +978,154 @@ func (p Projector) String() string {
 	case ProjJanus:
 		return "janus_pro"
 	}
-	if n, ok := visionFamProjNames[p]; ok {
+	if n, ok := visionFamProjName(p); ok {
 		return n
 	}
-	if n := visionProjNames[p]; n != "" {
+	if n, ok := visionProjName(p); ok {
 		return n
 	}
 	return "projector(" + itoa(uint64(p)) + ")"
+}
+
+// GLU is the bounded gated unit an FFN's activation is, as the container
+// states it, in numbers: act(gate) * up, where the gate is clamped above at
+// GateMax and up to [UpMin, UpMax] (where Clamp), up then shifted by UpShift;
+// the gate's linear factor, and then up, are each bounded b*tanh(x/b) by
+// GateTanh and UpTanh (where set); and the activation is the gate's linear
+// factor over 1 + exp(-SigScale * gate), SigScale zero being one. The zero
+// value is SwiGLU. The numbers are the flags' and fields' definitions:
+// FlagSwiGLUOAI is swiglu-oai's limit 7, alpha 1.702 and up + 1;
+// Flag2SwiGLUClamp a swiglu_limit of 10; SituBeta and SituLinearBeta situ's
+// two bounds.
+type GLU struct {
+	Clamp                          bool
+	GateMax, UpMin, UpMax, UpShift float32
+	SigScale                       float32
+	GateTanh, UpTanh               float32
+}
+
+// Bounded reports whether g is other than SwiGLU.
+func (g GLU) Bounded() bool { return g != GLU{} }
+
+// GLU is the gated unit c's activation states.
+func (c *Config) GLU() GLU {
+	switch {
+	case c.Flags.Has(FlagSwiGLUOAI):
+		return GLU{Clamp: true, GateMax: 7, UpMin: -7, UpMax: 7, UpShift: 1, SigScale: 1.702}
+	case c.Flags2.Has(Flag2SwiGLUClamp):
+		return GLU{Clamp: true, GateMax: 10, UpMin: -10, UpMax: 10}
+	case c.SituBeta != 0:
+		return GLU{GateTanh: c.SituBeta, UpTanh: c.SituLinearBeta}
+	}
+	return GLU{}
+}
+
+// StatementRevision is the revision of what this converter states: a
+// container written at an older one is upgraded (jitllm upgrade) where the
+// later statements matter to it. Revision 4 states a marker head's block
+// activations after the trunk's, revision 5 a period whose global layer is
+// its first, revision 6 a marker head's blocks' graphs (HeadGraphsRevision).
+const StatementRevision = HeadGraphsRevision
+
+// SourceRevision is the latest revision that states what only a source's
+// architecture says: an upgrade cannot state it from the container.
+const SourceRevision = 5
+
+// HeadGraphsRevision is the first revision whose stated graphs include a
+// marker head's blocks (Config.HeadBlocks); one written before it states
+// the other blocks' alone.
+const HeadGraphsRevision = 6
+
+// ActQuant is a model's activation quantization.
+type ActQuant uint8
+
+const (
+	// ActQuantNone leaves a projection's input as it is.
+	ActQuantNone ActQuant = iota
+	// ActQuantRowInt8 quantizes a projection's input to int8 per row by its
+	// absolute maximum (BitNet b1.58's BitLinear): the product is over the
+	// row's codes, scaled by the row's scale.
+	ActQuantRowInt8
+)
+
+// Sliding reports that layer li attends over a sliding window: all but the
+// last of each SWAPeriod layers, or with Flag2SWAGlobalFirst all but the
+// first.
+func (c *Config) Sliding(li int) bool {
+	w, p := c.SWAWindow, int(c.SWAPeriod)
+	if c.Flags2.Has(Flag2SWAGlobalFirst) {
+		return w > 0 && p > 1 && li%p != 0
+	}
+	return w > 0 && p > 0 && li%p < p-1
+}
+
+// RopePair is one pair of a rotary table: the position axis that turns it and
+// the frequency index it turns at (Base^(-2*Freq/NRot)).
+type RopePair struct{ Axis, Freq int }
+
+// RopePairs is the text rotary's table as the container states it
+// (RopeTable), none for a rotary of one position. A container with rotary
+// sections that states no table was written before the converter stated
+// it: refused, for the upgrade that states it (convert.StateStored).
+func (c *Config) RopePairs() ([]RopePair, error) {
+	if c.RopeSections == [4]uint32{} || len(c.RopeTable) != 0 {
+		return c.RopeTable, nil
+	}
+	return nil, &UpgradeError{What: "its rotary table"}
+}
+
+// PictureRope is how a picture's grid rows place themselves on the text
+// rotary's axes (graph's rotary marks): row j of the grid, raster order,
+// turns on axis a at Axes[a].Base, plus the row's own position where
+// Axes[a].Pos, plus Mul times j/Div modulo Mod (a Mod of PicZero is none).
+// The text after the picture resumes at its start plus its grid's longer
+// side where Side, after its rows otherwise; the row after a prompt at one
+// past the highest position it holds.
+type PictureRope struct {
+	Axes [4]PictureAxis
+	Side bool
+}
+
+// PictureAxis is one axis of a PictureRope.
+type PictureAxis struct {
+	Base, Mul, Div, Mod PicTerm
+	Pos                 bool
+}
+
+// PicTerm is a number a picture's layout reads off its grid.
+type PicTerm uint8
+
+const (
+	PicZero PicTerm = iota
+	PicOne
+	// PicStart is the rotary position the picture's span starts at.
+	PicStart
+	// PicOrdinal is how many pictures the sequence holds before it.
+	PicOrdinal
+	// PicStride is the positions a video's frames step apart.
+	PicStride
+	// PicCols is a grid row's cells, its extra columns included; PicRows a
+	// frame's grid rows; PicCells a frame's cells.
+	PicCols
+	PicRows
+	PicCells
+)
+
+func (c *Config) ropeTableValid() error {
+	if len(c.RopeTable) > int(c.NRot) {
+		return fmt.Errorf("jlm: a rotary table of %d entries over a rotary of %d", len(c.RopeTable), c.NRot)
+	}
+	for i, p := range c.RopeTable {
+		if p.Axis < 0 || p.Axis > 3 || p.Freq < 0 || p.Freq >= int(c.NRot)/2 {
+			return fmt.Errorf("jlm: rotary table entry %d turns by axis %d at frequency %d of %d", i, p.Axis, p.Freq, c.NRot/2)
+		}
+	}
+	for a, x := range c.PictureRope.Axes {
+		for _, t := range [...]PicTerm{x.Base, x.Mul, x.Div, x.Mod} {
+			if t > PicCells {
+				return fmt.Errorf("jlm: a picture's rotary axis %d reads term %d, which this format does not define", a, t)
+			}
+		}
+	}
+	return nil
 }

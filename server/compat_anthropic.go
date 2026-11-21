@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // Anthropic-compatible HTTP: POST /v1/messages.
@@ -77,17 +78,22 @@ type anInBlock struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
-	// Source is an image block's picture.
+	// Source is an image block's picture or a document block's text.
 	Source *anImageSource `json:"source"`
+	// Title and Context are a document block's.
+	Title   string `json:"title"`
+	Context string `json:"context"`
 }
 
 // anImageSource is where an image block's picture is: base64 data of a
-// media type, or a URL.
+// media type, or a URL; a document block's is also text, or content
+// blocks.
 type anImageSource struct {
-	Type      string `json:"type"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
-	URL       string `json:"url"`
+	Type      string          `json:"type"`
+	MediaType string          `json:"media_type"`
+	Data      string          `json:"data"`
+	URL       string          `json:"url"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // anOutBlock is a response content block: text, or a tool_use carrying its
@@ -313,7 +319,9 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		reason := anStopReason(fin.Reason)
 		txt := text.String()
 		blocks := []anOutBlock{{Type: "text", Text: &txt}}
-		if _, _, content := tt.finish(fin.StopMatched); len(tt.calls) > 0 {
+		if _, _, content := tt.finish(fin.StopMatched); len(tt.calls) == 0 && tt.generic() {
+			txt = content
+		} else if len(tt.calls) > 0 {
 			reason, blocks = "tool_use", nil
 			if content != "" {
 				blocks = append(blocks, anOutBlock{Type: "text", Text: &content})
@@ -516,7 +524,14 @@ func (e *compat) anMessages(ctx context.Context, mi int, m anMessage, pics *pict
 			}
 			images++
 		case "document":
-			return nil, fmt.Errorf("messages[%d].content[%d] is a document block, which this server does not take", mi, bi)
+			d, err := anDocument(b)
+			if err != nil {
+				return nil, fmt.Errorf("messages[%d].content[%d].%v", mi, bi, err)
+			}
+			if text.Len() > 0 {
+				text.WriteString("\n\n")
+			}
+			text.WriteString(d)
 		case "tool_use":
 			args := string(b.Input)
 			if args == "" || args == "null" {
@@ -538,6 +553,45 @@ func (e *compat) anMessages(ctx context.Context, mi int, m anMessage, pics *pict
 		out = append(out, cm)
 	}
 	return out, nil
+}
+
+// anDocument is a document block's text: its source's -- text, content
+// blocks of text, or base64 text/plain -- after its title and context, a
+// blank line between each. A PDF or a file is refused naming its source.
+func anDocument(b anInBlock) (string, error) {
+	src := b.Source
+	if src == nil {
+		return "", errors.New("source is missing")
+	}
+	var body string
+	switch src.Type {
+	case "text":
+		body = src.Data
+	case "content":
+		c, err := anText(src.Content)
+		if err != nil {
+			return "", fmt.Errorf("source.%v", err)
+		}
+		body = c
+	case "base64":
+		if src.MediaType != "text/plain" {
+			return "", fmt.Errorf("source is a %s document, and this server reads no PDF: send its text", src.MediaType)
+		}
+		raw, err := base64.StdEncoding.DecodeString(src.Data)
+		if err != nil {
+			return "", fmt.Errorf("source.data is not base64: %v", err)
+		}
+		body = string(raw)
+	default:
+		return "", fmt.Errorf("source is a %q document, and this server reads no PDF and holds no files: send its text", src.Type)
+	}
+	var parts []string
+	for _, p := range []string{b.Title, b.Context, body} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // anTools converts the Anthropic tool list to the OpenAI shape a chat
@@ -583,7 +637,7 @@ func (p ImagePolicy) anImage(ctx context.Context, src *anImageSource) (image.Ima
 		mt, ok := imageMediaType(src.MediaType)
 		if !ok {
 			return nil, fmt.Errorf("has media_type %q; the pictures accepted are image/png, image/jpeg, "+
-				"image/webp and image/gif", src.MediaType)
+				"image/webp, image/gif, image/bmp and image/tiff", src.MediaType)
 		}
 		return p.decodeBase64Image(src.Data, mt)
 	case "url":

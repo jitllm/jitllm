@@ -18,6 +18,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
 )
 
 // The pictures of a chat request, without a model: what each shim accepts,
@@ -85,12 +88,25 @@ func TestImagePolicyDecodesEachFormat(t *testing.T) {
 	if err := jpeg.Encode(&jpg, image.NewGray(image.Rect(0, 0, 9, 4)), nil); err != nil {
 		t.Fatal(err)
 	}
+	var bm, tf bytes.Buffer
+	pic := image.NewNRGBA(image.Rect(0, 0, 7, 2))
+	for i := range pic.Pix {
+		pic.Pix[i] = uint8(i * 9)
+	}
+	if err := bmp.Encode(&bm, pic); err != nil {
+		t.Fatal(err)
+	}
+	if err := tiff.Encode(&tf, pic, nil); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		mt   string
 		b    []byte
 		w, h int
 	}{
 		{"image/png", testPNG(t, 5, 3, color.White), 5, 3},
+		{"image/bmp", bm.Bytes(), 7, 2},
+		{"image/tiff", tf.Bytes(), 7, 2},
 		{"image/webp", readTestdata(t, "blue-purple-pink.lossy.webp"), 0, 0},
 		{"image/gif", gifb.Bytes(), 2, 1},
 		{"image/jpg", jpg.Bytes(), 9, 4},
@@ -114,7 +130,7 @@ func TestImagePolicyRefusals(t *testing.T) {
 		p               ImagePolicy
 	}{
 		{"not base64", "data:image/png;base64,@@@@", "not valid base64", p},
-		{"unsupported type", dataURL("image/bmp", small), `"image/bmp"`, p},
+		{"unsupported type", dataURL("image/avif", small), `"image/avif"`, p},
 		{"not base64 encoded", "data:image/png," + string(small), "not base64", p},
 		{"no comma", "data:image/png;base64", "no comma", p},
 		{"declared type differs", dataURL("image/jpeg", small), "declared image/jpeg and its bytes are image/png", p},
@@ -201,9 +217,12 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 			"messages[0].content[0] is an image_url part with no image_url.url"},
 		{"/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[{"type":"input_audio"}]}]}`,
 			`messages[0].content[0] is a "input_audio" part`},
+		{"/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[
+			{"type":"file","file":{"file_data":"data:application/pdf;base64,JVBERi0=","filename":"a.pdf"}}]}]}`,
+			"messages[0].content[0] is a application/pdf file, and this server reads no PDF"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
-			{"type":"image","source":{"type":"base64","media_type":"image/tiff","data":"` + png64 + `"}}]}]}`,
-			`messages[0].content[0].source has media_type "image/tiff"`},
+			{"type":"image","source":{"type":"base64","media_type":"image/avif","data":"` + png64 + `"}}]}]}`,
+			`messages[0].content[0].source has media_type "image/avif"`},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
 			{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"` + png64 + `"}}]}]}`,
 			"messages[0].content[0].source is declared image/jpeg and its bytes are image/png"},
@@ -213,7 +232,10 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[{"type":"image"}]}]}`,
 			"messages[0].content[0].source is missing"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[{"type":"document"}]}]}`,
-			"messages[0].content[0] is a document block"},
+			"messages[0].content[0].source is missing"},
+		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
+			{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0="}}]}]}`,
+			"messages[0].content[0].source is a application/pdf document, and this server reads no PDF"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
 			{"type":"tool_result","tool_use_id":"t","content":[{"type":"image","source":{}}]}]}]}`,
 			"messages[0].content[0].content[0] is an image block"},
@@ -232,6 +254,83 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 		}
 	}
 }
+
+// TestADocumentBlockIsTheTurnsText: an Anthropic document block of text
+// -- a text source, content blocks, base64 text/plain -- reaches the chat
+// turn as text after the turn's own, its title and context first.
+func TestADocumentBlockIsTheTurnsText(t *testing.T) {
+	for src, want := range map[string]string{
+		`{"type":"text","media_type":"text/plain","data":"the body"}`:       "Read this.\n\nNotes\n\nfrom a meeting\n\nthe body",
+		`{"type":"content","content":[{"type":"text","text":"the body"}]}`:  "Read this.\n\nNotes\n\nfrom a meeting\n\nthe body",
+		`{"type":"base64","media_type":"text/plain","data":"dGhlIGJvZHk="}`: "Read this.\n\nNotes\n\nfrom a meeting\n\nthe body",
+	} {
+		f := &fakeBackend{tokens: []string{"ok"}, reason: FinishEOS}
+		s := serve(t, f)
+		resp := post(t, s, "/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[`+
+			`{"type":"text","text":"Read this."},{"type":"document","title":"Notes","context":"from a meeting","source":`+src+`}]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", src, resp.StatusCode, raw)
+		}
+		ch := f.last.Prompt.Chat
+		if ch == nil || len(ch.Messages) == 0 || ch.Messages[len(ch.Messages)-1].Content != want {
+			t.Fatalf("%s: the turn reads %+v, want %q", src, ch, want)
+		}
+	}
+}
+
+// TestAFileContentPartIsItsText: an OpenAI file part of text -- chat's file
+// object, the responses API's fields on the part, text/plain, markdown or
+// JSON, and a file the Files API holds, named by id -- reaches the chat as its
+// file name and its text, after the turn's text. A stored PDF is refused.
+func TestAFileContentPartIsItsText(t *testing.T) {
+	f := &fakeBackend{tokens: []string{"ok"}, reason: FinishEOS}
+	s := serve(t, filesBackend{f, t.TempDir()})
+	code, up := uploadBatchFile(t, s.URL, "user_data", "the stored body")
+	_, pdf := uploadBatchFile(t, s.URL, "user_data", "%PDF-1.4 x")
+	if code != 200 {
+		t.Fatalf("the upload: %d", code)
+	}
+	for part, want := range map[string]string{
+		`{"type":"file","file":{"file_data":"data:text/plain;base64,dGhlIGJvZHk=","filename":"notes.txt"}}`:         "Read this.\n\nnotes.txt\n\nthe body",
+		`{"type":"input_file","file_data":"data:text/plain;base64,dGhlIGJvZHk=","filename":"notes.txt"}`:            "Read this.\n\nnotes.txt\n\nthe body",
+		`{"type":"file","file":{"file_data":"data:application/json;base64,eyJhIjoxfQ=="}}`:                          "Read this.\n\n{\"a\":1}",
+		`{"type":"file","file":{"file_data":"data:text/markdown;charset=utf-8;base64,IyBIaQ==","filename":"a.md"}}`: "Read this.\n\na.md\n\n# Hi",
+		`{"type":"file","file":{"file_id":"` + up.ID + `"}}`:                                                        "Read this.\n\n" + up.Filename + "\n\nthe stored body",
+	} {
+		resp := post(t, s, "/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[`+
+			`{"type":"text","text":"Read this."},`+part+`]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", part, resp.StatusCode, raw)
+		}
+		ch := f.last.Prompt.Chat
+		if ch == nil || len(ch.Messages) == 0 || ch.Messages[len(ch.Messages)-1].Content != want {
+			t.Fatalf("%s: the turn reads %+v, want %q", part, ch, want)
+		}
+	}
+	for part, want := range map[string]string{
+		`{"type":"file","file":{"file_id":"` + pdf.ID + `"}}`: "which is not text, and this server reads no PDF",
+		`{"type":"file","file":{"file_id":"file-none"}}`:      `names file \"file-none\": no such file`,
+	} {
+		resp := post(t, s, "/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[`+part+`]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 400 || !strings.Contains(string(raw), want) {
+			t.Fatalf("%s: %d %s, want 400 containing %q", part, resp.StatusCode, raw, want)
+		}
+	}
+}
+
+// filesBackend is a fake backend with a Files API store.
+type filesBackend struct {
+	*fakeBackend
+	dir string
+}
+
+func (f filesBackend) BatchDir() string { return f.dir }
 
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)

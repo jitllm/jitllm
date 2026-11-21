@@ -1,4 +1,4 @@
-"""Transformers goldens for the gemma3 and internvl vision towers.
+"""Transformers goldens for the gemma3, internvl and llava vision towers.
 
 For each family this writes, under $JITLLM_MODELS/vlm/goldens/<family>/:
 
@@ -15,7 +15,7 @@ weights (only the vision tensors are fetched: vlm/fetchst.py), run in float32
 on the CPU. The pictures are PNG so the Go test decodes the same pixels PIL
 does; a JPEG's decoders disagree before any of this runs.
 
-Usage: visiongold.py gemma3|internvl
+Usage: visiongold.py gemma3|internvl|llava
 """
 import json
 import math
@@ -61,7 +61,7 @@ def grid(n, patch):
     # Four colours in every 2x2 block of patches (red, green / blue, white),
     # dimmed by a diagonal ramp: a picture on which the order of a pixel
     # shuffle's group is the whole difference. Raw floats in [0, 1]; the Go
-    # gates build the same (engine/model's patchGrid).
+    # gates build the same (the engine's tower gates).
     pal = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1)]
     img = np.zeros((3, n, n), np.float32)
     for y in range(n):
@@ -77,7 +77,7 @@ def patch_rows(n, width):
     # A tower's last hidden state that is no picture at all: every row and
     # channel distinct, so the projector alone is held -- a pool or shuffle in
     # the wrong order cannot hide behind neighbouring patches looking alike.
-    # The Go gate builds the same (engine/model's projectorRows).
+    # The Go gate builds the same (the engine's projector gate).
     p = np.arange(n, dtype=np.float64)[:, None]
     c = np.arange(width, dtype=np.float64)[None, :]
     return torch.from_numpy((np.sin(0.37 * p + 0.11 * c) + 0.5 * np.cos(0.013 * p * c)).astype(np.float32))
@@ -89,7 +89,7 @@ def projector(fam, m, size):
     width = m.config.vision_config.hidden_size
     x = patch_rows(n, width)[None]
     with torch.no_grad():
-        if fam == "gemma3":
+        if fam in ("gemma3", "llava"):
             return m.multi_modal_projector(x)
         f = m.pixel_shuffle(x.reshape(1, side, side, width), scale_factor=m.config.downsample_ratio)
         return m.multi_modal_projector(f.reshape(1, -1, f.shape[-1]))
@@ -98,7 +98,7 @@ def projector(fam, m, size):
 def pictures(out):
     """The real pictures, as PNG: the repo's synthetic one and a photograph."""
     os.makedirs(out, exist_ok=True)
-    pics = {"quad-and-disc": os.path.join(REPO, "engine/model/testdata/quad-and-disc.png")}
+    pics = {"quad-and-disc": os.path.join(REPO, "engine/testdata/quad-and-disc.png")}
     photo = os.path.join(out, "..", "photo.png")
     if not os.path.exists(photo):
         src = os.path.join(refenv.lcpp_src(), "tools", "mtmd", "test-1.jpeg")
@@ -106,7 +106,7 @@ def pictures(out):
     pics["photo"] = photo
     # The photograph already at each tower's size, for the llama-mtmd-cli
     # comparison (scripts/vlmgold.py): a picture neither engine resizes.
-    for n in (448, 896):
+    for n in (378, 448, 896):
         sq = os.path.join(out, "..", "photo-%d.png" % n)
         if not os.path.exists(sq):
             Image.open(photo).convert("RGB").resize((n, n), Image.BICUBIC).save(sq)
@@ -154,16 +154,41 @@ def internvl():
     return m, proc, size[0] if isinstance(size, (list, tuple)) else size
 
 
+def llava():
+    from transformers import AutoProcessor, LlavaConfig, LlavaModel
+    d = os.path.join(VLM, "hf/llava-phi-3-mini-hf")
+    cfg = LlavaConfig.from_pretrained(d)
+    cfg.text_config.num_hidden_layers = 1
+    m = LlavaModel(cfg).float().eval()
+    w = load_file(os.path.join(d, "vision.safetensors"))
+    # The checkpoint nests the tower one module deeper, as Gemma 3's does.
+    w = {k.removeprefix("model.").replace("vision_tower.vision_model.", "vision_tower."): v.float()
+         for k, v in w.items()}
+    missing, unexpected = m.load_state_dict(w, strict=False)
+    bad = [k for k in missing if k.startswith(("vision_tower", "multi_modal_projector"))]
+    assert not bad and not unexpected, (bad, unexpected)
+    proc = AutoProcessor.from_pretrained(d)
+    # The repository has no processor_config.json: what it would state, from
+    # the model's own config (the class row is the one extra token).
+    proc.patch_size = cfg.vision_config.patch_size
+    proc.vision_feature_select_strategy = cfg.vision_feature_select_strategy
+    proc.num_additional_image_tokens = 1
+    return m, proc, cfg.vision_config.image_size
+
+
 def features(m, px):
     with torch.no_grad():
         f = m.get_image_features(pixel_values=px)
     f = getattr(f, "pooler_output", f)
+    # Llava's is a tensor per picture.
+    if isinstance(f, (list, tuple)):
+        f = torch.cat(list(f), 0)
     return f.reshape(-1, f.shape[-1])
 
 
 def main():
     fam = sys.argv[1]
-    m, proc, size = {"gemma3": gemma3, "internvl": internvl}[fam]()
+    m, proc, size = {"gemma3": gemma3, "internvl": internvl, "llava": llava}[fam]()
     out = os.path.join(VLM, "goldens", fam)
     os.makedirs(out, exist_ok=True)
     save(os.path.join(out, "rainbow.features.f32"), features(m, rainbow(size)))
@@ -185,12 +210,16 @@ def main():
         # Tokenized by apply_chat_template itself, which is the processor's
         # documented path: rendering to text and calling the processor on it
         # adds a second BOS to a template that writes its own (Gemma's).
+        # llava-phi-3-mini-hf publishes no processor chat template: its
+        # golden is the tower's alone.
         msgs = [{"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant."}]},
                 {"role": "user", "content": [{"type": "image", "image": img},
                                              {"type": "text", "text": "Describe this image in one sentence."}]}]
-        chat = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
-        chat_ids = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=True,
-                                            return_dict=True, return_tensors="pt")["input_ids"][0].tolist()
+        chat, chat_ids = None, None
+        if getattr(proc, "chat_template", None):
+            chat = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+            chat_ids = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=True,
+                                                return_dict=True, return_tensors="pt")["input_ids"][0].tolist()
         with open(os.path.join(out, name + ".json"), "w") as f:
             json.dump({"tiles": px.shape[0], "size": size, "w": img.size[0], "h": img.size[1],
                        "processor": type(proc.image_processor).__name__,

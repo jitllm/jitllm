@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/grammar"
 	"github.com/jitllm/jitllm/internal/schemacheck"
 )
 
@@ -21,25 +21,38 @@ import (
 // allows everything leaves greedy decode as it was; and the mask left off one
 // step is caught.
 
-// structuredModels are a tiny base model with a 128-token context and a real
-// instruct model.
-var structuredModels = []struct {
+// structuredModels() are a tiny base model with a 128-token context and a real
+// instruct model. Their objects state additionalProperties false and the
+// base model's integers state bounds: JSON Schema reads an absent bound as
+// none, and the grammar sets none. Without them the instruct model wrote
+// further keys to its 400th token, and the base model ended 13 of 24 arrays
+// within its 96 tokens, its greedy reply writing a 5 and then zeros to the
+// last.
+func structuredModels() []struct {
 	file, id string
 	schemas  []string
 	maxTok   int32
 	prompt   string
-}{
-	{"stories15M-q8_0.jlm", "s15", []string{
-		`{"type":"object","properties":{"color":{"enum":["red","green","blue"]},"ok":{"type":"boolean"}},` +
-			`"required":["color","ok"]}`,
-		`{"type":"array","items":{"type":"integer"},"minItems":1,"maxItems":3}`,
-	}, 96, "Once upon a time"},
-	{"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "llama1b", []string{
-		`{"type":"object","properties":{"name":{"type":"string","maxLength":16},"age":{"type":"integer"},` +
-			`"pets":{"type":"array","items":{"type":"object","properties":{"kind":{"enum":["cat","dog"]},` +
-			`"legs":{"type":"number"}},"required":["kind"]},"maxItems":2}},"required":["name","age"]}`,
-		`{"anyOf":[{"type":"string","maxLength":10},{"type":"null"},{"type":"boolean"}]}`,
-	}, 400, "Describe a person as JSON."},
+} {
+	return []struct {
+		file, id string
+		schemas  []string
+		maxTok   int32
+		prompt   string
+	}{
+		{"stories15M-q8_0.jlm", "s15", []string{
+			`{"type":"object","properties":{"color":{"enum":["red","green","blue"]},"ok":{"type":"boolean"}},` +
+				`"required":["color","ok"],"additionalProperties":false}`,
+			`{"type":"array","items":{"type":"integer","minimum":-9999,"maximum":9999},"minItems":1,"maxItems":3}`,
+		}, 96, "Once upon a time"},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.jlm", "llama1b", []string{
+			`{"type":"object","properties":{"name":{"type":"string","maxLength":16},"age":{"type":"integer"},` +
+				`"pets":{"type":"array","items":{"type":"object","properties":{"kind":{"enum":["cat","dog"]},` +
+				`"legs":{"type":"number"}},"required":["kind"],"additionalProperties":false},"maxItems":2}},` +
+				`"required":["name","age"],"additionalProperties":false}`,
+			`{"anyOf":[{"type":"string","maxLength":10},{"type":"null"},{"type":"boolean"}]}`,
+		}, 400, "Describe a person as JSON."},
+	}
 }
 
 // structuredSeeds is how many sampled outputs each schema is held to.
@@ -77,7 +90,7 @@ func genText(t *testing.T, e *Engine, o GenerateOptions) (string, []int32, Finis
 }
 
 func TestStructuredOutputValidates(t *testing.T) {
-	for _, sm := range structuredModels {
+	for _, sm := range structuredModels() {
 		t.Run(sm.id, func(t *testing.T) {
 			e, lm, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 			// A host model has a step loop (batch.go), so this gate holds a
@@ -98,7 +111,7 @@ func TestStructuredOutputValidates(t *testing.T) {
 				for seed := range uint64(structuredSeeds) {
 					out, _, reason := genText(t, e, GenerateOptions{ModelID: sm.id, Prompt: Prompt{Kind: PromptText,
 						Text: sm.prompt}, MaxTokens: int(sm.maxTok), Grammar: src,
-						Sampling: &model.Sampler{Temp: 1, Seed: int64(seed) + 1}})
+						Sampling: &engine.Sampler{Temp: 1, Seed: int64(seed) + 1}})
 					var doc any
 					if err := schemacheck.Parse(out, &doc); err != nil {
 						t.Fatalf("seed %d: %q does not parse (%v, finish %v)", seed, out, err, reason)
@@ -136,7 +149,7 @@ func firstKey(m map[string]bool) string {
 // TestAnAllowingGrammarIsPlainGreedy: a grammar that allows any text leaves
 // greedy decode token for token as it was.
 func TestAnAllowingGrammarIsPlainGreedy(t *testing.T) {
-	for _, sm := range structuredModels {
+	for _, sm := range structuredModels() {
 		t.Run(sm.id, func(t *testing.T) {
 			e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 			o := GenerateOptions{ModelID: sm.id, Prompt: Prompt{Kind: PromptText, Text: sm.prompt}, MaxTokens: 48}
@@ -156,7 +169,7 @@ func TestAnAllowingGrammarIsPlainGreedy(t *testing.T) {
 // TestStructuredGateDiscriminates leaves the mask off one step and demands an
 // invalid output among the seeds: the validation gate can see the break.
 func TestStructuredGateDiscriminates(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 	schemaText := sm.schemas[0]
 	src, err := grammar.FromJSONSchema([]byte(schemaText))
@@ -169,7 +182,7 @@ func TestStructuredGateDiscriminates(t *testing.T) {
 	}
 	for seed := range uint64(structuredSeeds) {
 		out, _, _ := genText(t, e, GenerateOptions{ModelID: sm.id, Prompt: Prompt{Kind: PromptText, Text: sm.prompt},
-			MaxTokens: int(sm.maxTok), Grammar: src, Sampling: &model.Sampler{Temp: 1, Seed: int64(seed) + 1}, maskSkip: 3})
+			MaxTokens: int(sm.maxTok), Grammar: src, Sampling: &engine.Sampler{Temp: 1, Seed: int64(seed) + 1}, maskSkip: 3})
 		var doc any
 		if err := schemacheck.Parse(out, &doc); err != nil {
 			t.Logf("seed %d: the unmasked step gave %q, which does not parse -- caught", seed, out[:min(60, len(out))])
@@ -187,7 +200,7 @@ func TestStructuredGateDiscriminates(t *testing.T) {
 // /v1/chat/completions -- json_object and json_schema -- and a schema
 // keyword the converter does not build refused with 400 naming it.
 func TestResponseFormatOverHTTP(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	_, _, c := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 	// A json_object grammar allows any text inside a string, so a sampled
 	// reply can run to max_tokens before the object closes. The contract is
@@ -219,7 +232,7 @@ func TestResponseFormatOverHTTP(t *testing.T) {
 	}
 	out := postOAText(t, c.url, fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"Describe a person."}],`+
 		`"max_tokens":400,"temperature":1,"seed":7,"response_format":{"type":"json_schema","json_schema":`+
-		`{"name":"p","strict":true,"schema":%s}}}`, sm.id, sm.schemas[0]))
+		`{"name":"p","schema":%s}}}`, sm.id, sm.schemas[0]))
 	var doc, schema any
 	if err := schemacheck.Parse(out, &doc); err != nil {
 		t.Fatalf("json_schema: %q: %v", out, err)
@@ -232,7 +245,7 @@ func TestResponseFormatOverHTTP(t *testing.T) {
 	}
 	status, body := postRaw(t, c.url+"/v1/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user",`+
 		`"content":"x"}],"response_format":{"type":"json_schema","json_schema":{"name":"p","schema":`+
-		`{"type":"string","pattern":"^a+$"}}}}`, sm.id))
+		`{"type":"string","pattern":"^(?=a)a+$"}}}}`, sm.id))
 	if status != 400 || !strings.Contains(body, "pattern") {
 		t.Fatalf("an unsupported keyword: %d %s, want 400 naming pattern", status, body)
 	}

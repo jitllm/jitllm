@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
@@ -82,6 +82,7 @@ func engineServer(t *testing.T, cfg server.Config) (string, *server.Engine) {
 	if cfg.Probe == nil {
 		cfg.Probe = func() ([]server.DeviceInfo, error) { return nil, nil }
 	}
+	cfg.Admit = testdevices.Admit()
 	e := server.New(cfg)
 	t.Cleanup(e.Close)
 	s := httptest.NewServer(e.Handler())
@@ -94,7 +95,7 @@ func engineServer(t *testing.T, cfg server.Config) (string, *server.Engine) {
 // own model probe has somebody to talk to.
 func scriptServer(t *testing.T, b server.Backend) (string, *pathCount) {
 	t.Helper()
-	e := server.New(server.Config{
+	e := server.New(server.Config{Admit: testdevices.Admit(),
 		ModelDir: t.TempDir(),
 		Probe:    func() ([]server.DeviceInfo, error) { return nil, nil },
 	})
@@ -143,7 +144,7 @@ func (s *scripted) Generate(ctx context.Context, o server.GenerateOptions, emit 
 		QueuedFor:    1500 * time.Millisecond,
 		QueueDepth:   2,
 		DeviceBlocks: 22,
-		HostBlocks:   10,
+		CPUBlocks:    10,
 		DeviceIDs:    []string{"cuda:0"},
 		Prefill:      40 * time.Millisecond,
 	}}); err != nil {
@@ -214,8 +215,6 @@ func (s *scripted) opts() server.GenerateOptions {
 	return s.last
 }
 
-var _ server.Backend = (*scripted)(nil)
-
 // ---------------------------------------------------------------- writers
 
 // syncBuffer is a concurrency-safe sink for a verb's stderr.
@@ -263,8 +262,6 @@ func (w *notifyWriter) String() string {
 	defer w.mu.Unlock()
 	return w.b.String()
 }
-
-var _ io.Writer = (*notifyWriter)(nil)
 
 // ---------------------------------------------------------------- driving
 

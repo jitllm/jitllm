@@ -295,7 +295,7 @@ func (v Value) Short() string {
 // a caller that wants to produce a meta.File without learning the encoding.
 // The converters build a jlm.Source directly; the one converter caller is
 // Kimi-K3's safetensors config (convert/hfkimik3.go), which states text_config
-// as the GGUF keys llama.cpp writes so configOf reads it. Arrays are built
+// as the GGUF keys so configOf reads it. Arrays are built
 // eagerly, since the caller already has the slice; the reader stays lazy.
 
 // MakeUint tags an unsigned integer, narrowing to the smallest type that holds

@@ -1,6 +1,10 @@
 package tok
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/jitllm/jitllm/tok/pretok"
+)
 
 // Representable is text with every character a byte-level vocabulary cannot
 // spell removed. A byte with no token in the alphabet is dropped by the
@@ -15,7 +19,7 @@ func Representable(v *Vocab, text string) string {
 	for _, r := range text {
 		ok := true
 		for _, c := range []byte(string(r)) {
-			if _, has := v.ids[string(byteToRune[c])]; !has {
+			if _, has := v.ids[string(pretok.ByteToRune(c))]; !has {
 				ok = false
 			}
 		}

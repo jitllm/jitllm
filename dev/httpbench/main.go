@@ -1,6 +1,6 @@
 // httpbench is the one HTTP load harness every engine is measured with: a
 // closed-loop concurrency sweep of streamed OpenAI-compatible requests, two or
-// more endpoints run as interleaved arms. docs/perf/http-bench.md is how to
+// more endpoints run as interleaved arms. .notes/perf/http-bench.md is how to
 // set each engine up for a fair arm.
 //
 //	go run ./dev/httpbench -arm jitllm=http://127.0.0.1:4242 -model stories15M

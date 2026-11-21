@@ -1,0 +1,129 @@
+{
+  "methods": {
+    "linear": {
+      "describe": "linear",
+      "params": ["factor"],
+      "gguf": {
+        "read": {"factor": "rope.scaling.factor ?? 0"},
+        "when": "factor > 0 && factor != 1"
+      },
+      "divisor": "factor"
+    },
+    "yarn": {
+      "describe": "YaRN",
+      "params": ["factor", "original_context", "beta_fast", "beta_slow", "truncate", "attention_factor", "mscale", "mscale_all_dim", "log_multiplier", "score_log_multiplier"],
+      "hf": {
+        "read": {
+          "factor": "scaling.factor",
+          "original_context": "(original_max_position_embeddings ?? 0) > 0 ? original_max_position_embeddings : ((scaling.original_max_position_embeddings ?? 0) != 0 ? scaling.original_max_position_embeddings : context)",
+          "beta_fast": "(scaling.beta_fast ?? 0) != 0 ? scaling.beta_fast : 32",
+          "beta_slow": "(scaling.beta_slow ?? 0) != 0 ? scaling.beta_slow : 1",
+          "truncate": "yarn_exact ? false : (scaling.truncate ?? true)",
+          "attention_factor": "scaling.attention_factor",
+          "mscale": "scaling.mscale ?? 0",
+          "mscale_all_dim": "scaling.mscale_all_dim ?? 0",
+          "log_multiplier": "0.1"
+        },
+        "require": [
+          ["factor != null", "states no factor"],
+          ["factor >= 1", "a factor below one"]
+        ],
+        "when": "factor > 1",
+        "check": [
+          ["beta_fast > 0 && beta_slow > 0 && original_context > 0", "a correction range and an original context, each above zero"]
+        ],
+        "magnitude": "f32(attn_factor * f32(attention_factor ?? (mscale != 0 && mscale_all_dim != 0 ? (0.1 * mscale * log(factor) + 1) / (0.1 * mscale_all_dim * log(factor) + 1) : log_multiplier * log(factor) + 1)))",
+        "keeps": {"yarn_factor": "factor", "original_context": "original_context"},
+        "clears": ["yarn_exact"]
+      },
+      "gguf": {
+        "read": {
+          "factor": "rope.scaling.factor ?? 0",
+          "original_context": "rope.scaling.original_context_length ?? (context)",
+          "beta_fast": "rope.scaling.yarn_beta_fast ?? 32",
+          "beta_slow": "rope.scaling.yarn_beta_slow ?? 1",
+          "truncate": "!yarn_exact",
+          "attention_factor": "rope.scaling.yarn_attn_factor",
+          "mscale": "0",
+          "mscale_all_dim": "0",
+          "log_multiplier": "rope.scaling.yarn_log_multiplier ?? 0.1",
+          "score_log_multiplier": "rope.scaling.yarn_log_multiplier"
+        },
+        "conventions": {
+          "softmax": {"mscale": "1", "mscale_all_dim": "1"},
+          "mscale_ratio": {"mscale": "1", "mscale_all_dim": "rope.scaling.yarn_log_multiplier ?? 0", "log_multiplier": "0.1", "score_log_multiplier": "null"}
+        },
+        "when": "factor > 1",
+        "check": [
+          ["beta_fast > 0 && beta_slow > 0", "rope.scaling.yarn_beta_fast and yarn_beta_slow are not a correction range"],
+          ["original_context > 0", "an original context of no positions"],
+          ["attention_factor == null ? true : attention_factor > 0", "rope.scaling.yarn_attn_factor is not a positive number"]
+        ],
+        "magnitude": "f32(attn_factor * f32(attention_factor ?? (mscale != 0 && mscale_all_dim != 0 ? (0.1 * mscale * log(factor) + 1) / (0.1 * mscale_all_dim * log(factor) + 1) : log_multiplier * log(factor) + 1)))",
+        "keeps": {"yarn_factor": "factor", "original_context": "original_context", "yarn_log_multiplier": "score_log_multiplier"},
+        "clears": ["yarn_exact"]
+      },
+      "values": [
+        ["f", "f32(factor)"],
+        ["lo0", "rotated * log(original_context / (2 * 3.141592653589793 * f32(beta_fast))) / (2 * log(base))"],
+        ["hi0", "rotated * log(original_context / (2 * 3.141592653589793 * f32(beta_slow))) / (2 * log(base))"],
+        ["lo", "max(truncate ? floor(lo0) : lo0, 0)"],
+        ["hi1", "min(truncate ? ceil(hi0) : hi0, rotated - 1)"],
+        ["hi", "hi1 == lo ? hi1 + 0.001 : hi1"],
+        ["e", "1 - min(max((pair - lo) / (hi - lo), 0), 1)"]
+      ],
+      "divisor": "1 / ((1 - e) / f + e)"
+    },
+    "llama3": {
+      "describe": "llama3",
+      "params": ["factor", "low_freq_factor", "high_freq_factor", "original_context"],
+      "hf": {
+        "read": {
+          "factor": "scaling.factor",
+          "low_freq_factor": "scaling.low_freq_factor",
+          "high_freq_factor": "scaling.high_freq_factor",
+          "original_context": "original_max_position_embeddings ?? (scaling.original_max_position_embeddings ?? (max_position_embeddings))"
+        },
+        "require": [
+          ["factor != null", "states no factor"],
+          ["low_freq_factor != null", "states no low_freq_factor"],
+          ["high_freq_factor != null", "states no high_freq_factor"],
+          ["original_context != null", "states no original_max_position_embeddings, and the config no max_position_embeddings"],
+          ["factor > 0 && low_freq_factor > 0 && high_freq_factor > low_freq_factor && original_context > 0", "a factor, a low frequency factor under a high one and an original context, each above zero"]
+        ]
+      },
+      "values": [
+        ["freq", "f32(1 / f32(f32(base) ** f32(f32(2 * pair) / f32(rotated))))"],
+        ["wave", "f32(f32(2 * 3.141592653589793) / freq)"],
+        ["s", "f32(f32(f32(f32(original_context) / wave) - f32(low_freq_factor)) / f32(high_freq_factor - low_freq_factor))"]
+      ],
+      "divisor": "wave < original_context / high_freq_factor ? 1 : wave > original_context / low_freq_factor ? f32(factor) : f32(1 / f32(f32(f32(1 - s) / f32(factor)) + s))"
+    },
+    "longrope": {
+      "describe": "LongRoPE",
+      "aliases": ["su"],
+      "params": ["short_factor", "long_factor", "original_context", "short_mscale", "long_mscale", "attention_factor"],
+      "hf": {
+        "read": {
+          "short_factor": "scaling.short_factor",
+          "long_factor": "scaling.long_factor",
+          "original_context": "(scaling.original_max_position_embeddings ?? 0) != 0 ? scaling.original_max_position_embeddings : (original_max_position_embeddings ?? 0)",
+          "short_mscale": "scaling.short_mscale",
+          "long_mscale": "scaling.long_mscale",
+          "attention_factor": "scaling.attention_factor"
+        },
+        "require": [
+          ["short_factor != null && long_factor != null", "LongRoPE factors: none stated"],
+        ["original_context > 0", "states no original_max_position_embeddings"]
+        ],
+        "magnitude": "short_mscale ?? (attention_factor ?? (context > original_context ? sqrt(1 + log(context / original_context) / log(original_context)) : attn_factor))",
+        "implements": [
+          ["long_mscale == null ? true : f32(long_mscale) == f32(magnitude)", "long_mscale past the original context against another magnitude before it"]
+        ],
+        "keeps": {"original_context": "original_context"},
+        "factors": {"short": "short_factor", "long": "long_factor"}
+      },
+      "gguf": {"read": {}}
+    }
+  }
+}

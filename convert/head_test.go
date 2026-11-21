@@ -2,18 +2,21 @@ package convert
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestHeadJoinsAsIfTheTrunkCarriedIt converts scripts/qwen4expgold.py's
-// synth-qwen4exp-mtp three ways, all written by llama.cpp's own converter
-// from one checkpoint: the model with its prediction block in one GGUF, and
+// synth-qwen4exp-mtp three ways, all written by convert_hf_to_gguf.py from
+// one checkpoint: the model with its prediction block in one GGUF, and
 // the trunk alone (--no-mtp) joined to the block alone (--mtp, the shape the
 // release's head is published in). The two containers must be the same bytes.
 //
@@ -54,7 +57,7 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := f.Config()
-	nmtp, nlayer := c.NMTP, c.NLayer
+	nmtp, nlayer := c.PredictionBlocks(), c.NLayer
 	_, own := f.Find(jlm.RoleHCHeadNorm, int32(nlayer), -1)
 	f.Close()
 	if nmtp != 1 || !own {
@@ -86,7 +89,7 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 	}
 	defer hf.Close()
 	// unsloth's published head states a compress ratio of 0 for its block
-	// where llama.cpp's converter writes the model's: the block carries the
+	// where convert_hf_to_gguf.py writes the model's: the block carries the
 	// indexer, so it is the same QSA block and the same container.
 	cr := hf.Arch() + ".attention.compress_ratios"
 	zero := hf.KV[cr]
@@ -126,4 +129,48 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 	if _, err := withHead(tf, hf, trunk, head); err == nil {
 		t.Errorf("a head stating another head count joined")
 	}
+	// The head alone is part of a model, said as such; the trunk and the
+	// whole model are not.
+	if _, err := FromGGUF(head, filepath.Join(dir, "head.jlm"), fp); !errors.Is(err, ErrPart) {
+		t.Errorf("the head converted alone: %v, want ErrPart", err)
+	}
+	for _, p := range []string{full, trunk} {
+		if err := headAlone(mustOpen(t, p), p); err != nil {
+			t.Errorf("%s reads as a head alone: %v", filepath.Base(p), err)
+		}
+	}
+	if _, err := FeaturesOf(head, ""); !errors.Is(err, ErrPart) {
+		t.Errorf("the head's features read alone: %v, want ErrPart", err)
+	}
+	if _, err := StreamGGUFs(openFileRemote(t, head), nil, filepath.Join(dir, "streamed.jlm"),
+		fp); !errors.Is(err, ErrPart) {
+		t.Errorf("the head streamed alone: %v, want ErrPart", err)
+	}
+	// The trunk with its head states what the model in one file does, and
+	// the features join the head as the conversion does: refusing it beside
+	// a file that carries its block already.
+	want, err := FeaturesOf(full, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := FeaturesOf(trunk, "", WithHead(head))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the trunk with its head takes %d features, the one-file model %d", len(got), len(want))
+	}
+	if _, err := FeaturesOf(full, "", WithHead(head)); err == nil {
+		t.Errorf("the features of a head joined to a file that carries its block already")
+	}
+}
+
+func mustOpen(t *testing.T, p string) *meta.File {
+	t.Helper()
+	f, err := gguf.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
 }

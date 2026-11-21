@@ -3,21 +3,21 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/grammar"
 	"github.com/jitllm/jitllm/internal/schemacheck"
 )
 
 // TestGrammarComposesWithLogprobsAndChoices: logprobs on a constrained reply
-// are the raw distribution's (vLLM's default), so a token the grammar forces
+// are the raw distribution's, so a token the grammar forces
 // keeps the log-probability the model gave it rather than 0; n choices are
-// each held to the grammar; and speculation with logprobs or with n is
+// each held to the grammar; and speculation with n gives every choice
 // refused by name.
 func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
-	sm := structuredModels[1]
+	sm := structuredModels()[1]
 	e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
 	prompt := Prompt{Kind: PromptText, Text: sm.prompt}
 
@@ -62,7 +62,7 @@ func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
 	}
 	texts := map[int]string{}
 	err = e.Generate(context.Background(), GenerateOptions{ModelID: sm.id, Prompt: prompt, MaxTokens: int(sm.maxTok),
-		Grammar: src, Sampling: &model.Sampler{Temp: 1}, Seeds: []int64{11, 12, 13}}, func(ev Event) error {
+		Grammar: src, Sampling: &engine.Sampler{Temp: 1}, Seeds: []int64{11, 12, 13}}, func(ev Event) error {
 		if ev.Kind == EventToken {
 			texts[ev.Choice] += ev.Token.Text
 		}
@@ -84,14 +84,24 @@ func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
 		}
 	}
 
-	on := &Speculation{Enabled: true}
-	for what, o := range map[string]GenerateOptions{
-		"logprobs": {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Logprobs: true},
-		"n":        {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Seeds: []int64{1, 2}, Sampling: &model.Sampler{Temp: 1}},
-	} {
-		err := e.Generate(context.Background(), o, func(Event) error { return nil })
-		if !errors.Is(err, ErrInvalid) {
-			t.Fatalf("speculation with %s: %v, want ErrInvalid", what, err)
+	// Speculation with n: every choice speculates on its own session, and
+	// each seed draws what it draws without speculation.
+	choices := func(spec *Speculation) map[int][]int32 {
+		got := map[int][]int32{}
+		err := e.Generate(context.Background(), GenerateOptions{ModelID: sm.id, Prompt: prompt, MaxTokens: 8, Speculation: spec,
+			Seeds: []int64{1, 2}, Sampling: &engine.Sampler{Temp: 1}}, func(ev Event) error {
+			if ev.Kind == EventToken && ev.Token.ID >= 0 {
+				got[ev.Choice] = append(got[ev.Choice], ev.Token.ID)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
+		return got
+	}
+	plain, spec := choices(nil), choices(&Speculation{Enabled: true})
+	if len(spec) != 2 || !slices.Equal(spec[0], plain[0]) || !slices.Equal(spec[1], plain[1]) {
+		t.Fatalf("speculation with n gave %v, without %v", spec, plain)
 	}
 }

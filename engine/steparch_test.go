@@ -1,0 +1,245 @@
+package engine
+
+import (
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
+)
+
+// TestStepAcrossSessionsEveryArchitecture is the step gate (stepGate) over one
+// model of every architecture the model directory carries: three sessions
+// decode together through Step, teacher-forced, against each session alone. A
+// model that does not step as rows is a failure that names the refusal
+// (Instance.StepRefusal), never a quiet fallback to one session after another --
+// which gives the same answer at a pass over the weights per session, and so is
+// invisible to every gate that compares logits. A model the card cannot hold
+// whole skips by name, and so does one whose block the device declines.
+//
+// JITLLM_STEP_ARCHS names the models, comma-separated: a GGUF or a container
+// by file name, or a safetensors fixture by directory. The default is the
+// smallest model of each architecture on the development box.
+func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
+	for _, name := range stepArchModels() {
+		t.Run(filepath.Base(name), func(t *testing.T) {
+			instOpts := []Option{WithKVF16(false)}
+			m, err := model.Open(stepArchPath(t, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			for _, dev := range stepDevices() {
+				t.Run(dev, func(t *testing.T) {
+					ctl := stepControl(t, m, name, dev, instOpts...)
+					var r stepResult
+					var card string
+					func() {
+						g := stepTier(t, m, dev, false, fixtureTier(name)...)
+						defer g.Close()
+						r, card = stepGate(t, m, g, false, instOpts...), g.Name()
+					}()
+					if fixture(name) && !(r.worst < fixtureStepNMSE) {
+						ctl = orderControl(t, m, dev, instOpts...)
+					}
+					bound := stepBound(m, name, r, ctl)
+					t.Logf("STEP %s %s: worst logit NMSE %.3e (bound %.3e, order-only control %.3e)", filepath.Base(name),
+						card, r.worst, bound, ctl)
+					if !(r.worst < bound) {
+						t.Fatalf("%s's step across sessions disagrees with each session alone: NMSE %.3e at row %d",
+							filepath.Base(name), r.worst, r.at)
+					}
+					if fixture(name) {
+						fixtureMatrixArm(t, m, name, dev, instOpts...)
+					}
+				})
+			}
+		})
+	}
+}
+
+// stepBound is the step gate's bound for model name, opened as m, whose step
+// measured r: a synthetic fixture's (fixtureStepNMSE); a mixture's,
+// whose router turns the step's grouped arithmetic into a wider band, or
+// denseStepBand times its order-only control where that is wider still; or
+// denseStepBand times ctl, the order-only control measured on the same device
+// in the same run (stepControl). A mixture's own control is what widens it:
+// granite-3.1-1b-a400m's rows sit near router ties, an order change alone moves
+// its worst row by 1.2e-02..2.0e-02 on the M4 where Qwen3-MoE-4x0.6B's whole
+// step reads 4.6e-03..7.3e-03, and its step there reads up to 8.4e-02 over six
+// prompt sets with the grouped experts in binary16 and 6.8e-02 with them int8.
+func stepBound(m *model.Model, name string, r stepResult, ctl float64) float64 {
+	switch {
+	case fixture(name):
+		return max(fixtureStepNMSE, denseStepBand*ctl)
+	case m.Cfg.MoE():
+		return max(mixtureStepNMSE, denseStepBand*ctl)
+	}
+	return denseStepBand * ctl
+}
+
+// stepControl is the order-only control stepBound sizes a model's band from,
+// measured on dev before the gate opens its tier, or 0 for a synthetic
+// fixture, whose control is measured only where its step reads past
+// fixtureStepNMSE.
+func stepControl(t *testing.T, m *model.Model, name, dev string, io ...Option) float64 {
+	if fixture(name) {
+		return 0
+	}
+	return orderControl(t, m, dev, io...)
+}
+
+// fixture reports a synthetic fixture: random weights of a few blocks.
+func fixture(name string) bool { return strings.HasPrefix(filepath.Base(name), "synth-") }
+
+// fixtureStepNMSE is the step gate's bound on a synthetic fixture (synth-*):
+// random weights of a few blocks, f32 or Q8_0, on which a step and each
+// session alone read 0 to 2.9e-12 on CUDA, SPIR-V and Metal -- where a
+// published model's band is set by its quantized activations near a tie. A
+// bound of the published models' width would pass a missing Llama 4
+// temperature, which reads 6.4e-04 on the fixture. It is float arithmetic's
+// bound, so a fixture's card forms nothing on its matrix unit (fixtureTier).
+// A fixture whose summation order alone moves it further is held to
+// denseStepBand times that order-only spread instead: synth-kimik3's, a
+// mixture over recurrent and latent-attention blocks, reads 2.1e-10 on CUDA
+// and 1.4e-09 on SPIR-V, and its step 1.0e-09.
+const fixtureStepNMSE = 1e-9
+
+// fixtureMatrixNMSE is a fixture's step bound with the matrix unit on: a step
+// of rows rounds each block's row factors to binary16, unit roundoff u =
+// 2^-11 (u squared 2.4e-07), where each session alone reads them as floats,
+// and a fixture's few blocks compound it. 64 u squared holds
+// synth-bitnet-i2s's 5.4e-08 well inside and a missing Llama 4 temperature's
+// 6.4e-04 well outside. A mixture's router turns a rounding near a tie into
+// another expert and takes mixtureStepNMSE, as a published mixture does.
+const fixtureMatrixNMSE = 64.0 / (1 << 22)
+
+// fixtureMatrixArm runs fixture name's step gate again on a card whose matrix
+// unit is on, held to fixtureMatrixNMSE (a mixture to mixtureStepNMSE). A
+// fixture whose weights stay float32 forms nothing on the unit (binary16
+// would round them), and says so: that arm repeats the float one.
+func fixtureMatrixArm(t *testing.T, m *model.Model, name, dev string, io ...Option) {
+	g := stepTier(t, m, dev, false)
+	defer g.Close()
+	r := stepGate(t, m, g, false, io...)
+	units := 0
+	for _, n := range g.Stats().MatrixLaunches {
+		units += n
+	}
+	bound := fixtureMatrixNMSE
+	if m.Cfg.MoE() {
+		bound = mixtureStepNMSE
+	}
+	t.Logf("STEP %s %s, matrix unit on: worst logit NMSE %.3e (bound %.3e), %d launch(es) on the unit",
+		filepath.Base(name), g.Name(), r.worst, bound, units)
+	if !(r.worst < bound) {
+		t.Fatalf("%s's step across sessions on the matrix unit disagrees with each session alone: NMSE %.3e at row %d",
+			filepath.Base(name), r.worst, r.at)
+	}
+}
+
+// fixtureTier is the card options a fixture's step gate runs under: no
+// kernel on the matrix unit (NoMMA), where a step of rows rounds its row
+// factors to binary16 and each session alone reads them as floats --
+// synth-bitnet-i2s's step read 5.4e-08 and synth-gptoss's 8.6e-04 (a router
+// tie moved) on a V100. The published models run the matrix unit, held to
+// their band, and each fixture runs it in an arm of its own
+// (fixtureMatrixArm).
+func fixtureTier(name string) []gpu.Option {
+	if !fixture(name) {
+		return nil
+	}
+	return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })}
+}
+
+// stepArchModels is the models TestStepAcrossSessionsEveryArchitecture runs.
+func stepArchModels() []string {
+	if v := os.Getenv("JITLLM_STEP_ARCHS"); v != "" {
+		return strings.Split(v, ",")
+	}
+	return []string{
+		"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf",
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf",
+		"gemma-2b.gguf", "gemma-2-2b-it-Q4_K_M.gguf", "gemma-3-1b-it-Q4_K_M.gguf",
+		"Phi-3.5-mini-instruct-Q4_K_M.gguf", "granite/granite-3.3-2b-instruct-Q4_K_M.gguf",
+		"granite/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
+		"synth-gptoss.gguf", "synth-llama4.gguf", "synth-phi2.gguf", "synth-starcoder.gguf",
+		"synth-starcoder2.gguf", "synth-commandr.gguf", "synth-cohere2.gguf", "synth-stablelm.gguf",
+		"synth-stablelm-par.gguf", "synth-falcon.gguf", "synth-nemotron.gguf", "synth-dbrx.gguf",
+		"synth-deepseek", "synth-deepseek-dense", "synth-kimilinear", "synth-glm4moe.gguf", "synth-qwen2moe.gguf",
+		"synth-ernie45moe.gguf", "synth-ernie45.gguf", "synth-hunyuanmoe.gguf", "synth-hunyuan.gguf",
+		"synth-smollm3.gguf", "synth-arcee.gguf", "synth-seedoss.gguf", "synth-olmo2.gguf",
+		"synth-exaone4.gguf", "synth-mistral3.gguf", "synth-olmo2-gqa.gguf", "synth-olmo3.gguf", "synth-olmo.gguf",
+		"synth-minimaxm2.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf", "synth-gemma4-e.gguf",
+		"synth-deepseek32.gguf", "synth-gemma3n.gguf", "synth-minimaxm3.gguf",
+		"synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-phimoe.gguf", "synth-apertus.gguf",
+		"synth-kimik3.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
+	}
+}
+
+// stepArchPath is name's container: a GGUF converted (jlmOf), a container as
+// it is, a safetensors fixture's directory converted (hfContainer).
+func stepArchPath(t *testing.T, name string) string {
+	t.Helper()
+	if strings.HasSuffix(name, ".gguf") || strings.HasSuffix(name, ".jlm") {
+		return jlmOf(t, testmodels.Path(name))
+	}
+	return hfContainer(t, name)
+}
+
+// TestStepAcrossSessionsAppliesTheFinalSoftcap is the step gate on a final
+// logit softcap (gemma2's), which a step's per-row head applies on the device
+// as decode's head does. The cap is perturbed rather than waited for, as
+// TestFinalSoftcapReachesTheDeviceHead does it: Llama-3.2-1B fits any card
+// here where gemma-2-2b does not, and a cap of an eighth of the largest logit
+// is far from linear, so an uncapped row parts from its session alone by more
+// than its own norm. The violation is the jitllmfault "nocap"
+// (TestStepAcrossSessionsSoftcapGateDiscriminates).
+func TestStepAcrossSessionsAppliesTheFinalSoftcap(t *testing.T) {
+	m := openSoftcapStep(t)
+	defer m.Close()
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			ctl := orderControl(t, m, dev)
+			g := stepTier(t, m, dev, false)
+			defer g.Close()
+			r := stepGate(t, m, g, false)
+			if bound := denseStepBand * ctl; !(r.worst < bound) {
+				t.Fatalf("a capped model's step across sessions disagrees with each session alone: NMSE %.3e "+
+					"at row %d, bound %.3e", r.worst, r.at, bound)
+			}
+		})
+	}
+}
+
+// openSoftcapStep opens Llama-3.2-1B with a final softcap of an eighth of its largest
+// logit on the step gate's first prompt.
+func openSoftcapStep(t *testing.T) *model.Model {
+	t.Helper()
+	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
+	if _, err := os.Stat(p); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	}
+	instOpts := []Option{WithKVF16(false)}
+	m, err := model.Open(jlmOf(t, p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	amax := 0.0
+	for _, l := range teacherForce(t, m, m.Vocab.Encode("The capital of France is", true), instOpts...) {
+		for _, v := range l {
+			amax = max(amax, math.Abs(float64(v)))
+		}
+	}
+	if amax == 0 {
+		m.Close()
+		t.Fatal("the host's logits are all zero -- a cap would compare nothing")
+	}
+	cfgMut(m, func(c *model.Config) { c.FinalSoftcap = float32(amax / 8) })
+	return m
+}

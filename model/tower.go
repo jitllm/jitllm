@@ -1,0 +1,1432 @@
+package model
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"image"
+	"image/color"
+	"math"
+	"slices"
+	"sync"
+	"unsafe"
+
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
+	"github.com/jitllm/jitllm/tok/jinja"
+)
+
+// The vision tower as its container states it (jlm.Tower), lowered into the
+// engine's graphs: an entry from the picture's samples to the first block's
+// rows, the repeated block, and a head from the last block's rows to the
+// language model's. Nothing here knows a family: each graph is the record's
+// steps and ops, op for op, and the tensors its inventory holds.
+
+// towerGraphs is a stated tower's graphs: an entry for each sample format a
+// decoded picture arrives in, a graph a block, and the head.
+type TowerGraphs struct {
+	// classes is every size the entry is formed for, smallest first: a
+	// fixed tower's one, or squares of growing sides for a picture resized
+	// to a size of its own (jlm.PreResizeLive).
+	Classes []towerClass
+	Blocks  []*graph.Graph
+	Head    *graph.Graph
+	// Chain says the blocks are a chained tower's (jlm.Tower.Chain), each a
+	// graph over a grid of its own run after the one before it; HeadFrom
+	// the blocks whose rows the head reads beside the last's.
+	Chain    bool
+	HeadFrom []int
+	// taps is each tap's graph (jlm.TowerTap), tapBlocks the tower block
+	// whose rows it reads.
+	Taps      []*graph.Graph
+	TapBlocks []int
+	// rows is the most rows the entry writes and every block reads, lead the
+	// class rows before the patches; side a fixed picture's patch grid's
+	// width and patch a patch's side in pixels; out the rows the head writes
+	// for rows rows, one a token of the picture's span.
+	Rows, Lead, Side, Patch, Out int
+	// gridDiv is the language model's grid over the patches'
+	// (jlm.TowerSpan.GridDiv); merge the side of the merge windows the patch
+	// rows are ordered in and window that of the windows of them, in merge
+	// windows (towerTiles); full says block i attends the whole picture.
+	GridDiv, Merge, Window int
+	// Line and Ends are the rows the head adds to the merged grid's: Line
+	// after each of its rows (TOpRowBreak), Ends before and after it
+	// (TOpWrapRows); Frame the merge they count the grid over.
+	Line, Ends, Frame int
+	// Trim is the break rows the frame leaves off its last row: 1 where the
+	// head breaks after each merged row but the last (TOpRowBreak's Offset).
+	Trim int
+	// Fixed is the rows the head writes for a square whatever its grid,
+	// its marker rows aside (a resampler's queries, TOpRowsAttend); 0 for
+	// a head whose rows follow the grid.
+	Fixed int
+	// Marks is the most marker rows the head writes around a square's rows
+	// (TOpMarkRow's Span and Offset), each run where the square names one
+	// (Square.Mark, Square.Trail).
+	Marks int
+	// Tail is the class rows after the patches (TOpTailRow).
+	Tail int
+	// Geometry is how a picture becomes the tower's squares
+	// (jlm.PictureGeometry, PictureSquares).
+	Geometry *jlm.PictureGeometry
+	// Video is how the tower reads a video (jlm.Video), nil for none, and
+	// Videos its entry's classes over a pair of frames, one for each
+	// picture class's size.
+	Video  *jlm.Video
+	Videos []towerClass
+	// Stages is the entries of the whole-picture resizes the geometries
+	// state before their squares (jlm.PictureGeometry.Stages), smallest
+	// first, each up to its pixels: the picture's bytes at a stage's size,
+	// which the next stage and the squares read.
+	Stages []towerClass
+	// table and planes are the blocks' rotary table and its planes, nil for
+	// blocks that turn nothing.
+	Table  *graph.Graph
+	Planes []float32
+	// holders is what each chat template writes for a picture and for a
+	// video, by the template's source (mediaPlaceholder).
+	holders sync.Map
+}
+
+// towerClass is one size the entry is formed for: its graph for each sample
+// format, its picture op's attributes and its rows.
+type towerClass struct {
+	Entry map[uint8]*graph.Graph
+	// Band is the class's band graphs, where its resize is Pillow's
+	// (graph.PicBand), by BandKey; BandRuns the band graphs each entry runs
+	// first, in order. Its entries' picture ops then finish the bands' sums.
+	Band     map[uint8]*graph.Graph
+	BandRuns map[uint8][]uint8
+	Pic      graph.Attrs
+	Rows     int
+}
+
+// placeholder is what the template src writes for an image part, or a video
+// part, read off it once.
+func (tg *TowerGraphs) placeholder(tpl *jinja.Template, src, bos, eos, mark string, video bool) (string, error) {
+	key := holderKey{src, video}
+	if ph, ok := tg.holders.Load(key); ok {
+		return ph.(string), nil
+	}
+	ph, err := mediaPlaceholder(tpl, src, bos, eos, mark, video)
+	if err != nil {
+		return "", err
+	}
+	tg.holders.Store(key, ph)
+	return ph, nil
+}
+
+// holderKey names a template's placeholder: its source and the part's kind.
+type holderKey struct {
+	src   string
+	video bool
+}
+
+// audioBlocks is how many audio blocks follow the vision blocks in v's
+// page array (jlm.Audio).
+func audioBlocks(v *jlm.Vision) int {
+	if v.Audio == nil {
+		return 0
+	}
+	return int(v.Audio.NLayer)
+}
+
+// bindTower makes the tower's blocks layers of the model from towerBase on,
+// the page each is read from the container's vision block of that index, and
+// its entry's and head's tensors towerDense: every vector read once, every
+// matrix a descriptor recorded by its role (layer.mats), which an instance's
+// copy binds (BindDense, BindBlock).
+func (m *Model) bindTower(c *jlm.File) error {
+	if m.TowerBase > int(c.H.NBlocks) {
+		return fmt.Errorf("model: %d text blocks over a page array of %d: the tower's pages would be another block's",
+			m.TowerBase, c.H.NBlocks)
+	}
+	// Blocks the container holds past the text model's (a decision model's
+	// head blocks) keep their pages: the tower's start after them.
+	m.Layers = m.Layers[:c.H.NBlocks]
+	m.TowerBase = int(c.H.NBlocks)
+	v := c.Vision()
+	// The tower's blocks are bound where they live: a matrix is recorded by a
+	// pointer into its layer (layer.mats), which a copy would leave behind.
+	n := len(m.Layers)
+	if cap(m.Layers)-n < int(v.NLayer) {
+		return fmt.Errorf("model: room for %d tower blocks after the text's, %d made", v.NLayer, cap(m.Layers)-n)
+	}
+	m.Layers = m.Layers[:n+int(v.NLayer)+audioBlocks(v)]
+	ls := m.Layers[n : n+int(v.NLayer)]
+	audio := m.Layers[n+int(v.NLayer):]
+	// A tap's tensors sit at its block's index of the dense region, each tap
+	// a layer of its own.
+	var taps []jlm.TowerTap
+	if v.Tower != nil {
+		taps = v.Tower.Taps
+	}
+	m.TowerTaps = make([]Layer, len(taps))
+	tapAt := map[int32]int{}
+	for j, tp := range taps {
+		tapAt[tp.Block] = j
+	}
+	for i := range c.Entries() {
+		e := &c.Entries()[i]
+		if !e.Role.Vision() {
+			continue
+		}
+		l := &m.TowerDense
+		if e.Index >= 0 {
+			j, ok := tapAt[e.Index]
+			if e.Block != jlm.DenseBlock || !ok || !tapBinds(taps[j], e.Role) {
+				continue
+			}
+			l = &m.TowerTaps[j]
+		}
+		switch {
+		case e.Block >= 0 && int(e.Block) < len(ls):
+			l = &ls[e.Block]
+		case e.Block >= 0 && int(e.Block) < len(ls)+len(audio):
+			l = &audio[int(e.Block)-len(ls)]
+		case e.Block != jlm.DenseBlock:
+			return fmt.Errorf("model: the tower holds %v in block %d of %d", e.Role, e.Block, len(ls))
+		}
+		if e.Role.Expanded() || e.NDim < 2 || squeezed(e) {
+			x, err := entryVector(c, e)
+			if err != nil {
+				return err
+			}
+			l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: x})
+			continue
+		}
+		t, err := entryTensor(e)
+		if err != nil {
+			return err
+		}
+		dst := l.towerSlot(e.Role)
+		if dst == nil {
+			dst = &t
+		}
+		*dst = t
+		l.Mats = append(l.Mats, roleTensor{e.Role, dst})
+	}
+	return nil
+}
+
+// tapBinds says tap tp's program binds role r.
+func tapBinds(tp jlm.TowerTap, r jlm.Role) bool {
+	for _, op := range tp.Prog.Ops {
+		if slices.Contains(op.Bind, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// towerTapFacts is the inventory of the tensors a tap of tower block b binds:
+// the dense region's at index b.
+func (m *Model) towerTapFacts(b int32) graph.Facts {
+	inv := map[jlm.Role]graph.Shape{}
+	for i := range m.Container.Entries() {
+		e := &m.Container.Entries()[i]
+		if e.Block != jlm.DenseBlock || e.Index != b || !e.Role.Vision() {
+			continue
+		}
+		s := graph.Shape{K: e.K()}
+		if e.NDim >= 2 && !squeezed(e) {
+			// Every trailing dimension's rows, as the tensor's load counts
+			// them: a stack of tables is its tables' rows back to back.
+			s.Rows = 1
+			for d := 1; d < int(e.NDim); d++ {
+				s.Rows *= int(e.Dims[d])
+			}
+		}
+		inv[e.Role] = s
+	}
+	return graph.Facts{Inventory: inv}
+}
+
+// towerTapFormats is the container's type of every tensor tap graph g of
+// tower block b binds.
+func (m *Model) TowerTapFormats(b int32, g *graph.Graph) map[jlm.Role]jlm.Type {
+	out := map[jlm.Role]jlm.Type{}
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			if e, ok := m.Container.Find(w.Role, jlm.DenseBlock, b); ok {
+				out[w.Role] = e.Type
+			}
+		}
+	}
+	return out
+}
+
+// squeezed reports whether e is a vector stored with trailing dimensions
+// of 1 (InternViT's class embedding, [1024, 1, 1]).
+func squeezed(e *jlm.Entry) bool {
+	for d := 1; d < int(e.NDim); d++ {
+		if e.Dims[d] != 1 {
+			return false
+		}
+	}
+	return true
+}
+
+// towerSlot is the field of a tower block's layer matrix r is held in: the
+// one a text block's matrix of the same place in the block is, which a card
+// reads a block's weights from (Instance.layerWeightsAt); nil for a matrix
+// bound by its role alone.
+func (l *Layer) towerSlot(r jlm.Role) *Tensor {
+	switch r {
+	case jlm.RoleVAttnQ:
+		return &l.Wq
+	case jlm.RoleVAttnK:
+		return &l.Wk
+	case jlm.RoleVAttnV:
+		return &l.Wv
+	case jlm.RoleVAttnOut:
+		return &l.Wo
+	case jlm.RoleVFFNGate:
+		return &l.Gate
+	case jlm.RoleVFC1:
+		return &l.Up
+	case jlm.RoleVFC2:
+		return &l.Down
+	}
+	return nil
+}
+
+// towerFacts is the shapes of the tower's tensors in its block b (the
+// tower's own index), jlm.DenseBlock the entry's and the head's.
+func (m *Model) TowerFacts(b int32) graph.Facts {
+	inv := map[jlm.Role]graph.Shape{}
+	for i := range m.Container.Entries() {
+		e := &m.Container.Entries()[i]
+		if e.Block != b || !e.Role.Vision() || e.Index >= 0 {
+			continue
+		}
+		s := graph.Shape{K: e.K()}
+		if e.NDim >= 2 && !squeezed(e) {
+			// Every trailing dimension's rows, as the tensor's load counts
+			// them: a stack of tables is its tables' rows back to back.
+			s.Rows = 1
+			for d := 1; d < int(e.NDim); d++ {
+				s.Rows *= int(e.Dims[d])
+			}
+		}
+		inv[e.Role] = s
+	}
+	return graph.Facts{Inventory: inv}
+}
+
+// towerFormats is the container's type of every tensor g binds: a tower
+// block's in its own index (its block less the model's other blocks), the
+// entry's and the head's outside any.
+func (m *Model) TowerFormats(g *graph.Graph) map[jlm.Role]jlm.Type {
+	b := int32(jlm.DenseBlock)
+	if g.Block >= 0 {
+		b = int32(g.Block - m.TowerBase)
+	}
+	out := map[jlm.Role]jlm.Type{}
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			if e, ok := m.Container.Find(w.Role, b, -1); ok {
+				out[w.Role] = e.Type
+			}
+		}
+	}
+	return out
+}
+
+// ClipRows is the frames a clip of n samples makes in the audio tower's
+// entry and the rows of them the blocks read, both from the stated entry:
+// the centred frames one more than its hops (TOpFrames), the clip's those
+// the feature norm keeps (its Offset fewer), then each strided convolution's
+// output side, (L + 2*Offset - Span)/Stride + 1.
+func (m *Model) ClipRows(n int) (frames, rows int) {
+	for _, op := range m.Container.Vision().Audio.Tower.Entry.Ops {
+		switch {
+		case op.Code == jlm.TOpFrames:
+			frames = n/int(op.Stride) + 1
+			rows = frames
+		case op.Code == jlm.TOpFeatureNorm:
+			rows -= int(op.Offset)
+		case (op.Code == jlm.TOpUnfold || op.Code == jlm.TOpConv) && op.Stride > 1:
+			rows = max(rows+2*int(op.Offset)-int(op.Span), 0)/int(op.Stride) + 1
+		}
+	}
+	return frames, rows
+}
+
+// ClipLength is the samples the audio tower reads of a clip that makes
+// outputs at its rate: cut to the longest clip the reference reads and padded
+// with silence to half a second, as audio.waveform makes them.
+func (m *Model) ClipLength(outputs int) int {
+	a := m.Container.Vision().Audio
+	return max(min(outputs, int(a.MaxSamples)), int(a.SampleRate)/2)
+}
+
+// ClipSamples is the samples a clip makes at the audio tower's rate as the
+// tower reads them: ffmpeg's resample of its mono mix (composer.SWR,
+// composer.MonoMix), cut and padded (ClipLength).
+func (m *Model) ClipSamples(c Clip) (int, error) {
+	if m.Audio == nil {
+		return 0, fmt.Errorf("model: the model has no audio tower")
+	}
+	if composer.SoundBytes(c.Format) == 0 || c.Channels < 1 || c.Rate < 1 {
+		return 0, fmt.Errorf("model: a clip of sample format %d, %d channel(s) at %d Hz", c.Format, c.Channels, c.Rate)
+	}
+	if c.Frames() == 0 {
+		return 0, fmt.Errorf("model: an empty clip")
+	}
+	if _, err := composer.MonoMix(c.Channels, c.Mask); err != nil {
+		return 0, err
+	}
+	s, err := composer.NewSWR(c.Rate, int(m.Container.Vision().Audio.SampleRate))
+	if err != nil {
+		return 0, err
+	}
+	if s.Taps*c.Channels > composer.SoundTapsMax {
+		return 0, fmt.Errorf("model: a clip of %d channel(s) at %d Hz resamples through %d taps of each, past the sound op's %d",
+			c.Channels, c.Rate, s.Taps, composer.SoundTapsMax)
+	}
+	_, n := s.Clip(c.Frames())
+	return m.ClipLength(n), nil
+}
+
+// ClipSpan is a voice clip as a span of the prompt: the clip as its
+// container stores it, the rows the audio tower writes for it (ClipSamples)
+// and a key over what decides them.
+func (m *Model) ClipSpan(clip Clip) (Span, error) {
+	n, err := m.ClipSamples(clip)
+	if err != nil {
+		return Span{}, err
+	}
+	_, rows := m.ClipRows(n)
+	h := sha256.New()
+	h.Write([]byte("clip"))
+	var w [8]byte
+	for _, v := range [...]uint64{uint64(clip.Format), uint64(clip.Channels), uint64(clip.Rate), clip.Mask} {
+		binary.LittleEndian.PutUint64(w[:], v)
+		h.Write(w[:])
+	}
+	h.Write(clip.PCM)
+	var k RowsKey
+	h.Sum(k[:0])
+	return Span{Clip: &clip, ClipRows: rows, Key: &k}, nil
+}
+
+// BuildAudioGraphs lowers the container's stated audio tower (jlm.Audio):
+// its entry over the longest clip's frames, a chained tower whose blocks
+// follow the vision tower's in the tower's block space, each block over the
+// rows the subsampling leaves, and the head -- each graph verified against
+// the tensors it binds.
+func (m *Model) BuildAudioGraphs() (*TowerGraphs, error) {
+	v := m.Container.Vision()
+	a := v.Audio
+	t := a.Tower
+	dense := m.TowerFacts(jlm.DenseBlock)
+	frames := int(a.MaxSamples/a.Hop) + 1
+	// An entry a sample format: the clip's samples at the tower's rate, made
+	// by the sound op from its PCM as it lies, are what the stated entry's
+	// frames read.
+	tg := &TowerGraphs{Classes: []towerClass{{Entry: map[uint8]*graph.Graph{}, Rows: frames}}, Rows: frames}
+	entry, err := clipInput(t.Entry)
+	if err != nil {
+		return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+	}
+	var first *graph.Graph
+	for f := graph.SoundU8; f < graph.SoundFormats; f++ {
+		b := graph.NewBlock(-1)
+		snd := b.Emit(graph.OpSound, nil, []graph.Result{{Name: "sound", Width: int(a.MaxSamples), Rows: 1}}, nil,
+			graph.Attrs{Sound: f, Taps: composer.SoundTapsMax}, nil, nil)[0]
+		out, err := graph.LowerProgram(b, t, &entry, []graph.ValueID{snd}, frames, dense)
+		if err != nil {
+			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+		}
+		b.Out(out)
+		if err := graph.Verify(b.G, dense); err != nil {
+			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+		}
+		tg.Classes[0].Entry[f] = b.G
+		if first == nil {
+			first = b.G
+		}
+	}
+	if err := m.chainGraphs(tg, t, int(a.NLayer), int(v.NLayer), first, dense); err != nil {
+		return nil, fmt.Errorf("model: the audio %w", err)
+	}
+	return tg, nil
+}
+
+// buildTowerGraphs lowers the container's stated tower, verifying each graph
+// against the tensors it binds. A container whose tower is not stated has
+// none to lower, and says which family it is so its converter can be told.
+func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
+	v := m.Container.Vision()
+	t := v.Tower
+	if t == nil {
+		return nil, fmt.Errorf("model: the container's vision tower (%v) is not stated: convert it again "+
+			"with a converter that states this family (jlm.Tower)", v.Projector)
+	}
+	dense := m.TowerFacts(jlm.DenseBlock)
+	ops := t.Entry.Ops
+	if len(ops) == 0 || ops[0].Code != jlm.TOpPatchify || t.Entry.NIn != 1 {
+		return nil, fmt.Errorf("model: the tower's entry does not begin with the picture's patches")
+	}
+	geom := t.Geometry
+	if geom == nil {
+		return nil, fmt.Errorf("model: the container states no picture geometry (%v): convert it again", v.Projector)
+	}
+	P := int(ops[0].Span)
+	merge, window := graph.TowerTiles(t)
+	tg := &TowerGraphs{Lead: int(ops[0].Offset), GridDiv: int(t.Span.GridDiv), Merge: merge, Window: window,
+		Side: int(v.ImageSize / v.PatchSize), Patch: P, Geometry: geom}
+	if len(t.Chain) > 0 {
+		// A chain's entry reads the picture's every patch of P: its grid is
+		// the picture's, whatever the container's patch.
+		tg.Side = int(v.ImageSize) / P
+	}
+	for _, op := range ops {
+		if op.Code == jlm.TOpTailRow {
+			tg.Tail = 1
+		}
+	}
+	bounds := geom.Bounds
+	sides := []int{0}
+	if bounds.Unit > 0 {
+		sides = classSides(bounds)
+	}
+	for _, sd := range sides {
+		grid := tg.Side * tg.Side
+		if sd > 0 {
+			grid = min((sd/P)*(sd/P), int(bounds.MaxPatches))
+		}
+		cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: grid + tg.Lead + tg.Tail}
+		for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
+			g, band, err := towerEntry(t, px, grid, tg.Lead+tg.Tail, sd, int(bounds.MaxPix), dense)
+			if err != nil {
+				return nil, fmt.Errorf("model: the tower's entry: %w", err)
+			}
+			cl.Pic, cl.Entry[px] = g.Ops[0].Attr, g
+			cl.Pic.PicPass = graph.PicWhole
+			if band != nil {
+				if cl.Band == nil {
+					cl.Band, cl.BandRuns = map[uint8]*graph.Graph{}, map[uint8][]uint8{}
+				}
+				cl.Band[BandKey(0, px)], cl.BandRuns[px] = band, []uint8{BandKey(0, px)}
+				if err := columnBands(cl.Band, BandKey(0, px), dense); err != nil {
+					return nil, fmt.Errorf("model: the tower's entry columns: %w", err)
+				}
+			}
+		}
+		tg.Classes = append(tg.Classes, cl)
+		tg.Rows = max(tg.Rows, cl.Rows)
+	}
+	// The stages' classes, the picture's and a video frame's, are one set:
+	// each the tower's resize up to its pixels, smallest first.
+	var most []int
+	stated := [][]jlm.PictureStage{geom.Stages}
+	if t.Video != nil && t.Video.Frames != nil {
+		stated = append(stated, t.Video.Frames.Stages)
+	}
+	for _, stages := range stated {
+		for _, st := range stages {
+			if !slices.Contains(most, int(st.MaxPix)) {
+				most = append(most, int(st.MaxPix))
+			}
+		}
+	}
+	slices.Sort(most)
+	for _, n := range most {
+		cl, err := stageClass(t, n, dense)
+		if err != nil {
+			return nil, fmt.Errorf("model: the tower's picture stage of %d pixels: %w", n, err)
+		}
+		tg.Stages = append(tg.Stages, cl)
+	}
+	// What of a video its pictures cannot read the container refuses
+	// (jlm.Tower.Valid).
+	tg.Video = t.Video
+	if t.Video != nil && !t.Video.AsPictures() {
+		// A pair's classes are its frames' own: the squares their resize
+		// reaches, which may be past the picture's, and the rows they hold.
+		fb := t.Video.Frames.Bounds
+		for _, sd := range classSides(fb) {
+			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: min((sd/P)*(sd/P), int(fb.MaxPatches)) + tg.Lead + tg.Tail}
+			tg.Rows = max(tg.Rows, cl.Rows)
+			for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {
+				for px1 := graph.PixRGBA8; px1 < graph.PixFormats; px1++ {
+					g, err := videoEntry(t, px0, px1, cl.Rows-tg.Lead-tg.Tail, tg.Lead+tg.Tail, sd, dense)
+					if err != nil {
+						return nil, fmt.Errorf("model: the tower's video entry: %w", err)
+					}
+					cl.Pic, cl.Entry[PairKey(px0, px1)] = g.Ops[0].Attr, g
+					cl.Pic.PicPass = graph.PicWhole
+				}
+			}
+			if cl.Pic.Chain == graph.ChainPIL {
+				// Each frame's bands into its own accumulator, the first
+				// frame's then the second's.
+				cl.Band, cl.BandRuns = map[uint8]*graph.Graph{}, map[uint8][]uint8{}
+				for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
+					for frame := range 2 {
+						a := cl.Pic
+						a.Pixels, a.PicFrame, a.PicPass = px, frame == 1, graph.PicBand
+						b := graph.NewBlock(-1)
+						b.Out(b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "frame.band", Width: 3}}, nil, a, nil, nil)[0])
+						if err := graph.Verify(b.G, dense); err != nil {
+							return nil, fmt.Errorf("model: the tower's video band: %w", err)
+						}
+						cl.Band[BandKey(frame, px)] = b.G
+						if err := columnBands(cl.Band, BandKey(frame, px), dense); err != nil {
+							return nil, fmt.Errorf("model: the tower's video columns: %w", err)
+						}
+					}
+				}
+				for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {
+					for px1 := graph.PixRGBA8; px1 < graph.PixFormats; px1++ {
+						cl.BandRuns[PairKey(px0, px1)] = []uint8{BandKey(0, px0), BandKey(1, px1)}
+					}
+				}
+			}
+			tg.Videos = append(tg.Videos, cl)
+		}
+	}
+	if r := t.Block.Rope; len(r.Runs) > 0 {
+		tg.Table, tg.Planes = towerRotary(t)
+	}
+	if len(t.Chain) > 0 {
+		if err := m.chainGraphs(tg, t, int(v.NLayer), 0, tg.Classes[0].Entry[graph.PixRGBA8], dense); err != nil {
+			return nil, err
+		}
+	} else {
+		for i := range int(v.NLayer) {
+			g, err := towerBlock(m.TowerBase+i, i, t, v, m.TowerFacts(int32(i)))
+			if err != nil {
+				return nil, fmt.Errorf("model: the tower's block %d: %w", i, err)
+			}
+			tg.Blocks = append(tg.Blocks, g)
+		}
+		h, out, err := towerProgram(t, &t.Head, v, tg.Rows, dense)
+		if err != nil {
+			return nil, fmt.Errorf("model: the tower's head: %w", err)
+		}
+		tg.Head, tg.Out = h, out
+	}
+	for _, op := range t.Head.Ops {
+		if op.Code == jlm.TOpMarkRow {
+			tg.Marks = int(op.Span + op.Offset)
+		}
+		if op.Code == jlm.TOpRowsAttend {
+			tg.Fixed = -1
+		}
+	}
+	if tg.Fixed < 0 {
+		tg.Fixed = tg.Out - tg.Marks
+	}
+	if tg.Line, tg.Frame, tg.Trim = graph.ProgramFrame(&t.Head); tg.Frame > 0 {
+		for _, op := range t.Head.Ops {
+			if op.Code == jlm.TOpWrapRows {
+				tg.Ends = 1
+			}
+		}
+	} else {
+		for _, op := range t.Head.Ops {
+			if op.Code == jlm.TOpWrapRows {
+				tg.Ends, tg.Frame = 1, int(op.Span)
+			}
+		}
+	}
+	D := int(v.ProjDim)
+	for j := range t.Taps {
+		tp := &t.Taps[j]
+		if tp.Block >= int32(v.NLayer) {
+			return nil, fmt.Errorf("model: the tower's tap %d reads block %d of %d", j, tp.Block, v.NLayer)
+		}
+		g, n, err := towerProgram(t, &tp.Prog, v, tg.Rows, m.towerTapFacts(tp.Block))
+		if err != nil {
+			return nil, fmt.Errorf("model: the tower's tap %d: %w", j, err)
+		}
+		if w := g.Values[g.Out[0]].Width; n != tg.Out || w != D {
+			return nil, fmt.Errorf("model: the tower's tap %d writes %d rows of %d, the head %d of %d", j, n, w, tg.Out, D)
+		}
+		tg.Taps, tg.TapBlocks = append(tg.Taps, g), append(tg.TapBlocks, int(tp.Block))
+	}
+	return tg, nil
+}
+
+// StageWidth is the words a row of a stage's bytes holds: the live picture
+// lies dense over them (graph.Attrs.PicBytes).
+const StageWidth = 4096
+
+// stageClass is a whole-picture resize's entry (jlm.PictureStage) for each
+// sample format: the record's resize filter at any size of at most maxPix
+// pixels, its bytes (graph.Attrs.PicBytes) a word a pixel over rows of
+// StageWidth words, Pillow's band passes first.
+func stageClass(t *jlm.Tower, maxPix int, f graph.Facts) (towerClass, error) {
+	var a graph.Attrs
+	for _, s := range t.Pre {
+		switch s.Kind {
+		case jlm.PreResize:
+			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
+				return towerClass{}, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[3]) == jlm.PrecTorch
+		case jlm.PreResizeLive:
+			if err := resizeChain(&a, jlm.Filter(s.Ints[0])); err != nil {
+				return towerClass{}, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[1]) == jlm.PrecTorch
+		}
+	}
+	if a.Chain != graph.ChainPIL {
+		return towerClass{}, fmt.Errorf("a stage resized by chain %d: a stage's bytes are a Pillow resize's", a.Chain)
+	}
+	a.Std, a.PicLive, a.PicBytes = [3]float64{1, 1, 1}, true, true
+	a.PicW, a.PicH, a.PicArea = composer.PictureMaxSide, composer.PictureMaxSide, maxPix
+	a.Taps = composer.LiveTaps(a.Filter, int(math.Sqrt(float64(maxPix))))
+	cl := towerClass{Entry: map[uint8]*graph.Graph{}, Band: map[uint8]*graph.Graph{}, BandRuns: map[uint8][]uint8{},
+		Rows: (maxPix + StageWidth - 1) / StageWidth}
+	for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
+		a.Pixels = px
+		ba := a
+		ba.PicPass, ba.PicBytes = graph.PicBand, false
+		bb := graph.NewBlock(-1)
+		bb.Out(bb.Emit(graph.OpPicture, nil, []graph.Result{{Name: "stage.band", Width: 3}}, nil, ba, nil, nil)[0])
+		if err := graph.Verify(bb.G, f); err != nil {
+			return towerClass{}, err
+		}
+		ea := a
+		ea.PicPass = graph.PicFinish
+		b := graph.NewBlock(-1)
+		b.Out(b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "stage", Width: StageWidth, Elem: graph.ElemU32}}, nil, ea, nil, nil)[0])
+		if err := graph.Verify(b.G, f); err != nil {
+			return towerClass{}, err
+		}
+		key := BandKey(0, px)
+		cl.Entry[px], cl.Band[key], cl.BandRuns[px] = b.G, bb.G, []uint8{key}
+		if err := columnBands(cl.Band, key, f); err != nil {
+			return towerClass{}, err
+		}
+	}
+	cl.Pic = a
+	cl.Pic.PicPass = graph.PicWhole
+	return cl, nil
+}
+
+// towerEntry is the entry for pictures of sample format px: the record's
+// preprocessing as one op (graph.OpPicture), then its entry program over
+// the grid's patch rows and extra rows beside them (a class row's, before
+// or after); for a picture of a size of its own, at most side pixels a side.
+func towerEntry(t *jlm.Tower, px uint8, grid, extra, side, maxPix int, f graph.Facts) (*graph.Graph, *graph.Graph, error) {
+	a := graph.Attrs{Pixels: px, Std: [3]float64{1, 1, 1}}
+	for _, s := range t.Pre {
+		switch s.Kind {
+		case jlm.PreResize:
+			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
+			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
+				return nil, nil, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[3]) == jlm.PrecTorch
+		case jlm.PreResizeLive:
+			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[0])); err != nil {
+				return nil, nil, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[1]) == jlm.PrecTorch
+		case jlm.PreCanvas:
+			a.PicCanvas = true
+			a.PicFill = [3]uint8{uint8(s.Ints[0]), uint8(s.Ints[1]), uint8(s.Ints[2])}
+			if s.Ints[3] > 0 {
+				a.PicW, a.PicH = int(s.Ints[3]), int(s.Ints[4])
+			}
+		case jlm.PreNormalize, jlm.PreNormalizeBF16:
+			for c := range 3 {
+				a.Mean[c], a.Std[c] = float64(s.Floats[c]), float64(s.Floats[3+c])
+			}
+			a.PicBF16 = s.Kind == jlm.PreNormalizeBF16
+		}
+	}
+	if a.PicLive && side > 0 {
+		// A picture of a size of its own holds its class's area, its sides
+		// any a picture reaches.
+		a.PicW, a.PicH, a.PicArea = composer.PictureMaxSide, composer.PictureMaxSide, side*side
+	}
+	switch {
+	case a.Chain == graph.ChainPIL && a.PicLive:
+		// A picture's own size is its source's but for the rounding to the
+		// factor and the area's bound: a side under twice smaller than the
+		// source's times sqrt(area / maxPix), the source at most PicSide a
+		// side (pictureFit.smartSize).
+		root := int(math.Sqrt(float64(maxPix)))
+		a.Taps = composer.LiveTaps(a.Filter, root)
+	case a.Chain == graph.ChainPIL:
+		// A crop's taps are a window of the resize's, whose scale is at most
+		// the crop's own.
+		a.Taps = max(composer.PILTapCount(a.Filter, composer.PictureMaxSide, a.PicW), composer.PILTapCount(a.Filter, composer.PictureMaxSide, a.PicH))
+	}
+	// A Pillow resize runs in bands of PicSide source rows (its band graph)
+	// and the entry finishes their sums.
+	var band *graph.Graph
+	if a.Chain == graph.ChainPIL {
+		ba := a
+		ba.PicPass = graph.PicBand
+		bb := graph.NewBlock(-1)
+		bb.Out(bb.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels.band", Width: 3}}, nil, ba, nil, nil)[0])
+		if err := graph.Verify(bb.G, f); err != nil {
+			return nil, nil, err
+		}
+		band, a.PicPass = bb.G, graph.PicFinish
+	}
+	p := &t.Entry
+	b := graph.NewBlock(-1)
+	P := int(p.Ops[0].Span)
+	pix := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels", Width: 3 * P * P}}, nil, a, nil, nil)[0]
+	if a.PicLive && grid*P*P > a.Area() || !a.PicLive && a.PicW*a.PicH != grid*P*P {
+		return nil, nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
+	}
+	out, err := graph.LowerProgram(b, t, p, []graph.ValueID{pix}, grid+extra, f)
+	if err != nil {
+		return nil, nil, err
+	}
+	b.Out(out)
+	return b.G, band, graph.Verify(b.G, f)
+}
+
+// towerRotary is the blocks' rotary as the tower's table turns it: the
+// table graph over each row's cell of the picture's grid (graph.RopeTable
+// .Grid), and its planes -- every pair's frequency, then its axis, 0 a
+// cell's row and 1 its column.
+func towerRotary(t *jlm.Tower) (*graph.Graph, []float32) {
+	rp := t.Block.Rope
+	r := nn.Rope{NRot: int(rp.Dim), Base: float64(rp.Base), Neox: rp.Neox}
+	var axes []float32
+	for _, run := range rp.Runs {
+		r.Runs = append(r.Runs, nn.RopeRun{Pairs: int(run.Pairs), Axis: int(run.Axis), Freq: int(run.Freq)})
+		for range run.Pairs {
+			axes = append(axes, float32(run.Axis))
+		}
+	}
+	return composer.TableGraph(TowerRotaryOf(t), 0), append(r.TabPlanes(len(axes)), axes...)
+}
+
+// towerRotaryOf is the blocks' rotary as their graphs state it: every turned
+// pair's element, each row's position the cell of the grid in the order the
+// patch gather lays the rows out (TOpPatchify's Width and Offset).
+func TowerRotaryOf(t *jlm.Tower) graph.Rotary {
+	g := graph.Rotary{Base: float64(t.Block.Rope.Base), Grid: true}
+	for _, run := range t.Block.Rope.Runs {
+		g.NRot += 2 * int(run.Pairs)
+	}
+	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify {
+		g.Lead = int(ops[0].Offset)
+	}
+	g.Origin = int(t.Block.Rope.Origin)
+	g.Merge, g.Window = graph.TowerTiles(t)
+	return g
+}
+
+// square is one square of a picture as the tower encodes it: the class its
+// entry is formed for, the size the picture is resized to and the window of
+// it the square is -- its corner and its size -- and its patch grid.
+type Square struct {
+	Class                  int
+	Ow, Oh, X0, Y0, Pw, Ph int
+	Gw, Gh                 int
+	// Mark and Trail are the first rows of the square's marker runs in the
+	// head's table plus one, before its rows and after them, 0 for none, and
+	// MarkN and TrailN their lengths (TOpMarkRow, composer.RequestMark and
+	// RequestTrail).
+	Mark, Trail, MarkN, TrailN int
+	// Cw x Ch is the canvas the resized picture is laid on and (Cx, Cy) its
+	// corner on it (graph.Attrs.PicCanvas): the resize itself at (0, 0)
+	// where the tower lays it on none.
+	Cw, Ch, Cx, Cy int
+}
+
+// squareOut is the rows the head writes for square sq: its patches over
+// the head's ratio of rows out to patch rows in.
+func (tg *TowerGraphs) SquareOut(sq Square) int {
+	if tg.Frame > 0 {
+		m := tg.Frame
+		return (sq.Gh/m)*(sq.Gw/m+tg.Line) - tg.Trim + 2*tg.Ends
+	}
+	grid := tg.Rows - tg.Lead - tg.Tail
+	if tg.Fixed > 0 {
+		n := tg.Fixed
+		if sq.Mark > 0 {
+			n += sq.MarkN
+		}
+		if sq.Trail > 0 {
+			n += sq.TrailN
+		}
+		return n
+	}
+	if tg.Marks > 0 {
+		// The head's rows less its marker rows over the patches, and the
+		// markers the square names.
+		n := sq.Gw * sq.Gh * (tg.Out - tg.Marks) / grid
+		if sq.Mark > 0 {
+			n += sq.MarkN
+		}
+		if sq.Trail > 0 {
+			n += sq.TrailN
+		}
+		return n
+	}
+	return sq.Gw * sq.Gh * tg.Out / grid
+}
+
+// resizeChain sets a's resample to filter f's.
+func resizeChain(a *graph.Attrs, f jlm.Filter) error {
+	switch f {
+	case jlm.FilterTwoTap:
+		a.Chain, a.Filter = graph.ChainHalfPixel, graph.FilterLinear
+	case jlm.FilterPILBilinear:
+		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterBilinear, composer.PictureSide
+	case jlm.FilterPILBicubic:
+		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterCubic, composer.PictureSide
+	case jlm.FilterPILLanczos:
+		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterLanczos, composer.PictureSide
+	default:
+		return fmt.Errorf("a resize by filter %d, which no picture op runs", f)
+	}
+	return nil
+}
+
+// Square is square i of a w x h picture and how many the picture has, as
+// the tower's geometry states them (PictureSquares).
+func (tg *TowerGraphs) Square(w, h, i int) (Square, int, error) {
+	var ps PictureSquares
+	n, err := ps.Of(tg, w, h)
+	if err != nil {
+		return Square{}, 0, err
+	}
+	sq, err := ps.At(i)
+	return sq, n, err
+}
+
+// LastSquare is a w x h picture's last square: a tiled tower's thumbnail,
+// or its one square.
+func (tg *TowerGraphs) LastSquare(w, h int) (Square, error) {
+	var ps PictureSquares
+	if _, err := ps.Of(tg, w, h); err != nil {
+		return Square{}, err
+	}
+	return ps.Last()
+}
+
+// FrameSquare is the square a video's w x h frame read as a picture is
+// (jlm.Video.AsPictures): its last square, under the frames' own geometry
+// where the video states one.
+func (tg *TowerGraphs) FrameSquare(w, h int) (Square, error) {
+	var ps PictureSquares
+	if _, err := ps.FrameOf(tg, w, h); err != nil {
+		return Square{}, err
+	}
+	return ps.Last()
+}
+
+// PicRows is the rows a w x h picture becomes: its squares' every row.
+func (tg *TowerGraphs) PicRows(w, h int) (int, error) {
+	var ps PictureSquares
+	if _, err := ps.Of(tg, w, h); err != nil {
+		return 0, err
+	}
+	return ps.Rows()
+}
+
+// classSides is the sides of the squares whose areas a picture of its own
+// size is encoded in (graph.Attrs.PicArea), smallest first: 16 units,
+// doubling, and last composer.PictureSide rounded up a unit, or the side of
+// the area the resize reaches where that is more.
+func classSides(b jlm.PictureBounds) []int {
+	u := int(b.Unit)
+	most := (composer.PictureSide/u + 1) * u
+	if r := int(math.Ceil(math.Sqrt(float64(b.MaxPix)))); r > most {
+		most = (r + u - 1) / u * u
+	}
+	var out []int
+	for s := 16 * u; s < most; s *= 2 {
+		out = append(out, s)
+	}
+	return append(out, most)
+}
+
+// towerHead is the head over the last block's rows, and the rows it writes.
+func towerProgram(t *jlm.Tower, p *jlm.Program, v *jlm.Vision, rows int, f graph.Facts) (*graph.Graph, int, error) {
+	b := graph.NewBlock(-1)
+	x := b.In("rows", int(v.NEmbd))
+	out, err := graph.LowerProgram(b, t, p, []graph.ValueID{x}, rows, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	b.Out(out)
+	n := b.G.Values[out].Rows
+	if n == 0 {
+		n = rows
+	}
+	return b.G, n, graph.Verify(b.G, f)
+}
+
+// towerBlock is block li of the model's block space (the tower's block
+// li-NLayer): the stated block over the tensors its inventory holds -- each
+// norm before a sublayer where held, biases where held, a gate where held,
+// post-norms where held -- attending both ways over the picture's rows.
+func towerBlock(li, i int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Graph, error) {
+	rot := TowerRotaryOf(t)
+	bl := &t.Block
+	has := func(r jlm.Role) bool {
+		_, ok := f.Inventory[r]
+		return ok
+	}
+	stored := func(r jlm.Role) []jlm.Role {
+		if has(r) {
+			return []jlm.Role{r}
+		}
+		return nil
+	}
+	for _, r := range []jlm.Role{jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2} {
+		if !has(r) {
+			return nil, fmt.Errorf("the block holds no %v", r)
+		}
+	}
+	d, hd := int(v.NEmbd), int(bl.HeadDim)
+	qdim, kvDim := int(bl.NHead)*hd, int(bl.NKVHead)*hd
+	eps := float64(bl.Eps)
+	b := graph.NewBlock(li)
+	norm := func(x graph.ValueID, r, bias jlm.Role) graph.ValueID {
+		switch {
+		case !has(r):
+			return x
+		case bl.Norm == jlm.NormLayer:
+			return b.LayerNorm(x, r, eps, stored(bias)...)
+		}
+		return b.Norm(x, r, eps)
+	}
+	// clamp holds x, w wide, to the bounds at slot of the block's clipped
+	// linears (RoleVClamp: four a matrix, input then output, min then max),
+	// where it holds them.
+	clamp := func(x graph.ValueID, w, slot int) graph.ValueID {
+		if !has(jlm.RoleVClamp) {
+			return x
+		}
+		return b.Emit(graph.OpClamp, []graph.ValueID{x}, []graph.Result{{Name: "clamp", Width: w}},
+			[]graph.Binding{{Role: jlm.RoleVClamp, K: 28}}, graph.Attrs{Offset: slot}, nil, nil)[0]
+	}
+	// mv is the matrix r over x, in wide to out wide, both clamped by
+	// matrix m's bounds.
+	mv := func(x graph.ValueID, r jlm.Role, in, out, m int, bias ...jlm.Role) graph.ValueID {
+		x = clamp(x, in, 4*m)
+		// A matrix stored wider than the row, its k padded to whole blocks
+		// (quantizeTower), reads the row widened with zeros.
+		if k := f.Inventory[r].K; k > in {
+			x = b.Pad(x, k)
+		}
+		return clamp(b.MatVec(x, r, out, bias...), out, 4*m+2)
+	}
+	x := b.In("x", d)
+	n := norm(x, jlm.RoleVAttnNorm, jlm.RoleVAttnNormBias)
+	q := mv(n, jlm.RoleVAttnQ, d, qdim, 0, stored(jlm.RoleVAttnQBias)...)
+	k := mv(n, jlm.RoleVAttnK, d, kvDim, 1, stored(jlm.RoleVAttnKBias)...)
+	vv := mv(n, jlm.RoleVAttnV, d, kvDim, 2, stored(jlm.RoleVAttnVBias)...)
+	if has(jlm.RoleVAttnQNorm) {
+		q = b.HeadNorm(q, jlm.RoleVAttnQNorm, hd, eps)
+	}
+	if has(jlm.RoleVAttnKNorm) {
+		k = b.HeadNorm(k, jlm.RoleVAttnKNorm, hd, eps)
+	}
+	if bl.VNorm {
+		vv = b.Emit(graph.OpHeadNorm, []graph.ValueID{vv}, []graph.Result{{Name: "v.norm", Width: kvDim}}, nil,
+			graph.Attrs{Eps: eps, HeadDim: hd}, nil, nil)[0]
+	}
+	if len(bl.Rope.Runs) > 0 {
+		layout := graph.RopeNorm
+		if bl.Rope.Neox {
+			layout = graph.RopeNeox
+		}
+		a := graph.Attrs{HeadDim: hd, NRot: rot.NRot, Base: rot.Base, Layout: layout}
+		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
+		k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
+	}
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, vv, 0)}
+	scale := float64(bl.AttnScale)
+	if scale == 0 {
+		scale = 1 / math.Sqrt(float64(hd))
+	}
+	// A windowed block reads each row's keys from its window (the step's
+	// row windows); a whole-picture block every row's.
+	windowed := bl.Window > 0 && !slices.Contains(bl.Full, int32(i))
+	att := b.AttendOf(q, hist, graph.Attrs{NHead: int(bl.NHead), NKVHead: int(bl.NKVHead), HeadDim: hd, Scale: scale, Bidir: true,
+		RowWindows: windowed})
+	ao := mv(att, jlm.RoleVAttnOut, qdim, d, 3, stored(jlm.RoleVAttnOutBias)...)
+	if has(jlm.RoleVPostAttnNorm) {
+		ao = b.Norm(ao, jlm.RoleVPostAttnNorm, eps)
+	}
+	x2 := b.Add(x, ao)
+	n2 := norm(x2, jlm.RoleVFFNNorm, jlm.RoleVFFNNormBias)
+	ffn := f.Inventory[jlm.RoleVFC1].Rows
+	var acts []graph.ValueID
+	if has(jlm.RoleVFFNGate) {
+		acts = append(acts, mv(n2, jlm.RoleVFFNGate, d, ffn, 4, stored(jlm.RoleVFFNGateBias)...))
+	}
+	acts = append(acts, mv(n2, jlm.RoleVFC1, d, ffn, 5, stored(jlm.RoleVFC1Bias)...))
+	h, err := b.Stated("act", &bl.Act, acts, ffn, f)
+	if err != nil {
+		return nil, fmt.Errorf("the stated activation: %w", err)
+	}
+	fo := mv(h, jlm.RoleVFC2, ffn, d, 6, stored(jlm.RoleVFC2Bias)...)
+	if has(jlm.RoleVPostFFNNorm) {
+		fo = b.Norm(fo, jlm.RoleVPostFFNNorm, eps)
+	}
+	b.Out(b.Add(x2, fo))
+	return b.G, graph.Verify(b.G, f)
+}
+
+// towerConfig is the tower's segment as a Config: its blocks' geometry,
+// attending both ways, with its own rotary where it turns q and k and no
+// vocabulary. Its block indices are the model's (base on), so a block is
+// asked by the index it runs at.
+func TowerConfig(base, rows int, v *jlm.Vision, t *jlm.Tower) *Config {
+	b := &t.Block
+	r := TowerRotaryOf(t)
+	return &Config{NLayer: base + int(v.NLayer), NEmbd: int(v.NEmbd), NHead: int(b.NHead),
+		NKVHead: int(b.NKVHead), HeadDim: int(b.HeadDim), NFFN: int(v.NFFN), NCtx: rows,
+		RMSEps: float64(b.Eps), EmbdScale: 1, AttnFactor: 1, NonCausal: true, NoPosEnc: r.NRot == 0,
+		NRot: r.NRot, RopeBase: r.Base, RopeNeox: b.Rope.Neox, LayerNorm: b.Norm == jlm.NormLayer}
+}
+
+// pictureLayout is how a decoded picture's samples sit in the step's picture
+// table: their format, the picture's size and its rows' stride in bytes, and
+// for a second and third plane (YCbCr's chroma, a palette) their stride, byte
+// offsets and the chroma subsampling (composer.RequestPicSub); wide says a
+// sample is two bytes, and ink is the format's own reading: RGBA's fourth
+// byte CMYK's key, gray's samples alphas.
+type PictureLayout struct {
+	Px                              uint8
+	W, H, stride                    int
+	cstride, p2, p3, sub, wide, ink int
+}
+
+// RGBA8Layout is a w x h picture of RGBA8 words, a row w words: a picture
+// stage's bytes (graph.Attrs.PicBytes) as the next resize reads them.
+func RGBA8Layout(w, h int) PictureLayout {
+	return PictureLayout{Px: graph.PixRGBA8, W: w, H: h, stride: 4 * w}
+}
+
+// request writes the layout's words into the step's request.
+func (l PictureLayout) Request(req []uint32) {
+	req[composer.RequestPicW], req[composer.RequestPicH], req[composer.RequestPicStride] = uint32(l.W), uint32(l.H), uint32(l.stride)
+	req[composer.RequestPicCStride], req[composer.RequestPicP2], req[composer.RequestPicP3] = uint32(l.cstride), uint32(l.p2), uint32(l.p3)
+	req[composer.RequestPicSub], req[composer.RequestPicWide] = uint32(l.sub), uint32(l.wide)
+	req[composer.RequestPicInk] = uint32(l.ink)
+}
+
+// RequestFrame writes the layout's words as a video pair's second frame's.
+func (l PictureLayout) RequestFrame(req []uint32) {
+	req[composer.RequestFrameStride], req[composer.RequestFrameCStride] = uint32(l.stride), uint32(l.cstride)
+	req[composer.RequestFrameP2], req[composer.RequestFrameP3], req[composer.RequestFrameSub] = uint32(l.p2), uint32(l.p3), uint32(l.sub)
+	req[composer.RequestFrameWide], req[composer.RequestFrameInk] = uint32(l.wide), uint32(l.ink)
+}
+
+// picturePlanes is a decoded picture's layout and the planes the step's
+// picture table holds for it, each from a word boundary after the last: its
+// samples' bytes as the decoder left them, and a palette's entries -- four
+// bytes each, the colour's straight red, green and blue and its alpha --
+// written into ent.
+func picturePlanes(img image.Image, ent *[4 * 256]byte) (PictureLayout, [3][]byte, error) {
+	b := img.Bounds()
+	l := PictureLayout{W: b.Dx(), H: b.Dy()}
+	var planes [3][]byte
+	if l.W <= 0 || l.H <= 0 {
+		return l, planes, fmt.Errorf("model: an empty picture")
+	}
+	rows := func(pix []byte, stride, bpp int) []byte { return pix[:(l.H-1)*stride+l.W*bpp] }
+	switch p := img.(type) {
+	case *image.NRGBA:
+		l.Px, l.stride, planes[0] = graph.PixRGBA8, p.Stride, rows(p.Pix, p.Stride, 4)
+	case *image.RGBA:
+		l.Px, l.stride, planes[0] = graph.PixRGBAPremul, p.Stride, rows(p.Pix, p.Stride, 4)
+	case *image.Gray:
+		l.Px, l.stride, planes[0] = graph.PixGray8, p.Stride, rows(p.Pix, p.Stride, 1)
+	case *image.NRGBA64:
+		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 8)
+	case *image.RGBA64:
+		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBAPremul, p.Stride, 1, rows(p.Pix, p.Stride, 8)
+	case *image.Gray16:
+		l.Px, l.stride, l.wide, planes[0] = graph.PixGray8, p.Stride, 1, rows(p.Pix, p.Stride, 2)
+	case *image.Alpha:
+		l.Px, l.stride, l.ink, planes[0] = graph.PixGray8, p.Stride, 1, rows(p.Pix, p.Stride, 1)
+	case *image.Alpha16:
+		l.Px, l.stride, l.wide, l.ink, planes[0] = graph.PixGray8, p.Stride, 1, 1, rows(p.Pix, p.Stride, 2)
+	case *image.CMYK:
+		l.Px, l.stride, l.ink, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 4)
+	case *image.YCbCr:
+		return ycbcrPlanes(l, p)
+	case *image.NYCbCrA:
+		return ycbcrPlanes(l, &p.YCbCr)
+	case *image.Paletted:
+		clear(ent[:])
+		for i, c := range p.Palette[:min(len(p.Palette), 256)] {
+			e := ent[4*i : 4*i+4]
+			if n, ok := c.(color.NRGBA); ok {
+				e[0], e[1], e[2], e[3] = n.R, n.G, n.B, n.A
+				continue
+			}
+			// color.NRGBAModel's arithmetic, without its boxed result.
+			r, g, bb, a := c.RGBA()
+			if a != 0 && a != 0xffff {
+				r, g, bb = r*0xffff/a, g*0xffff/a, bb*0xffff/a
+			}
+			if a == 0 {
+				r, g, bb = 0, 0, 0
+			}
+			e[0], e[1], e[2], e[3] = uint8(r>>8), uint8(g>>8), uint8(bb>>8), uint8(a>>8)
+		}
+		l.Px, l.stride = graph.PixPaletted8, p.Stride
+		planes[0], planes[1] = rows(p.Pix, p.Stride, 1), ent[:]
+	default:
+		return l, planes, fmt.Errorf("model: a %T picture has no picture op reading its samples", img)
+	}
+	l.place(planes)
+	return l, planes, nil
+}
+
+// ycbcrPlanes is picturePlanes for a YCbCr picture: its luma and chroma
+// planes, and the chroma's shifts and phase on each axis read off the
+// picture's own COffset, so a sub-picture's chroma is the decoder's.
+func ycbcrPlanes(l PictureLayout, p *image.YCbCr) (PictureLayout, [3][]byte, error) {
+	r := p.Rect
+	ylen := p.YOffset(r.Max.X-1, r.Max.Y-1) + 1
+	clen := p.COffset(r.Max.X-1, r.Max.Y-1) + 1
+	planes := [3][]byte{p.Y[:ylen], p.Cb[:clen], p.Cr[:clen]}
+	hs, mx, okx := chromaShift(r.Dx(), 1, func(k int) int { return p.COffset(r.Min.X+k, r.Min.Y) })
+	vs, my, oky := chromaShift(r.Dy(), p.CStride, func(k int) int { return p.COffset(r.Min.X, r.Min.Y+k) })
+	if !okx || !oky {
+		return l, planes, fmt.Errorf("model: a %v YCbCr picture's chroma follows no shift", p.SubsampleRatio)
+	}
+	l.Px, l.stride, l.cstride, l.sub = graph.PixYCbCr8, p.YStride, p.CStride, hs|vs<<8|mx<<16|my<<24
+	l.place(planes)
+	return l, planes, nil
+}
+
+// chromaShift is the shift and phase taking an axis's first pixels, n of
+// them, to their chroma samples as off places them, step bytes apart.
+func chromaShift(n, step int, off func(k int) int) (shift, phase int, ok bool) {
+	for s := 0; s < 3; s++ {
+		for m := 0; m < 1<<s; m++ {
+			ok = true
+			for k := 0; k < min(n, 8) && ok; k++ {
+				ok = off(k) == ((k+m)>>s)*step
+			}
+			if ok {
+				return s, m, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// place sets the second and third planes' offsets, each from a word
+// boundary after the last plane.
+func (l *PictureLayout) place(planes [3][]byte) {
+	at := len(planes[0])
+	for i := 1; i < 3; i++ {
+		if planes[i] == nil {
+			continue
+		}
+		at = (at + 3) &^ 3
+		if i == 1 {
+			l.p2 = at
+		} else {
+			l.p3 = at
+		}
+		at += len(planes[i])
+	}
+}
+
+// pictureWords is a decoded picture's samples as the step's picture table
+// reads them, and their layout: one plane whose bytes are whole aligned
+// words is read in place, and any other picture's planes are copied into
+// pad, which grows to hold them.
+func PictureWords(img image.Image, pad *[]uint32, ent *[4 * 256]byte) ([]uint32, PictureLayout, error) {
+	l, planes, err := picturePlanes(img, ent)
+	if err != nil {
+		return nil, l, err
+	}
+	p := planes[0]
+	end := len(p)
+	if planes[2] != nil {
+		end = l.p3 + len(planes[2])
+	} else if planes[1] != nil {
+		end = l.p2 + len(planes[1])
+	}
+	n := (end + 3) / 4
+	if n > composer.PictureWords {
+		return nil, l, fmt.Errorf("model: a picture of %d bytes is past the %d its samples' U32 offsets reach", end, 4*composer.PictureWords)
+	}
+	if planes[1] == nil && len(p)%4 == 0 && uintptr(unsafe.Pointer(&p[0]))%4 == 0 {
+		return unsafe.Slice((*uint32)(unsafe.Pointer(&p[0])), len(p)/4), l, nil
+	}
+	if cap(*pad) < n {
+		*pad = make([]uint32, n)
+	}
+	words := (*pad)[:n]
+	b := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*n)
+	copy(b, p)
+	copy(b[l.p2:], planes[1])
+	copy(b[l.p3:], planes[2])
+	return words, l, nil
+}
+
+// SeesPictures reports whether the model carries a tower, so a prompt may hold
+// a picture.
+func (m *Model) SeesPictures() bool { return m.Tower != nil }
+
+// PictureSpan is the span a picture stands in a prompt as, for ChatSpans or
+// PrefillMixed: the picture, which the prefill encodes through the tower,
+// the rows it takes, and the key naming them (pictureKey).
+func (m *Model) PictureSpan(img image.Image) (Span, error) {
+	if m.Tower == nil {
+		return Span{}, fmt.Errorf("model: the model has no vision tower")
+	}
+	k, err := pictureKey(img)
+	if err != nil {
+		return Span{}, err
+	}
+	b := img.Bounds()
+	rows, err := m.Tower.PicRows(b.Dx(), b.Dy())
+	if err != nil {
+		return Span{}, err
+	}
+	grid, err := m.Tower.SpanGrid(b.Dx(), b.Dy())
+	if err != nil {
+		return Span{}, err
+	}
+	return Span{Picture: img, PicRows: rows, Grid: grid, Key: k}, nil
+}
+
+// SpanGrid is the grid a w x h picture's rows are for the language model's
+// rotary (jlm.TowerSpan.GridDiv): its one square's patch grid with each side
+// divided; none where the rows advance as text.
+func (tg *TowerGraphs) SpanGrid(w, h int) (ImageGrid, error) {
+	if tg.GridDiv == 0 {
+		return ImageGrid{}, nil
+	}
+	sq, _, err := tg.Square(w, h, 0)
+	if err != nil {
+		return ImageGrid{}, err
+	}
+	return ImageGrid{T: 1, H: sq.Gh / tg.GridDiv, W: sq.Gw / tg.GridDiv, Line: tg.Line, Ends: tg.Ends}, nil
+}
+
+// pictureKey names a picture by everything the tower reads of it: its
+// layout and its planes as the step's picture table holds them.
+func pictureKey(img image.Image) (*RowsKey, error) {
+	var ent [4 * 256]byte
+	l, planes, err := picturePlanes(img, &ent)
+	if err != nil {
+		return nil, err
+	}
+	hs := sha256.New()
+	var hdr [37]byte
+	hdr[0] = l.Px
+	for i, v := range [9]int{l.W, l.H, l.stride, l.cstride, l.p2, l.p3, l.sub, l.wide, l.ink} {
+		binary.LittleEndian.PutUint32(hdr[1+4*i:], uint32(v))
+	}
+	hs.Write(hdr[:])
+	for _, p := range planes {
+		hs.Write(p)
+	}
+	var k RowsKey
+	hs.Sum(k[:0])
+	return &k, nil
+}
+
+// classOf is the class a picture of side pixels is encoded in: the smallest
+// whose picture holds it, else the largest.
+func (tg *TowerGraphs) classOf(w, h int) int {
+	c := 0
+	for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(w, h) {
+		c++
+	}
+	return c
+}
+
+// chainGraphs lowers a chained tower's blocks, each over the grid the block
+// before it left (the entry's, for the first) and bound to its own tensors,
+// and its head over the last block's rows and each HeadFrom block's: the
+// head writes as many rows whatever the picture.
+func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, n, base int, e *graph.Graph, dense graph.Facts) error {
+	if len(t.Chain) != n {
+		return fmt.Errorf("model: the tower chains %d blocks of its %d", len(t.Chain), n)
+	}
+	ev := e.Values[e.Out[0]]
+	rows, width := ev.Rows, ev.Width
+	if rows == 0 {
+		rows = tg.Classes[0].Rows
+	}
+	outs := make([][2]int, len(t.Chain))
+	for i := range t.Chain {
+		cb := &t.Chain[i]
+		if int(cb.Rows) != rows || int(cb.Width) != width {
+			return fmt.Errorf("model: the tower's block %d reads %d rows of %d after %d rows of %d", i, cb.Rows, cb.Width, rows, width)
+		}
+		f := m.TowerFacts(int32(base + i))
+		b := graph.NewBlock(m.TowerBase + base + i)
+		x := b.In("x", width)
+		b.G.Values[x].Rows = rows
+		out, err := graph.LowerProgram(b, t, &cb.Prog, []graph.ValueID{x}, rows, f)
+		if err != nil {
+			return fmt.Errorf("model: the tower's block %d: %w", i, err)
+		}
+		b.Out(out)
+		if err := graph.Verify(b.G, f); err != nil {
+			return fmt.Errorf("model: the tower's block %d: %w", i, err)
+		}
+		tg.Blocks = append(tg.Blocks, b.G)
+		o := b.G.Values[out]
+		rows, width = o.Rows, o.Width
+		outs[i] = [2]int{rows, width}
+	}
+	b := graph.NewBlock(-1)
+	ins := []graph.ValueID{b.In("x", width)}
+	b.G.Values[ins[0]].Rows = rows
+	for _, j := range t.HeadFrom {
+		x := b.In("from", outs[j][1])
+		b.G.Values[x].Rows = outs[j][0]
+		ins = append(ins, x)
+		tg.HeadFrom = append(tg.HeadFrom, int(j))
+	}
+	out, err := graph.LowerProgram(b, t, &t.Head, ins, rows, dense)
+	if err != nil {
+		return fmt.Errorf("model: the tower's head: %w", err)
+	}
+	b.Out(out)
+	if err := graph.Verify(b.G, dense); err != nil {
+		return fmt.Errorf("model: the tower's head: %w", err)
+	}
+	hn := b.G.Values[out].Rows
+	tg.Head, tg.Out, tg.Fixed, tg.Chain = b.G, hn, hn, true
+	return nil
+}
+
+// clipInput is p over one more input, first, the clip: each frames op that
+// names no input reads it, every other value one index on.
+func clipInput(p jlm.Program) (jlm.Program, error) {
+	q := jlm.Program{NIn: p.NIn + 1, Out: p.Out + 1, Ops: make([]jlm.TowerOp, len(p.Ops))}
+	read := false
+	for i, op := range p.Ops {
+		op.In = slices.Clone(op.In)
+		for j := range op.In {
+			op.In[j]++
+		}
+		if op.Code == jlm.TOpFrames && len(op.In) == 0 {
+			op.In, read = []uint16{0}, true
+		}
+		q.Ops[i] = op
+	}
+	if !read {
+		return q, fmt.Errorf("no frames op reads the clip")
+	}
+	return q, nil
+}

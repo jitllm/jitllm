@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// spmOneHeap is llama.cpp's SentencePiece merge as it stands there: the text
+// spmOneHeap is the SentencePiece merge over a whole run: the text
 // cut at its special tokens, then one queue per run seeded with every adjacent
 // pair of it. Encode runs one heap per word; this is the oracle that says the
 // two produce the same ids.
@@ -119,8 +119,9 @@ func TestSPMWordHeapsMatchOneHeap(t *testing.T) {
 			continue
 		}
 		v, err := New(vc)
-		// A score merge only: not byte-level BPE, not Gemma 4's rank merge.
-		if err != nil || v.bpe != nil || v.spmBPE != nil {
+		// A score merge only: not byte-level BPE, not Gemma 4's rank merge,
+		// not WordPiece (an encoder's vocabulary holds no scores).
+		if err != nil || v.bpe != nil || v.spmBPE != nil || v.wpm != nil {
 			continue
 		}
 		checked++

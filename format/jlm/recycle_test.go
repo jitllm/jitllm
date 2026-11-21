@@ -74,7 +74,7 @@ func TestRecycleNamesEveryFrameItRefills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.f, f.dense = h, alignedBuf(page)
+	f.file.f, f.dense = h, alignedBuf(page)
 	dense := f.dense
 	if l, err = f.Hold(0, nil); err != nil {
 		t.Fatal(err)
@@ -82,7 +82,8 @@ func TestRecycleNamesEveryFrameItRefills(t *testing.T) {
 	held := f.pages[0]
 	l.Release()
 	got = nil
-	if err := f.Close(); err != nil {
+	f.Close()
+	if err := f.file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if !named(dense) || !named(held) {

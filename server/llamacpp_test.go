@@ -2,15 +2,24 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image/color"
 	"io"
+	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/model"
 )
 
 // llamaFake is the scripted backend with a byte tokenizer (id 1 is the BOS,
@@ -18,6 +27,8 @@ import (
 type llamaFake struct {
 	*fakeBackend
 	fim bool
+	// slots is how many slots Slots lists, one when 0.
+	slots int
 }
 
 func (f *llamaFake) LlamaModel(name string) (LlamaModelInfo, error) {
@@ -60,7 +71,13 @@ func (f *llamaFake) ApplyTemplate(_ string, msgs []model.ChatMessage, _ []byte) 
 	return sb.String() + "<assistant>", nil
 }
 
-func (f *llamaFake) Slots(string) []LlamaSlot { return []LlamaSlot{{ID: "s1", NCtx: 2048}} }
+func (f *llamaFake) Slots(string) []LlamaSlot {
+	out := make([]LlamaSlot, max(f.slots, 1))
+	for i := range out {
+		out[i] = LlamaSlot{ID: "s" + strconv.Itoa(i+1), NCtx: 2048}
+	}
+	return out
+}
 
 func llamaServe(t *testing.T, f *llamaFake) *httptest.Server {
 	t.Helper()
@@ -167,9 +184,459 @@ func TestLlamaPromptForms(t *testing.T) {
 			}
 		}
 	}
-	for _, bad := range []string{`{"prompt":[["a"],["b"]]}`, `{"prompt":{"prompt_string":"x","multimodal_data":["AAA"]}}`, `{}`} {
+	for _, bad := range []string{`{"prompt":[["a"],["b"]]}`, `{"prompt":[[5,["x"]]]}`, `{"prompt":[]}`,
+		`{"prompt":{"prompt_string":"x","multimodal_data":["AAA"]}}`, `{"prompt":{"prompt_string":"<__media__>","multimodal_data":["AAA"]}}`, `{}`} {
 		if code, _ := llamaPost(t, s, "/completion", bad); code != 400 {
 			t.Errorf("%s answered %d", bad, code)
+		}
+	}
+}
+
+func llamaPostAll(t *testing.T, s *httptest.Server, body string) []map[string]any {
+	t.Helper()
+	resp := post(t, s, "/completion", body)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var out []map[string]any
+	if resp.StatusCode != 200 || json.Unmarshal(b, &out) != nil {
+		t.Fatalf("%s: %d %s", body, resp.StatusCode, b)
+	}
+	return out
+}
+
+// TestLlamaPromptsAndCompletions: a prompt array holding no token id is a list
+// of prompts, each answered with n_cmpl completions (n its alias), the results
+// in llama-server's order -- each prompt, then its completions -- one result
+// alone the object itself; a seed gives completion i seed+i, whole or
+// streamed.
+func TestLlamaPromptsAndCompletions(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	out := llamaPostAll(t, s, `{"prompt":["Hi",[5,6],{"prompt_string":"Yo"}],"n_predict":2}`)
+	all := f.took()
+	wantPrompts := []string{"Hi", "", "Yo"}
+	if len(out) != 3 || len(all) != 3 {
+		t.Fatalf("%d results from %d generates, want 3 of 3: %v", len(out), len(all), out)
+	}
+	for i, r := range out {
+		if r["index"] != float64(i) || r["prompt"] != wantPrompts[i] || r["content"] != "Hello" || r["stop"] != true {
+			t.Errorf("result %d: %v", i, r)
+		}
+	}
+	wantIDs := [][]int32{{1, 256 + 'H', 256 + 'i'}, {5, 6}, {1, 256 + 'Y', 256 + 'o'}}
+	for i, o := range all {
+		if !slices.Equal(o.Prompt.IDs, wantIDs[i]) || len(o.Seeds) != 0 {
+			t.Errorf("generate %d: ids %v seeds %v, want %v and none", i, o.Prompt.IDs, o.Seeds, wantIDs[i])
+		}
+	}
+
+	out = llamaPostAll(t, s, `{"prompt":["Hi","Yo"],"n_cmpl":2,"seed":42}`)
+	all = f.took()
+	if len(out) != 4 || len(all) != 2 {
+		t.Fatalf("%d results from %d generates, want 4 of 2", len(out), len(all))
+	}
+	for i, r := range out {
+		if r["index"] != float64(i) || r["prompt"] != []string{"Hi", "Hi", "Yo", "Yo"}[i] {
+			t.Errorf("result %d: index %v prompt %v", i, r["index"], r["prompt"])
+		}
+	}
+	for i, o := range all {
+		if !slices.Equal(o.Seeds, []int64{42, 43}) {
+			t.Errorf("generate %d seeds %v, want [42 43]", i, o.Seeds)
+		}
+	}
+
+	// n is n_cmpl's alias; with no seed the completions still differ.
+	out = llamaPostAll(t, s, `{"prompt":"Hi","n":3}`)
+	all = f.took()
+	if len(out) != 3 || len(all) != 1 {
+		t.Fatalf("n=3: %d results from %d generates, want 3 of 1", len(out), len(all))
+	}
+	if sd := all[0].Seeds; len(out) != 3 || len(sd) != 3 || sd[1] != sd[0]+1 || sd[2] != sd[0]+2 {
+		t.Fatalf("n=3: %d results, seeds %v", len(out), sd)
+	}
+
+	// One prompt in a list is one result, answered as the object.
+	if code, one := llamaPost(t, s, "/completion", `{"prompt":["Hi"]}`); code != 200 || one["content"] != "Hello" {
+		t.Fatalf("one prompt in a list: %d %v", code, one)
+	}
+	for _, bad := range []string{`{"prompt":"Hi","n_cmpl":0}`, `{"prompt":"Hi","n_cmpl":129}`} {
+		code, msg := llamaPost(t, s, "/completion", bad)
+		if b, _ := json.Marshal(msg); code != 400 || !strings.Contains(string(b), "n_cmpl") {
+			t.Errorf("%s: %d %s", bad, code, b)
+		}
+	}
+
+	resp := post(t, s, "/completion", `{"prompt":["Hi","Yo"],"n_cmpl":2,"stream":true}`)
+	defer resp.Body.Close()
+	var finals []float64
+	tokens := map[float64]int{}
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var fr map[string]any
+		if err := json.Unmarshal([]byte(line), &fr); err != nil {
+			t.Fatalf("frame %q: %v", line, err)
+		}
+		ix, _ := fr["index"].(float64)
+		if fr["stop"] == true {
+			finals = append(finals, ix)
+		} else {
+			tokens[ix]++
+		}
+	}
+	if !slices.Equal(finals, []float64{0, 1, 2, 3}) {
+		t.Fatalf("streamed results ended %v, want each of 0..3 once in order", finals)
+	}
+	for ix := range 4 {
+		if tokens[float64(ix)] != 2 {
+			t.Errorf("result %d streamed %d token frames, want 2", ix, tokens[float64(ix)])
+		}
+	}
+}
+
+// TestLlamaNPredictZeroAndTimingsPerToken: n_predict 0 asks for the one token
+// llama-server answers it with, and reports 0; timings_per_token puts the
+// timings so far on every token frame, and without it a token frame carries
+// none.
+func TestLlamaNPredictZeroAndTimingsPerToken(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo", "!"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	code, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","n_predict":0}`)
+	if code != 200 {
+		t.Fatalf("n_predict 0: %d %v", code, out)
+	}
+	if f.opts().MaxTokens != 1 {
+		t.Fatalf("n_predict 0 asked for %d tokens, want 1", f.opts().MaxTokens)
+	}
+	if gs := out["generation_settings"].(map[string]any); gs["n_predict"] != float64(0) {
+		t.Fatalf("generation_settings.n_predict %v, want 0", gs["n_predict"])
+	}
+	for _, perToken := range []bool{true, false} {
+		body := `{"prompt":"Hi","stream":true,"timings_per_token":false}`
+		if perToken {
+			body = `{"prompt":"Hi","stream":true,"timings_per_token":true}`
+		}
+		resp := post(t, s, "/completion", body)
+		sc := bufio.NewScanner(resp.Body)
+		n := 0
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var fr map[string]any
+			if err := json.Unmarshal([]byte(line), &fr); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			if fr["stop"] == true {
+				continue
+			}
+			n++
+			tm, has := fr["timings"].(map[string]any)
+			if has != perToken {
+				t.Fatalf("timings_per_token=%v: token frame %d timings %v", perToken, n, fr["timings"])
+			}
+			if perToken && (tm["predicted_n"] != fr["tokens_predicted"] || tm["prompt_n"] != float64(7) || tm["prompt_ms"] != float64(40)) {
+				t.Fatalf("token frame %d timings %v, tokens_predicted %v", n, tm, fr["tokens_predicted"])
+			}
+		}
+		resp.Body.Close()
+		if n != 3 {
+			t.Fatalf("timings_per_token=%v: %d token frames, want 3", perToken, n)
+		}
+	}
+}
+
+// TestLlamaPredictTimeReachesTheEngine: t_max_predict_ms is the generate's
+// PredictTime, and 0 sets none.
+func TestLlamaPredictTimeReachesTheEngine(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	for body, want := range map[string]time.Duration{
+		`{"prompt":"x","t_max_predict_ms":250}`: 250 * time.Millisecond,
+		`{"prompt":"x","t_max_predict_ms":0}`:   0,
+		`{"prompt":"x"}`:                        0,
+	} {
+		if code, out := llamaPost(t, s, "/completion", body); code != 200 {
+			t.Fatalf("%s: %d %v", body, code, out)
+		}
+		if got := f.opts().PredictTime; got != want {
+			t.Errorf("%s: PredictTime %v, want %v", body, got, want)
+		}
+	}
+}
+
+// TestLlamaSSEPings: a stream silent for sse_ping_interval seconds is sent an
+// SSE comment, once for each such silence; -1 sends none, and the 30 second
+// default none in a stream that never falls silent that long.
+// TestLlamaStreamsPromptProgress: return_progress on a stream asks the
+// generate for its prompt's progress and sends each as a frame of its own
+// before the reply's, as llama-server does: no text, no token, stop false,
+// and prompt_progress's total, cache, processed and time_ms. Without a stream,
+// or without the field, the generate is not asked.
+func TestLlamaStreamsPromptProgress(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	frames := func(body string) []map[string]any {
+		resp := post(t, s, "/completion", body)
+		defer resp.Body.Close()
+		var out []map[string]any
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var fr map[string]any
+			if err := json.Unmarshal([]byte(line), &fr); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			out = append(out, fr)
+		}
+		return out
+	}
+	got := frames(`{"prompt":"Hi","stream":true,"return_progress":true}`)
+	if !f.opts().Progress {
+		t.Fatal("return_progress on a stream did not ask the generate for the prompt's progress")
+	}
+	if len(got) != 6 {
+		t.Fatalf("%d frames, want three of progress, two of text and the last: %v", len(got), got)
+	}
+	for i, done := range []float64{2, 5, 7} {
+		fr := got[i]
+		pp, _ := fr["prompt_progress"].(map[string]any)
+		want := map[string]any{"total": float64(7), "cache": float64(2), "processed": done, "time_ms": done}
+		if pp == nil || !maps.Equal(pp, want) {
+			t.Fatalf("frame %d: prompt_progress %v, want %v", i, fr["prompt_progress"], want)
+		}
+		toks, _ := fr["tokens"].([]any)
+		if fr["content"] != "" || toks == nil || len(toks) != 0 || fr["stop"] != false || fr["index"] != float64(0) ||
+			fr["tokens_predicted"] != float64(0) || fr["tokens_evaluated"] != float64(7) {
+			t.Fatalf("frame %d is not a progress frame: %v", i, fr)
+		}
+	}
+	if _, ok := got[3]["prompt_progress"]; ok || got[3]["content"] != "Hel" {
+		t.Fatalf("the reply's first frame: %v", got[3])
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","return_progress":true}`); code != 200 || f.opts().Progress {
+		t.Fatalf("return_progress without a stream: %d, progress asked %v: %v", code, f.opts().Progress, out)
+	}
+	for _, fr := range frames(`{"prompt":"Hi","stream":true}`) {
+		if _, ok := fr["prompt_progress"]; ok || f.opts().Progress {
+			t.Fatalf("a stream without return_progress: %v", fr)
+		}
+	}
+}
+
+// TestLlamaIndentAndPromptTime: n_indent reaches the generate as MinIndent
+// and the answer is cut at the line the indentation ended it on, its leading
+// spaces kept; t_max_prompt_ms is taken, to no effect, as llama-server takes
+// it.
+func TestLlamaIndentAndPromptTime(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "\n", "  b", "\n c", "d"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	code, out := llamaPost(t, s, "/completion", `{"prompt":"x","n_indent":2,"t_max_prompt_ms":500}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if f.opts().MinIndent != 2 {
+		t.Fatalf("n_indent reached the generate as %d", f.opts().MinIndent)
+	}
+	if out["content"] != "a\n  b\n " {
+		t.Fatalf("content %q, want the short line cut at its first character", out["content"])
+	}
+	for in, want := range map[string]string{"a\n  b": "a\n  b", "a\n b": "a\n ", "a\n  ": "a\n  ", "ab": "ab", "a\n\tb": "a\n\t"} {
+		if got := cutShortLine(in, 2); got != want {
+			t.Errorf("cutShortLine(%q, 2) = %q, want %q", in, got, want)
+		}
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x"}`); code != 200 || f.opts().MinIndent != 0 {
+		t.Fatalf("no n_indent: %d, MinIndent %d", code, f.opts().MinIndent)
+	}
+}
+
+func TestLlamaSSEPings(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "b"}, reason: FinishEOS, beforeToken: func(i int) {
+		if i == 1 {
+			time.Sleep(1500 * time.Millisecond)
+		}
+	}}}
+	s := llamaServe(t, f)
+	pings := func(body string) (n, frames int) {
+		resp := post(t, s, "/completion", body)
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			switch l := sc.Text(); {
+			case l == ":":
+				n++
+			case strings.HasPrefix(l, "data: "):
+				frames++
+			}
+		}
+		return n, frames
+	}
+	if n, fr := pings(`{"prompt":"x","stream":true,"sse_ping_interval":1}`); n != 1 || fr != 3 {
+		t.Fatalf("a 1.5 s silence under a 1 s interval: %d pings and %d frames, want 1 and 3", n, fr)
+	}
+	for _, body := range []string{`{"prompt":"x","stream":true,"sse_ping_interval":-1}`, `{"prompt":"x","stream":true}`} {
+		if n, fr := pings(body); n != 0 || fr != 3 {
+			t.Errorf("%s: %d pings and %d frames, want none and 3", body, n, fr)
+		}
+	}
+}
+
+// TestLlamaAnySlot: any id_slot is taken, as llama-server takes it, and
+// reported wrapped by the slot count (the fake's one).
+func TestLlamaAnySlot(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "b"}, reason: FinishEOS}, slots: 4}
+	s := llamaServe(t, f)
+	for slot, want := range map[string]float64{"-1": 0, "0": 0, "3": 3, "6": 2} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","id_slot":`+slot+`}`)
+		if code != 200 || out["id_slot"] != want {
+			t.Errorf("id_slot %s: %d, reported %v, want %v", slot, code, out["id_slot"], want)
+		}
+		// A stream reports it on every frame, its replies' and its last.
+		resp := post(t, s, "/completion", `{"prompt":"x","stream":true,"id_slot":`+slot+`}`)
+		sc := bufio.NewScanner(resp.Body)
+		frames := 0
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var fr map[string]any
+			if err := json.Unmarshal([]byte(line), &fr); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			frames++
+			if fr["id_slot"] != want {
+				t.Errorf("id_slot %s: frame %d reported %v, want %v", slot, frames, fr["id_slot"], want)
+			}
+		}
+		resp.Body.Close()
+		if frames != 3 {
+			t.Errorf("id_slot %s: %d frames, want two of text and the last", slot, frames)
+		}
+	}
+}
+
+// TestLlamaPicturesReachTheGenerate: a prompt's multimodal_data reaches the
+// generate as its text and pictures, each where the text holds <__media__>,
+// in order; a list of such prompts gives each its own.
+func TestLlamaPicturesReachTheGenerate(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	red := base64.StdEncoding.EncodeToString(testPNG(t, 4, 3, color.NRGBA{R: 200, A: 255}))
+	blue := base64.StdEncoding.EncodeToString(testPNG(t, 2, 5, color.NRGBA{B: 200, A: 255}))
+	one := `{"prompt_string":"a <__media__> b <__media__>","multimodal_data":["` + red + `","` + blue + `"]}`
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":`+one+`}`); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	p := f.opts().Prompt
+	if p.Kind != PromptText || p.Text != "a <__media__> b <__media__>" || p.Marker != "<__media__>" || len(p.Images) != 2 ||
+		p.Images[0].Bounds().Dx() != 4 || p.Images[1].Bounds().Dx() != 2 {
+		t.Fatalf("the generate's prompt: kind %v text %q marker %q, %d pictures", p.Kind, p.Text, p.Marker, len(p.Images))
+	}
+	f.took()
+	two := `{"prompt_string":"<__media__>c","multimodal_data":["` + blue + `"]}`
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":[`+one+`,`+two+`,"plain"]}`); code != 200 {
+		t.Fatalf("a list: %d", code)
+	} else if _, many := out["raw"]; !many {
+		t.Fatalf("three prompts answered one object: %v", out)
+	}
+	all := f.took()
+	if len(all) != 3 || len(all[0].Prompt.Images) != 2 || len(all[1].Prompt.Images) != 1 || all[1].Prompt.Images[0].Bounds().Dx() != 2 ||
+		all[2].Prompt.Kind != PromptIDs {
+		t.Fatalf("a list of prompts with pictures reached %d generates", len(all))
+	}
+}
+
+// TestLlamaSamplersChooseTheStages: samplers is the stages that run, in
+// order, as llama-server reads it: a stage it leaves out is off whatever its
+// field says (no temperature draws at 1), its names take llama.cpp's
+// aliases and letters, and an order the draw does not run, an unknown name or
+// a stage not built is refused naming samplers. Every request's draw takes
+// the temperature last, its chain's order, the fused draw's included.
+func TestLlamaSamplersChooseTheStages(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	const fields = `"top_k":5,"top_p":0.5,"min_p":0.2,"temperature":0.3,"repeat_penalty":1.3,"typical_p":0.7`
+	for _, samplers := range []string{`["top_k","top_p"]`, `"kp"`, `["Top-K","nucleus"]`, `["topk","TOP_P"]`} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x",`+fields+`,"samplers":`+samplers+`}`)
+		if code != 200 {
+			t.Fatalf("%s: %d %v", samplers, code, out)
+		}
+		sm := f.opts().Sampling
+		if sm.TopK != 5 || sm.TopP != 0.5 || sm.MinP != 0 || sm.Temp != 1 || sm.RepeatPen != 1 || sm.TypicalP != 1 {
+			t.Errorf("%s ran %+v, want top-k 5 and top-p 0.5 alone at temperature 1", samplers, sm)
+		}
+		gs := out["generation_settings"].(map[string]any)
+		if got, _ := json.Marshal(gs["samplers"]); string(got) != `["top_k","top_p"]` || gs["temperature"] != 0.3 {
+			t.Errorf("%s: generation_settings samplers %s, temperature %v", samplers, got, gs["temperature"])
+		}
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x",`+fields+`}`); code != 200 {
+		t.Fatalf("no samplers: %d", code)
+	}
+	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 || sm.Stages != nil || !sm.TempLast {
+		t.Errorf("the default chain ran %+v, want every stage, fused with the temperature last", sm)
+	}
+	// Any order runs as listed, the stages one by one; llamaChain's own runs
+	// fused.
+	for _, c := range []struct {
+		list   string
+		stages []engine.Stage
+		infill bool
+	}{
+		{`["top_p","top_k"]`, []engine.Stage{engine.StageTopP, engine.StageTopK}, false},
+		{`"tkp"`, []engine.Stage{engine.StageTemperature, engine.StageTopK, engine.StageTopP}, false},
+		{`["top_k","infill","top_p"]`, nil, true},
+		{`["top_p","infill","top_k"]`, []engine.Stage{engine.StageTopP, engine.StageTopK}, true},
+		{`["min_p","min-p","xtc"]`, []engine.Stage{engine.StageMinP, engine.StageMinP, engine.StageXTC}, false},
+		{`["top_k","top_p","temperature"]`, nil, false},
+	} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+c.list+`}`); code != 200 {
+			t.Fatalf("samplers %s: %d %v", c.list, code, out)
+		}
+		if sm := f.opts().Sampling; !slices.Equal(sm.Stages, c.stages) || sm.Infill != c.infill || !sm.TempLast {
+			t.Errorf("samplers %s: stages %v, infill %v, temperature last %v; want %v, %v", c.list, sm.Stages, sm.Infill, sm.TempLast, c.stages, c.infill)
+		}
+	}
+	for _, bad := range []string{`["top_k","foo"]`, `"kq"`, `7`} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+bad+`}`)
+		if b, _ := json.Marshal(out); code != 400 || !strings.Contains(string(b), "samplers") {
+			t.Errorf("samplers %s: %d %s", bad, code, b)
+		}
+	}
+}
+
+// TestLlamaInfillSamplerReachesTheDraw: infill as samplers' last stage, by
+// name or letter, asks the generate for the infill sampler, which
+// generation_settings lists; no samplers, or a list without it, does not.
+func TestLlamaInfillSamplerReachesTheDraw(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	for _, samplers := range []string{`["top_k","top_p","infill"]`, `"kpi"`, `["Infill"]`} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","top_k":40,"samplers":`+samplers+`}`)
+		if code != 200 {
+			t.Fatalf("%s: %d %v", samplers, code, out)
+		}
+		if sm := f.opts().Sampling; sm == nil || !sm.Infill {
+			t.Fatalf("%s: the draw has no infill sampler", samplers)
+		}
+		gs := out["generation_settings"].(map[string]any)
+		if got, _ := json.Marshal(gs["samplers"]); !strings.HasSuffix(string(got), `"infill"]`) {
+			t.Errorf("%s: generation_settings samplers %s", samplers, got)
+		}
+	}
+	for _, body := range []string{`{"prompt":"x"}`, `{"prompt":"x","samplers":["top_k","top_p"]}`} {
+		if code, _ := llamaPost(t, s, "/completion", body); code != 200 || f.opts().Sampling.Infill {
+			t.Fatalf("%s: %d, infill %v", body, code, f.opts().Sampling.Infill)
 		}
 	}
 }
@@ -187,6 +654,23 @@ func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	if sm.Temp != 0 || sm.TopK != 5 || sm.TopP != 0.5 || sm.MinP != 0.2 || sm.Seed != 42 || sm.RepeatPen != 1.3 {
 		t.Fatalf("fields not mapped: %+v", sm)
 	}
+	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","n_probs":3,"post_sampling_probs":true}`)
+	if o := f.opts(); !o.Logprobs || o.TopLogprobs != 3 || !o.PostSampling {
+		t.Fatalf("post_sampling_probs reached the generate as logprobs %v, %d alternatives, after sampling %v", o.Logprobs, o.TopLogprobs, o.PostSampling)
+	}
+	if gs := out["generation_settings"].(map[string]any); gs["post_sampling_probs"] != true {
+		t.Fatalf("generation_settings: %v", gs)
+	}
+	// adaptive-p, named anywhere in samplers, as llama.cpp runs it last.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":["adaptive_p","top_k","temperature"],"adaptive_target":0.3,"adaptive_decay":0.8}`); code != 200 {
+		t.Fatalf("adaptive-p: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; !sm.Adaptive || sm.AdaptiveTarget != 0.3 || sm.AdaptiveDecay != 0.8 || sm.TopK != 40 {
+		t.Fatalf("adaptive-p reached the sampler as %v at %v, decay %v, top-k %d", sm.Adaptive, sm.AdaptiveTarget, sm.AdaptiveDecay, sm.TopK)
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x","adaptive_target":0.3}`); code != 200 || f.opts().Sampling.Adaptive {
+		t.Fatalf("adaptive_target without adaptive_p in samplers: %d, adaptive %v", code, f.opts().Sampling.Adaptive)
+	}
 	llamaPost(t, s, "/completion", `{"prompt":"x","json_schema":{"type":"object"}}`)
 	if f.opts().Grammar == "" {
 		t.Fatal("json_schema produced no grammar")
@@ -199,15 +683,46 @@ func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 
 // TestLlamaRefusals: every parameter the engine cannot honour is refused
 // naming itself, and its neutral value is accepted.
+// TestLlamaReadsEveryValueAsLlamaCppDoes: /completion takes the values
+// llama-server takes, each as llama.cpp's sampler reads it.
+func TestLlamaReadsEveryValueAsLlamaCppDoes(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	body := `{"prompt":"x","temperature":-1,"top_p":0,"typical_p":-0.5,"min_p":1.5,"top_k":-7,` +
+		`"presence_penalty":3,"frequency_penalty":-3,"repeat_penalty":0.5}`
+	if code, out := llamaPost(t, s, "/completion", body); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	sm := f.opts().Sampling
+	for _, c := range []struct {
+		name      string
+		got, want float64
+	}{
+		{"temperature", sm.Temp, 0}, {"top_p", sm.TopP, leastP}, {"typical_p", sm.TypicalP, leastP},
+		{"min_p", sm.MinP, 1}, {"top_k", float64(sm.TopK), 0}, {"presence_penalty", sm.PresencePen, 3},
+		{"frequency_penalty", sm.FreqPen, -3}, {"repeat_penalty", sm.RepeatPen, 0.5},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s reached the sampler as %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","top_p":0.9,"min_p":0.05,"repeat_penalty":0}`); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.TopP != 0.9 || sm.MinP != 0.05 || sm.RepeatPen != 0 {
+		t.Errorf("top_p 0.9, min_p 0.05 and repeat_penalty 0 reached the sampler as %v, %v and %v", sm.TopP, sm.MinP, sm.RepeatPen)
+	}
+}
+
 func TestLlamaRefusals(t *testing.T) {
-	s := llamaServe(t, &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}})
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
 	refuse := map[string]string{
-		"mirostat": `2`, "dry_multiplier": `0.8`, "xtc_probability": `0.5`, "typical_p": `0.9`,
-		"presence_penalty": `0.3`, "frequency_penalty": `0.3`, "dynatemp_range": `0.5`,
-		"logit_bias": `[[15,1.0]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
-		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
-		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `128`,
-		"response_fields": `["content"]`, "mystery_field": `1`,
+		"mirostat": `3`, "dry_penalty_last_n": `-2`, "dry_sequence_breakers": `[]`,
+		"logit_bias": `[[15]]`, "samplers": `["top_k","dryer"]`, "n_cmpl": `0`, "id_slot": `-2`,
+		"lora":            `[{"id":0,"scale":1}]`,
+		"repeat_last_n":   `-2`,
+		"response_fields": `"content"`, "mystery_field": `1`,
 	}
 	for k, v := range refuse {
 		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","`+k+`":`+v+`}`)
@@ -218,15 +733,168 @@ func TestLlamaRefusals(t *testing.T) {
 	}
 	accept := `{"prompt":"x","mirostat":0,"dry_multiplier":0,"xtc_probability":0,"typical_p":1,"presence_penalty":0,
 		"logit_bias":[],"samplers":["top_k","top_p","min_p","temperature"],"n_cmpl":1,"id_slot":-1,"cache_prompt":true,
-		"n_keep":0,"timings_per_token":false,"top_n_sigma":-1,"repeat_last_n":64}`
+		"n_keep":5,"n_discard":2,"n_cache_reuse":256,"timings_per_token":false,"top_n_sigma":-1,"repeat_last_n":64}`
 	if code, out := llamaPost(t, s, "/completion", accept); code != 200 {
 		t.Fatalf("neutral values refused: %d %v", code, out)
 	}
+	// repeat_last_n is the sampler's window, -1 the context (the fake's 2048).
+	for v, want := range map[string]int{`128`: 128, `-1`: 2048} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","repeat_penalty":1.1,"repeat_last_n":`+v+`}`); code != 200 {
+			t.Fatalf("repeat_last_n=%s: %d %v", v, code, out)
+		}
+		if got := f.opts().Sampling.RepeatLastN; got != want {
+			t.Errorf("repeat_last_n=%s reached the sampler as %d, want %d", v, got, want)
+		}
+	}
+	// n_probs past the twenty the OpenAI API takes reaches the generate
+	// whole, as llama-server takes it; below 0 it asks for none.
+	for v, want := range map[string]int{`99`: 99, `100000`: 100000, `-3`: 0} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","n_probs":`+v+`}`); code != 200 {
+			t.Fatalf("n_probs=%s: %d %v", v, code, out)
+		}
+		if o := f.opts(); o.Logprobs != (want > 0) || want > 0 && o.TopLogprobs != want {
+			t.Errorf("n_probs=%s reached the generate as logprobs %v with %d alternatives", v, o.Logprobs, o.TopLogprobs)
+		}
+	}
+	// presence_penalty and frequency_penalty reach the sampler.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","presence_penalty":0.4,"frequency_penalty":-0.25}`); code != 200 {
+		t.Fatalf("the penalties: %d %v", code, out)
+	}
+	if smp := f.opts().Sampling; smp.PresencePen != 0.4 || smp.FreqPen != -0.25 {
+		t.Errorf("the penalties reached the sampler as %v and %v", smp.PresencePen, smp.FreqPen)
+	}
+	// logit_bias in both forms reaches the generate: ids, texts and false.
+	for body, want := range map[string][]TokenBias{
+		`[[15,1.5],["ab",false]]`: {{ID: 15, Bias: 1.5}, {Text: "ab", Bias: float32(math.Inf(-1))}},
+		`{"7":-2,"cd":false}`:     {{ID: 7, Bias: -2}, {Text: "cd", Bias: float32(math.Inf(-1))}},
+	} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","logit_bias":`+body+`}`); code != 200 {
+			t.Fatalf("logit_bias %s: %d %v", body, code, out)
+		}
+		if got := f.opts().LogitBias; !slices.Equal(got, want) {
+			t.Errorf("logit_bias %s reached the generate as %v, want %v", body, got, want)
+		}
+	}
+	// DRY's fields reach the sampler, dry_penalty_last_n -1 as the context
+	// and a base below 1 as the default; "dry" in samplers is its stage.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dry_multiplier":0.8,"dry_base":1.5,"dry_allowed_length":3,`+
+		`"dry_penalty_last_n":-1,"dry_sequence_breakers":["\n","Q:"]}`); code != 200 {
+		t.Fatalf("dry: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.DryMultiplier != 0.8 || sm.DryBase != 1.5 || sm.DryAllowedLength != 3 || sm.DryPenaltyLastN != 2048 ||
+		!slices.Equal(sm.DryBreakers, []string{"\n", "Q:"}) {
+		t.Errorf("dry reached the sampler as %v %v %v %v %q", sm.DryMultiplier, sm.DryBase, sm.DryAllowedLength, sm.DryPenaltyLastN, sm.DryBreakers)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dry_multiplier":0.8,"dry_base":0.5,"samplers":["dry","top_k","temperature","penalties"]}`); code != 200 {
+		t.Fatalf("dry samplers: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.DryBase != 1.75 || !slices.Equal(sm.Stages, []engine.Stage{engine.StageDRY, engine.StageTopK, engine.StageTemperature, engine.StagePenalties}) {
+		t.Errorf("a base below 1 and a list starting with dry reached the sampler as %v and %v", sm.DryBase, sm.Stages)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dry_multiplier":0.8,"samplers":["top_k","temperature"]}`); code != 200 {
+		t.Fatalf("dry outside the samplers: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.DryMultiplier != 0 {
+		t.Errorf("a samplers list without dry left DRY at %v", sm.DryMultiplier)
+	}
+	// min_keep reaches the sampler; below 0 it is refused.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","min_keep":3}`); code != 200 {
+		t.Fatalf("min_keep: %d %v", code, out)
+	}
+	if got := f.opts().Sampling.MinKeep; got != 3 {
+		t.Errorf("min_keep reached the sampler as %v", got)
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x","min_keep":-1}`); code != 400 {
+		t.Errorf("min_keep -1 answered %d", code)
+	}
+	// typical_p reaches the sampler.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","typical_p":0.7,"samplers":["typ_p","temperature"]}`); code != 200 {
+		t.Fatalf("typical_p: %d %v", code, out)
+	}
+	if got := f.opts().Sampling.TypicalP; got != 0.7 {
+		t.Errorf("typical_p reached the sampler as %v", got)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","xtc_probability":0.5,"xtc_threshold":0.2}`); code != 200 {
+		t.Fatalf("xtc: %d %v", code, out)
+	}
+	if smp := f.opts().Sampling; smp.XTCProbability != 0.5 || smp.XTCThreshold != 0.2 {
+		t.Errorf("XTC reached the sampler as %v and %v", smp.XTCProbability, smp.XTCThreshold)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","top_n_sigma":1.5}`); code != 200 {
+		t.Fatalf("top_n_sigma: %d %v", code, out)
+	}
+	if got := f.opts().Sampling.TopNSigma; got != 1.5 {
+		t.Errorf("top_n_sigma reached the sampler as %v", got)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dynatemp_range":0.5,"dynatemp_exponent":2}`); code != 200 {
+		t.Fatalf("dynatemp: %d %v", code, out)
+	}
+	if smp := f.opts().Sampling; smp.DynatempRange != 0.5 || smp.DynatempExponent != 2 {
+		t.Errorf("the dynamic temperature reached the sampler as %v and %v", smp.DynatempRange, smp.DynatempExponent)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":2,"mirostat_tau":4,"mirostat_eta":0.2}`); code != 200 {
+		t.Fatalf("mirostat: %d %v", code, out)
+	}
+	if smp := f.opts().Sampling; smp.Mirostat != 2 || smp.MirostatTau != 4 || smp.MirostatEta != 0.2 {
+		t.Errorf("Mirostat reached the sampler as %d, %v and %v", smp.Mirostat, smp.MirostatTau, smp.MirostatEta)
+	}
 	// The error body is llama-server's.
-	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)
+	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":3}`)
 	e := out["error"].(map[string]any)
 	if e["code"] != float64(400) || e["type"] != "invalid_request_error" || e["message"] == "" {
 		t.Fatalf("error shape: %v", out)
+	}
+}
+
+// TestLlamaResponseFields: response_fields keeps the paths asked for, a
+// nested one lifted to the root under its path, and leaves out a path that
+// names nothing; the stream's last frame is picked the same way, its token
+// frames whole.
+func TestLlamaResponseFields(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	code, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","n_predict":2,
+		"response_fields":["content","generation_settings/n_predict","timings/predicted_n","nowhere/at/all","content/deeper"]}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	want := map[string]any{"content": "Hello", "generation_settings/n_predict": float64(2), "timings/predicted_n": float64(2)}
+	if len(out) != len(want) {
+		t.Fatalf("kept %v, want exactly %v", out, want)
+	}
+	for k, v := range want {
+		if out[k] != v {
+			t.Errorf("%s = %v, want %v", k, out[k], v)
+		}
+	}
+	// An empty list keeps the whole object.
+	if _, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","response_fields":[]}`); out["timings"] == nil || out["tokens_predicted"] == nil {
+		t.Fatalf("an empty response_fields dropped fields: %v", out)
+	}
+	resp := post(t, s, "/completion", `{"prompt":"Hi","stream":true,"response_fields":["stop","tokens_predicted"]}`)
+	defer resp.Body.Close()
+	var frames []map[string]any
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var fr map[string]any
+		if err := json.Unmarshal([]byte(line), &fr); err != nil {
+			t.Fatalf("frame %q: %v", line, err)
+		}
+		frames = append(frames, fr)
+	}
+	if len(frames) < 2 {
+		t.Fatalf("%d frames", len(frames))
+	}
+	last := frames[len(frames)-1]
+	if len(last) != 2 || last["stop"] != true || last["tokens_predicted"] != float64(2) {
+		t.Fatalf("the last frame: %v", last)
+	}
+	if frames[0]["content"] != "Hel" {
+		t.Fatalf("a token frame was picked too: %v", frames[0])
 	}
 }
 
@@ -402,14 +1070,52 @@ func TestLlamaPropsSlotsHealthEmbedding(t *testing.T) {
 	if code != 400 || out["error"] == nil {
 		t.Fatalf("embedding: %d %v", code, out)
 	}
-	if code, _ := llamaPost(t, s, "/embedding", `{"content":"hi","embd_normalize":0}`); code != 400 {
-		t.Fatalf("embd_normalize 0 accepted: %d", code)
+	if code, _ := llamaPost(t, s, "/embedding", `{"content":"hi","embd_normalize":"x"}`); code != 400 {
+		t.Fatalf("embd_normalize \"x\" accepted: %d", code)
 	}
 }
 
 func TestLlamaEmbeddingShape(t *testing.T) {
 	s := serve(t, &llamaEmbedFake{llamaFake: &llamaFake{fakeBackend: &fakeBackend{}}})
-	resp := post(t, s, "/embedding", `{"content":["a","b"]}`)
+	for _, path := range []string{"/embedding", "/embeddings"} {
+		t.Run(path, func(t *testing.T) { llamaEmbeddingShape(t, s, path) })
+	}
+}
+
+// TestLlamaModelsIsV1Models: llama-server's /models is its /v1/models.
+func TestLlamaModelsIsV1Models(t *testing.T) {
+	s := serve(t, &fakeBackend{})
+	read := func(path string) []byte {
+		resp, err := http.Get(s.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	var m struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	b := read("/models")
+	if err := json.Unmarshal(b, &m); err != nil || len(m.Data) == 0 || m.Data[0].ID == "" {
+		t.Fatalf("/models: %s (%v)", b, err)
+	}
+	if v := read("/v1/models"); !bytes.Equal(b, v) {
+		t.Fatalf("/models %s, /v1/models %s", b, v)
+	}
+}
+
+func llamaEmbeddingShape(t *testing.T, s *httptest.Server, path string) {
+	resp := post(t, s, path, `{"content":["a","b"]}`)
 	defer resp.Body.Close()
 	var out []struct {
 		Index     int         `json:"index"`
@@ -423,9 +1129,37 @@ func TestLlamaEmbeddingShape(t *testing.T) {
 	}
 }
 
-type llamaEmbedFake struct{ *llamaFake }
+// TestLlamaEmbeddingNormalize: embd_normalize reaches the embedder as asked,
+// every kind llama-server reads, and none where the request names none.
+func TestLlamaEmbeddingNormalize(t *testing.T) {
+	f := &llamaEmbedFake{llamaFake: &llamaFake{fakeBackend: &fakeBackend{}}}
+	s := serve(t, f)
+	for _, c := range []struct {
+		body string
+		want *int
+	}{
+		{`{"content":"a"}`, nil}, {`{"content":"a","embd_normalize":-1}`, ptr(-1)}, {`{"content":"a","embd_normalize":0}`, ptr(0)},
+		{`{"content":"a","embd_normalize":2}`, ptr(2)}, {`{"content":"a","embd_normalize":5}`, ptr(5)},
+	} {
+		resp := post(t, s, "/embedding", c.body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d", c.body, resp.StatusCode)
+		}
+		if got := f.norm; (got == nil) != (c.want == nil) || got != nil && *got != *c.want {
+			t.Fatalf("%s: the embedder was asked %v", c.body, got)
+		}
+	}
+}
+
+type llamaEmbedFake struct {
+	*llamaFake
+	// norm is the normalisation the last request asked.
+	norm *int
+}
 
 func (f *llamaEmbedFake) Embed(_ context.Context, o EmbedOptions) (*EmbedResult, error) {
+	f.norm = o.Normalize
 	r := &EmbedResult{}
 	for range o.Inputs {
 		r.Vectors = append(r.Vectors, []float32{1, 0, 0})

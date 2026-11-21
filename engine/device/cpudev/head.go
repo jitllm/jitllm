@@ -1,0 +1,694 @@
+package cpudev
+
+import (
+	"math"
+	"unsafe"
+
+	"github.com/jitllm/jitllm/nn"
+)
+
+// HeadParts is the head's and the samplers' forms on the CPU device: the
+// head's (Head), the one also writing the norm's rows (Hidden) and the
+// latter at a chunk's rows (Rows), the label pick's, the greedy sampler's,
+// a top-k draw's walk, a draw's row and cut with no top-k and its top-k
+// variant, their distributions, the output norm alone, the log-softmax's
+// and a constrained draw's mask; the Typ forms are the cuts with typical-p,
+// Miro and MiroV1 Mirostat's draws, WalkInfill a top-k draw's walk through
+// the infill sampler.
+type HeadParts struct {
+	Head, Hidden, Rows, Pick                 Part
+	Sample, Walk, Row, Cut                   Part
+	WalkProb, CutProb, CutK, CutKProb        Part
+	OutNorm, Logprobs, Mask                  Part
+	Decide                                   Part
+	CutTyp, CutTypProb, CutKTyp, CutKTypProb Part
+	Miro, MiroV1                             Part
+	WalkInfill                               Part
+	Adaptive                                 Part
+	Stage                                    Part
+	LogprobsRow                              Part
+	Keep                                     Part
+}
+
+// Head is the head and the samplers on the CPU device, composed once at the
+// instance's placement, with the buffers their calls bind. A call is
+// counted served or declined by name (nn.PartHead, nn.PartSample).
+type Head struct {
+	p     HeadParts
+	norm  bool
+	w     Weights
+	dev   *Device
+	steps *nn.Steps
+	d, nv int
+	// onPad is the output norm's rows where a call is shorter than its unit,
+	// in then out.
+	onPad []float32
+	// lpRow and lpIDs are what the log-softmax writes, lpAll the whole
+	// row's order where its part writes it.
+	lpRow []float32
+	lpIDs []uint32
+	lpAll []uint32
+	// probVals and probIDs are the walk's distribution.
+	probVals []float32
+	probIDs  []uint32
+	token    [1]uint32
+	// noWin is a window that holds no token, for a draw with no penalty;
+	// pen is the penalties a draw reads.
+	noWin []float32
+	pen   nn.Penalties
+	// walkArgs is the walk's words: k, 1/T, top-p, min-p, u, typical-p,
+	// XTC's threshold and its probability, the dynamic temperature's, then
+	// the cuts' 1/T; rowArgs the row's (1/T, u), cutArgs the cut's (1/T,
+	// top-p, min-p, u, then typical-p, XTC's threshold and probability for
+	// its typical form, the cuts' 1/T last) and cutKArgs its top-k variant's
+	// (then k, then the same).
+	walkArgs [11]float32
+	// miroArgs is a Mirostat draw's words (1/T, tau, eta, mu, u), miroMu the
+	// next mu it writes and miroKept how many tokens it keeps.
+	miroArgs [5]float32
+	miroMu   [1]float32
+	miroKept [1]float32
+	rowArgs  [2]float32
+	cutArgs  [11]float32
+	cutKArgs [12]float32
+	// infill is the vocabulary's tables an infill draw reads, infArgs its
+	// walk's words (walkArgs' and top-n-sigma's n) and infEOT its end-of-turn
+	// token.
+	infill  nn.InfillTables
+	infArgs [12]float32
+	infEOT  [1]uint32
+	// infP, infIDs and infForced are what an infill draw writes beside its
+	// token: the distribution it draws from over its candidates, their ids,
+	// and 1 where it is forced to the end-of-turn token, whose probability
+	// one is then.
+	infP      []float32
+	infIDs    []uint32
+	infForced [1]float32
+	one       [1]float32
+	// adWords and adOut are adaptive-p's words and the average it writes.
+	adWords [6]float32
+	adOut   [2]float32
+	// stWords is a chain stage's words (graph.SampleStage's sample.stage),
+	// dryWords its DRY multiplier and the base's log.
+	stWords  [4]float32
+	dryWords [2]float32
+	// keepWords is min_keep's words over a cut (graph.SampleKeep's
+	// sample.keep).
+	keepWords [2]float32
+	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
+	// no top-k read.
+	ids []uint32
+	// hid is the rows' norm rows where the caller keeps none; xpad, lpad and
+	// hpad a call's last rows where the rows' form's units reach past them.
+	hid, xpad, lpad, hpad []float32
+	pickIDs               []uint32
+	pickVals              []float32
+	call                  [4]uint32
+	zero                  []uint32
+	recRows               [3]uint32
+	bind                  Call
+	// places is the calls' IO, held from one to the next.
+	places places
+	// Wrong is the row a violated head reads in place of the caller's (a
+	// gate's violation), nil for none.
+	Wrong []float32
+	// planes is the residual's planes the head's graphs read, io a call's
+	// buffers, and PlaneFault reads plane 1 in place of plane 2 (Exec.PlaneFault).
+	planes     int
+	io         []unsafe.Pointer
+	PlaneFault bool
+}
+
+// NewHead is the head part over rows of width d and a vocabulary of nv on
+// dev, counted in steps: its forms p, norm where the model has an output
+// norm, their weights bound by w; topLog is the most alternatives the
+// log-softmax selects; inf is the vocabulary's tables an infill draw reads;
+// planes is the planes of d a residual row holds, an input of the head's
+// graphs each.
+func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d, nv, topLog int, inf nn.InfillTables, planes int) *Head {
+	h := &Head{p: p, norm: norm, w: w, dev: dev, steps: steps, d: d, nv: nv, infill: inf, planes: planes}
+	h.io = make([]unsafe.Pointer, 0, planes+2)
+	h.infEOT[0] = inf.EOT
+	if f := h.p.OutNorm.F; f != nil {
+		h.onPad = make([]float32, 2*max(f.Unit, 1)*d)
+	}
+	if f := h.p.Rows.F; f != nil {
+		h.hid = make([]float32, f.Rows*d)
+		if u := f.Unit; u > 1 {
+			h.xpad, h.lpad, h.hpad = make([]float32, planes*u*d), make([]float32, u*nv), make([]float32, u*d)
+		}
+	}
+	if h.p.Pick.F != nil {
+		h.pickIDs, h.pickVals = make([]uint32, nn.PickMax), make([]float32, nn.PickMax)
+	}
+	q := &h.p
+	cuts := q.Row.F != nil || q.Cut.F != nil || q.CutProb.F != nil || q.CutK.F != nil || q.CutKProb.F != nil ||
+		q.CutTyp.F != nil || q.CutTypProb.F != nil || q.CutKTyp.F != nil || q.CutKTypProb.F != nil || q.Miro.F != nil || q.MiroV1.F != nil
+	if cuts || q.Walk.F != nil || q.WalkProb.F != nil || q.WalkInfill.F != nil {
+		h.noWin = make([]float32, nv)
+	}
+	if q.WalkProb.F != nil {
+		h.probVals, h.probIDs = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
+	}
+	if q.WalkInfill.F != nil {
+		h.infP, h.infIDs = make([]float32, nn.InfillMaxK), make([]uint32, nn.InfillMaxK)
+	}
+	h.one[0] = 1
+	if q.Logprobs.F != nil || q.LogprobsRow.F != nil {
+		h.lpRow = make([]float32, nv)
+	}
+	if q.Logprobs.F != nil {
+		h.lpIDs = make([]uint32, min(topLog, nv))
+	}
+	if q.LogprobsRow.F != nil {
+		h.lpAll = make([]uint32, nv)
+	}
+	if cuts {
+		h.ids = make([]uint32, nv)
+		for i := range h.ids {
+			h.ids[i] = uint32(i)
+		}
+	}
+	h.zero = make([]uint32, 4)
+	return h
+}
+
+// form is part p's form and its weights, or why it does not serve.
+func (h *Head) form(p *Part, weighted bool) (*Form, []unsafe.Pointer, nn.Decline) {
+	f, why := p.Form()
+	var weights []unsafe.Pointer
+	if why == nn.DeclineServes && weighted {
+		weights, why = h.w.Bind(f)
+	}
+	return f, weights, why
+}
+
+// run calls form f, its weights at weights, over n rows, its buffers io.
+func (h *Head) run(f *Form, weights []unsafe.Pointer, n int, io ...unsafe.Pointer) {
+	c := &h.bind
+	*c = Call{Own: h.dev.Own(f), N: n, Weights: weights, IO: h.places.of(f.Places)}
+	copy(c.IO, io)
+	h.call[0] = uint32(n)
+	h.recRows = [3]uint32{1, 0, 0}
+	c.At[SrcCall], c.At[SrcZero] = unsafe.Pointer(&h.call[0]), unsafe.Pointer(&h.zero[0])
+	c.At[SrcRecRows] = unsafe.Pointer(&h.recRows[0])
+	for i := range f.Codes {
+		h.dev.Call(c, &f.Codes[i])
+	}
+}
+
+// in is the row a head's call reads in place of x.
+func (h *Head) in(x []float32) unsafe.Pointer {
+	if h.Wrong != nil {
+		return unsafe.Pointer(&h.Wrong[0])
+	}
+	return unsafe.Pointer(&x[0])
+}
+
+// inputs is a call's buffers: plane k of a residual from x0 at plane floats
+// apart (plane 0 at x0 itself, wrong in its place where it is set), then
+// outs.
+func (h *Head) inputs(x0, wrong unsafe.Pointer, plane int, outs ...unsafe.Pointer) []unsafe.Pointer {
+	io := append(h.io[:0], x0)
+	if wrong != nil {
+		io[0] = wrong
+	}
+	for k := 1; k < h.planes; k++ {
+		j := k
+		if h.PlaneFault && k == 2 {
+			j = 1
+		}
+		io = append(io, unsafe.Add(x0, j*plane*4))
+	}
+	h.io = append(io, outs...)
+	return h.io
+}
+
+// Head writes the norm of the row x, its projection and what follows it into
+// logits, and the norm's rows into hidden where it is given, or says why
+// not.
+func (h *Head) Head(x, logits, hidden []float32) nn.Decline {
+	p := &h.p.Head
+	if hidden != nil {
+		p = &h.p.Hidden
+	}
+	f, weights, why := h.form(p, true)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartHead, why)
+		return why
+	}
+	var hd unsafe.Pointer
+	if hidden != nil {
+		hd = unsafe.Pointer(&hidden[0])
+	}
+	var wrong unsafe.Pointer
+	if h.Wrong != nil {
+		wrong = unsafe.Pointer(&h.Wrong[0])
+	}
+	h.run(f, weights, 1, h.inputs(unsafe.Pointer(&x[0]), wrong, h.d, unsafe.Pointer(&logits[0]), hd)...)
+	h.steps.Serve(nn.PartHead)
+	return nn.DeclineServes
+}
+
+// HeadRows is the head over the first n rows of x, d apart, each plane past
+// the first plane floats on, into the rows of logits, and the norm's rows
+// into hidden where it is given (n rows of it), a call of at most the rows'
+// form's rows, or says why not. A call's rows past a whole number of the
+// form's units run from copies, so its units write no row past the
+// caller's.
+func (h *Head) HeadRows(x, logits, hidden []float32, n, plane int) nn.Decline {
+	f, weights, why := h.form(&h.p.Rows, true)
+	if why != nn.DeclineServes {
+		h.steps.Declined[nn.PartHead][why] += n
+		return why
+	}
+	d, nv := h.d, h.nv
+	for r0 := 0; r0 < n; {
+		k := min(f.Rows, n-r0)
+		u := max(f.Unit, 1)
+		if k >= u {
+			k -= k % u
+			hd := unsafe.Pointer(&h.hid[0])
+			if hidden != nil {
+				hd = unsafe.Pointer(&hidden[r0*d])
+			}
+			h.rowsCall(f, weights, unsafe.Pointer(&x[r0*d]), plane, unsafe.Pointer(&logits[r0*nv]), hd, k)
+		} else {
+			for j := range h.planes {
+				copy(h.xpad[j*u*d:], x[j*plane+r0*d:j*plane+(r0+k)*d])
+			}
+			h.rowsCall(f, weights, unsafe.Pointer(&h.xpad[0]), u*d, unsafe.Pointer(&h.lpad[0]), unsafe.Pointer(&h.hpad[0]), k)
+			copy(logits[r0*nv:(r0+k)*nv], h.lpad)
+			if hidden != nil {
+				copy(hidden[r0*d:(r0+k)*d], h.hpad)
+			}
+		}
+		r0 += k
+	}
+	h.steps.Served[nn.PartHead] += n
+	return nn.DeclineServes
+}
+
+// rowsCall runs the rows' form f over k rows of x, its planes plane floats
+// apart, into logits and the norm's rows hidden.
+func (h *Head) rowsCall(f *Form, weights []unsafe.Pointer, x unsafe.Pointer, plane int, logits, hidden unsafe.Pointer, k int) {
+	var wrong unsafe.Pointer
+	if h.Wrong != nil {
+		wrong = unsafe.Pointer(&h.hid[0])
+	}
+	h.run(f, weights, k, h.inputs(x, wrong, plane, logits, hidden)...)
+}
+
+// OutNorm writes the output norm of n rows of x into dst -- a model with no
+// output norm copies them -- or says why not.
+func (h *Head) OutNorm(dst, x []float32, n int) nn.Decline {
+	d := h.d
+	if !h.norm {
+		copy(dst[:n*d], x[:n*d])
+		return nn.DeclineServes
+	}
+	f, weights, why := h.form(&h.p.OutNorm, true)
+	if why != nn.DeclineServes {
+		h.steps.Declined[nn.PartHead][why] += n
+		return why
+	}
+	for r0 := 0; r0 < n; {
+		k := min(f.Rows, n-r0)
+		u := max(f.Unit, 1)
+		in, out := unsafe.Pointer(&x[r0*d]), unsafe.Pointer(&dst[r0*d])
+		padded := k < u
+		if padded {
+			copy(h.onPad[:k*d], x[r0*d:(r0+k)*d])
+			in, out = unsafe.Pointer(&h.onPad[0]), unsafe.Pointer(&h.onPad[u*d])
+		} else {
+			k -= k % u
+		}
+		h.run(f, weights, k, in, out)
+		if padded {
+			copy(dst[r0*d:(r0+k)*d], h.onPad[u*d:(u+k)*d])
+		}
+		r0 += k
+	}
+	return nn.DeclineServes
+}
+
+// Pick is the label pick: the head projecting the ids alone from the row x
+// into vals, the logits left as they were, or why not.
+func (h *Head) Pick(x []float32, ids []int32, vals []float32) nn.Decline {
+	f, weights, why := h.form(&h.p.Pick, true)
+	if why == nn.DeclineServes && (len(ids) > len(h.pickIDs) || len(vals) < len(ids)) {
+		why = nn.DeclineCaller
+	}
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartHead, why)
+		return why
+	}
+	clear(h.pickIDs)
+	for i, id := range ids {
+		h.pickIDs[i] = uint32(id)
+	}
+	h.run(f, weights, 1, h.in(x), unsafe.Pointer(&h.pickIDs[0]), unsafe.Pointer(&h.pickVals[0]))
+	copy(vals, h.pickVals[:len(ids)])
+	h.steps.Serve(nn.PartHead)
+	return nn.DeclineServes
+}
+
+// Greedy is the token of the largest of logits, the lower id of two equal,
+// or false where the sampler declines.
+func (h *Head) Greedy(logits []float32) (int32, bool) {
+	f, _, why := h.form(&h.p.Sample, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.token[0]))
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// window writes a's penalties where the draws read them and is the window
+// row they read: a's, or a row holding no token where they are off.
+func (h *Head) window(a *nn.DrawArgs) unsafe.Pointer {
+	h.pen = a.Penalty
+	if a.Penalty.Off() || len(a.Window) == 0 {
+		return unsafe.Pointer(&h.noWin[0])
+	}
+	return unsafe.Pointer(&a.Window[0])
+}
+
+// ext is a's typical-p and XTC's threshold as the forms read them, +Inf
+// where off, and whether either is on, which only the cut's typical forms
+// read.
+func ext(a *nn.DrawArgs) (typ, xtc float32, on bool) {
+	typ, xtc = float32(math.Inf(1)), float32(math.Inf(1))
+	if a.Typical > 0 && a.Typical < 1 {
+		typ, on = a.Typical, true
+	}
+	if a.XTC > 0 {
+		xtc, on = a.XTC, true
+	}
+	return typ, xtc, on || a.Sigma > 0 || a.DynRange > 0
+}
+
+// Draw is a's sampled token over logits at the uniform u: a top-k draw's
+// walk, or with no top-k the row's or, where top-p or min-p is set, the
+// cut's, or with a top-k past the walk's bound the cut's top-k variant; a
+// cut with typical-p is the cut's typical form, which a draw with no top-k
+// takes whatever its other cuts.
+// False where none serves it.
+func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
+	n := len(logits)
+	if a.Mirostat != 0 {
+		return h.mirostat(logits, &a, u)
+	}
+	if a.Infill {
+		return h.walkInfill(logits, &a, u)
+	}
+	if a.TopK > 0 && a.TopK < n && a.TopK <= nn.SampleMaxK && a.Sigma <= 0 {
+		return h.walk(logits, &a, u)
+	}
+	typ, xtc, typOn := ext(&a)
+	p, words := &h.p.Row, unsafe.Pointer(&h.rowArgs[0])
+	h.rowArgs = [2]float32{a.InvTemp, u}
+	switch {
+	case a.TopK > 0 && a.TopK < n:
+		p, words = &h.p.CutK, h.cutWords(&a, u, typ, xtc, 1, true, typOn)
+		if typOn {
+			p = &h.p.CutKTyp
+		}
+	case typOn:
+		p, words = &h.p.CutTyp, h.cutWords(&a, u, typ, xtc, 1, false, true)
+	case a.MinP > 0 || a.TopP < 1:
+		p, words = &h.p.Cut, h.cutWords(&a, u, typ, xtc, 1, false, false)
+	}
+	f, _, why := h.form(p, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	win := h.window(&a)
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]), words,
+		unsafe.Pointer(&h.token[0]))
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// mirostat is a's Mirostat draw over logits at the uniform u, the next mu
+// written to a.Mu, or false where the form declines.
+func (h *Head) mirostat(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
+	p := &h.p.Miro
+	if a.Mirostat == 1 {
+		p = &h.p.MiroV1
+	}
+	f, _, why := h.form(p, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	h.pen = nn.NoPenalties()
+	h.miroArgs = [5]float32{a.InvTemp, a.MiroTau, a.MiroEta, a.MiroMu, u}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.noWin[0]), unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]),
+		unsafe.Pointer(&h.miroArgs[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.miroMu[0]), unsafe.Pointer(&h.miroKept[0]))
+	if a.Mu != nil {
+		*a.Mu = h.miroMu[0]
+	}
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// walk is a's top-k draw over logits at the uniform u, or false where it
+// declines: a k past the bound the walk was formed for.
+func (h *Head) walk(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
+	f, _, why := h.form(&h.p.Walk, false)
+	if why == nn.DeclineServes && a.TopK > nn.SampleMaxK {
+		why = nn.DeclineCaller
+	}
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	win := h.window(a)
+	typ, xtc, _ := ext(a)
+	h.walkArgs = [11]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.CutInvTemp}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
+		unsafe.Pointer(&h.token[0]))
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// walkInfill is a's draw through the infill sampler over logits at the
+// uniform u, or false where its form declines: a top-k past InfillMaxK, or
+// none, reads InfillMaxK candidates.
+func (h *Head) walkInfill(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
+	f, _, why := h.form(&h.p.WalkInfill, false)
+	if why != nn.DeclineServes || len(h.infill.Class) != len(logits) {
+		if why == nn.DeclineServes {
+			why = nn.DeclineCaller
+		}
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	k := a.TopK
+	if k <= 0 || k > nn.InfillMaxK {
+		k = nn.InfillMaxK
+	}
+	win := h.window(a)
+	typ, xtc, _ := ext(a)
+	h.infArgs = [12]float32{float32(k), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.Sigma, a.CutInvTemp}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.infArgs[0]),
+		unsafe.Pointer(&h.infill.Class[0]), unsafe.Pointer(&h.infill.Parent[0]), unsafe.Pointer(&h.infill.EOG[0]),
+		unsafe.Pointer(&h.infEOT[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.infP[0]), unsafe.Pointer(&h.infIDs[0]),
+		unsafe.Pointer(&h.infForced[0]))
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// Dist is the distribution a draws from over logits: a top-k draw's
+// candidates and their share of the survivors (ids and vals, dense false),
+// else every token's probability written into pall (dense true). A Mirostat
+// draw's is the top-k draw's over the tokens it keeps at a.MiroMu (a.Mu left
+// as it is); an infill draw's its candidates' share of what survives the
+// infill sampler, or its end-of-turn token alone where the draw is forced to
+// it. False where the forms decline.
+func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool, ids []uint32, vals []float32, ok bool) {
+	n := len(logits)
+	if n != h.nv {
+		return false, nil, nil, false
+	}
+	if a.Mirostat != 0 {
+		a.Mu = nil
+		if _, ok := h.mirostat(logits, &a, 0); !ok {
+			return false, nil, nil, false
+		}
+		k := int(h.miroKept[0])
+		if k >= n {
+			k = 0
+		}
+		a = nn.DrawArgs{TopK: k, InvTemp: a.InvTemp, CutInvTemp: a.CutInvTemp, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties()}
+	}
+	if a.Infill {
+		if _, ok := h.walkInfill(logits, &a, 0); !ok {
+			return false, nil, nil, false
+		}
+		if h.infForced[0] > 0 {
+			return false, h.infEOT[:], h.one[:], true
+		}
+		return false, h.infIDs, h.infP, true
+	}
+	topK := a.TopK > 0 && a.TopK < n
+	bounded := topK && a.TopK <= nn.SampleMaxK && a.Sigma <= 0
+	typ, xtc, typOn := ext(&a)
+	p := &h.p.CutProb
+	switch {
+	case bounded:
+		p = &h.p.WalkProb
+	case topK && typOn:
+		p = &h.p.CutKTypProb
+	case topK:
+		p = &h.p.CutKProb
+	case typOn:
+		p = &h.p.CutTypProb
+	}
+	f, _, why := h.form(p, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false, nil, nil, false
+	}
+	win := h.window(&a)
+	if bounded {
+		h.walkArgs = [11]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, 0, typ, xtc, a.XTCMix, a.DynRange, a.DynExp, a.CutInvTemp}
+		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
+			unsafe.Pointer(&h.probVals[0]), unsafe.Pointer(&h.probIDs[0]))
+	} else {
+		words := h.cutWords(&a, 0, typ, xtc, a.XTCMix, topK, typOn)
+		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]), words,
+			unsafe.Pointer(&pall[0]))
+	}
+	h.steps.Serve(nn.PartSample)
+	if bounded {
+		return false, h.probIDs, h.probVals, true
+	}
+	return true, nil, nil, true
+}
+
+// Adaptive is adaptive-p's transform of a draw's distribution p, a top-k
+// draw's candidates cand put in place at ids, at its words w
+// (graph.SampleAdaptive): the logits the row's draw walks into logits, their
+// softmax into q, the whole distribution into pd, and the moving average's
+// sum and weight; false where the form declines.
+func (h *Head) Adaptive(p []float32, ids []uint32, cand []float32, w [6]float32, logits, q, pd []float32) (sum, weight float32, ok bool) {
+	f, _, why := h.form(&h.p.Adaptive, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, 0, false
+	}
+	h.adWords = w
+	h.run(f, nil, 1, unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]), unsafe.Pointer(&h.adWords[0]),
+		unsafe.Pointer(&logits[0]), unsafe.Pointer(&q[0]), unsafe.Pointer(&pd[0]), unsafe.Pointer(&h.adOut[0]), unsafe.Pointer(&h.adOut[1]))
+	h.steps.Serve(nn.PartSample)
+	return h.adOut[0], h.adOut[1], true
+}
+
+// Stage is one stage of a sampler chain in an order of its own
+// (graph.SampleStage): logits with the survivors p names, cand put in place
+// at ids, or every finite one where w says so, a's penalties and DRY applied
+// and scaled at w's temperature, the rest -Inf, into out; false where the
+// form declines.
+func (h *Head) Stage(logits, p []float32, ids []uint32, cand []float32, a nn.DrawArgs, w [4]float32, out []float32) bool {
+	f, _, why := h.form(&h.p.Stage, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false
+	}
+	h.stWords, h.dryWords = w, [2]float32{a.DryMult, a.DryLogBase}
+	win, dry := h.window(&a), unsafe.Pointer(&h.noWin[0])
+	if len(a.Dry) > 0 {
+		dry = unsafe.Pointer(&a.Dry[0])
+	}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]),
+		win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.stWords[0]), dry, unsafe.Pointer(&h.dryWords[0]), unsafe.Pointer(&out[0]))
+	h.steps.Serve(nn.PartSample)
+	return true
+}
+
+// Keep is min_keep, the floor on a cut's survivors, over one cut of a chain in
+// an order of its own (graph.SampleKeep): over logits, the survivors p names,
+// cand put in place at ids, with the first w[0] of the cut's order besides --
+// the softmax's, or typical-p's where w[1] is 1 -- or, where w[1] is 2 (XTC),
+// every finite one unless w[0] survive; 1 each into out, the rest 0; false
+// where the form declines.
+func (h *Head) Keep(logits, p []float32, ids []uint32, cand []float32, w [2]float32, out []float32) bool {
+	f, _, why := h.form(&h.p.Keep, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false
+	}
+	h.keepWords = w
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]),
+		unsafe.Pointer(&h.ids[0]), unsafe.Pointer(&h.keepWords[0]), unsafe.Pointer(&out[0]))
+	h.steps.Serve(nn.PartSample)
+	return true
+}
+
+// Mask writes logits plus mask into dst, or false where the form declines.
+func (h *Head) Mask(dst, logits, mask []float32) bool {
+	f, _, why := h.form(&h.p.Mask, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false
+	}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&mask[0]), unsafe.Pointer(&dst[0]))
+	return true
+}
+
+// Logprobs is the log-softmax of logits and at least its n most likely
+// tokens, the larger logit first and the lower id on a tie -- the selection's
+// where n is within it, else the whole row in order -- or false where the
+// form declines; both are the head's until its next call.
+func (h *Head) Logprobs(logits []float32, n int) (row []float32, ids []uint32, ok bool) {
+	p, out := &h.p.Logprobs, h.lpIDs
+	if n > len(h.lpIDs) {
+		p, out = &h.p.LogprobsRow, h.lpAll
+	}
+	f, _, why := h.form(p, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return nil, nil, false
+	}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&out[0]))
+	h.steps.Serve(nn.PartSample)
+	return h.lpRow, out, true
+}
+
+// Decide is a label readout over vals, the picked logits of a question's
+// option groups: its distribution into probs and its statistics into stats
+// (graph.DecisionScores), or false where the form declines.
+func (h *Head) Decide(vals, keep, params, prior, probs, stats []float32) bool {
+	f, _, why := h.form(&h.p.Decide, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false
+	}
+	h.run(f, nil, 1, unsafe.Pointer(&vals[0]), unsafe.Pointer(&keep[0]), unsafe.Pointer(&params[0]),
+		unsafe.Pointer(&prior[0]), unsafe.Pointer(&probs[0]), unsafe.Pointer(&stats[0]))
+	h.steps.Serve(nn.PartSample)
+	return true
+}
+
+// cutWords is a's words for graph.SampleCut at the uniform u, in the layout
+// of the form topK and typOn choose, the cuts' 1/T its last word.
+func (h *Head) cutWords(a *nn.DrawArgs, u, typ, xtc, mix float32, topK, typOn bool) unsafe.Pointer {
+	switch {
+	case topK && typOn:
+		h.cutKArgs = [12]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), a.Sigma, typ, xtc, mix, a.DynRange, a.DynExp, a.CutInvTemp}
+	case topK:
+		h.cutKArgs = [12]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), a.CutInvTemp}
+	case typOn:
+		h.cutArgs = [11]float32{a.InvTemp, a.TopP, a.MinP, u, a.Sigma, typ, xtc, mix, a.DynRange, a.DynExp, a.CutInvTemp}
+		return unsafe.Pointer(&h.cutArgs[0])
+	default:
+		h.cutArgs = [11]float32{a.InvTemp, a.TopP, a.MinP, u, a.CutInvTemp}
+		return unsafe.Pointer(&h.cutArgs[0])
+	}
+	return unsafe.Pointer(&h.cutKArgs[0])
+}

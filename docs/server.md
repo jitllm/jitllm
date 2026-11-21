@@ -37,20 +37,60 @@ constrain the output; `n_probs` reports the raw distribution (at most 20).
 accepted either way: the prefix cache is automatic and never changes the
 output. `POST /props` answers 501, as llama-server does without `--props`.
 
+A `prompt` array holding no token id is a list of prompts, as llama-server
+reads it, and `n_cmpl` (or its alias `n`) asks for that many completions of
+each: the answer is the results in llama-server's order, each prompt and then
+its completions, indexed so, and a single result is the object itself. With a
+`seed`, completion i of a prompt samples with seed+i. Streamed, every frame
+carries its result's `index`, and with `timings_per_token` the timings so
+far. `n_predict` 0 answers one token, `stop_type` `limit`, as llama-server
+does (its README says none; the server samples one before it checks). Any
+`id_slot` is taken: every slot reads the one prefix cache, so a slot changes
+no answer, and the slot asked for is reported, wrapped by the slot count as
+llama-server wraps it. A stream silent for `sse_ping_interval` seconds (30
+unless set; -1 or 0 none) is sent an SSE comment, as llama-server sends one.
+`t_max_predict_ms` ends the reply at its first token holding a newline once
+that long has passed since decoding began, `stop_type` `limit`. `samplers`
+(names with llama.cpp's aliases, or a string of their letters) is the stages
+that run, as llama-server runs them: a list in the draw's order (penalties,
+dry, top_n_sigma, top_k, typ_p, top_p, min_p, xtc, temperature) runs with the
+stages it leaves out off, so a list without `temperature` draws at 1; `infill`
+comes last, and runs llama.cpp's infill sampler over the survivors (the merge
+of tokens whose pieces prefix one another, its thresholds, and the end-of-turn
+token where nothing else is left) over at most the 64 most likely candidates,
+a draw with no `top_k` or a larger one reading those 64. A prompt
+`{"prompt_string": ..., "multimodal_data": [...]}` carries base64 pictures,
+each standing where the text holds `<__media__>`, in order, wrapped in the
+markers the model's container states, after the model's leading specials, as
+llama-server's mtmd places them; the counts must agree. `n_indent` ends the
+reply at a line, past its first newline, that starts with fewer spaces or tabs
+than asked before its first other character, `stop_type` `limit`, that
+character and what follows it cut from the answer as llama-server cuts them.
+`t_max_prompt_ms` is taken to no effect, as llama-server takes it (its server
+leaves it unimplemented). `return_progress` on a stream sends the prompt's
+progress as llama-server does: a frame when the prompt begins, what the prompt
+cache restored counted processed, and one after each chunk it runs, each with
+no text and `prompt_progress` (`total`, `cache`, `processed`, `time_ms`); its
+`tokens` is empty where llama-server's carries a 0 no step sampled. Without a
+stream it is taken to no effect, as llama-server takes it.
+
 A field the engine cannot honour is refused by name with a 400, at any value
-but its neutral one: `mirostat`, `dry_multiplier`, `xtc_probability`,
-`typical_p`, `dynatemp_range`, `presence_penalty`, `frequency_penalty`,
-`logit_bias`, `samplers` beyond penalties/top_k/top_p/min_p/temperature,
-`n_cmpl` above 1, `id_slot` other than -1 and 0, `n_predict` 0, `n_keep`,
-`n_cache_reuse`, `t_max_predict_ms`, `timings_per_token`, `return_progress`,
-`post_sampling_probs`, `response_fields`, `lora`, `repeat_last_n` other than
-64 or 0, `embd_normalize` other than 2, a list of prompts, and multimodal
-prompts. A field llama.cpp does not define is refused as unknown. On a
+but its neutral one: `lora`, and `image_data` or
+`multimodal_data` beside the prompt (pictures go in
+`prompt.multimodal_data`); an audio file in `prompt.multimodal_data` is
+refused as a picture that does not decode.
+`/embedding` reads `embd_normalize` as llama-server does (2, unit length, by
+default; below 0 the pooled row as it is; 0 scaled into int16's range by its
+largest magnitude; any other k its k-norm), each kind the composed readout's. The top-level
+`multimodal_data` and `image_data` older llama-servers read are refused,
+naming `prompt.multimodal_data`. A field llama.cpp does not define is
+refused as unknown. On a
 byte-level BPE vocabulary `/tokenize` with `parse_special: false` is refused
 when the text contains a control token, because the tokenizer matches it either
 way.
 
-Not served: `/reranking`, `/embeddings`, `/lora-adapters`, `/models`, slot
+`/embeddings` is `/embedding` and `/models` is `/v1/models`, as llama-server
+serves them. Not served: `/reranking`, `/lora-adapters`, slot
 save/restore/erase, and llama-server's own `/metrics` names (`/metrics` stays
 jitllm's).
 
@@ -115,13 +155,16 @@ interrupted is reported failed.
 
 Structured output: OpenAI's `response_format` (`json_object`, or
 `json_schema` with its `schema`) on `/v1/chat/completions` and
-`/v1/completions`, and `grammar` (GBNF) or `json_schema` on the Connect
-`GenerateRequest`. Every sampled token keeps the reply inside the grammar and
-the reply ends where the grammar does. A schema keyword the converter does not
-build (`pattern`, `format`, numeric bounds, `allOf`, ...) is a 400 naming it;
+`/v1/completions`, and `json_schema` (JSON Schema 2020-12, compiled by
+`grammar.FromJSONSchema`) on the Connect `GenerateRequest`; grammar text
+(`grammar`) is taken by the compatibility endpoints alone.
+Every sampled token keeps the reply inside the grammar and the reply ends
+where the grammar does. A schema keyword the compiler does not build
+(`uniqueItems`, a number's bounds, `multipleOf`, a oneOf whose branches may
+overlap, ...) is a 400 naming it;
 the supported subset is in
-[model-correctness.md](engineering-history/model-correctness.md),
-"engine/grammar". A constrained generate decodes alone and without
+[model-correctness.md](../.notes/engineering-history/model-correctness.md),
+"grammar". A constrained generate decodes alone and without
 speculation, and refuses `ignore_eos`.
 
 Speculative decoding is off by default and asked for per request
@@ -138,7 +181,7 @@ reply was cut by a stop string inside a round refuses `continue_session`.
 Pictures: on a model whose container carries a vision tower, a chat request
 may carry pictures -- OpenAI `image_url` content parts on
 `/v1/chat/completions`, Anthropic `image` blocks on `/v1/messages`. PNG, JPEG,
-WebP and GIF (its first frame) are decoded, inline as a `data:` URL
+WebP, GIF (its first frame), BMP and TIFF are decoded, inline as a `data:` URL
 (`data:image/png;base64,...`) or an Anthropic `base64` source whose
 `media_type` must match the bytes. The pictures keep the order the client sent
 them and go where the model's own chat template puts its image markers (a
@@ -273,7 +316,7 @@ the same text, finish reason, usage, log-probabilities and tool calls.
 | assistant `tool_calls`, `tool` turns | `ChatMessage.tool_calls`, `tool_call_id`, `name` | |
 | reply `tool_calls` | `GenerateToolCalls` events; `CompleteChoice.tool_calls` | each call is sent when its markup closes; the text carries none of it |
 | `finish_reason` `stop`, `length`, `tool_calls` | `FinishReason` `STOP` or `EOS`, `MAX_TOKENS`, `TOOL_CALLS` | |
-| `response_format` `text`, `json_object`, `json_schema` | `ResponseFormat.type`, `json_schema`, `name`, `strict` | `strict` is accepted and always so: the grammar always holds the reply; with `grammar`, `json_schema` or a forced tool call it is refused as one constraint each |
+| `response_format` `text`, `json_object`, `json_schema` | `ResponseFormat.type`, `json_schema`, `name`, `strict` | `strict` is accepted and always so: the grammar always holds the reply; with `json_schema` or a forced tool call it is refused as one constraint each |
 | `logprobs`, `top_logprobs` | `logprobs`, `top_logprobs` (0 to 20) | `GenerateToken.logprob`, `CompleteChoice.logprobs`; the raw distribution; refused with `echo_prompt` |
 | `/v1/completions` `logprobs: N` | `logprobs: true`, `top_logprobs: N` | |
 | `n` (1 to 128) | `n` | `GenerateResponse.choice`, `CompleteResponse.choices`; choice `i` samples with seed + `i` |

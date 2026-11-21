@@ -16,7 +16,9 @@ import (
 
 // chatGoldDate is the date strftime_now prints, pinned as scripts/chatgold.py
 // pins it, so a golden made on one day still matches on the next.
-var chatGoldDate = time.Date(2024, 7, 26, 0, 0, 0, 0, time.UTC)
+func chatGoldDate() time.Time {
+	return time.Date(2024, 7, 26, 0, 0, 0, 0, time.UTC)
+}
 
 // A templateEntry is one row of testdata/templates/manifest.json: a supported
 // model family's chat template, where it was read from, and the BOS and EOS
@@ -246,7 +248,7 @@ func TestChatTemplatesMatchTransformers(t *testing.T) {
 			for k, x := range v.AsDict().Data {
 				data[k] = x
 			}
-			data["strftime_now"] = jinja.StrftimeNow(func() time.Time { return chatGoldDate })
+			data["strftime_now"] = jinja.StrftimeNow(func() time.Time { return chatGoldDate() })
 			got, err := tpl.Render(data)
 			compared++
 			switch {

@@ -16,33 +16,27 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
-// visionModel is the smallest of the three projector families.
-var visionModel = testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
-
 // A picture attached in the app must reach the model as the picture.
 //
 // It runs the engine as the screen drives it (session.ChatMessages carrying a
 // path, the worker encoding with the tower and prefilling spans), which
-// model.TestChatSpansDescribeAnImage does not cover. A blank picture runs
+// model.TestStatedTowerSeesThePicture does not cover. A blank picture runs
 // beside it, because a tower wired to nothing still answers fluently.
 func TestAnAttachedPictureReachesTheModel(t *testing.T) {
+	visionModel := testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
 	fresh.Must(t, visionModel)
 	if _, err := os.Stat(visionModel); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	pic := filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
+	pic := filepath.Join("..", "..", "engine", "testdata", "quad-and-disc.png")
 	if _, err := os.Stat(pic); err != nil {
 		t.Fatalf("IMAGE MISSING: %v", err)
 	}
-	// A private cache dir: a prefix an earlier run left on disk restores the
-	// picture's rows whole, the image cache is never asked, and the history
-	// half below reads 0 hits.
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	blank := filepath.Join(t.TempDir(), "blank.png")
 	writeGrey(t, blank, 384)
 	// A private cache folder: the prefix cache outlives the process, and pages
-	// an earlier run left restore this test's prompts whole, so neither the
-	// tower nor the image cache runs and the follow-up's assertion reads 0 hits.
+	// an earlier run left would restore this test's prompts whole, the tower
+	// running for none of them.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	sh := newTestShell()
@@ -83,10 +77,8 @@ func TestAnAttachedPictureReachesTheModel(t *testing.T) {
 		t.Errorf("a BLANK picture is yellow too (%q): the picture is not what answered", none)
 	}
 
-	// A follow-up turn carries the picture in its history, encoded once and
-	// taken from the cache. The question is leading, so this half proves the
-	// history path and the cache, not sight.
-	_, miss0 := e.m.ImageCacheStats()
+	// A follow-up turn carries the picture in its history. The question is
+	// leading, so this half proves the history path, not sight.
 	hist := []session.Turn{
 		{Role: session.RoleUser, Text: "What shape is in the middle?", Images: []string{pic}},
 		{Role: session.RoleAssistant, Text: "The shape in the middle is a circle."},
@@ -96,9 +88,30 @@ func TestAnAttachedPictureReachesTheModel(t *testing.T) {
 	if !strings.Contains(follow, "yellow") {
 		t.Errorf("the follow-up does not see the picture from the history: %q", follow)
 	}
-	if hits, miss1 := e.m.ImageCacheStats(); miss1 != miss0 || hits == 0 {
-		t.Errorf("the history's picture ran the tower again (%d misses, then %d; %d hits)", miss0, miss1, hits)
+}
+
+// The memory map draws the model's whole block space. A vision tower's blocks
+// are blocks of the model, placed and paged like the text blocks, so a map
+// that stopped at the text blocks would hide them.
+func TestTheMemoryMapCoversTheTowersBlocks(t *testing.T) {
+	visionModel := testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
+	fresh.Must(t, visionModel)
+	if _, err := os.Stat(visionModel); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
+	sh := newTestShell()
+	e := New(sh, sh.state())
+	defer e.Close()
+	e.Load(visionModel)
+	pump(t, sh, 180*time.Second, "the model to load", func() bool { return sh.Store.Loaded.Get() })
+	text, all := e.m.Cfg.NLayer, e.m.Blocks()
+	if all <= text {
+		t.Fatalf("%s has %d blocks against %d text blocks: no tower blocks to draw, so this proves nothing", visionModel, all, text)
+	}
+	if got := len(sh.Store.BlockMap.Get()); got != all {
+		t.Fatalf("the memory map draws %d blocks, the model has %d (%d of them text)", got, all, text)
+	}
+	t.Logf("the memory map draws all %d blocks, %d of them the tower's", all, all-text)
 }
 
 func writeGrey(t *testing.T, path string, n int) {

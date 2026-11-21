@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // Source is a model, described in this format's own terms, ready to be
@@ -28,6 +28,10 @@ type Source struct {
 	// times. A write of a named origin can be resumed (see Write); "" is a
 	// source that cannot name its bytes, whose write always starts over.
 	Origin string
+	// JournalEvery is how many bytes a resumable write puts down between
+	// journal points: the most a resumed write does twice. Zero is 1 GiB;
+	// a gate sets 1 to journal every tensor.
+	JournalEvery uint64
 }
 
 // Tensor is one weight on its way in. Data is the source bytes; the writer
@@ -52,6 +56,9 @@ type Tensor struct {
 	// sheet's SC -- as a migration reads it out of a container (migrate.go);
 	// the writer places it without packing.
 	Stored bool
+	// RowTable stores a model-level 2-D verbatim tensor as a row table
+	// (File.RowTable), after every page array.
+	RowTable bool
 }
 
 // Bytes is the tensor's source bytes, from Data or from Load.
@@ -67,30 +74,30 @@ func (t *Tensor) Bytes() ([]byte, error) {
 //
 // A type that is not packed is not an error: F32/F16 norms, biases and
 // routers are carried verbatim, since the container must be self-sufficient.
-func packerOf(t Type) (kernels.Quant, bool) {
+func packerOf(t Type) (layout.Quant, bool) {
 	switch t {
 	case TypeQ4:
-		return kernels.Q4_0, true
+		return layout.Q4_0, true
 	case TypeQ8:
-		return kernels.Q8_0, true
+		return layout.Q8_0, true
 	case TypeQ5:
-		return kernels.Q5_0, true
+		return layout.Q5_0, true
 	case TypeQ51:
-		return kernels.Q5_1, true
+		return layout.Q5_1, true
 	case TypeMX4:
-		return kernels.MXFP4, true
+		return layout.MXFP4, true
 	case TypeTQ2:
-		return kernels.TQ2, true
+		return layout.TQ2, true
 	case TypeTQ2F:
-		return kernels.TQ2F, true
+		return layout.TQ2F, true
 	case TypeQ3S:
-		return kernels.Q3_K, true
+		return layout.Q3_K, true
 	case TypeQ4S:
-		return kernels.Q4_K, true
+		return layout.Q4_K, true
 	case TypeQ5S:
-		return kernels.Q5_K, true
+		return layout.Q5_K, true
 	case TypeQ6S:
-		return kernels.Q6_K, true
+		return layout.Q6_K, true
 	}
 	return 0, false
 }
@@ -102,7 +109,7 @@ func Packed(t Type) bool { _, ok := packerOf(t); return ok }
 
 // Packer is packerOf, exported so a gate can pack a tensor the same way the
 // writer did and compare the bytes.
-func Packer(t Type) (kernels.Quant, bool) { return packerOf(t) }
+func Packer(t Type) (layout.Quant, bool) { return packerOf(t) }
 
 // verbatimBytes is how many bytes a non-packed type occupies for n elements.
 func verbatimBytes(t Type, n uint64) (uint64, error) {
@@ -148,7 +155,7 @@ func ExpertBank(r Role) bool {
 
 // expertPaged is ExpertBank for an entry that actually has sheets to split.
 func expertPaged(e *Entry) bool {
-	return ExpertBank(e.Role) && e.Block != DenseBlock && !alwaysResident(e) && e.NDim >= 3
+	return ExpertBank(e.Role) && e.Block != DenseBlock && !e.Role.Expanded() && e.NDim >= 3
 }
 
 // sheetPlanes is one sheet's unaligned length in each plane, packed or not. A
@@ -185,7 +192,7 @@ func sheetSpan(e *Entry) (qs, d, sc, sheets uint64, err error) {
 		// span and SpanLen already gives it.
 		return 0, 0, 0, 0, fmt.Errorf("jlm: %v is %v, which is not packed", e.Role, e.Type)
 	}
-	pq, pd, psc, err := kernels.PackedWords(q, int(rows), int(e.Dims[0]))
+	pq, pd, psc, err := layout.PackedWords(q, int(rows), int(e.Dims[0]))
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -208,7 +215,7 @@ const minGroupBytes = 64 << 10
 // ceil(k/n) of them per plane), so the rule is the largest n whose group
 // still clears minGroupBytes. On Qwen3-Next-80B that gives three, which is
 // where the measured dose peaked. A container is written where it runs (see
-// Fingerprint); tier.Config.StreamGroups overrides it.
+// Fingerprint); gpu.Config.StreamGroups overrides it.
 func streamGroupsFor(es []Entry, used int) uint32 {
 	if used < 2 {
 		return 1
@@ -301,7 +308,7 @@ func spans(t Type, dims [4]uint64, ndim uint8) (qs, d, sc uint64, err error) {
 	k := dims[0]
 	sheets, rows := sheetsOf(dims, ndim)
 	if q, ok := packerOf(t); ok {
-		pq, pd, psc, err := kernels.PackedWords(q, int(rows), int(k))
+		pq, pd, psc, err := layout.PackedWords(q, int(rows), int(k))
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -333,16 +340,9 @@ func StoredBytes(t Type, dims [4]uint64, ndim uint8) (uint64, error) {
 // Role.Expanded: a tensor read into a fresh slice at load may live anywhere,
 // and a tensor a matvec reads in place must stay a page. See Role.Expanded for
 // why the MoE router is not here. The
-func alwaysResident(e *Entry) bool {
-	return !RowTable(e) && (e.Block == DenseBlock || e.Role.Expanded())
+func alwaysResident(e *Entry, rows bool) bool {
+	return !rows && (e.Block == DenseBlock || e.Role.Expanded())
 }
-
-// RowTable says a tensor is a row table: rows read one at a time from the
-// file, never resident whole and never in the dense region or a page. It
-// sits after every page array, verbatim and row-major, so row r is
-// RowBytes(e) bytes at QSOff + r*RowBytes(e). Qwen3.8-Flash-Next's n-gram
-// table is one: 320 million rows, of which a token reads sixteen.
-func RowTable(e *Entry) bool { return e.Role == RoleNGramTable }
 
 // RowBytes is one row of a row table: Dims[0] elements of its type.
 func RowBytes(e *Entry) (uint64, error) { return verbatimBytes(e.Type, e.Dims[0]) }
@@ -364,8 +364,8 @@ func Write(dst string, src *Source, fp Fingerprint) (*Header, error) {
 // other byte is the current layout, which each migration's step gate holds
 // to v's own writer (TestEachStepIsItsVersionsWriter).
 func writeAt(dst string, src *Source, fp Fingerprint, v uint32) (*Header, error) {
-	if v < 28 && src.Config != nil && src.Config.NMTP != 0 {
-		return nil, fmt.Errorf("jlm: a version %d container cannot state %d prediction blocks", v, src.Config.NMTP)
+	if v < 28 && src.Config != nil && src.Config.PredictionBlocks() != 0 {
+		return nil, fmt.Errorf("jlm: a version %d container cannot state %d prediction blocks", v, src.Config.PredictionBlocks())
 	}
 	l, err := layoutOf(src, fp, v)
 	if err != nil {
@@ -386,9 +386,9 @@ func Plan(src *Source, fp Fingerprint) (*Header, uint64, error) {
 	return l.h, l.total, nil
 }
 
-// layout is pass 1's result: every entry placed, the encoded sections, and
+// fileLayout is pass 1's result: every entry placed, the encoded sections, and
 // the file's size.
-type layout struct {
+type fileLayout struct {
 	es                    []Entry
 	h                     *Header
 	cfgb, visb, vocb, fpb []byte
@@ -396,7 +396,7 @@ type layout struct {
 	ver                   uint32 // the version word written
 }
 
-func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
+func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 	if src == nil || src.Config == nil {
 		return nil, fmt.Errorf("jlm: Write needs a Source with a Config")
 	}
@@ -432,7 +432,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 		} else if e.Block > maxBlock {
 			maxBlock = e.Block
 		}
-		if !alwaysResident(&e) && !expertPaged(&e) && !RowTable(&e) {
+		if !alwaysResident(&e, t.RowTable) && !expertPaged(&e) && !t.RowTable {
 			if e.Role.Vision() {
 				perVis[e.Block] += qs + d + sc
 			} else {
@@ -560,7 +560,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 
 	dense := h.DenseOff
 	for i := range es {
-		if !alwaysResident(&es[i]) {
+		if !alwaysResident(&es[i], src.Tensors[i].RowTable) {
 			continue
 		}
 		qs, d, sc, _ := spans(es[i].Type, es[i].Dims, es[i].NDim)
@@ -589,7 +589,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 	for i := range es {
 		// Same predicate as the dense pass above, or this one overwrites the
 		// offsets it just assigned and a norm ends up inside a page again.
-		if alwaysResident(&es[i]) || RowTable(&es[i]) {
+		if alwaysResident(&es[i], src.Tensors[i].RowTable) || src.Tensors[i].RowTable {
 			continue
 		}
 		if po, ok := inner[i]; ok {
@@ -619,7 +619,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 	}
 	// The row tables, after everything a pager reads.
 	for i := range es {
-		if !RowTable(&es[i]) {
+		if !src.Tensors[i].RowTable {
 			continue
 		}
 		if es[i].Block != DenseBlock || es[i].NDim != 2 || Packed(es[i].Type) {
@@ -633,7 +633,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 		es[i].DOff, es[i].SCOff = es[i].QSOff+qs, es[i].QSOff+qs
 		total = es[i].QSOff + qs
 	}
-	return &layout{es: es, h: h, cfgb: cfgb, visb: visb, vocb: vocb, fpb: fpb,
+	return &fileLayout{es: es, h: h, cfgb: cfgb, visb: visb, vocb: vocb, fpb: fpb,
 		expPageSize: expPageSize, total: total, ver: ver}, nil
 }
 
@@ -655,7 +655,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 // many tensors are down. A failed or killed write keeps both, and the next
 // Write of the same layout from the same origin by the same build picks up
 // at the journal's count. Anything else starts over.
-func (l *layout) write(dst string, src *Source) (*Header, error) {
+func (l *fileLayout) write(dst string, src *Source) (*Header, error) {
 	es, h, expPageSize, total := l.es, l.h, l.expPageSize, l.total
 	cfgb, visb, vocb, fpb := l.cfgb, l.visb, l.vocb, l.fpb
 	hdr := make([]byte, HeaderBytes)
@@ -725,7 +725,7 @@ func (l *layout) write(dst string, src *Source) (*Header, error) {
 		go fetch(start)
 	}
 	var dirty uint64
-	every := journalSpacing(total)
+	every := journalSpacing(src.JournalEvery, total)
 	for i := start; i < len(es); i++ {
 		e := &es[i]
 		got := <-next
@@ -796,7 +796,7 @@ func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64, stored 
 	// One sheet at a time, back to back: see sheetsOf. A dense weight is
 	// one sheet and takes the same path, so there is no second shape here.
 	srcSheet := len(raw) / int(sheets)
-	nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+	nq, nd, nsc, err := layout.PackedWords(q, int(rows), e.K())
 	if err != nil {
 		return n, fmt.Errorf("jlm: %v: %w", e.Role, err)
 	}
@@ -811,7 +811,7 @@ func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64, stored 
 			dw = raw[(S*nq+sh*nd)*4 : (S*nq+(sh+1)*nd)*4]
 			sc = raw[(S*(nq+nd)+sh*nsc)*4 : (S*(nq+nd)+(sh+1)*nsc)*4]
 		} else {
-			pq, pd, psc, err := kernels.PackWeights(q, raw[sh*srcSheet:(sh+1)*srcSheet], int(rows), e.K())
+			pq, pd, psc, err := layout.PackWeights(q, raw[sh*srcSheet:(sh+1)*srcSheet], int(rows), e.K())
 			if err != nil {
 				return n, fmt.Errorf("jlm: %v sheet %d: %w", e.Role, sh, err)
 			}
@@ -840,17 +840,15 @@ func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64, stored 
 	return n, nil
 }
 
-// journalEvery is how many bytes are written between journal points: the
-// most a resumed write does twice. A variable so a gate can journal every
-// tensor.
-var journalEvery uint64 = 1 << 30
-
-// journalSpacing is journalEvery for a container of total bytes, closer for
+// journalSpacing is the source's JournalEvery for a container of total bytes, closer for
 // a small one: a write journalled only at its end is never resumed, and a
 // model of a few hundred MB is still minutes of a slow link. A thirty-second
 // of the container keeps the syncs few.
-func journalSpacing(total uint64) uint64 {
-	return min(journalEvery, max(total/32, 64<<10))
+func journalSpacing(every, total uint64) uint64 {
+	if every == 0 {
+		every = 1 << 30
+	}
+	return min(every, max(total/32, 64<<10))
 }
 
 // journalSuffix follows the part's name: out.jlm.part.resume.

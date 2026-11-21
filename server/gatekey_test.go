@@ -4,7 +4,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // serialises reports whether a session of b is recorded on a device gate a
@@ -23,7 +24,7 @@ func serialises(t *testing.T, e *Engine, a, b *LoadedModel) bool {
 func deviceGates(lm *LoadedModel) []string {
 	var out []string
 	for _, id := range lm.gateIDs() {
-		if id != HostGateID {
+		if id != CPUGateID {
 			out = append(out, id)
 		}
 	}
@@ -34,12 +35,12 @@ func deviceGates(lm *LoadedModel) []string {
 // physical device, so a model loaded with `cuda` (every card) and one loaded
 // with `cuda:1` serialise on card 1 -- the one scratch set they would both
 // use -- while models on disjoint cards run at once. The keys are the ones
-// tier.Hardware gives a three-card host (TestHardwareIsOneKeyPerPhysicalDevice).
+// gpu.Hardware gives a three-card host (TestHardwareIsOneKeyPerPhysicalDevice).
 //
 // VIOLATION SIGNATURE. Key gateIDs on the spec text (lm.deviceIDs) and this
 // fails with "cuda and cuda:1 ran on card 1 at once".
 func TestOverlappingSpecsShareTheCardTheyShare(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
+	e := New(admitConfig(Config{ModelDir: t.TempDir()}))
 	const a, b, c = "uuid:card-a", "uuid:card-b", "uuid:card-c"
 	every := &LoadedModel{deviceIDs: []string{"cuda"}, gateKeys: []string{a, b, c}}
 	one := &LoadedModel{deviceIDs: []string{"cuda:1"}, gateKeys: []string{b}}
@@ -75,7 +76,7 @@ func TestRealOverlappingSpecsShareAGate(t *testing.T) {
 	if n, err := backend.CUDACount(); err != nil || n == 0 {
 		t.Skipf("NO CUDA DEVICE (%d, %v): this gate proved nothing", n, err)
 	}
-	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 	t.Cleanup(e.Close)
 	load := func(id, spec string) *LoadedModel {
 		t.Helper()
@@ -95,7 +96,7 @@ func TestRealOverlappingSpecsShareAGate(t *testing.T) {
 		t.Fatalf("GetDeviceQueue(cuda:0) reads gate %q, and the model on cuda:0 queues on %q", k, cuda0.gateKeys[0])
 	}
 
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Logf("no Vulkan (%v): the cross-backend and integrated arms did not run", err)
 		return

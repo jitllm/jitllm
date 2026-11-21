@@ -73,7 +73,7 @@ func printDevice(w io.Writer, d *v1.Device, verbose bool) {
 		id, trunc(d.GetName(), 30), deviceKindName(d.GetKind()),
 		bytesOf(d.GetTotalMemory()), bytesOf(d.GetFreeMemory()))
 
-	if d.GetCountsTowardHostBudget() && d.GetKind() != v1.DeviceKind_DEVICE_KIND_HOST {
+	if d.GetCountsTowardHostBudget() && d.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU {
 		fmt.Fprintf(w, "          ★ this heap IS host memory -- SUBTRACT it from the host budget, "+
 			"never add it as a second pool\n")
 	}

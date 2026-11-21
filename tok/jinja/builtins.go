@@ -12,17 +12,16 @@ import (
 	"unicode"
 )
 
-// cachedBuiltins is a read-only scope populated once with all built-in
-// globals and filters. It is shared across every render — no code path
-// writes to the builtins scope (only chained reads through parent
-// links and lookupFilter), so a single shared instance is safe and
-// avoids rebuilding them per render.
-var cachedBuiltins = func() *scope {
+// newBuiltins is a read-only scope populated with all built-in globals and
+// filters. A Template builds it once at Compile and shares it across its
+// renders: no code path writes to the builtins scope (only chained reads
+// through parent links and lookupFilter).
+func newBuiltins() *scope {
 	s := newScope(nil)
 	registerGlobals(s)
 	registerFilters(s)
 	return s
-}()
+}
 
 // =============================================================================
 // Global functions
@@ -75,6 +74,11 @@ func builtinRange(args []Value, kwargs map[string]Value) (Value, error) {
 
 	if step == 0 {
 		return Undefined(), fmt.Errorf("range: step must not be zero")
+	}
+	// Size nothing from the template: the count is checked before a list
+	// is made (RULE 9).
+	if n := (stop - start) / step; n > MaxItems {
+		return Undefined(), fmt.Errorf("range: %d items, past %d", n, MaxItems)
 	}
 
 	var items []Value
@@ -359,6 +363,14 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 	// The indented form keeps key order too, as Python's json.dumps does (a
 	// Go map would sort a tool schema's keys). json.Indent re-spaces the
 	// direct encoder's output into Python's indent=N layout.
+	// separators=[item, key] replaces Python's ", " and ": ".
+	item, key := ", ", ": "
+	if sep, ok := kwargs["separators"]; ok && sep.IsList() && len(sep.AsList().Items) == 2 {
+		s := sep.AsList().Items
+		if s[0].IsString() && s[1].IsString() {
+			item, key = s[0].AsString(), s[1].AsString()
+		}
+	}
 	if indent, ok := kwargs["indent"]; ok && !indent.IsNone() && !indent.IsUndefined() {
 		var sb strings.Builder
 		if err := encodeValueJSON(&sb, args[0]); err != nil {
@@ -376,7 +388,7 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 	// path: a handful of allocations (one strings.Builder grow + one Marshal
 	// per leaf string for escaping).
 	var sb strings.Builder
-	if err := encodeValueJSON(&sb, args[0]); err != nil {
+	if err := encodeJSON(&sb, args[0], item, key); err != nil {
 		return NewString(""), nil
 	}
 	return NewString(sb.String()), nil
@@ -396,7 +408,10 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 //
 // Both differences would otherwise change the tokenization of every tool
 // definition that ends up in a chat prompt.
-func encodeValueJSON(sb *strings.Builder, v Value) error {
+func encodeValueJSON(sb *strings.Builder, v Value) error { return encodeJSON(sb, v, ", ", ": ") }
+
+// encodeJSON is encodeValueJSON with item and key as the separators.
+func encodeJSON(sb *strings.Builder, v Value, item, key string) error {
 	switch v.kind {
 	case KindUndefined, KindNone, KindCallable:
 		sb.WriteString("null")
@@ -428,11 +443,11 @@ func encodeValueJSON(sb *strings.Builder, v Value) error {
 
 	case KindList:
 		sb.WriteByte('[')
-		for i, item := range v.AsList().Items {
+		for i, x := range v.AsList().Items {
 			if i > 0 {
-				sb.WriteString(", ")
+				sb.WriteString(item)
 			}
-			if err := encodeValueJSON(sb, item); err != nil {
+			if err := encodeJSON(sb, x, item, key); err != nil {
 				return err
 			}
 		}
@@ -442,15 +457,15 @@ func encodeValueJSON(sb *strings.Builder, v Value) error {
 	case KindDict:
 		sb.WriteByte('{')
 		d := v.AsDict()
-		for i, key := range d.Keys {
+		for i, k := range d.Keys {
 			if i > 0 {
-				sb.WriteString(", ")
+				sb.WriteString(item)
 			}
-			if err := encodeJSONString(sb, key); err != nil {
+			if err := encodeJSONString(sb, k); err != nil {
 				return err
 			}
-			sb.WriteString(": ")
-			if err := encodeValueJSON(sb, d.Data[key]); err != nil {
+			sb.WriteString(key)
+			if err := encodeJSON(sb, d.Data[k], item, key); err != nil {
 				return err
 			}
 		}
@@ -1388,8 +1403,9 @@ func compareValues(a, b Value) int {
 
 func containsValue(container, item Value) bool {
 	if container.IsList() {
+		// Membership is ==, as Python's: 1.0 is in [0, 1].
 		for _, v := range container.AsList().Items {
-			if v.Equals(item) {
+			if valuesEqual(v, item) {
 				return true
 			}
 		}
@@ -1408,6 +1424,8 @@ func containsValue(container, item Value) bool {
 // String() which returns a Python-style repr, printValue returns the
 // raw text for template rendering (no quotes around strings, empty
 // string for None/Undefined).
+func Print(v Value) string { return printValue(v) }
+
 func printValue(v Value) string {
 	switch v.kind {
 	case KindUndefined:

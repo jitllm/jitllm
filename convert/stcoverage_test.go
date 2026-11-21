@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -30,8 +31,8 @@ func stDirBytes(d string) int64 {
 
 // TestSafetensorsArchCoverage walks every HuggingFace model directory in the
 // model directory and pins which architectures the safetensors reader converts. It is
-// two-sided: every hfArchTable entry must convert a real checkpoint, so an
-// entry cannot outlive its code, and an architecture not in the table must be
+// two-sided: every library class must convert a real checkpoint, so an
+// entry cannot outlive its code, and an architecture not in the library must be
 // refused by name (RULE 7) rather than crash or convert plausibly. It prints
 // the count, since the safetensors list is a second list, not the GGUF one.
 func TestSafetensorsArchCoverage(t *testing.T) {
@@ -63,7 +64,7 @@ func TestSafetensorsArchCoverage(t *testing.T) {
 			continue // config.json without weights beside it
 		}
 		r := row{filepath.Base(d), c.Architectures[0], c.ModelType}
-		_, known := hfArchTable[c.Architectures[0]]
+		known := slices.Contains(HFClasses(), c.Architectures[0])
 		// A real checkpoint is skipped by size, because this gate writes a
 		// whole container (a 31 GB model thrashes a 31 GB box). Coverage is not
 		// lost: each class is also covered by a tiny synth fixture gated against
@@ -87,7 +88,7 @@ func TestSafetensorsArchCoverage(t *testing.T) {
 		case known:
 			done = append(done, r)
 		case cerr == nil:
-			t.Errorf("%s: %s is NOT in hfArchTable and converted anyway -- an "+
+			t.Errorf("%s: %s is NOT in the class list and converted anyway -- an "+
 				"architecture nobody implemented produced a container", r.dir, r.arch)
 		case !strings.Contains(cerr.Error(), r.arch):
 			// Refusing is right; refusing without naming what was refused sends
@@ -113,7 +114,7 @@ func TestSafetensorsArchCoverage(t *testing.T) {
 	for _, r := range done {
 		got[r.arch] = true
 	}
-	for name := range hfArchTable {
+	for _, name := range HFClasses() {
 		seen := false
 		for _, r := range append(append([]row{}, done...), blocked...) {
 			if r.arch == name {
@@ -121,7 +122,7 @@ func TestSafetensorsArchCoverage(t *testing.T) {
 			}
 		}
 		if seen && !got[name] {
-			t.Errorf("hfArchTable names %s and every checkpoint of it on this box "+
+			t.Errorf("the class list names %s and every checkpoint of it on this box "+
 				"was refused: the entry claims a capability nothing demonstrates", name)
 		}
 	}

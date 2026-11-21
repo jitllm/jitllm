@@ -1,0 +1,1128 @@
+package gpu
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"unsafe"
+
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
+
+	"github.com/jitllm/jitllm/backend"
+)
+
+// ErrKVCapacity is a device that cannot give a sequence another page of
+// attention history: the budget, the backend's buffer limit or the index
+// width stops a layer's pool growing. Nothing changed; the caller may evict,
+// move blocks, wait for room or give up, and the model is not down. See
+// .notes/design/device-kv-paging.md.
+const ErrKVCapacity tierError = "tier: no room for another page of attention history"
+
+// tierError is a sentinel error of the tier: a constant, matched with
+// errors.Is like any other.
+type tierError string
+
+func (e tierError) Error() string { return string(e) }
+
+// kvGeom is what one attention layer's page holds: kvRow floats of K per
+// position (transposed within the page), and V beside it -- f32, binary16
+// packed two to a word, or none under MLA, where V is K's prefix. A typed
+// history's (pool set: q8 rows, GGUF blocks or bfloat16 halves) holds K and
+// V as the type's words a position's row at a time, as the CPU device's
+// pages do.
+type kvGeom struct {
+	kvRow int
+	f16   bool
+	mla   bool
+	// period, past 1, is an entries plane's: one entry each period
+	// positions, a page holding its positions' and one spare slot
+	// (composer.History.Period).
+	period int
+	pool   composer.Pool
+}
+
+// typed is a geometry holding a quantized or bfloat16 history's words.
+func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.BF16 }
+
+// kWords and vWords are one page's K and V in 32-bit words.
+func (k kvGeom) kWords(p int) int {
+	switch {
+	case k.period > 1:
+		return composer.History{Period: k.period}.Slots(p) * k.kvRow
+	case k.typed():
+		return p * k.pool.Words(k.kvRow)
+	}
+	return p * k.kvRow
+}
+
+// histKey(li, h) is block li's history h, histKey(li, 0) == li its rows',
+// keyBlock the block a key is of, keyHist its history: nn.HistoryKey, the
+// engine's name for it. typedKey adds the type its sessions hold it as
+// (poolCode, nn.HistoryTyped) and keyType reads it back: a block keeps a pool
+// layer of each type, so two instances of it holding their histories as
+// different types share its weights and not its pages.
+
+func histKey(li, h int) int { return nn.HistoryKey(li, h) }
+
+func keyBlock(key int) int { return nn.HistoryBlock(key) }
+
+func keyHist(key int) int { return nn.HistoryIndex(key) }
+
+func typedKey(key, t int) int { return nn.HistoryTyped(key, t) }
+
+func keyType(key int) int { return nn.HistoryType(key) }
+
+// poolCode is a history type as a pool key's type: the same on every
+// device, so a copy of a session's history on another is keyed alike.
+func poolCode(p composer.Pool) int {
+	c := int(p.Block) | p.Row<<11
+	for i, f := range [3]bool{p.Half, p.BF16, p.ByDim} {
+		if f {
+			c |= 1 << (8 + i)
+		}
+	}
+	return c
+}
+
+// codePool is the history type poolCode names.
+func codePool(c int) composer.Pool {
+	return composer.Pool{Block: graph.BlockFmt(c & 0xff), Half: c>>8&1 != 0, BF16: c>>9&1 != 0, ByDim: c>>10&1 != 0, Row: c >> 11}
+}
+
+// histType is the type session sid holds block li's history as here
+// (pagedLayer, a copy's making), 0 -- floats -- where it holds none.
+// Callers hold g.mu.
+func (g *devTier) histType(sid uint64, li int) int {
+	if ds := g.sess[sid]; ds != nil && !g.pagedFaulted("histtype") {
+		return ds.hist[keyBlock(li)]
+	}
+	return 0
+}
+
+// setHistType records t as the type session sid holds block li's history
+// as here. Callers hold g.mu.
+func (g *devTier) setHistType(sid uint64, li, t int) {
+	ds := g.sessOf(sid)
+	if ds.hist[li] == t {
+		return
+	}
+	if ds.hist == nil {
+		ds.hist = map[int]int{}
+	}
+	ds.hist[li] = t
+}
+
+// sessKey is session sid's pool key of block li's rows: the block at the
+// type the session holds it as. histKey(sessKey(sid, li), h) is its
+// history h's. Callers hold g.mu.
+func (g *devTier) sessKey(sid uint64, li int) int {
+	return typedKey(li, g.histType(sid, li))
+}
+
+// viewKey is sessKey for this view's session, or for the type a placement
+// forms its parts at (formingAs, eachHistType).
+func (g *devTier) viewKey(li int) int {
+	switch {
+	case g.formAs > 0:
+		return typedKey(li, g.formAs-1)
+	case g.pagedFaulted("histtype"):
+		return li
+	}
+	return typedKey(li, g.devSess.hist[keyBlock(li)])
+}
+
+// formingAs has this device's parts formed for the type session sid holds
+// block li's history as, until the returned func restores the one before.
+// Callers hold g.mu.
+func (g *devTier) formingAs(sid uint64, li int) func() {
+	was := g.formAs
+	g.formAs = 1 + g.histType(sid, g.histSrc(li))
+	return func() { g.formAs = was }
+}
+
+// eachHistType runs f with this device's parts formed for each type block
+// li's history is held as here, once as they are where it holds none.
+// Callers hold g.mu.
+func (g *devTier) eachHistType(li int, f func()) {
+	src, ran := g.histSrc(li), false
+	if g.kvp != nil {
+		for key := range g.kvp.layers {
+			if keyBlock(key) != src || keyHist(key) != 0 {
+				continue
+			}
+			was := g.formAs
+			g.formAs = 1 + keyType(key)
+			f()
+			g.formAs = was
+			ran = true
+		}
+	}
+	if !ran {
+		f()
+	}
+}
+
+// holdsRows reports that kp holds block li's rows at some type.
+func (kp *kvPool) holdsRows(li int) bool {
+	for key := range kp.layers {
+		if keyBlock(key) == li && keyHist(key) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// histSrc is the block whose history block li reads: its own, or the
+// source it shares.
+func (g *devTier) histSrc(li int) int {
+	if l := g.layers[li]; l != nil {
+		return l.kvSrc
+	}
+	return li
+}
+
+// layerOf is kp's pool layer of key, nil where kp is or it holds none.
+func (kp *kvPool) layerOf(key int) *kvLayerPool {
+	if kp == nil {
+		return nil
+	}
+	return kp.layers[key]
+}
+
+// blockHists bounds the indices of the histories key li's block keeps in
+// kp: its rows' and each past them its graph appends to, an index below it
+// with no pool layer one the block does not keep.
+func (kp *kvPool) blockHists(li int) int {
+	return max(1, kp.hists[keyBlock(li)])
+}
+func (k kvGeom) vWords(p int) int {
+	switch {
+	case k.mla:
+		return 0
+	case k.typed():
+		return p * k.pool.Words(k.kvRow)
+	case k.f16:
+		return p * k.kvRow / 2
+	case k.period > 1:
+		return composer.History{Period: k.period}.Slots(p) * k.kvRow
+	}
+	return p * k.kvRow
+}
+
+// seqID names a sequence: a session, and the base of its rows' slots (0 for a
+// single instance).
+type seqID struct {
+	sid  uint64
+	base int
+}
+
+// kvLayerPool is one attention layer's pages on a device. Page ids are the
+// LAYER's: a physical slot in this layer's K and V buffers, so a session that
+// leaves this layer frees exactly this layer's pages, and every layer grows and
+// shrinks on its own. Id 0 is the dummy, zero-filled and never owned (padded
+// rows write it, empty rows read it).
+type kvLayerPool struct {
+	geom kvGeom
+	k, v backend.Buf
+	n    int // pages the buffers hold, the dummy included
+	free []uint32
+	// fenced are ids released while a submission may still read them, and
+	// fencedAt the ticket each was released at (subClock.seq then); fence()
+	// frees them once nothing that could read them is in flight. clk is the
+	// device's clock, nil in a pool built outside one, where a fence frees
+	// everything.
+	fenced   []uint32
+	fencedAt []uint64
+	clk      *subClock
+	owned    map[seqID][]uint32
+	// tab is the layer's table arena, kvPool.tabWords u32: sequence s's ids
+	// at ranges[s].off, in position order, entry 0 the dummy.
+	tab backend.Buf
+	// charged is what the layer holds against the budget: its buffers at n
+	// pages, its table arena and its read reserve.
+	charged uint64
+	// stage is the reserve a read of the layer's pages goes through when the
+	// card refuses a buffer for it (readPages): one page of the wider half.
+	// It is made with the layer, while the card has room, and charged with
+	// it: a park or an eviction runs on a full card, which is exactly when an
+	// allocation for the read is refused (a 4 GiB card whose budget the
+	// server set past what the driver had free).
+	stage backend.Buf
+	// sh is the layer's pages the prefix cache names (kvshare.go).
+	sh sharedIDs
+	// floor is the fewest pages a shrink leaves: the dummy and a page for each
+	// session attached to the layer (its working set), or ctx pages for each
+	// where the layer holds its context.
+	floor int
+	// ctx is the pages a session's context takes in a layer that holds it on
+	// the card (pagedLayer), 0 in one that grows as sequences write.
+	ctx int
+	// home holds sequence s's evicted pages in host memory, page j's K words then its
+	// V words, in the device's layout (kvevict.go); owned[s][j] is 0 for each.
+	home map[seqID][][]float32
+	// win is the block's window in keys, 0 for one that reads its whole
+	// history; chunked makes it aligned chunks. A windowed layer releases the
+	// pages behind its window (devTier.windowPages): their ids are 0 in the
+	// sequence's run and, below the evicted prefix, their host copy is nil.
+	win     int
+	chunked bool
+	// rel is where windowPages' walk starts for sequence s: every page below
+	// it was released.
+	rel map[seqID]int
+	// tail is how many positions behind a sequence's newest the block reads
+	// outside a pass over its history (historyTail): eviction leaves them.
+	tail int
+}
+
+// historyTail is how many positions behind its newest block graph g reads
+// outside a pass over its history: the windows its history rows reach
+// (OpHistoryRows), the row's own and those before it.
+func historyTail(g *graph.Graph) int {
+	if g == nil {
+		return 0
+	}
+	n := 0
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpHistoryRows {
+			n = max(n, (o.Attr.Local+1)*o.Attr.Span)
+		}
+	}
+	return n
+}
+
+// readsHome reports whether a call at a sequence's next position reads any of
+// its pages at home on layer l, were more of them sent there: a windowed
+// layer's rows start past the pages behind their window.
+func (kp *kvPool) readsHome(l *kvLayerPool, more int) bool {
+	for s, ids := range l.owned {
+		if e := len(l.home[s]) + more; len(ids) > 0 && e > 0 && l.keyStart(kp.written[s]) < e*kp.p {
+			return true
+		}
+	}
+	return false
+}
+
+// keyStart is the first key position pos attends on this layer: pagedStage's
+// window start, or 0 on a layer with no window.
+func (l *kvLayerPool) keyStart(pos int) int {
+	switch {
+	case l.win <= 0 || pos <= 0:
+		return 0
+	case l.chunked:
+		return pos / l.win * l.win
+	}
+	return max(0, pos+1-l.win)
+}
+
+// positions is how many of the pool's own positions a sequence that has
+// written end positions holds.
+func (l *kvLayerPool) positions(end int) int { return end }
+
+// tabRange is a sequence's run in every layer's table arena.
+type tabRange struct{ off, cap int }
+
+// kvPool is a device's paged attention history: one kvLayerPool per attention
+// layer, and the table layout they share. A sequence's run starts at the SAME
+// offset in every layer's arena, so one set of row descriptors serves every
+// layer of a submission and only the table bound per layer differs; the ids in
+// it are each layer's own.
+type kvPool struct {
+	p int // positions per page, fixed for the pool's life
+	// maxBytes is the backend's largest buffer (Vulkan's storage-buffer range,
+	// Metal's maxBufferLength), 0 for no limit: a buffer past it would bind
+	// short and read the wrong memory.
+	maxBytes uint64
+	layers   map[int]*kvLayerPool
+	// hists is, per block keeping a history past its rows, one past the
+	// highest index it keeps (blockHists).
+	hists  map[int]int
+	ranges map[seqID]tabRange
+	// tabWords is every arena's size; tabTop the first word never handed out
+	// (word 0 is the dummy entry); tabFree runs given back, reused first-fit.
+	tabWords, tabTop int
+	tabFree          []tabRange
+	// evicted is the most of sequence s's leading pages any layer holds in host
+	// memory: each layer's own count is its host copies (kvevict.go).
+	evicted map[seqID]int
+	// written is the positions of sequence s a completed submission wrote:
+	// only pages wholly below it may leave, so a page a call is about to write
+	// is never sent to host memory under it.
+	written map[seqID]int
+	// chunked says the windowed layers' graphs attend an aligned chunk of
+	// their window rather than its last keys (pagedStage's windowed rows).
+	chunked bool
+}
+
+// newKVPool starts a pool of p-position pages with no layers. maxBuf is the
+// backend's largest buffer in bytes, 0 for no limit.
+func newKVPool(p int, maxBuf uint64) *kvPool {
+	return &kvPool{p: p, maxBytes: maxBuf, layers: map[int]*kvLayerPool{}, hists: map[int]int{},
+		ranges: map[seqID]tabRange{}, tabWords: 256, tabTop: 1}
+}
+
+// pageBytes is one page of one layer.
+func (kp *kvPool) pageBytes(l *kvLayerPool) uint64 {
+	return uint64(l.geom.kWords(kp.p)+l.geom.vWords(kp.p)) * 4
+}
+
+// maxPages is the most pages a layer's buffer may hold: kernels index a pool
+// in 32-bit words, and a buffer past the backend's limit binds short.
+func (kp *kvPool) maxPages(l *kvLayerPool) int {
+	words := uint64(1<<32 - 1)
+	if kp.maxBytes > 0 {
+		words = min(words, kp.maxBytes/4)
+	}
+	return int(words / uint64(max(1, l.geom.kWords(kp.p), l.geom.vWords(kp.p))))
+}
+
+// charged is the whole pool's charge.
+func (kp *kvPool) charged() uint64 {
+	var n uint64
+	for _, l := range kp.layers {
+		n += l.charged
+	}
+	return n
+}
+
+// addKVLayer gives attention layer li its buffers at n pages -- the dummy and
+// n-1 free, allocated at that size so placing a block costs no resize -- and a
+// table arena. Callers hold g.mu.
+func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
+	if _, ok := kp.layers[li]; ok {
+		return nil
+	}
+	n = max(n, 1)
+	if h := keyHist(li); h > 0 {
+		kp.hists[keyBlock(li)] = max(kp.hists[keyBlock(li)], h+1)
+	}
+	l := &kvLayerPool{geom: geom, n: n, owned: map[seqID][]uint32{}, clk: &g.clk}
+	for id := n - 1; id >= 1; id-- {
+		l.free = append(l.free, uint32(id))
+	}
+	l.reserveFences()
+	need := kp.pageBytes(l)*uint64(n) + uint64(kp.tabWords)*4 + kvStageBytes(geom, kp.p)
+	before, why := g.holdFor(need, nil, false)
+	if why != nil {
+		return fmt.Errorf("%w: a layer's %d page(s) and table need %d bytes: %v", ErrKVCapacity, n, need, why)
+	}
+	defer g.unclaim(before)
+	var err error
+	if l.k, l.v, err = g.allocLayerPool(geom, kp.p, n); err != nil {
+		return err
+	}
+	if l.tab, err = g.alloc(kp.tabWords * 4); err == nil {
+		err = l.tab.Write(make([]byte, kp.tabWords*4))
+	}
+	if err == nil {
+		err = g.makeStage(l, kp.p)
+	}
+	if err != nil {
+		freeLayerBufs(l)
+		return err
+	}
+	g.charge(need)
+	l.charged = need
+	kp.layers[li] = l
+	return nil
+}
+
+// kvStageBytes is a layer's read reserve: a page of its wider half.
+func kvStageBytes(geom kvGeom, p int) uint64 {
+	return uint64(max(geom.kWords(p), geom.vWords(p))) * 4
+}
+
+// makeStage gives l its read reserve, so a read through it allocates
+// nothing. Callers hold g.mu.
+func (g *devTier) makeStage(l *kvLayerPool, p int) error {
+	var err error
+	l.stage, err = g.alloc(max(l.geom.kWords(p), l.geom.vWords(p)) * 4)
+	return err
+}
+
+// maxBuffer is the device's largest buffer, 0 when it has no such limit; a
+// pool on this device is created with it (newKVPool).
+func (g *devTier) maxBuffer() uint64 {
+	if bl, ok := g.dev.(backend.BufferLimited); ok {
+		return bl.MaxBuffer()
+	}
+	return 0
+}
+
+// allocLayerPool allocates a layer's K and V buffers for n pages, zeroed: the
+// dummy page is read as history by an empty row, and zero is finite.
+func (g *devTier) allocLayerPool(geom kvGeom, p, n int) (k, v backend.Buf, err error) {
+	kw, vw := geom.kWords(p)*n, geom.vWords(p)*n
+	if k, err = g.alloc(kw * 4); err != nil {
+		return nil, nil, err
+	}
+	if err = g.zeroBuf(k, kw*4); err == nil && vw > 0 {
+		if v, err = g.alloc(vw * 4); err == nil {
+			err = g.zeroBuf(v, vw*4)
+		}
+	}
+	if err != nil {
+		k.Free()
+		if v != nil {
+			v.Free()
+		}
+		return nil, nil, err
+	}
+	return k, v, nil
+}
+
+// zeroChunk is the host zeros zeroBuf writes before its copies on the device.
+const zeroChunk = 64 << 10
+
+// zeroBuf zeroes b's first n bytes: one write of the kept host zeros, then
+// copies on the device, each doubling the zeroed prefix. A write of the
+// whole buffer from the host made a layer's growth past a prompt's pages
+// allocate, clear and send hundreds of MiB a layer, and the collector ran
+// over them: 1.2 s of a decode token on four V100s, where the copies take
+// a millisecond.
+func (g *devTier) zeroBuf(b backend.Buf, n int) error {
+	if g.zeroHost == nil {
+		g.zeroHost = make([]byte, zeroChunk)
+	}
+	c := min(n, zeroChunk)
+	if err := b.WriteAt(0, g.zeroHost[:c]); err != nil {
+		return err
+	}
+	for c < n {
+		m := min(c, n-c)
+		if err := g.dev.Copy(b, c, b, 0, m); err != nil {
+			return err
+		}
+		g.KVZeroCopies++
+		c += m
+	}
+	return nil
+}
+
+// allocPages gives sequence s count more pages in layer l, all or none. The
+// layer grows when its free list is short -- a new buffer pair, the old pages
+// copied across on the device, every captured graph dropped since it names the
+// old buffers -- and refuses with ErrKVCapacity when the budget or the
+// backend's limit stops it. The new ids are appended to s's run in the layer's
+// table arena. Callers hold g.mu, outside any submission.
+func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, count int) error {
+	if count <= 0 {
+		return nil
+	}
+	// The table run first: a run that moves may grow every layer's table
+	// arena, and the room for that comes from compacting the layers
+	// (kvCompact), this one included, which gives its free pages back. Taken
+	// after the free list was made long enough, it emptied the list again.
+	have := len(l.owned[s])
+	if err := g.ensureRange(kp, s, have+count); err != nil {
+		return err
+	}
+	if len(l.free) < count {
+		l.fence()
+	}
+	// The prefix cache's unheld pages first: they are a cache, and room for
+	// them is the first a sequence takes back (kvshare.go).
+	if len(l.free) < count {
+		l.reclaimNamed(count - len(l.free))
+	}
+	if len(l.free) < count {
+		// Growth first -- a page-out of streamed weights or more pool -- and
+		// when nothing can grow, cold history goes to host memory (kvevict.go). A
+		// driver's refusal inside the budget is no room either.
+		want := l.n + count - len(l.free)
+		err := g.growKVLayer(kp, l, want)
+		switch {
+		case err == nil:
+			g.kvTight = false
+		case !errors.Is(err, ErrKVCapacity):
+			// The budget allowed it and the driver did not: the card's
+			// own ceiling, which KVRoom then reads (kvTight).
+			g.kvTight = true
+		}
+		// Last, blocks stream to make the room (streamForRoom): weights read
+		// again every token, where history read again in passes could not.
+		if err != nil {
+			g.fail("KV growth: " + err.Error())
+		}
+		if err != nil && !g.evictForRoom(sid, kp, l, count) && !(errors.Is(err, ErrKVCapacity) && g.evictForBytes(sid, kp, l, count)) {
+			if !errors.Is(err, ErrKVCapacity) || g.asking || !g.streamForRoom(kp.pageBytes(l)*uint64(want-l.n)) {
+				return err
+			}
+			if err := g.growKVLayer(kp, l, want); err != nil {
+				return err
+			}
+		}
+	}
+	// The room made may sit fenced behind a submission in flight (a stream's
+	// pass, an eviction's copy): what is free by now is what the call takes,
+	// and a shortfall is no room, as the budget's is.
+	if len(l.free) < count {
+		l.fence()
+	}
+	if len(l.free) < count {
+		return fmt.Errorf("%w: %d page(s) wanted, %d free once the room was made", ErrKVCapacity, count, len(l.free))
+	}
+	take := l.free[len(l.free)-count:]
+	l.owned[s] = append(l.owned[s], take...)
+	l.free = l.free[:len(l.free)-count]
+	g.tabPend = append(g.tabPend, tabWrite{l.tab, kp.ranges[s].off + have, l.owned[s][have:]})
+	return nil
+}
+
+// tabWrite is a page-table update allocPages queued: ids at word off of tab.
+// A write to a table is a hop to the device's owner goroutine and a wait, so
+// a call's pages -- one run per layer -- go in one session (flushTabs), which
+// was a measurable share of a 512-row prompt's host time as one write a layer.
+type tabWrite struct {
+	tab backend.Buf
+	off int
+	ids []uint32
+}
+
+// flushTabs writes the queued table updates, in order, in one session.
+// Everything that reads or rewrites a table or renumbers ids flushes first,
+// so a queued write never lands after one that superseded it; ids alias the
+// sequences' runs, which only such functions change. Callers hold g.mu,
+// outside any submission.
+func (g *devTier) flushTabs() error {
+	if len(g.tabPend) == 0 {
+		return nil
+	}
+	// The session's body is made once and kept: a prompt that maps or
+	// copies pages writes tables every call, and a closure a call is an
+	// allocation a call.
+	if g.flushFn == nil {
+		g.flushFn = func(s backend.Session) {
+			for _, w := range g.tabPend {
+				if g.flushErr = s.WriteAt(w.tab, w.off*4, u32view(w.ids)); g.flushErr != nil {
+					return
+				}
+			}
+		}
+	}
+	g.flushErr = nil
+	g.dev.Session(g.flushFn)
+	err := g.flushErr
+	clear(g.tabPend)
+	g.tabPend = g.tabPend[:0]
+	return err
+}
+
+// growKVLayer makes layer l's buffers hold at least want pages: doubling when
+// that fits, else exactly want, since a doubling is an amortisation and not a
+// requirement. Nothing changes unless all of it succeeds.
+func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
+	limit := kp.maxPages(l)
+	if want > limit {
+		return fmt.Errorf("%w: %d page(s) wanted, the backend's buffer limit allows %d", ErrKVCapacity, want, limit)
+	}
+	// The pages are copied into the new buffers: a submission in flight
+	// writing a row into the old ones would be lost.
+	g.quiesce()
+	pb := kp.pageBytes(l)
+	// What the driver rounds a pair of n pages up to, beyond its bytes.
+	round := func(n int) uint64 {
+		kb := l.geom.kWords(kp.p) * n * 4
+		r := g.footprint(kb) - uint64(kb)
+		if vb := l.geom.vWords(kp.p) * n * 4; vb > 0 {
+			r += g.footprint(vb) - uint64(vb)
+		}
+		return r
+	}
+	var last error
+	// A doubling stops at what a scheduler promised (PromiseKV): the pages in
+	// use and the promise's, with one spare. The budget past it is left to
+	// the batched scratches the admitted rows' steps run in, which a pool
+	// doubled into the whole card refused, padding every step to the widest.
+	grow := l.n * 2
+	if g.kvPromise > 0 {
+		grow = min(grow, l.n-len(l.free)+(g.kvPromise+kp.p-1)/kp.p+1)
+	}
+	for _, n := range []int{min(max(grow, want, 2), limit), want} {
+		if n < want {
+			continue
+		}
+		var k, v backend.Buf
+		var err error
+		// The room is held to the charge: the peak while copying on the
+		// device, both pairs, or the growth through the host.
+		before, why := g.stateHold(pb*uint64(n)+round(n), l)
+		if why == nil {
+			// Copied on the device: the old buffers are live until the copy is
+			// done, so the peak is both pairs.
+			if k, v, err = g.allocLayerPool(l.geom, kp.p, n); err != nil {
+				g.unclaim(before)
+				return err
+			}
+			kw, vw := l.geom.kWords(kp.p)*l.n, l.geom.vWords(kp.p)*l.n
+			if !g.restride(l.k, k, 1, kw, kw, kw) || vw > 0 && !g.restride(l.v, v, 1, vw, vw, vw) {
+				freeKV2(k, v)
+				g.unclaim(before)
+				return fmt.Errorf("tier: carrying a KV layer across a resize failed: %s", g.LastErr)
+			}
+			g.dropGraph()
+			freeKV2(l.k, l.v)
+		} else if before, why = g.stateHold(pb*uint64(n-l.n)+round(n), l); why == nil {
+			// Only the grown layer fits, not both: through the host, the old
+			// pair freed before the new one is made (compactViaHost).
+			order := make([]uint32, l.n)
+			for i := range order {
+				order[i] = uint32(i)
+			}
+			if k, v, err = g.compactViaHost(kp, l, order, n); err != nil {
+				g.unclaim(before)
+				return err
+			}
+		} else {
+			last = why
+			continue
+		}
+		l.k, l.v = k, v
+		for id := n - 1; id >= l.n; id-- {
+			l.free = append(l.free, uint32(id))
+		}
+		delta := pb * uint64(n-l.n)
+		g.charge(delta)
+		g.unclaim(before)
+		l.charged += delta
+		l.n = n
+		l.reserveFences()
+		g.KVGrows++
+		return nil
+	}
+	return fmt.Errorf("%w: a layer's %d more page(s) need %d bytes: %v", ErrKVCapacity, want-l.n, pb*uint64(want-l.n), last)
+}
+
+// ensureRange gives sequence s a run of at least pages words in every layer's
+// table arena. A run that has to move takes a new offset: the ids go across
+// from the host copies (owned), and the old run is given back.
+func (g *devTier) ensureRange(kp *kvPool, s seqID, pages int) error {
+	r, ok := kp.ranges[s]
+	if ok && r.cap >= pages {
+		return nil
+	}
+	if err := g.flushTabs(); err != nil {
+		return err
+	}
+	want := max(pages, 2*r.cap, 4)
+	nr := tabRange{cap: want}
+	if fit := slices.IndexFunc(kp.tabFree, func(f tabRange) bool { return f.cap >= want }); fit >= 0 {
+		nr = kp.tabFree[fit]
+		kp.tabFree = slices.Delete(kp.tabFree, fit, fit+1)
+	} else {
+		if kp.tabTop+want > kp.tabWords {
+			if err := g.growTables(kp, max(2*kp.tabWords, kp.tabTop+want)); err != nil {
+				return err
+			}
+		}
+		nr.off = kp.tabTop
+		kp.tabTop += want
+	}
+	for _, l := range kp.layers {
+		if ids := l.owned[s]; len(ids) > 0 {
+			if err := l.tab.WriteAt(nr.off*4, u32view(ids)); err != nil {
+				return err
+			}
+		}
+	}
+	if ok {
+		kp.tabFree = append(kp.tabFree, r)
+	}
+	kp.ranges[s] = nr
+	return nil
+}
+
+// growTables replaces every layer's table arena with one of words u32,
+// rewritten from the host copies. It drops the captured graph, which names the
+// old arenas.
+func (g *devTier) growTables(kp *kvPool, words int) error {
+	type swap struct {
+		l   *kvLayerPool
+		tab backend.Buf
+	}
+	var done []swap
+	undo := func(err error) error {
+		for _, s := range done {
+			s.tab.Free()
+		}
+		return err
+	}
+	extra := uint64(words-kp.tabWords) * 4
+	before, why := g.stateHold(extra*uint64(len(kp.layers)), nil)
+	if why != nil {
+		return fmt.Errorf("%w: the page tables need %d more bytes a layer: %v", ErrKVCapacity, extra, why)
+	}
+	defer g.unclaim(before)
+	host := make([]uint32, words)
+	for _, l := range kp.layers {
+		clear(host)
+		for s, ids := range l.owned {
+			copy(host[kp.ranges[s].off:], ids)
+		}
+		tab, err := g.alloc(words * 4)
+		if err == nil {
+			if err = tab.Write(u32view(host)); err != nil {
+				tab.Free()
+			}
+		}
+		if err != nil {
+			return undo(err)
+		}
+		done = append(done, swap{l, tab})
+	}
+	g.dropGraph()
+	for _, s := range done {
+		s.l.tab.Free()
+		s.l.tab = s.tab
+		g.charge(extra)
+		s.l.charged += extra
+	}
+	kp.tabWords = words
+	return nil
+}
+
+// releasePages gives sequence s's pages in layer l back. They are fenced, not
+// free: a submission still in flight may read them.
+func (l *kvLayerPool) releasePages(s seqID) {
+	l.fenceIDs(l.owned[s])
+	delete(l.owned, s)
+	delete(l.home, s)
+	delete(l.rel, s)
+}
+
+// reserveFences sizes the fence lists for every page of the layer, so
+// releasing pages never grows them on a warm path.
+func (l *kvLayerPool) reserveFences() {
+	l.fenced = slices.Grow(l.fenced, l.n-len(l.fenced))
+	l.fencedAt = slices.Grow(l.fencedAt, l.n-len(l.fencedAt))
+}
+
+// fenceIDs fences every id of ids that is a page on the card (0 is one in
+// host memory), at the ticket the next submission takes.
+func (l *kvLayerPool) fenceIDs(ids []uint32) {
+	for _, id := range ids {
+		if id != 0 {
+			l.releaseID(id) // a named page is held, not fenced (kvshare.go)
+		}
+	}
+}
+
+// fenceID fences one page.
+func (l *kvLayerPool) fenceID(id uint32) {
+	var at uint64
+	if l.clk != nil {
+		at = l.clk.seq
+	}
+	l.fenced = append(l.fenced, id)
+	l.fencedAt = append(l.fencedAt, at)
+}
+
+// fence frees the fenced pages nothing in flight can read: every one when no
+// submission is in flight, else those released before the oldest submission in
+// flight took its ticket. A page released at ticket t waits for every
+// submission holding t or less, the one about to take t included -- what
+// "after the next completed submission" was when submissions ran one at a
+// time.
+func (l *kvLayerPool) fence() {
+	if l.clk == nil || l.clk.live == 0 {
+		l.free = append(l.free, l.fenced...)
+		l.fenced, l.fencedAt = l.fenced[:0], l.fencedAt[:0]
+		return
+	}
+	kept := 0
+	for i, id := range l.fenced {
+		if l.fencedAt[i] < l.clk.oldest {
+			l.free = append(l.free, id)
+			continue
+		}
+		l.fenced[kept], l.fencedAt[kept] = id, l.fencedAt[i]
+		kept++
+	}
+	l.fenced, l.fencedAt = l.fenced[:kept], l.fencedAt[:kept]
+}
+
+// dropRange gives s's table run back once no layer holds a page of it.
+func (kp *kvPool) dropRange(s seqID) {
+	for _, l := range kp.layers {
+		if len(l.owned[s]) > 0 {
+			return
+		}
+	}
+	if r, ok := kp.ranges[s]; ok {
+		kp.tabFree = append(kp.tabFree, r)
+		delete(kp.ranges, s)
+	}
+	kp.forgetFrom(s, 0)
+}
+
+// shrinkKVLayer gives back layer l's pages beyond the ones in use and its
+// floor, whatever ids they hold: the live pages are compacted into a fresh,
+// smaller buffer pair by one gather (dummy first, then each live page), the
+// sequences' ids renumbered and their table runs rewritten. Ids are stable only
+// while a submission can read them, and none can here: callers hold g.mu,
+// outside any submission, with the layer's released pages fenced. The
+// transient peak is both buffer pairs; a card that cannot hold it keeps the
+// larger layer and says so.
+func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
+	if err := g.flushTabs(); err != nil {
+		return err
+	}
+	live := 1
+	for _, ids := range l.owned {
+		for _, id := range ids {
+			if id != 0 {
+				live++
+			}
+		}
+	}
+	// Named pages: the unheld ones go first, and a layer whose named pages a
+	// sequence holds is not compacted (an id held twice would be gathered
+	// twice).
+	l.reclaimNamed(l.n)
+	if l.heldNamed() {
+		return nil
+	}
+	// A layer with history in host memory keeps one id free to stream it through.
+	// streamRoom ensured it; a compaction forced by another layer's growth
+	// took it back, and the next call found no page to stream through.
+	want := live
+	if kp.anyEvicted() {
+		want++
+	}
+	n := max(want, l.floor, 1)
+	if n >= l.n || len(l.fenced) > 0 {
+		return nil
+	}
+	// The live pages are gathered into new buffers and renumbered under
+	// every sequence: nothing in flight may write or read the old ones.
+	g.quiesce()
+	pb := kp.pageBytes(l)
+	// The gather order: new id j is old id order[j], the dummy first.
+	seqs := make([]seqID, 0, len(l.owned))
+	for s := range l.owned {
+		seqs = append(seqs, s)
+	}
+	slices.SortFunc(seqs, func(a, b seqID) int {
+		if a.sid != b.sid {
+			if a.sid < b.sid {
+				return -1
+			}
+			return 1
+		}
+		return a.base - b.base
+	})
+	order := make([]uint32, 1, live)
+	for _, s := range seqs {
+		order = residentIDs(order, l.owned[s])
+	}
+	var k, v backend.Buf
+	if before, held := g.roomHold(pb * uint64(n)); held {
+		defer g.unclaim(before)
+		var err error
+		if k, v, err = g.allocLayerPool(l.geom, kp.p, n); err != nil {
+			return err
+		}
+		err = g.gatherInto(l.k, k, order, l.geom.kWords(kp.p))
+		if vw := l.geom.vWords(kp.p); err == nil && vw > 0 {
+			err = g.gatherInto(l.v, v, order, vw)
+		}
+		if err != nil {
+			freeKV2(k, v)
+			return err
+		}
+		g.dropGraph()
+		freeKV2(l.k, l.v)
+	} else {
+		// No room for both pairs, which is exactly when compaction is asked
+		// for (kvCompact): the live pages go through the host instead, the old
+		// pair is freed before the new one is made, and the peak is the host
+		// copy rather than device memory.
+		var err error
+		if k, v, err = g.compactViaHost(kp, l, order, n); err != nil {
+			return err
+		}
+	}
+	l.k, l.v = k, v
+	next := uint32(1)
+	for _, s := range seqs {
+		ids := l.owned[s]
+		for i := range ids {
+			if ids[i] != 0 { // 0 is a page in host memory (kvevict.go)
+				ids[i] = next
+				next++
+			}
+		}
+		if err := l.tab.WriteAt(kp.ranges[s].off*4, u32view(ids)); err != nil {
+			return err
+		}
+	}
+	l.free = l.free[:0]
+	for id := n - 1; id >= live; id-- {
+		l.free = append(l.free, uint32(id))
+	}
+	back := pb * uint64(l.n-n)
+	g.refund(back)
+	l.charged -= back
+	l.n = n
+	return nil
+}
+
+// compactViaHost is shrinkKVLayer's gather when the card cannot hold the old
+// and the new buffer pair at once: the layer is read to the host, freed, and
+// made again at n pages with page j holding old page order[j]. A failure after
+// the free leaves the layer with no buffers, which is reported and not
+// survivable -- its history is gone -- so it is refused before the free
+// wherever it can be.
+func (g *devTier) compactViaHost(kp *kvPool, l *kvLayerPool, order []uint32, n int) (k, v backend.Buf, err error) {
+	kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
+	// The layer is read back whole: nothing in flight may still write it.
+	g.quiesce()
+	hk, err := readPages(l.k, kw, l.n)
+	if err != nil {
+		return nil, nil, err
+	}
+	hv, err := readPages(l.v, vw, l.n)
+	if err != nil {
+		return nil, nil, err
+	}
+	g.dropGraph()
+	freeKV2(l.k, l.v)
+	l.k, l.v = nil, nil
+	if k, v, err = g.allocLayerPool(l.geom, kp.p, n); err != nil {
+		// The card refused the new size where the budget allowed it. The old
+		// size was just given back, so the history goes back in at it: a
+		// layer left with no buffers made the next grow read a nil one.
+		if rk, rv, rerr := g.restoreLayer(l, kp.p, hk, hv); rerr == nil {
+			l.k, l.v = rk, rv
+			return nil, nil, fmt.Errorf("tier: a KV layer could not grow to %d pages (it keeps its %d): %w", n, l.n, err)
+		}
+		return nil, nil, fmt.Errorf("tier: a KV layer freed for compaction could not be made again: %w", err)
+	}
+	if err = writePagesIn(k, hk, kw, order); err == nil {
+		err = writePagesIn(v, hv, vw, order)
+	}
+	if err != nil {
+		// As above: the history goes back in at the old size rather than
+		// leaving the layer with no buffers for the next read.
+		freeKV2(k, v)
+		if rk, rv, rerr := g.restoreLayer(l, kp.p, hk, hv); rerr == nil {
+			l.k, l.v = rk, rv
+		}
+		return nil, nil, err
+	}
+	return k, v, nil
+}
+
+// restoreLayer makes l's buffers again at its own l.n pages and writes back the
+// host copy compactViaHost took, page for page.
+func (g *devTier) restoreLayer(l *kvLayerPool, page int, hk, hv []byte) (k, v backend.Buf, err error) {
+	if k, v, err = g.allocLayerPool(l.geom, page, l.n); err != nil {
+		return nil, nil, err
+	}
+	same := make([]uint32, l.n)
+	for i := range same {
+		same[i] = uint32(i)
+	}
+	if err = writePagesIn(k, hk, l.geom.kWords(page), same); err == nil {
+		err = writePagesIn(v, hv, l.geom.vWords(page), same)
+	}
+	if err != nil {
+		freeKV2(k, v)
+		return nil, nil, err
+	}
+	return k, v, nil
+}
+
+// readPages reads n pages of words each from b to the host; nothing when the
+// half has no words (MLA's V).
+func readPages(b backend.Buf, words, n int) ([]byte, error) {
+	if words == 0 {
+		return nil, nil
+	}
+	h := make([]byte, words*4*n)
+	return h, b.Read(h)
+}
+
+// writePagesIn writes host page order[j] to page j of b.
+func writePagesIn(b backend.Buf, host []byte, words int, order []uint32) error {
+	pw := words * 4
+	for j, id := range order {
+		if pw == 0 {
+			break
+		}
+		if err := b.WriteAt(j*pw, host[int(id)*pw:int(id+1)*pw]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gatherInto copies pages order[j] of src, words each, to page j of dst:
+// one device copy a page, run as one list.
+func (g *devTier) gatherInto(src, dst backend.Buf, order []uint32, words int) error {
+	cs := g.gatherCopies[:0]
+	for j, id := range order {
+		cs = append(cs, backend.CopyRange{Dst: dst, DstOff: j * words * 4, Src: src, SrcOff: int(id) * words * 4, N: words * 4})
+	}
+	g.gatherCopies = cs
+	err := backend.CopyAll(g.dev, cs)
+	clear(cs)
+	return err
+}
+
+// freeKVLayer frees one layer's buffers and refunds its charge, and forgets
+// its queued table writes.
+func (g *devTier) freeKVLayer(l *kvLayerPool) {
+	g.tabPend = slices.DeleteFunc(g.tabPend, func(w tabWrite) bool { return w.tab == l.tab })
+	freeLayerBufs(l)
+	g.refund(l.charged)
+	l.charged = 0
+}
+
+func freeLayerBufs(l *kvLayerPool) {
+	freeKV2(l.k, l.v)
+	freeKV2(l.tab, l.stage)
+	l.k, l.v, l.tab, l.stage = nil, nil, nil, nil
+	l.sh = sharedIDs{}
+}
+
+// freeKV2 frees a K buffer and, when there is one, its V buffer.
+func freeKV2(k, v backend.Buf) {
+	if k != nil {
+		k.Free()
+	}
+	if v != nil {
+		v.Free()
+	}
+}
+
+// freeKVPool gives every buffer back and refunds the charge. Callers hold g.mu.
+func (g *devTier) freeKVPool(kp *kvPool) {
+	if kp == nil {
+		return
+	}
+	for li, l := range kp.layers {
+		g.freeKVLayer(l)
+		delete(kp.layers, li)
+	}
+}
+
+// u32view is v's bytes, without a copy: the per-token staging writes through
+// it so a token allocates nothing.
+func u32view(v []uint32) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v))
+}
+
+// anyEvicted reports that some sequence has pages in host memory.
+func (kp *kvPool) anyEvicted() bool {
+	for _, e := range kp.evicted {
+		if e > 0 {
+			return true
+		}
+	}
+	return false
+}

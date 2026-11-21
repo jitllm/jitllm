@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestLoadWithNoDevicesTakesEveryDevice: a load that names no device is offered
@@ -32,7 +32,7 @@ func TestLoadWithNoDevicesTakesEveryDevice(t *testing.T) {
 //
 // VIOLATION SIGNATURE. Return ids unchanged and the first case keeps "auto".
 func TestSelectorsResolveToTheOpenedDevices(t *testing.T) {
-	hw := []tier.Hardware{{Ref: "cuda:0"}, {Ref: "vulkan:1"}}
+	hw := []gpu.Hardware{{Ref: "cuda:0"}, {Ref: "vulkan:1"}}
 	if got := resolveDeviceIDs([]string{"auto"}, hw); !slices.Equal(got, []string{"cuda:0", "vulkan:1"}) {
 		t.Fatalf("auto -> %v", got)
 	}

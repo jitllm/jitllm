@@ -3,11 +3,13 @@ package server
 import (
 	"os"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // One physical device enumerated by two backends is one budget: a card seen
 // as vulkan:0 and cuda:0 must not be counted twice. See
-// docs/engineering-history/placement.md 15u.
+// .notes/engineering-history/placement.md 15u.
 
 // oneCard is the identity both backends report for one discrete card
 // (VkPhysicalDeviceIDProperties.deviceUUID and cuDeviceGetUuid agree byte for
@@ -24,7 +26,7 @@ const (
 // probeDevices enumerates it.
 func thisBoxDevices() []DeviceInfo {
 	return []DeviceInfo{
-		{ID: HostGateID, Backend: "cpu", Kind: KindHost, TotalMemory: 31 << 30,
+		{ID: CPUGateID, Backend: "cpu", Kind: KindCPU, TotalMemory: 31 << 30,
 			CountsTowardHostBudget: true, Available: true},
 		{ID: "vulkan:0", Backend: "vulkan", Name: sameModel, Kind: KindDiscrete,
 			TotalMemory: 4 << 30, PhysicalID: oneCard, Available: true},
@@ -142,7 +144,7 @@ func TestADeviceWithNoIdentityIsNotMerged(t *testing.T) {
 // only the real probe shows whether the backends agree on a UUID and whether
 // probeDevices fills PhysicalID at all.
 func TestTheRealProbeCountsEachCardOnce(t *testing.T) {
-	devs, err := probeDevices(os.Getenv("JITLLM_ROCM"))
+	devs, err := probeDevices(os.Getenv("JITLLM_ROCM"), testdevices.Admit())
 	if err != nil {
 		t.Fatalf("probeDevices: %v", err)
 	}
@@ -161,7 +163,7 @@ func TestTheRealProbeCountsEachCardOnce(t *testing.T) {
 			marked++
 			continue
 		}
-		if d.Kind == KindHost || d.CountsTowardHostBudget || !d.Available {
+		if d.Kind == KindCPU || d.CountsTowardHostBudget || !d.Available {
 			continue
 		}
 		if prev, dup := counted[d.PhysicalID]; dup && d.PhysicalID != "" {

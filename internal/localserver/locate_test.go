@@ -122,7 +122,7 @@ func TestKeyTransportSendsTheKey(t *testing.T) {
 		t.Fatalf("%v %v", resp, err)
 	}
 	resp.Body.Close()
-	if rt := KeyTransport("", nil); rt != Transport {
+	if _, ok := KeyTransport("", nil).(*http.Transport); !ok {
 		t.Errorf("no key wraps the transport anyway")
 	}
 }

@@ -1,6 +1,6 @@
 #!/bin/bash
 # decisionbench-cell.sh: one cell of the decision-model board, ON the benchmark host
-# (AGENTS.md RULE 1-2; the rows are in docs/perf/current.md, "Decision models").
+# (AGENTS.md RULE 1-2; the rows are in .notes/perf/current.md, "Decision models").
 #
 #   decisionbench-cell.sh cpu|cuda MODEL WINDOW_SECONDS ROUNDS
 #

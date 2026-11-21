@@ -9,7 +9,7 @@ import (
 )
 
 // TestApertusFoldsItsActivation is the converter half of Apertus: the four
-// xielu.* keys (bare, as llama.cpp's writer stores them; one per layer)
+// xielu.* keys (bare, as the GGUF stores them; one per layer)
 // become each block's RoleXIELU vector with the softplus folded in, and a file
 // without them is refused rather than run with a default activation.
 func TestApertusFoldsItsActivation(t *testing.T) {
@@ -25,11 +25,11 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != jlm.ArchApertus || !c.Flags.Has(jlm.FlagQKNorm) || !c.Flags.Has(jlm.FlagRopeNeox) {
-		t.Fatalf("arch %v flags %v", c.Arch, c.Flags)
+	if c.Name != "apertus" || !c.Flags.Has(jlm.FlagQKNorm) || !c.Flags.Has(jlm.FlagRopeNeox) {
+		t.Fatalf("arch %v flags %v", c.Name, c.Flags)
 	}
-	s := &jlm.Source{Config: c}
-	if err := apertusXIELU(f, s); err != nil {
+	s := &jlm.Source{Config: c.Config}
+	if err := statedGathers(c, s, f, "blk."); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.Tensors) != 2 {
@@ -52,7 +52,11 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 		}
 	}
 	delete(kv, "xielu.eps")
-	if _, err := configOf(meta.New(f.Path, kv, f.Tensors)); err == nil {
+	f = meta.New(f.Path, kv, f.Tensors)
+	if c, err = configOf(f); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedGathers(c, &jlm.Source{Config: c.Config}, f, "blk."); err == nil {
 		t.Fatal("an Apertus with no xielu.eps converted")
 	}
 }

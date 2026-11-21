@@ -7,7 +7,7 @@ import (
 )
 
 // JointSteps says how the step loop runs a decode step's rows when it could
-// run them as one joint step (model.StepRuns across sessions).
+// run them as one joint step (engine.StepRuns across sessions).
 type JointSteps int
 
 const (
@@ -41,7 +41,7 @@ const (
 	// tens of percent that decide anything here.
 	jointRounds = 2
 	// jointMargin is how much faster running separately must be to be
-	// chosen: model.SeamTuneMargin's 5%, for the same reason. Joint is the
+	// chosen: engine.SeamTuneMargin's 5%, for the same reason. Joint is the
 	// incumbent because it is what the loop exists for.
 	jointMargin = 1.05
 	// jointReprobe is the steps a choice stands before it is measured again:
@@ -105,7 +105,9 @@ func newJointChoice(mode JointSteps) *jointChoice {
 }
 
 // abba is the arm of each run in a quad: joint, separate, separate, joint.
-var abba = [4]bool{true, false, false, true}
+func abba() [4]bool {
+	return [4]bool{true, false, false, true}
+}
 
 // pick says whether a step of n rows runs joint.
 func (c *jointChoice) pick(n int) bool {
@@ -127,7 +129,7 @@ func (c *jointChoice) pick(n int) bool {
 		return a.joint
 	}
 	c.probeSteps++
-	return abba[a.turn%len(abba)]
+	return abba()[a.turn%len(abba())]
 }
 
 // observe records how long a step of n rows took on the arm pick chose, and
@@ -164,7 +166,7 @@ func (c *jointChoice) observe(n int, joint bool, d time.Duration) {
 		return
 	}
 	a.step = 0
-	if a.turn++; a.turn < jointRounds*len(abba) {
+	if a.turn++; a.turn < jointRounds*len(abba()) {
 		return
 	}
 	a.jMed, a.sMed = median(a.j), median(a.s)
@@ -182,6 +184,18 @@ func median(v []time.Duration) time.Duration {
 	v = slices.Clone(v)
 	slices.Sort(v)
 	return v[len(v)/2]
+}
+
+// settled reports whether the choice for a step of n rows stands, rather
+// than being probed.
+func (c *jointChoice) settled(n int) bool {
+	if c.mode != JointMeasured {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	a := c.per[c.bucket(n)]
+	return a != nil && a.settled
 }
 
 // probed is the steps run so far while their bucket was probing.

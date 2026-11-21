@@ -26,14 +26,14 @@ type Thumb struct {
 	box float32
 }
 
-// NewThumb reads path and scales it to fit a box of edge px. A file that does
+// New reads path and scales it to fit a box of edge px. A file that does
 // not decode becomes a labelled placeholder rather than an empty space, because
 // an attachment that silently shows nothing reads as one that was never made.
-func NewThumb(path string, px int) *Thumb {
+func (c *Thumbs) New(path string, px int) *Thumb {
 	t := &Thumb{box: float32(px)}
 	t.SetVisible(true)
 	t.SetEnabled(true)
-	t.img, t.err = thumbOf(path, px)
+	t.img, t.err = c.of(path, px)
 	return t
 }
 
@@ -72,12 +72,12 @@ func (t *Thumb) Event(widget.Context, event.Event) bool { return false }
 // Children is nil: a thumbnail is a leaf.
 func (t *Thumb) Children() []widget.Widget { return nil }
 
-// thumbs caches scaled pictures by (path, edge), since the transcript rebuilds
+// Thumbs caches scaled pictures by (path, edge), since the transcript rebuilds
 // every bubble when the turn count moves. Decoding happens on the UI goroutine
 // the first time a picture is shown.
 // Unbounded and keyed by path; a session attaches a handful. Evict by
 // size, and decode off the UI goroutine, if large photos ever stutter.
-var thumbs sync.Map
+type Thumbs struct{ m sync.Map }
 
 type thumbKey struct {
 	path string
@@ -89,9 +89,9 @@ type thumbVal struct {
 	err string
 }
 
-func thumbOf(path string, px int) (*image.RGBA, string) {
+func (c *Thumbs) of(path string, px int) (*image.RGBA, string) {
 	k := thumbKey{path, px}
-	if v, ok := thumbs.Load(k); ok {
+	if v, ok := c.m.Load(k); ok {
 		tv := v.(thumbVal)
 		return tv.img, tv.err
 	}
@@ -100,7 +100,7 @@ func thumbOf(path string, px int) (*image.RGBA, string) {
 	if err != nil {
 		tv.err = fmt.Sprintf("%s: %v", filepath.Base(path), err)
 	}
-	thumbs.Store(k, tv)
+	c.m.Store(k, tv)
 	return tv.img, tv.err
 }
 

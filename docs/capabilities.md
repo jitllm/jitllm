@@ -18,7 +18,7 @@ support my workload". It lists:
 
 `implemented` with an empty `verified` list is a claim about code, not about a
 card: the HIP backend is built and its kernels compile for five AMD targets,
-and it has not run on an AMD card (`docs/design/amd-hip.md`).
+and it has not run on an AMD card (`.notes/design/amd-hip.md`).
 
 ## Reading it at run time
 

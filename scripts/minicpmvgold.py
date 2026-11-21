@@ -120,7 +120,205 @@ def pil(src):
     print("wrote", len(PIL_SIZES), "resizes of", src, "to", dst)
 
 
+# The fixture: MiniCPM-V 4's own remote code (MiniCPMV: a Llama text model
+# under LongRoPE, the SigLIP-NaViT tower, the perceiver resampler) at toy
+# size, every parameter randomised and rounded to bfloat16 -- llama.cpp's
+# minicpmv-surgery.py loads the checkpoint in bfloat16, so the GGUFs its
+# converters write hold the reference's weights exactly. The LongRoPE
+# factors are resized to the toy head and kept far from one, so a reader
+# that drops them parts from the reference. The golden is the end-to-end
+# record: the prompt around one unsliced picture, the resampler's rows (f32
+# and at the engine's arithmetic) and the reference's logits after it.
+
+FIX = "synth-minicpmv"
+NLOGIT = 512
+IMG_W, IMG_H = 168, 126
+SHORT = [1.0, 1.3, 1.7, 2.2, 2.9, 3.8, 5.0, 6.5]
+
+
+def qact(x):
+    # An activation as the engine's packed matmul reads it: int8 per block of
+    # 32 along k, d = amax/127.
+    k = x.shape[-1]
+    kp = (k + 31) // 32 * 32
+    y = torch.nn.functional.pad(x.reshape(-1, k), (0, kp - k)).reshape(-1, 32)
+    d = y.abs().amax(1, keepdim=True) / 127
+    idd = torch.where(d == 0, torch.zeros_like(d), 1 / d)
+    return (torch.round(y * idd) * d).reshape(-1, kp)[:, :k].reshape(x.shape)
+
+
+def qpatches(x, p):
+    # The patch conv's input as the engine's patch matmul reads it: each
+    # patch flattened channel-planar (c, ky, kx), at int8 per block of 32.
+    b, c, h, w = x.shape
+    t = x.reshape(b, c, h // p, p, w // p, p).permute(0, 2, 4, 1, 3, 5).reshape(-1, c * p * p)
+    t = qact(t).reshape(b, h // p, w // p, c, p, p).permute(0, 3, 1, 4, 2, 5)
+    return t.reshape(b, c, h, w)
+
+
+def q8rows(w):
+    # A matrix as the converter stores it: Q8_0 along k (d = amax/127 as f16).
+    k = w.shape[-1]
+    kp = (k + 31) // 32 * 32
+    x = torch.nn.functional.pad(w.reshape(-1, k), (0, kp - k)).reshape(-1, 32)
+    d = x.abs().amax(1, keepdim=True) / 127
+    idd = torch.where(d == 0, torch.zeros_like(d), 1 / d)
+    return (torch.round(x * idd) * d.half().float()).reshape(-1, kp)[:, :k].reshape(w.shape)
+
+
+def perturb(m):
+    with torch.no_grad():
+        for n, p in m.named_parameters():
+            last = n.split(".")[-2] if "." in n else ""
+            if n.endswith("weight") and ("norm" in last or last.startswith("ln")):
+                p.copy_(torch.randn_like(p) * 0.3 + 1)
+            elif n.endswith("bias"):
+                p.copy_(torch.randn_like(p) * 0.3)
+            elif n.endswith("query") or "position_embedding" in n:
+                p.copy_(torch.randn_like(p) * 0.5)
+            else:
+                p.copy_(torch.randn_like(p) * 0.15)
+            p.copy_(p.to(torch.bfloat16).float())
+
+
+def fixture():
+    import base64, copy, importlib, shutil, subprocess
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import refenv
+    models = refenv.models()
+    src = refenv.under("MINICPMV_HF", "minicpmv", "hf", "MiniCPM-V-4")
+    hf_dir = refenv.under("MINICPMV_FIX_HF", "vlmb", "fixtures")
+    lcpp = refenv.lcpp_src()
+    d = os.path.join(hf_dir, FIX)
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    for f in os.listdir(src):
+        if f.endswith(".py") or f in ("config.json", "preprocessor_config.json", "generation_config.json",
+                                      "special_tokens_map.json", "tokenizer_config.json", "tokenizer.json"):
+            shutil.copy(os.path.join(src, f), d)
+    sys.path.insert(0, d)
+    pkg = types.ModuleType("mcpv")
+    pkg.__path__ = [d]
+    sys.modules["mcpv"] = pkg
+    conf = importlib.import_module("mcpv.configuration_minicpm")
+    mod = importlib.import_module("mcpv.modeling_minicpmv")
+    cfg = conf.MiniCPMVConfig.from_pretrained(d)
+    # The text model 256 wide (the resampler's heads are its width over
+    # 128), 16 heads of 16 under the toy factors; the tower two blocks of
+    # 64; 16 queries.
+    cfg.hidden_size, cfg.intermediate_size, cfg.num_hidden_layers = 256, 384, 2
+    cfg.num_attention_heads, cfg.num_key_value_heads, cfg.head_dim = 16, 2, 16
+    cfg.query_num = 16
+    rs = dict(cfg.rope_scaling)
+    rs["short_factor"], rs["long_factor"] = list(SHORT), list(SHORT)
+    cfg.rope_scaling = rs
+    vc = cfg.vision_config
+    vc.hidden_size, vc.intermediate_size, vc.num_hidden_layers, vc.num_attention_heads = 64, 96, 2, 4
+    cfg._attn_implementation = "eager"
+    vc._attn_implementation = "eager"
+    torch.manual_seed(20261111)
+    m = mod.MiniCPMV(cfg).float().eval()
+    perturb(m)
+    m.save_pretrained(d, safe_serialization=True)
+    pc = json.load(open(os.path.join(src, "preprocessor_config.json")))
+    pc["image_feature_size"] = cfg.query_num
+    json.dump(pc, open(os.path.join(d, "preprocessor_config.json"), "w"), indent=1)
+
+    env = {**os.environ, "PYTHONPATH": os.path.join(lcpp, "gguf-py")}
+    legacy = os.path.join(lcpp, "tools", "mtmd", "legacy-models")
+    # minicpmv-surgery.py's split, done here: its AutoModel load of the remote
+    # class fails on this transformers (no all_tied_weights_keys), and the
+    # split is all it does -- the resampler's tensors, the tower's without
+    # their "vpm." and the text model saved on its own with the tokenizer.
+    sd = m.state_dict()
+    torch.save({k: v.float() for k, v in sd.items() if k.startswith("resampler")}, os.path.join(d, "minicpmv.projector"))
+    torch.save({k.replace("vpm.", ""): v.float() for k, v in sd.items() if k.startswith("vpm")}, os.path.join(d, "minicpmv.clip"))
+    m.llm.save_pretrained(os.path.join(d, "model"), safe_serialization=True)
+    from transformers import AutoTokenizer
+    AutoTokenizer.from_pretrained(d, trust_remote_code=True).save_pretrained(os.path.join(d, "model"))
+    subprocess.run([sys.executable, os.path.join(legacy, "minicpmv-convert-image-encoder-to-gguf.py"), "-m", d,
+                    "--minicpmv-projector", os.path.join(d, "minicpmv.projector"), "--output-dir", d,
+                    "--minicpmv_version", "5", "--use-f32"], check=True, env=env)
+    mm = [f for f in os.listdir(d) if f.startswith("mmproj") and f.endswith(".gguf")]
+    if len(mm) != 1:
+        sys.exit(f"the image encoder converter wrote {mm}")
+    shutil.copy(os.path.join(d, mm[0]), os.path.join(models, "mmproj-" + FIX + ".gguf"))
+    subprocess.run([sys.executable, os.path.join(lcpp, "convert_hf_to_gguf.py"), os.path.join(d, "model"),
+                    "--outtype", "f32", "--outfile", os.path.join(models, FIX + ".gguf")], check=True, env=env)
+
+    proc_mod = importlib.import_module("mcpv.processing_minicpmv")
+    ip = processor(d)
+    tok = AutoTokenizer.from_pretrained(d, trust_remote_code=True)
+    # This transformers loads the tokenizer without the picture's markers as
+    # single tokens, so the processor finds no picture run; they are in the
+    # vocabulary at their ids (as the GGUF holds them), registered here.
+    tok.add_special_tokens({"additional_special_tokens": ["<image>", "</image>", "<image_id>", "</image_id>", "<slice>", "</slice>"]})
+    proc = proc_mod.MiniCPMVProcessor(image_processor=ip, tokenizer=tok)
+    y, x = np.mgrid[0:IMG_H, 0:IMG_W].astype(np.float64)
+    rgb = np.stack([255 * (0.5 + 0.5 * np.sin(x / 9.0)), 255 * (y / IMG_H),
+                    255 * (((x - 70) ** 2 + (y - 50) ** 2) < 30 ** 2)], -1)
+    rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+    img = Image.fromarray(rgb)
+    if ip.get_sliced_grid(img.size, ip.max_slice_nums) is not None:
+        sys.exit("the fixture's picture is sliced")
+    prompt = "<|im_start|>user\n(<image>./</image>)\nWhat is in the picture?<|im_end|>\n<|im_start|>assistant\n"
+    answer = " A disc on stripes."
+    batch = proc([prompt + answer], [[img]], max_slice_nums=ip.max_slice_nums, use_image_id=True, return_tensors="pt")
+    ids = batch["input_ids"][0]
+    bound = batch["image_bound"][0]
+    if len(bound) != 1:
+        sys.exit(f"the prompt holds {len(bound)} picture runs")
+    lo, hi = int(bound[0][0]), int(bound[0][1])
+    cont = tok.encode(answer, add_special_tokens=False)
+    if ids[-len(cont):].tolist() != cont:
+        sys.exit("the answer does not tokenize alone as it does after the prompt")
+    data = {"input_ids": batch["input_ids"], "pixel_values": batch["pixel_values"],
+            "tgt_sizes": batch["tgt_sizes"], "image_bound": batch["image_bound"]}
+
+    def rows(model, a8):
+        hs = []
+        if a8:
+            for n, mod_ in model.named_modules():
+                if not n.startswith(("vpm", "resampler")):
+                    continue
+                if isinstance(mod_, torch.nn.Conv2d):
+                    hs.append(mod_.register_forward_pre_hook(lambda m_, inp: (qpatches(inp[0], ip.patch_size),)))
+                elif isinstance(mod_, torch.nn.Linear):
+                    hs.append(mod_.register_forward_pre_hook(lambda m_, inp: (qact(inp[0]),)))
+        try:
+            with torch.no_grad():
+                emb, _ = model.get_vllm_embedding(data)
+        finally:
+            for h in hs:
+                h.remove()
+        return emb
+
+    with torch.no_grad():
+        emb = rows(m, False)
+        lg = m.llm(inputs_embeds=emb).logits[0]
+        mq = copy.deepcopy(m)
+        for n, p in mq.named_parameters():
+            if n.startswith(("vpm", "resampler")) and n.endswith("weight") and p.ndim == 2:
+                p.copy_(q8rows(p))
+        emb8 = rows(mq, True)
+    first = len(ids) - len(cont) - 1
+    g = {
+        "pre": ids[:lo].tolist(), "post": ids[hi:len(ids) - len(cont)].tolist(), "cont": cont,
+        "image": {"h": IMG_H, "w": IMG_W, "rgb": base64.b64encode(rgb.reshape(-1).tobytes()).decode(),
+                  "embd": [round(float(v), 8) for v in emb[0, lo:hi].reshape(-1)],
+                  "embd_a8": [round(float(v), 8) for v in emb8[0, lo:hi].reshape(-1)]},
+        "logits": [{"argmax": int(r.argmax()), "head": [round(float(v), 7) for v in r[:NLOGIT]]}
+                   for r in lg[first:]],
+    }
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "testdata", "golden", "minicpmv")
+    os.makedirs(out, exist_ok=True)
+    json.dump(g, open(os.path.join(out, FIX + ".json"), "w"))
+    print(f"{FIX}: {len(ids)} ids, the picture {hi - lo} rows at [{lo}, {hi}), {len(g['logits'])} logit rows")
+
+
 def main():
+    if sys.argv[1:] == ["--fixture"]:
+        return fixture()
     if sys.argv[2:] == ["--layouts"]:
         return layouts(sys.argv[1])
     if sys.argv[1] == "--pil":

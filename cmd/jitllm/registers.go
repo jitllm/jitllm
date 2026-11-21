@@ -6,19 +6,20 @@ import (
 	"io"
 	"sort"
 
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
-// registerReport prints what each compiled kernel cost the host and each
+// registerReport prints what each composed kernel cost the CPU and each
 // device, worst first: spill, then occupancy (or vector registers named),
 // then registers.
-func registerReport(w io.Writer, host []cpu.KernelRegs, devs []tier.DeviceKernels, asJSON bool) error {
+func registerReport(w io.Writer, host []cpudev.Kernel, devs []gpu.DeviceKernels, asJSON bool) error {
 	sort.SliceStable(host, func(a, b int) bool {
-		if host[a].StackRefs != host[b].StackRefs {
-			return host[a].StackRefs > host[b].StackRefs
+		if host[a].Stack != host[b].Stack {
+			return host[a].Stack > host[b].Stack
 		}
-		return host[a].VecUsed > host[b].VecUsed
+		return host[a].Vec > host[b].Vec
 	})
 	for i := range devs {
 		ks := devs[i].Kernels
@@ -36,17 +37,18 @@ func registerReport(w io.Writer, host []cpu.KernelRegs, devs []tier.DeviceKernel
 		e := json.NewEncoder(w)
 		e.SetIndent("", "  ")
 		return e.Encode(struct {
-			Host    []cpu.KernelRegs     `json:"host"`
-			Devices []tier.DeviceKernels `json:"devices"`
-		}{host, devs})
+			Tier    string              `json:"cpu_tier"`
+			Host    []cpudev.Kernel     `json:"cpu"`
+			Devices []gpu.DeviceKernels `json:"devices"`
+		}{cpu.New().Tier().String(), host, devs})
 	}
-	fmt.Fprintf(w, "\nhost\n  %-48s %5s %8s %6s %7s %5s\n", "emitter", "isa", "vec/file", "stack", "bytes", "emits")
+	fmt.Fprintf(w, "\ncpu (%s)\n  %-48s %8s %6s %7s %5s\n", cpu.New().Tier(), "kernel", "vec/file", "stack", "bytes", "forms")
 	for _, k := range host {
 		vec := "-"
-		if k.VecUsed >= 0 {
-			vec = fmt.Sprintf("%d/%d", k.VecUsed, k.File)
+		if k.Vec >= 0 {
+			vec = fmt.Sprintf("%d/%d", k.Vec, k.File)
 		}
-		fmt.Fprintf(w, "  %-48s %5s %8s %6d %7d %5d\n", k.Emitter, k.ISA, vec, k.StackRefs, k.Bytes, k.Emits)
+		fmt.Fprintf(w, "  %-48s %8s %6d %7d %5d\n", k.Name, vec, k.Stack, k.Bytes, k.Forms)
 	}
 	for _, d := range devs {
 		fmt.Fprintf(w, "\n%s\n", d.Device)

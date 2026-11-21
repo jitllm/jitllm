@@ -1,19 +1,18 @@
 package server
 
 import (
-	"errors"
 	"sort"
 	"sync"
 )
 
-// HostGateID is the gate every host-only session queues on. The host is a
-// placement target like any other, so it gets a gate like any other.
-const HostGateID = "cpu"
+// CPUGateID is the gate every CPU-only session queues on. The CPU is a
+// device like any other, so it gets a gate like any other.
+const CPUGateID = "cpu"
 
-// gate records which sessions are running on one device (or the host). It
+// gate records which sessions are running on one device, the CPU among them. It
 // does not queue them: two sessions on one card are correct at once (each
-// holds its own history through tier.GPU.Attach, and the tier takes its
-// scratch one step at a time), and two on the host take turns on one shared
+// holds its own history through gpu.GPU.Attach, and the tier takes its
+// scratch one step at a time), and two on the CPU take turns on one shared
 // pool a region at a time (sched.Shared). So a generate is never held behind
 // another one for its whole length; it interleaves with it token by token.
 //
@@ -45,7 +44,7 @@ const (
 // ErrQueueTimeout is returned when a caller declined to keep waiting for a
 // row of its model's step loop (batch.go). It is NOT a refusal of the
 // session: the session stays open and may try again.
-var ErrQueueTimeout = errors.New("server: timed out waiting for a row of the step loop")
+const ErrQueueTimeout serverError = "server: timed out waiting for a row of the step loop"
 
 func newGate(id string) *gate {
 	return &gate{id: id, holders: map[string]bool{}}

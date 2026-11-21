@@ -53,7 +53,7 @@ func Llama() Model {
 	}
 	return Model{
 		Entry: catalog.Entry{Path: "/mock/Llama-3.2-1B-Instruct-Q4_K_M.jlm", Name: "Llama-3.2-1B-Instruct-Q4_K_M.jlm",
-			Kind: catalog.KindContainer, Size: 816 << 20, Probed: true, Quant: "Q4_K_M", Arch: "llama", NLayer: 16, NEmbd: 2048,
+			Kind: catalog.KindContainer, Size: 816 << 20, Probed: true, Quant: "Q4_K_M", NLayer: 16, NEmbd: 2048,
 			Version: catalog.CurrentVersion, MTime: time.Unix(1758300000, 0)},
 		Summary: "Llama-3.2-1B-Instruct-Q4_K_M · chat · context 4,096 · all 16 layers on the NVIDIA GeForce RTX 3050 Ti Laptop GPU",
 		Device:  "auto (1 device(s))",
@@ -84,21 +84,21 @@ func Qwen() Model {
 		case i < 13:
 			b[i] = byte(widgets.OnDevice(1))
 		case i == 13 || (i > 20 && i < 24):
-			b[i] = byte(widgets.PlaceHost)
+			b[i] = byte(widgets.PlaceCPU)
 		default:
-			b[i] = byte(widgets.PlaceHost | widgets.PlaceResident)
+			b[i] = byte(widgets.PlaceCPU | widgets.PlaceResident)
 		}
 	}
 	b[30] = byte(widgets.OnDevice(0))
 	return Model{
 		Entry: catalog.Entry{Path: "/mock/Qwen3-30B-A3B-Q4_K_M.jlm", Name: "Qwen3-30B-A3B-Q4_K_M.jlm",
-			Kind: catalog.KindContainer, Size: 18 << 30, Probed: true, Quant: "Q4_K_M", Arch: "qwen3moe", NLayer: n, NEmbd: 2048,
+			Kind: catalog.KindContainer, Size: 18 << 30, Probed: true, Quant: "Q4_K_M", NLayer: n, NEmbd: 2048,
 			Version: catalog.CurrentVersion, MTime: time.Unix(1758310000, 0)},
 		Summary: "Qwen3-30B-A3B-Q4_K_M · chat · context 32,768 · 14 of 48 layers on 2 devices, the rest paged on the host",
 		Device:  "cuda:0,vulkan:1 (2 device(s))",
 		Blocks:  b,
 		Alloc: app.Allocation{
-			NBlocks: n, HostBlocks: 34, DeviceBlocks: 14,
+			NBlocks: n, CPUBlocks: 34, DeviceBlocks: 14,
 			HostUsed: 30 * qwenPage, HostBudget: 30*qwenPage + 200<<20, Dense: 622_000_000,
 			PageBytes: qwenPage, MaxSeq: 32_768,
 			Devices: []app.DeviceUse{
@@ -164,10 +164,11 @@ type Engine struct {
 	Calls []string
 }
 
-var _ screen.Engine = (*Engine)(nil)
-
 // New builds a mock engine that publishes into sh.
-func New(sh *app.Shell) *Engine { return &Engine{sh: sh, Interval: 40 * time.Millisecond} }
+func New(sh *app.Shell) *Engine {
+	var _ screen.Engine = (*Engine)(nil)
+	return &Engine{sh: sh, Interval: 40 * time.Millisecond}
+}
 
 func (e *Engine) called(format string, a ...any) {
 	e.Calls = append(e.Calls, fmt.Sprintf(format, a...))
@@ -298,7 +299,7 @@ func (e *Engine) activate(m *Model) {
 	e.active = m
 	models := make([]app.LoadedModel, len(e.open))
 	for i, o := range e.open {
-		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name, Arch: o.Entry.Arch,
+		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name,
 			Blocks: int(o.Entry.NLayer), Colour: i, Active: o == m, Grant: o.Alloc.HostBudget}
 	}
 	snap := *m
@@ -335,7 +336,7 @@ func (e *Engine) Unload(path string) {
 	}
 	models := make([]app.LoadedModel, len(e.open))
 	for i, o := range e.open {
-		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name, Arch: o.Entry.Arch,
+		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name,
 			Blocks: int(o.Entry.NLayer), Colour: i, Active: o == e.active, Grant: o.Alloc.HostBudget}
 	}
 	active := e.active != nil
@@ -374,10 +375,10 @@ func (e *Engine) Relocate(n int) {
 		if i < n {
 			m.Blocks[i] = byte(widgets.OnDevice(0) | widgets.PlaceResident)
 		} else {
-			m.Blocks[i] = byte(widgets.PlaceHost | widgets.PlaceResident)
+			m.Blocks[i] = byte(widgets.PlaceCPU | widgets.PlaceResident)
 		}
 	}
-	m.Alloc.DeviceBlocks, m.Alloc.HostBlocks = n, len(m.Blocks)-n
+	m.Alloc.DeviceBlocks, m.Alloc.CPUBlocks = n, len(m.Blocks)-n
 	for k := range m.Alloc.Devices {
 		d := &m.Alloc.Devices[k]
 		was := d.Weights
@@ -484,7 +485,7 @@ func (e *Engine) finish() {
 	e.words = nil
 	m.Alloc.Pos = min(m.Alloc.Pos+n+24, m.Alloc.MaxSeq)
 	kv := uint64(m.Alloc.Pos) * kvPerPos
-	m.Alloc.HostKV = kv * uint64(m.Alloc.HostBlocks) / uint64(max(m.Alloc.NBlocks, 1))
+	m.Alloc.CPUKV = kv * uint64(m.Alloc.CPUBlocks) / uint64(max(m.Alloc.NBlocks, 1))
 	for k := range m.Alloc.Devices {
 		d := &m.Alloc.Devices[k]
 		d.KV = kv * uint64(d.Blocks) / uint64(max(m.Alloc.NBlocks, 1))
@@ -519,12 +520,8 @@ func Report() hardware.Report {
 		PCores: []int{0, 2, 4, 6, 8, 10}, ECores: []int{12, 13, 14, 15, 16, 17, 18, 19},
 		SMT: []int{1, 3, 5, 7, 9, 11}, Decode: []int{0, 2, 4, 6, 8, 10}, RAMTotal: 31 << 30,
 		MemBudget: 15 << 30, GCBudgetCap: 24 << 30, MemWall: 55.7e9,
-		Arch: "amd64", ISA: "avx2 fma f16c avx-vnni", DotKind: "vpdpbusd",
-		Kernels: []hardware.Kernel{
-			{Format: "Q4_K", Native: true, NativeNote: "generated", Packed: true, PackedNote: "generated"},
-			{Format: "Q6_K", Native: true, NativeNote: "generated", Packed: true, PackedNote: "generated"},
-			{Format: "Q8_0", Native: true, NativeNote: "generated", Packed: true, PackedNote: "generated"},
-		},
+		Arch: "amd64", ISA: "sse2, sse3, ssse3, sse4.1, sse4.2, popcnt, avx2, fma, f16c, avx-vnni, bmi2",
+		Form: "x86, wide passes (AVX2, FMA, F16C), int8 dots by VPDPBUSD",
 		GPUs: []hardware.GPU{
 			{API: "cuda", Name: "NVIDIA GeForce RTX 3050 Ti Laptop GPU", Slots: 20, Free: 3_800_000_000, Total: 4 << 30},
 			{API: "vulkan", Name: "Intel(R) Iris(R) Xe Graphics", Slots: 96, Free: 20 << 30, Total: 20 << 30, Unified: true},

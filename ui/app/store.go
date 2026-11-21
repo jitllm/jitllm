@@ -92,9 +92,12 @@ type Store struct {
 	DeviceSpec state.Signal[string]
 	// Placement is the -placement map for the next load.
 	Placement state.Signal[string]
-	// Sampling is how the next reply is drawn from the logits, and MaxSeq the
-	// context window the next load allocates.
+	// Sampling is how the next reply is drawn from the logits, Own
+	// the open model's stated draw (Sampling.Own set) the knobs show while
+	// Sampling is the model's own, and MaxSeq the context window the next
+	// load allocates.
 	Sampling      state.Signal[Sampling]
+	Own           state.Signal[Sampling]
 	MaxSeq        state.Signal[int]
 	DeviceReport  state.Signal[string]
 	DeclineReport state.Signal[string]
@@ -212,8 +215,9 @@ func NewStore() *Store {
 
 		DeviceSpec:    state.NewSignal("auto"),
 		Placement:     state.NewSignal(""),
-		Sampling:      state.NewSignal(DefaultConfig().Sampling),
-		MaxSeq:        state.NewSignal(DefaultConfig().MaxSeq),
+		Sampling:      state.NewSignal(DefaultConfig(Env{}).Sampling),
+		Own:           state.NewSignal(Sampling{}),
+		MaxSeq:        state.NewSignal(DefaultConfig(Env{}).MaxSeq),
 		DeviceReport:  state.NewSignal(""),
 		DeclineReport: state.NewSignal(""),
 		BlockMap:      state.NewSignal([]byte(nil)),

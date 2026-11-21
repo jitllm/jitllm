@@ -1,0 +1,73 @@
+package x86
+
+import (
+	"encoding/hex"
+	"testing"
+)
+
+// TestGPREncodings pins the general-register encoders the composer's CPU
+// lowering uses to bytes objdump decodes as the named instruction.
+func TestGPREncodings(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		emit func(*Buf)
+		want string
+	}{
+		{"and %r9,%rax", func(a *Buf) { a.ANDQ(RAX, R9) }, "4c21c8"},
+		{"or %rdx,%r11", func(a *Buf) { a.ORQ(R11, RDX) }, "4909d3"},
+		{"and $0xfff,%r10", func(a *Buf) { a.ANDimm32(R10, 0x0FFF) }, "4981e2ff0f0000"},
+		{"imul $0x28,%rbx,%r12", func(a *Buf) { a.IMULimm(R12, RBX, 40) }, "4c69e328000000"},
+		{"shrx %rcx,%r13,%r8", func(a *Buf) { a.SHRX(R8, R13, RCX) }, "c442f3f7c5"},
+		{"shlx %r9,%r15,%rax", func(a *Buf) { a.SHLX(RAX, R15, R9) }, "c4c2b1f7c7"},
+		{"mov (%r8,%r13,4),%r11d", func(a *Buf) { a.MOVLLoad(R11, Idx(R8, R13, 4, 0)) }, "478b1ca8"},
+		{"mov %r9d,%eax", func(a *Buf) { a.MOVL(RAX, R9) }, "4489c8"},
+		{"movslq %r10d,%rbx", func(a *Buf) { a.MOVSXD(RBX, R10) }, "4963da"},
+		{"neg %r12", func(a *Buf) { a.NEGQ(R12) }, "49f7dc"},
+		{"xor $0x80808080,%rbx", func(a *Buf) { a.XORimm32(RBX, -0x7f7f7f80) }, "4881f380808080"},
+		{"or $0x10,%r13", func(a *Buf) { a.ORimm32(R13, 0x10) }, "4981cd10000000"},
+		{"vpsrlvd %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPSRLVD(Y3, Y1, Y2) }, "c4e27545da"},
+		{"cmp %r10d,%ebx", func(a *Buf) { a.CMPL(RBX, R10) }, "4439d3"},
+		{"vmovd %r12d,%xmm3", func(a *Buf) { a.VMOVDToX(Y3, R12) }, "c4c1796edc"},
+		{"vcvtsi2ss %r12,%xmm3,%xmm3", func(a *Buf) { a.VCVTSI2SS(Y3, Y3, R12) }, "c4c1e22adc"},
+		{"vcvttss2si %xmm3,%r12d", func(a *Buf) { a.VCVTTSS2SIL(R12, Y3) }, "c57a2ce3"},
+		{"vcvttss2si %xmm13,%eax", func(a *Buf) { a.VCVTTSS2SIL(RAX, Y13) }, "c4c17a2cc5"},
+		{"vcvtss2si %xmm3,%r12d", func(a *Buf) { a.VCVTSS2SIL(R12, Y3) }, "c57a2de3"},
+		{"vpshufd $0x0,%xmm1,%xmm3", func(a *Buf) { a.VPSHUFDx(Y3, Y1, 0) }, "c5f970d900"},
+		{"vpminud %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPMINUD(Y3, Y1, Y2) }, "c4e2753bda"},
+		{"vpmaxsd %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPMAXSD(Y3, Y1, Y2) }, "c4e2753dda"},
+		{"vpmaxud %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPMAXUD(Y3, Y1, Y2) }, "c4e2753fda"},
+		{"vpackusdw %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPACKUSDW(Y3, Y1, Y2) }, "c4e2752bda"},
+		{"vpsrld -0x80(%rsp),%ymm1,%ymm3", func(a *Buf) { a.VPSRLDMem(Y3, Y1, At(RSP, -128)) }, "c5f5d25c2480"},
+		{"vpslld -0x80(%rsp),%ymm1,%ymm3", func(a *Buf) { a.VPSLLDMem(Y3, Y1, At(RSP, -128)) }, "c5f5f25c2480"},
+		{"vpsrad -0x80(%rsp),%ymm1,%ymm3", func(a *Buf) { a.VPSRADMem(Y3, Y1, At(RSP, -128)) }, "c5f5e25c2480"},
+		{"movq $0x0,-0x8(%rsp)", func(a *Buf) { a.MOVMemImm(At(RSP, -8), 0) }, "48c74424f800000000"},
+		{"addq $0x1,-0x10(%rsp)", func(a *Buf) { a.ADDMemImm8(At(RSP, -16), 1) }, "48834424f001"},
+		{"addq $0x400,-0x18(%rsp)", func(a *Buf) { a.ADDMemImm32(At(RSP, -24), 1024) }, "48814424e800040000"},
+		{"mov $0x80808080,%r15d", func(a *Buf) { a.MOVLimm(R15, 0x80808080) }, "41bf80808080"},
+		{"cmp $0x3f,%r9d", func(a *Buf) { a.CMPLimm(R9, 63) }, "4181f93f000000"},
+		{"vpsllvd %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPSLLVD(Y3, Y1, Y2) }, "c4e27547da"},
+		{"vpsravd %ymm2,%ymm1,%ymm3", func(a *Buf) { a.VPSRAVD(Y3, Y1, Y2) }, "c4e27546da"},
+		{"add %r9d,%edx", func(a *Buf) { a.ADDL(RDX, R9) }, "4401ca"},
+		{"sub %ebx,%r12d", func(a *Buf) { a.SUBL(R12, RBX) }, "4129dc"},
+		{"and %r9d,%eax", func(a *Buf) { a.ANDL(RAX, R9) }, "4421c8"},
+		{"or %edx,%r11d", func(a *Buf) { a.ORL(R11, RDX) }, "4109d3"},
+		{"xor %r13d,%r8d", func(a *Buf) { a.XORL(R8, R13) }, "4531e8"},
+		{"imul %ebx,%r12d", func(a *Buf) { a.IMULL(R12, RBX) }, "440fafe3"},
+		{"neg %r12d", func(a *Buf) { a.NEGL(R12) }, "41f7dc"},
+		{"add $0x7,%r10d", func(a *Buf) { a.ADDLimm(R10, 7) }, "4183c207"},
+		{"add $0x1000,%ecx", func(a *Buf) { a.ADDLimm(RCX, 4096) }, "81c100100000"},
+		{"xor $0x80808080,%ebx", func(a *Buf) { a.XORLimm(RBX, -0x7f7f7f80) }, "81f380808080"},
+		{"or $0x10,%r13d", func(a *Buf) { a.ORLimm(R13, 0x10) }, "4181cd10000000"},
+		{"imul $0x28,%ebx,%r12d", func(a *Buf) { a.IMULLimm(R12, RBX, 40) }, "4469e328000000"},
+	} {
+		var a Buf
+		c.emit(&a)
+		b, err := a.Bytes()
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := hex.EncodeToString(b); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}

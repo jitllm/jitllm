@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The AMD backend's gates on a host with an AMD card and ROCm (docs/design/amd-hip.md).
+# The AMD backend's gates on a host with an AMD card and ROCm (.notes/design/amd-hip.md).
 #
 #   JITLLM_MODELS=/path/to/models ./scripts/hip-gates.sh
 #
@@ -18,17 +18,19 @@ step() {
 	"$@" 2>&1 | tee -a "$log"
 }
 
-step ./scripts/cap 8G -- go test ./jit/gpu/hip -count=1 -v -run 'TestRealROCmLoadsOrSaysWhy'
-step ./scripts/cap 8G -- go test ./jit/gpu/amdgpu ./jit/gpu/hip -count=1
-step ./scripts/cap 8G -- go test ./jit/gpu/lowertest -count=1 -v -run 'AMDGPU'
+step ./scripts/cap 8G -- go test ./backend/hip -count=1 -v -run 'TestRealROCmLoadsOrSaysWhy'
+step ./scripts/cap 8G -- go test ./composer/amdgpu ./backend/hip -count=1
 # Every backend kernel gate runs on every device backend.Open returns, the
 # HIP device among them; TestHIP* are its own.
-step ./scripts/cap 16G -- go test ./jit/gpu/backend -count=1 -v
-step ./scripts/cap 8G -- go test ./jit/gpu/tier -count=1
+step ./scripts/cap 16G -- go test ./backend -count=1 -v
+step ./scripts/cap 8G -- go test ./engine/device/gpu -count=1
 # The model gates. gpu:0 is the first device backend.Open returns, which on a
 # host with no CUDA is the HIP device.
 : "${JITLLM_MODELS:?set JITLLM_MODELS to the model directory (docs/testing.md)}"
-step ./scripts/cap 24G -- go test ./engine/model -count=1 -v -timeout 3h -run \
+# The offline gate: every composed form of the synthetic fixtures becomes a
+# code object for each AMD generation.
+step ./scripts/cap 8G -- go test ./engine -count=1 -v -run 'TestComposedFormsLowerForAMDGPU'
+step ./scripts/cap 24G -- go test ./engine -count=1 -v -timeout 3h -run \
 	'TestEveryModelRunsGenerated|TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestDecodeDoesNotAllocate|TestLayerRelocatesToAnotherDevice|TestRelocatedBlocksComeBack|TestKVPagesRelocateWithTheLayer|TestPagingDoesNotChangeTheAnswer|TestOpenHonoursAPageBudget|TestForwardBatchFaultsItsBlocksIn|TestSlidingWindowRunsOnTheDevice|TestDeviceMatchesHostOnABiasedModel'
 
 if grep -E 'NO AMD DEVICE|NO COMGR|NO ROCM' "$log"; then

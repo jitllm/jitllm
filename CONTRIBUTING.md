@@ -37,7 +37,7 @@ pinned to the performance cores (AGENTS.md RULE 3 and RULE 5).
 `.github/scripts/test-model-free.sh` (the program is `scripts/modelfree`) is
 what CI runs on Linux, macOS and Windows: vet aside, every package of the
 five modules but `./dev/bench`, `./ui/stage` (CI's ui job runs it) and, on
-macOS, `./jit/gpu/backend`, with no GPU and no model but the committed
+macOS, `./backend`, with no GPU and no model but the committed
 stories260K, and a summary that lists every skip and the reason it printed.
 It sets `JITLLM_MODEL_FREE=1`, under which a test that reports a missing model
 through `testmodels.Missing` skips; without it that test fails
@@ -61,10 +61,10 @@ repository root):
 
     internal/testmodels/fetch.sh --list      # what the tests read, and what is here
     internal/testmodels/fetch.sh             # the default set
-    JITLLM_MODELS=/path/to/models ./scripts/cap 16G -- go test ./engine/model -run TestGreedyMatchesLlamaCpp -count=1
+    JITLLM_MODELS=/path/to/models ./scripts/cap 16G -- go test ./engine -run TestGreedyMatchesLlamaCpp -count=1
 
 [docs/testing.md](docs/testing.md) has every variable that selects a test's
-model and the gates that need a GPU. `engine/model` as a whole package is too
+model and the gates that need a GPU. `engine` as a whole package is too
 much for one run; slice it with `-run`.
 
 ## Commits
@@ -86,7 +86,7 @@ golden from that class, a gate that fails when each of its graph features is
 removed, every tier (the host on amd64 and arm64, CUDA, Vulkan and Metal with
 every block placed), the five principles' gates with the model added to each
 list, and a real checkpoint against llama.cpp wherever one fits.
-[docs/design/model-coverage.md](docs/design/model-coverage.md) is the survey an
+[.notes/design/model-coverage.md](.notes/design/model-coverage.md) is the survey an
 addition is chosen from.
 
 ## Reporting results

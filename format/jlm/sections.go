@@ -2,6 +2,7 @@ package jlm
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 )
@@ -113,7 +114,13 @@ func encodeConfig(c *Config) []byte { return encodeConfigAt(c, Version) }
 // config that version cannot state (writeAt).
 func encodeConfigAt(c *Config, v uint32) []byte {
 	w := &wbuf{}
-	w.u16(uint16(c.Arch))
+	// From v31 the record names no architecture; the slot stays, zero, so
+	// nothing after it moves.
+	if v >= 31 {
+		w.u16(0)
+	} else {
+		w.u16(c.legacy)
+	}
 	for _, v := range []uint32{c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NRot,
 		c.NFFN, c.NVocab, c.NCtx, c.NExpert, c.NExpertUsed, c.NFFNExp, c.SWAWindow, c.SWAPeriod} {
 		w.u32(v)
@@ -151,9 +158,14 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	w.f32(c.ExpertScale)
 	w.u32(c.NExpertGroup)
 	w.u32(c.NExpertGroupUsed)
-	// v28: the prediction blocks after the trunk.
-	if v >= 28 {
-		w.u32(c.NMTP)
+	// v28 to v32: the count of prediction blocks after the trunk, which v33
+	// reads from the graph statement instead.
+	if v >= 28 && v < 33 {
+		n := c.legacyPredict
+		if n == 0 {
+			n = c.PredictionBlocks()
+		}
+		w.u32(n)
 	}
 	// (ERNIE 4.5's mixtures write the interleave too, under ArchErnie45MoE,
 	// another code an older reader refuses.)
@@ -179,23 +191,80 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// mixture, situ bounds, decay bound and latent norm epsilon, implies the
 	// first eight; ArchKimiK3 writes all of it, and ArchKimiLinear the latent
 	// norm epsilon alone, which an older reader drops and norms at RMSEps, as
-	// it did before the field existed. The tenth, a decision model's readout
-	// and temperatures, implies the first nine; an older reader drops it and
-	// runs the model as the backbone it is, a model that generates.
+	// it did before the field existed. The tenth, a decision model's head
+	// blocks and temperatures, implies the first nine; an older reader drops
+	// it and runs the model as the backbone it is, a model that generates.
+	// Its first byte named a readout by code before the readouts were
+	// stated: it is written zero and read as nothing.
 	// The twelfth, Clef's routing blocks and head epsilon, implies the first
-	// eleven; an older reader refuses its decision kind by code.
-	clef := c.DecisionRouting != 0 || c.DecisionEps != 0
+	// eleven.
+	// The thirteenth, the stated activations, implies the first twelve; an
+	// older reader drops it and runs the activation its flags name. The
+	// fourteenth, the router's stated score, implies the first thirteen; an
+	// older reader drops it and routes by the gating its flags name. The
+	// fifteenth, the router's stated weight, implies the first fourteen; an
+	// older reader drops it and weighs by the router its flags name. The
+	// sixteenth, the residual's stated streams, implies the first fifteen;
+	// an older reader drops it and refuses the streams it cannot state. The
+	// seventeenth, the statement revision with the sliding layers' rotary
+	// magnitude and the layers a picture's rows see each other on, implies
+	// the first sixteen; an older reader drops it.
+	// The eighteenth, the activation quantization, implies the first
+	// seventeen; an older reader drops it.
+	// The nineteenth, the streams' expansions and writes, implies the first
+	// eighteen; the twentieth, the selection, the first nineteen; the
+	// twenty-first, the blocks' additions before their attention, the first
+	// twenty. An older reader drops each.
+	// The twenty-second, the streams' posts, implies the first twenty-one;
+	// the twenty-third, the blocks' own geometries (Geoms), the first
+	// twenty-two; the twenty-fourth, the delta rule's stated decay and gate,
+	// the first twenty-three. An older reader drops each.
+	// The twenty-fifth, a label readout's statement, implies the first
+	// twenty-four; an older reader drops it and opens the model as the
+	// backbone it is. The twenty-sixth, a marker head's prompt, implies the
+	// first twenty-five, an empty label statement standing for none.
+	// The twenty-seventh, a joint head's statement, implies the first
+	// twenty-six, an empty marker prompt standing for none. The
+	// twenty-eighth, the blocks' graphs, implies the first twenty-seven, a
+	// joint head of zeros standing for none (an older reader builds a
+	// decision graph no request reaches).
+	// The twenty-ninth, the rotary's table and a picture's layout on it,
+	// implies the first twenty-eight, no graphs standing for none. The
+	// thirtieth, the stated generation defaults, implies the first
+	// twenty-nine, an empty table standing for none; an older reader drops it
+	// and generates as it did before the field existed. The thirty-first,
+	// the parts' graphs outside the blocks, implies the first thirty, no
+	// generation defaults standing for none.
+	front := c.Front.Stated()
+	gen := front || c.Generation != nil
+	rope := gen || len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
+	graphs := rope || len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
+	joint := graphs || c.JointHead != nil
+	marker := joint || c.MarkerPrompt != nil
+	labels := marker || c.DecisionLabels != nil
+	delta := labels || c.DeltaDecay != nil || c.DeltaGate != nil
+	geoms := delta || len(c.Geoms) != 0
+	post := geoms || c.Streams.sharesWrites()
+	pre := post || c.Streams.addsBefore()
+	sel := pre || c.Selection != nil
+	sw := sel || c.Streams.writesStreams()
+	aq := sw || c.ActQuant != ActQuantNone
+	rev := aq || c.Revision != 0 || c.RopeScaleSWA != 0 || len(c.BidirLayers) != 0
+	streams := rev || c.Streams.N > 1
+	weight := streams || len(c.RouterWeight.Terms) != 0
+	score := weight || len(c.RouterScore.Terms) != 0
+	acts := score || len(c.Acts) != 0 || len(c.ActLayers) != 0
+	clef := acts || c.DecisionRouting != 0 || c.DecisionEps != 0
 	q4e := clef || c.HCLowRank != 0 || c.QSARatio != 0 || c.NGramBlock != 0
-	dec := q4e || c.Decision != DecisionNone || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
+	dec := q4e || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
 		c.DecisionHeads != 0
 	k3 := dec || c.AttnResBlock != 0 || c.ExpertLatent != 0 || c.SituBeta != 0 || c.SituLinearBeta != 0 ||
 		c.KDALowerBound != 0 || c.LatentNormEps != 0
 	ds4 := k3 || c.HCMult != 0 || len(c.CompKinds) != 0
 	msa := ds4 || c.IdxBlock != 0 || c.IdxLocal != 0
-	alt := msa || c.AltUp != 0 || c.NSparse != 0
+	alt := msa || c.PredStreams != 0 || c.NSparse != 0
 	idx := alt || c.IdxHeads != 0
-	geom := idx || c.HeadDimSWA != 0 || c.NKVHeadSWA != 0 || c.NRotSWA != 0 || c.Flags2 != 0 ||
-		c.NKVShared != 0 || c.PLEDim != 0
+	geom := idx || c.Flags2 != 0 || c.NKVShared != 0 || c.PLEDim != 0
 	clamp := geom || c.ClampKQV != 0
 	scales := clamp || c.AttnScale != 0 || c.ResidualScale != 0 || c.LogitScale != 0
 	if scales || c.MoEStep != 0 || c.AttnTempScale != 0 || c.AttnTempFloor != 0 || c.AttnTempOffset != 0 {
@@ -213,9 +282,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.f32(c.ClampKQV)
 	}
 	if geom {
-		w.u32(c.HeadDimSWA)
-		w.u32(c.NKVHeadSWA)
-		w.u32(c.NRotSWA)
+		// Three slots an older writer filled with the sliding layers'
+		// geometry; decodeConfigAt reads them into Geoms.
+		w.u32(0)
+		w.u32(0)
+		w.u32(0)
 		w.u32(uint32(c.Flags2))
 		w.u32(c.NKVShared)
 		w.u32(c.PLEDim)
@@ -226,7 +297,7 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.u32(c.IdxTopK)
 	}
 	if alt {
-		w.u32(c.AltUp)
+		w.u32(c.PredStreams)
 		w.u32(c.NSparse)
 		w.f32(c.SparseStd)
 	}
@@ -257,7 +328,7 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.f32(c.LatentNormEps)
 	}
 	if dec {
-		w.u8(uint8(c.Decision))
+		w.u8(0)
 		w.u32(c.DecisionBlocks)
 		w.u32(c.DecisionHeadTokens)
 		w.u32(c.DecisionHeads)
@@ -287,6 +358,103 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.u32(c.DecisionRouting)
 		w.f32(c.DecisionEps)
 	}
+	if acts {
+		encodeExprs(w, c)
+	}
+	if score {
+		encodeExpr(w, &c.RouterScore)
+	}
+	if weight {
+		encodeExpr(w, &c.RouterWeight)
+	}
+	if streams {
+		encodeStreams(w, &c.Streams)
+	}
+	if rev {
+		w.u8(c.Revision)
+		w.f32(c.RopeScaleSWA)
+		w.u32(uint32(len(c.BidirLayers)))
+		for _, b := range c.BidirLayers {
+			w.bool(b)
+		}
+	}
+	if aq {
+		w.u8(uint8(c.ActQuant))
+	}
+	if sw {
+		encodeStreamWrites(w, &c.Streams)
+	}
+	if sel {
+		encodeSelection(w, c.Selection)
+	}
+	if pre {
+		encodeStreamPre(w, &c.Streams)
+	}
+	if post {
+		encodeStreamPosts(w, &c.Streams)
+	}
+	if geoms {
+		w.u32(uint32(len(c.Geoms)))
+		for _, g := range c.Geoms {
+			w.u32(g.NKVHead)
+			w.u32(g.HeadDim)
+			w.u32(g.NRot)
+			w.u32(g.NFFN)
+		}
+	}
+	if delta {
+		encodePrograms(w, []*Program{c.DeltaDecay, c.DeltaGate})
+	}
+	if labels {
+		l := c.DecisionLabels
+		if l == nil {
+			l = &DecisionLabels{}
+		}
+		encodeDecisionLabels(w, l)
+	}
+	if marker {
+		p := c.MarkerPrompt
+		if p == nil {
+			p = &MarkerPrompt{}
+		}
+		encodeMarkerPrompt(w, p)
+	}
+	if joint {
+		j := c.JointHead
+		if j == nil {
+			j = &JointHead{}
+		}
+		encodeJointHead(w, j)
+	}
+	if graphs {
+		encodeBlockGraphs(w, &c.Blocks)
+	}
+	if rope {
+		w.u32(uint32(len(c.RopeTable)))
+		for _, p := range c.RopeTable {
+			w.u8(uint8(p.Axis))
+			w.u32(uint32(p.Freq))
+		}
+		for _, x := range c.PictureRope.Axes {
+			for _, t := range [...]PicTerm{x.Base, x.Mul, x.Div, x.Mod} {
+				w.u8(uint8(t))
+			}
+			w.bool(x.Pos)
+		}
+		w.bool(c.PictureRope.Side)
+	}
+	if gen {
+		// No draw stated is the zero record, which no draw is (its
+		// repetition penalty is 0).
+		g := c.Generation
+		if g == nil {
+			g = &Generation{}
+		}
+		encodeGeneration(w, g)
+	}
+	if front {
+		encodeFrontGraphs(w, &c.Front)
+	}
 	return w.b
 }
 
@@ -296,7 +464,10 @@ func decodeConfig(b []byte) (*Config, error) { return decodeConfigAt(b, Version)
 // migration reads an older one (migrate.go).
 func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	r := &rbuf{b: b}
-	c := &Config{Arch: Arch(r.u16())}
+	c := &Config{}
+	if a := r.u16(); v < 31 {
+		c.legacy = a
+	}
 	for _, p := range []*uint32{&c.NLayer, &c.NEmbd, &c.NHead, &c.NKVHead, &c.HeadDim, &c.NRot,
 		&c.NFFN, &c.NVocab, &c.NCtx, &c.NExpert, &c.NExpertUsed, &c.NFFNExp, &c.SWAWindow, &c.SWAPeriod} {
 		*p = r.u32()
@@ -333,9 +504,10 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	c.ExpertScale = r.f32()
 	c.NExpertGroup = r.u32()
 	c.NExpertGroupUsed = r.u32()
-	// v28 added the prediction blocks' count; an older record has none.
-	if v >= 28 {
-		c.NMTP = r.u32()
+	// v28 to v32 carried the prediction blocks' count, which v33 reads from
+	// the graph statement.
+	if v >= 28 && v < 33 {
+		c.legacyPredict = r.u32()
 	}
 	// The optional tail; see encodeConfig. Absent means all zero, which is what
 	// every architecture but Llama 4 is.
@@ -353,10 +525,11 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		c.ClampKQV = r.f32()
 	}
+	var swa Geom
 	if r.err == nil && len(r.b) > 0 {
-		c.HeadDimSWA = r.u32()
-		c.NKVHeadSWA = r.u32()
-		c.NRotSWA = r.u32()
+		swa.HeadDim = r.u32()
+		swa.NKVHead = r.u32()
+		swa.NRot = r.u32()
 		c.Flags2 = Flags2(r.u32())
 		c.NKVShared = r.u32()
 		c.PLEDim = r.u32()
@@ -367,7 +540,7 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		c.IdxTopK = r.u32()
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.AltUp = r.u32()
+		c.PredStreams = r.u32()
 		c.NSparse = r.u32()
 		c.SparseStd = r.f32()
 	}
@@ -400,7 +573,7 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		c.LatentNormEps = r.f32()
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.Decision = DecisionKind(r.u8())
+		r.u8()
 		c.DecisionBlocks = r.u32()
 		c.DecisionHeadTokens = r.u32()
 		c.DecisionHeads = r.u32()
@@ -433,10 +606,138 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		c.DecisionRouting = r.u32()
 		c.DecisionEps = r.f32()
 	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeExprs(r, c)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeExpr(r, &c.RouterScore)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeExpr(r, &c.RouterWeight)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreams(r, &c.Streams)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Revision = r.u8()
+		c.RopeScaleSWA = r.f32()
+		for range r.count(1) {
+			c.BidirLayers = append(c.BidirLayers, r.bool())
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.ActQuant = ActQuant(r.u8())
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreamWrites(r, &c.Streams)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Selection = decodeSelection(r)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreamPre(r, &c.Streams)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreamPosts(r, &c.Streams)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		for range r.count(16) {
+			c.Geoms = append(c.Geoms, Geom{NKVHead: r.u32(), HeadDim: r.u32(), NRot: r.u32(), NFFN: r.u32()})
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		ps := decodePrograms(r)
+		if len(ps) != 2 && r.err == nil {
+			r.err = fmt.Errorf("jlm: the delta rule's statement holds %d programs", len(ps))
+		}
+		if len(ps) == 2 {
+			c.DeltaDecay, c.DeltaGate = ps[0], ps[1]
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if l := decodeDecisionLabels(r); l.MaxOptions != 0 {
+			c.DecisionLabels = l
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if p := decodeMarkerPrompt(r); len(p.Nodes) > 0 {
+			c.MarkerPrompt = p
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if j := decodeJointHead(r); *j != (JointHead{}) {
+			c.JointHead = j
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Blocks = decodeBlockGraphs(r)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		for range r.count(5) {
+			c.RopeTable = append(c.RopeTable, RopePair{Axis: int(r.u8()), Freq: int(r.u32())})
+		}
+		for a := range c.PictureRope.Axes {
+			x := &c.PictureRope.Axes[a]
+			for _, t := range [...]*PicTerm{&x.Base, &x.Mul, &x.Div, &x.Mod} {
+				*t = PicTerm(r.u8())
+			}
+			x.Pos = r.bool()
+		}
+		c.PictureRope.Side = r.bool()
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if g := decodeGeneration(r); *g != (Generation{}) {
+			c.Generation = g
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Front = decodeFrontGraphs(r)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
+	if c.Generation != nil {
+		if err := c.Generation.Valid(); err != nil {
+			return nil, err
+		}
+	}
+	if err := c.olderGeoms(swa); err != nil {
+		return nil, err
+	}
+	if err := c.ropeTableValid(); err != nil {
+		return nil, err
+	}
+	if err := c.geomsValid(); err != nil {
+		return nil, err
+	}
+	if err := c.deltaValid(); err != nil {
+		return nil, err
+	}
+	if err := exprsValid(c); err != nil {
+		return nil, err
+	}
+	if err := c.Streams.valid(int(c.TextBlocks())); err != nil {
+		return nil, err
+	}
+	if err := c.Selection.valid(int(c.TextBlocks()), func(li int) bool { return li < len(c.CompKinds) && c.CompKinds[li] != CompNone }); err != nil {
+		return nil, err
+	}
+	if c.ActQuant > ActQuantRowInt8 {
+		return nil, fmt.Errorf("jlm: activation quantization %d is not one this format defines", c.ActQuant)
+	}
+	if n := len(c.BidirLayers); n != 0 && n != int(c.NLayer) {
+		return nil, fmt.Errorf("jlm: %d layers' bidirectional statement for %d layers", n, c.NLayer)
+	}
 	if err := ngramValid(c); err != nil {
+		return nil, err
+	}
+	if err := c.Front.valid(int(c.PredictionBlocks())); err != nil {
+		return nil, err
+	}
+	if err := c.Blocks.valid(c.statedBlocks()); err != nil {
+		return nil, err
+	}
+	if err := c.olderStatements(); err != nil {
 		return nil, err
 	}
 	// One kind per layer or none at all: a short array would leave the tail
@@ -453,9 +754,6 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if n := len(c.CompKinds); n != 0 && uint32(n) != c.NLayer {
 		return nil, fmt.Errorf("jlm: %d compression kinds for %d layers", n, c.NLayer)
 	}
-	if _, ok := decisionNames[c.Decision]; !ok && c.Decision != DecisionNone {
-		return nil, fmt.Errorf("jlm: decision kind %d is not one this format defines", c.Decision)
-	}
 	for _, d := range c.DecisionTemps {
 		if d.Type > QuestionNoul || !(d.T > 0) {
 			return nil, fmt.Errorf("jlm: decision temperature %v for %v is not a positive temperature of a question type", d.T, d.Type)
@@ -465,9 +763,6 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		if k > CompHCA {
 			return nil, fmt.Errorf("jlm: layer %d has compression kind %d, which this format does not define", i, k)
 		}
-	}
-	if !c.Arch.Valid() {
-		return nil, fmt.Errorf("jlm: architecture code %d is not one this format defines", c.Arch)
 	}
 	// The MLA block is all-or-nothing: a rank with no rope width would
 	// attend over a key of the wrong length, fluently.
@@ -511,18 +806,6 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	for _, v := range []float32{c.AttnScale, c.ResidualScale, c.LogitScale, c.ClampKQV} {
 		if !(v >= 0) || math.IsInf(float64(v), 0) {
 			return nil, fmt.Errorf("jlm: scale %g in the config record", v)
-		}
-	}
-	// A sliding geometry with no sliding layer to carry it is a field no block
-	// reads; one whose kv heads do not divide the query heads has no grouping.
-	if c.HeadDimSWA != 0 || c.NKVHeadSWA != 0 || c.NRotSWA != 0 {
-		switch {
-		case c.SWAWindow == 0 || c.SWAPeriod == 0:
-			return nil, fmt.Errorf("jlm: a sliding-layer geometry with no sliding layers")
-		case c.NKVHeadSWA != 0 && c.NHead%c.NKVHeadSWA != 0:
-			return nil, fmt.Errorf("jlm: %d sliding kv heads for %d query heads", c.NKVHeadSWA, c.NHead)
-		case c.HeadDimSWA != 0 && c.NRotSWA > c.HeadDimSWA:
-			return nil, fmt.Errorf("jlm: sliding rotary width %d on a %d-wide head", c.NRotSWA, c.HeadDimSWA)
 		}
 	}
 	// A shared run that leaves no layer to share from, or a layer of one kind
@@ -577,7 +860,7 @@ func encodeVision(v *Vision) []byte {
 	// after it is set, so every earlier tower's section is byte-identical.
 	// The pixel bounds of a tower read at its own size come third, and
 	// LFM2-VL's tile size and tolerance fourth.
-	tile := v.TileSize != 0 || v.Tolerance != 0 || v.Audio != nil
+	tile := v.TileSize != 0 || v.Tolerance != 0 || v.Audio != nil || v.Tower != nil
 	pix := v.MinPixels != 0 || v.MaxPixels != 0 || tile
 	if v.MinTiles != 0 || v.MaxTiles != 0 || v.WinPattern != 0 || v.WinSize != 0 || pix {
 		w.u32(v.MinTiles)
@@ -595,8 +878,32 @@ func encodeVision(v *Vision) []byte {
 		w.u32(v.TileSize)
 		w.f32(v.Tolerance)
 	}
-	if v.Audio != nil {
+	switch {
+	case v.Audio != nil:
 		encodeAudio(w, v.Audio)
+	case v.Tower != nil:
+		encodeAudio(w, &Audio{})
+	}
+	if v.Tower != nil {
+		encodeTower(w, v.Tower)
+	}
+	// The audio tower after the vision tower's record, which a reader takes
+	// whole: a container with no audio tower is the bytes it was.
+	if a := v.Audio; a != nil && a.Tower != nil && v.Tower != nil {
+		w.u32(a.MaxSamples)
+		encodeTower(w, a.Tower)
+	}
+	// The video record last, after the audio tower's where there is one: a
+	// container with no video is the bytes it was.
+	if v.Tower != nil && v.Tower.Video != nil {
+		encodeVideo(w, v.Tower.Video)
+	}
+	// The picture's geometry after it, each record opened by its own tag.
+	if v.Tower != nil && v.Tower.Geometry != nil {
+		encodeGeometry(w, v.Tower.Geometry)
+		if v.Tower.Video != nil && v.Tower.Video.Frames != nil {
+			encodeGeometry(w, v.Tower.Video.Frames)
+		}
 	}
 	return w.b
 }
@@ -635,10 +942,41 @@ func decodeVision(b []byte) (*Vision, error) {
 		v.TileSize, v.Tolerance = r.u32(), r.f32()
 	}
 	if r.err == nil && len(r.b) > 0 {
-		v.Audio = decodeAudio(r)
+		if v.Audio = decodeAudio(r); v.Audio.NLayer == 0 {
+			v.Audio = nil
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		v.Tower = decodeTower(r)
+	}
+	if r.err == nil && len(r.b) > 0 && v.Audio != nil {
+		v.Audio.MaxSamples = r.u32()
+		v.Audio.Tower = decodeTower(r)
+	}
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil && tailTag(r) != geometryTag {
+		v.Tower.Video = decodeVideo(r)
+	}
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil {
+		v.Tower.Geometry = decodeGeometry(r)
+	}
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil && v.Tower.Video != nil {
+		v.Tower.Video.Frames = decodeGeometry(r)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		r.err = fmt.Errorf("jlm: %d bytes after the vision section's last record", len(r.b))
 	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if v.Tower != nil {
+		if err := v.Tower.Valid(); err != nil {
+			return nil, err
+		}
+	}
+	if v.Audio != nil && v.Audio.Tower != nil {
+		if err := v.Audio.Tower.Valid(); err != nil {
+			return nil, fmt.Errorf("jlm: the audio tower: %w", err)
+		}
 	}
 	return v, nil
 }
@@ -709,7 +1047,12 @@ func encodeVocab(v *Vocab) []byte {
 	// The optional tails, each written only when it holds something (or a
 	// later one follows), so every vocabulary without one writes the bytes it
 	// wrote before. First one flag per op, then the stop ids.
-	tail := len(v.Stop) > 0
+	tools := len(v.Tools.Calls) > 0
+	patterns := false
+	for _, op := range v.Pre {
+		patterns = patterns || op.Kind == PrePattern
+	}
+	tail := len(v.Stop) > 0 || tools || patterns
 	for _, op := range v.Pre {
 		tail = tail || op.PunctNoNewline
 	}
@@ -719,10 +1062,29 @@ func encodeVocab(v *Vocab) []byte {
 			w.bool(op.PunctNoNewline)
 		}
 	}
-	if len(v.Stop) > 0 {
+	if len(v.Stop) > 0 || tools || patterns {
 		w.u32(uint32(len(v.Stop)))
 		for _, id := range v.Stop {
 			w.i32(id)
+		}
+	}
+	// Then the tool-call form, as JSON: a record of templates that grows
+	// with what forms state, read by name.
+	if tools {
+		// Strings, lists of them and a string map: nothing in it fails to
+		// marshal.
+		b, _ := json.Marshal(v.Tools)
+		w.str(string(b))
+	} else if patterns {
+		w.str("")
+	}
+	// Then each op's pattern and invert flag, written only when a stage is a
+	// pattern.
+	if patterns {
+		w.u32(uint32(len(v.Pre)))
+		for _, op := range v.Pre {
+			w.str(op.Pattern)
+			w.bool(op.Invert)
 		}
 	}
 	return w.b
@@ -815,6 +1177,33 @@ func decodeVocab(b []byte) (*Vocab, error) {
 			}
 		}
 	}
+	if r.err == nil && len(r.b) > 0 {
+		if s := r.str(); r.err == nil && s != "" {
+			if err := json.Unmarshal([]byte(s), &v.Tools); err != nil {
+				return nil, fmt.Errorf("jlm: the vocabulary's tool form: %w", err)
+			}
+			if err := v.Tools.Valid(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if n := r.count(5); n != len(v.Pre) {
+			if r.err == nil {
+				return nil, fmt.Errorf("jlm: vocab tail has %d patterns for %d ops", n, len(v.Pre))
+			}
+		} else {
+			for i := range v.Pre {
+				v.Pre[i].Pattern = r.str()
+				v.Pre[i].Invert = r.bool()
+			}
+		}
+	}
+	for _, op := range v.Pre {
+		if op.Kind == PrePattern && op.Pattern == "" && r.err == nil {
+			return nil, fmt.Errorf("jlm: a pattern stage with no pattern")
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -861,9 +1250,48 @@ func ngramValid(c *Config) error {
 		return fmt.Errorf("jlm: an n-gram block with %d residual streams", c.HCMult)
 	}
 	for h, v := range c.NGramVoc {
-		if v == 0 || c.NGramOff[h]+v < c.NGramOff[h] {
+		if v == 0 || v > 1<<31 || c.NGramOff[h] > 1<<32-v {
 			return fmt.Errorf("jlm: n-gram head %d range [%d, +%d)", h, c.NGramOff[h], v)
 		}
 	}
 	return nil
+}
+
+func encodeStrs(w *wbuf, ss []string) {
+	w.u32(uint32(len(ss)))
+	for _, x := range ss {
+		w.str(x)
+	}
+}
+
+func decodeStrs(r *rbuf) []string {
+	var out []string
+	for range r.count(4) {
+		out = append(out, r.str())
+	}
+	return out
+}
+
+func encodeDecisionLabels(w *wbuf, l *DecisionLabels) {
+	encodeStrs(w, l.Codes)
+	encodeStrs(w, l.WideCodes)
+	encodeStrs(w, l.Pool)
+	w.u32(l.MaxOptions)
+	encodeStrs(w, l.NoulTrue)
+	encodeStrs(w, l.NoulFalse)
+	w.u32(l.NoulRatings)
+	for _, b := range []bool{l.KeyCodes, l.Spaced, l.ShowCodes, l.NoulTrueFirst, l.ScoreByKey, l.Reversed, l.SortKeys,
+		l.IDInstructions, l.EntropyConfidence, l.SortedLegend} {
+		w.bool(b)
+	}
+}
+
+func decodeDecisionLabels(r *rbuf) *DecisionLabels {
+	l := &DecisionLabels{Codes: decodeStrs(r), WideCodes: decodeStrs(r), Pool: decodeStrs(r), MaxOptions: r.u32()}
+	l.NoulTrue, l.NoulFalse, l.NoulRatings = decodeStrs(r), decodeStrs(r), r.u32()
+	for _, b := range []*bool{&l.KeyCodes, &l.Spaced, &l.ShowCodes, &l.NoulTrueFirst, &l.ScoreByKey, &l.Reversed,
+		&l.SortKeys, &l.IDInstructions, &l.EntropyConfidence, &l.SortedLegend} {
+		*b = r.bool()
+	}
+	return l
 }

@@ -16,20 +16,13 @@ func TestChunkIsPerFile(t *testing.T) {
 	if _, err := jlm.Write(dst, src, jlm.Fingerprint{Host: "t"}); err != nil {
 		t.Fatal(err)
 	}
-	open := func() *jlm.File {
-		c, err := jlm.Open(dst)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { c.Close() })
-		return c
-	}
+	open := func() *jlm.Frames { return openFrames(t, dst) }
 	header := open().ChunkBytes()
 	want := uint64(4096)
 	if header == want {
 		want = 8192
 	}
-	chunks := func(c *jlm.File) int64 {
+	chunks := func(c *jlm.Frames) int64 {
 		before := c.ChunksIn()
 		if err := c.EnsurePage(0); err != nil {
 			t.Fatal(err)
@@ -37,7 +30,7 @@ func TestChunkIsPerFile(t *testing.T) {
 		return c.ChunksIn() - before
 	}
 	for _, setFirst := range []bool{true, false} {
-		var set, plain *jlm.File
+		var set, plain *jlm.Frames
 		if setFirst {
 			set = open()
 			if err := set.SetChunk(want); err != nil {
@@ -55,9 +48,9 @@ func TestChunkIsPerFile(t *testing.T) {
 			t.Fatalf("set first=%v: the Files fill at %d and %d, want %d and the header's %d",
 				setFirst, set.ChunkBytes(), plain.ChunkBytes(), want, header)
 		}
-		page := set.PageBytes(0)
+		page := set.File().PageBytes(0)
 		for _, c := range []struct {
-			f     *jlm.File
+			f     *jlm.Frames
 			chunk uint64
 		}{{set, want}, {plain, header}} {
 			if n, w := chunks(c.f), int64((page+c.chunk-1)/c.chunk); n != w {

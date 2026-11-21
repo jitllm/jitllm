@@ -18,15 +18,14 @@ const (
 	// HuggingFace's Split on "[0-9][0-9][0-9]" with behavior Isolated, which
 	// falcon's pipeline ends with ("12345" -> "123", "45").
 	//
-	// It is a stage of its own because it is not the alternation skeleton
-	// parseSplit reads parameters off; read that way it became a second llama3
-	// split.
+	// Containers converted before every Split was stored as its own pattern
+	// carry it; a conversion now stores that Split as an OpPattern.
 	OpDigitTriples
 	// OpPunctDefault isolates each contiguous run of \p{P} and the ASCII
-	// symbols $+<=>^~| -- llama.cpp's "[\p{P}\$\+<=>\^~\|]+", the first
-	// regex of its default pre-tokenizer. Unlike OpPunctuation (HuggingFace's
+	// symbols $+<=>^~| -- "[\p{P}\$\+<=>\^~\|]+", the first stage of
+	// DefaultBPE. Unlike OpPunctuation (HuggingFace's
 	// is_punc) it leaves the backtick alone. It is reached only through
-	// LlamaCppDefault; no tokenizer.json produces it.
+	// DefaultBPE; no tokenizer.json produces it.
 	OpPunctDefault
 	// OpDigitGroups isolates \p{N} in groups of Split.DigitGroup, left to
 	// right: HuggingFace's Split on "\p{N}{1,3}" with behavior Isolated, as a
@@ -59,10 +58,12 @@ const (
 	//	| ?[\p{P}\p{S}]+
 	//	|[\r\n]|\s+(?!\S)|\s+
 	OpSparkSplit
-	// opUnreadable is a stage whose pattern this package does not recognise.
-	// It is never valid: Validate and buildPipeline refuse it rather than
-	// reading an unrecognised Split as the nearest skeleton.
-	opUnreadable
+	// OpPattern is a Split as the model's tokenizer.json writes it: its
+	// regex (Pattern), its behavior (Behavior, by the tokenizers library's
+	// names) and whether it is inverted. Every Split a tokenizer.json holds
+	// parses to one; the kinds above are what older containers carry, each
+	// read as the pattern it stands for (Op.Pattern).
+	OpPattern
 )
 
 type Op struct {
@@ -80,13 +81,18 @@ type Op struct {
 	// Digits. individual_digits=true isolates every digit; false groups runs.
 	Individual bool
 
-	// Punctuation behaviour, e.g. "Contiguous" or "Isolated".
+	// Punctuation behaviour, e.g. "Contiguous" or "Isolated"; a Pattern
+	// stage's split behavior.
 	Behavior string
+
+	// Pattern: the regex, and whether the split is inverted.
+	Pattern string
+	Invert  bool
 }
 
 type SplitParams struct {
 	// contractions: (?i:'s|'t|'re|'ve|'m|'ll|'d). CaseFold is what the original
-	// regex means; llama.cpp expands it to '[sS]', which cannot match U+017F.
+	// regex means; an expansion to '[sS]' cannot match U+017F.
 	Contractions bool
 	CaseFold     bool
 	// LetterMarks is [\p{L}\p{M}]+ rather than \p{L}+ (qwen35).
@@ -129,9 +135,8 @@ type SplitParams struct {
 	HanRuns bool
 }
 
-// LlamaCppDefault is the pipeline llama.cpp runs for a BPE vocabulary whose
-// tokenizer.ggml.pre is absent or "default" (llama-vocab.cpp, the `default:`
-// arm of the regex switch):
+// DefaultBPE is the pipeline a BPE vocabulary takes when its GGUF names no
+// pre-tokenizer, or names "default":
 //
 //	"[\p{P}\$\+<=>\^~\|]+"                                   -> OpPunctDefault
 //	"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)"
@@ -140,16 +145,17 @@ type SplitParams struct {
 //	"[0-9][0-9][0-9]"                                          -> OpDigitTriples
 //
 // with add_bos and ignore_merges false unless the file says otherwise. It is
-// not llama3's split: llama.cpp gives llama3's pattern and BOS only to the names
-// it lists.
+// not llama3's split, which only the names that state it take.
 //
-// A file with no pre name carries no claim about its tokenizer, so what other
-// readers run is the only reference; tok.WithTokenizer outranks this.
-var LlamaCppDefault = []Op{
-	{Kind: OpPunctDefault},
-	{Kind: OpByteLevel, UseRegex: true},
-	{Kind: OpDigits, Individual: false},
-	{Kind: OpDigitTriples},
+// A file with no pre name carries no claim about its tokenizer; the model's own
+// tokenizer.json (tok.WithTokenizer) outranks this.
+func DefaultBPE() []Op {
+	return []Op{
+		{Kind: OpPunctDefault},
+		{Kind: OpByteLevel, UseRegex: true},
+		{Kind: OpDigits, Individual: false},
+		{Kind: OpDigitTriples},
+	}
 }
 
 // PreOps returns the ordered stages a pre-tokenizer name denotes, from the
@@ -157,7 +163,7 @@ var LlamaCppDefault = []Op{
 // converter: a container stores the stages, so a name the table lacks is a
 // question at conversion rather than a refusal at load.
 func PreOps(name string) ([]Op, bool) {
-	ops, ok := Table[name]
+	ops, ok := Table()[name]
 	return ops, ok
 }
 
@@ -183,8 +189,8 @@ func (k OpKind) String() string {
 		return "HunyuanSplit"
 	case OpSparkSplit:
 		return "SparkSplit"
-	case opUnreadable:
-		return "UnreadableSplit"
+	case OpPattern:
+		return "Pattern"
 	}
 	return "?"
 }

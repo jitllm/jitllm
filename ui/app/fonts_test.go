@@ -20,19 +20,19 @@ const (
 // The gate asserts coverage, not identity, so it does not bake the host's font
 // set into the test.
 func TestTheChainAnswersWithAFamilyThatCoversTheRune(t *testing.T) {
-	restore(t)
-	if len(LoadFonts()) == 0 {
+	var fonts Fonts
+	if len(fonts.Load()) == 0 {
 		t.Skip("no candidate font on this box -- this gate proved nothing")
 	}
-	t.Logf("chain: %v", UIFonts)
+	t.Logf("chain: %v", fonts.chain)
 
 	for _, r := range []rune{latinA, arabicAl, cjkHan} {
-		fam := FamilyFor(r, "")
+		fam := fonts.FamilyFor(r, "")
 		if fam == "" {
 			t.Logf("U+%04X: nothing in the chain covers it (the embedded default draws it)", r)
 			continue
 		}
-		if !FamilyCovers(fam, r) {
+		if !fonts.FamilyCovers(fam, r) {
 			t.Errorf("FamilyFor(U+%04X) named %q, which has no glyph for it: that is "+
 				"the .notdef box, chosen deliberately", r, fam)
 		}
@@ -42,13 +42,13 @@ func TestTheChainAnswersWithAFamilyThatCoversTheRune(t *testing.T) {
 // A rune the current run can already draw must stay in that run, or every
 // space would split a non-head-family sentence into per-word runs.
 func TestAFamilyKeepsARuneItCanAlreadyDraw(t *testing.T) {
-	restore(t)
-	if len(LoadFonts()) < 2 {
+	var fonts Fonts
+	if len(fonts.Load()) < 2 {
 		t.Skip("need at least two families on this box to tell a chain from a pick")
 	}
 	other := ""
-	for _, f := range UIFonts {
-		if FamilyCovers(f, ' ') {
+	for _, f := range fonts.chain {
+		if fonts.FamilyCovers(f, ' ') {
 			other = f
 			break
 		}
@@ -56,10 +56,10 @@ func TestAFamilyKeepsARuneItCanAlreadyDraw(t *testing.T) {
 	if other == "" {
 		t.Skip("no second family covering a space")
 	}
-	if got := FamilyFor(' ', other); got != other {
+	if got := fonts.FamilyFor(' ', other); got != other {
 		t.Errorf("a space inside a %q run was handed to %q: the run breaks at every space", other, got)
 	}
-	if got := FamilyFor(' ', ""); got != "" {
+	if got := fonts.FamilyFor(' ', ""); got != "" {
 		t.Errorf("with no run in progress a space went to %q, want Inter (the empty default)", got)
 	}
 }
@@ -67,22 +67,22 @@ func TestAFamilyKeepsARuneItCanAlreadyDraw(t *testing.T) {
 // Prose is Inter, and data is JetBrains Mono, whatever leads the fallback
 // chain: the chain is for runes Inter cannot draw.
 func TestProseIsInterAndDataIsMono(t *testing.T) {
-	restore(t)
-	LoadFonts()
-	if got := FamilyFor(latinA, ""); got != "" {
+	var fonts Fonts
+	fonts.Load()
+	if got := fonts.FamilyFor(latinA, ""); got != "" {
 		t.Errorf("Latin prose went to %q, want Inter", got)
 	}
-	if !FamilyCovers(MonoFamily, latinA) {
+	if !fonts.FamilyCovers(MonoFamily, latinA) {
 		t.Skipf("%s is not on this box -- the mono half proved nothing", MonoFamily)
 	}
-	if got := MonoFor(latinA, ""); got != MonoFamily {
+	if got := fonts.MonoFor(latinA, ""); got != MonoFamily {
 		t.Errorf("data went to %q, want %s", got, MonoFamily)
 	}
 	// A rune Inter lacks still reaches a family that has it.
 	if interCovers(cjkHan) {
 		t.Fatal("setup: Inter covers Han, pick a rune it lacks")
 	}
-	if fam := FamilyFor(cjkHan, ""); fam != "" && !FamilyCovers(fam, cjkHan) {
+	if fam := fonts.FamilyFor(cjkHan, ""); fam != "" && !fonts.FamilyCovers(fam, cjkHan) {
 		t.Errorf("Han went to %q, which cannot draw it", fam)
 	}
 }
@@ -114,12 +114,12 @@ func TestInterCoverMatchesTheEmbeddedFont(t *testing.T) {
 // An unregistered family covers nothing, and a chain that failed to load leaves
 // every rune on the embedded default rather than on a family that draws boxes.
 func TestAnUnknownFamilyCoversNothing(t *testing.T) {
-	restore(t)
-	if FamilyCovers("No Such Family", latinA) {
+	var fonts Fonts
+	if fonts.FamilyCovers("No Such Family", latinA) {
 		t.Error("an unregistered family reported coverage")
 	}
-	UIFonts, parsedFonts = nil, nil
-	if got := FamilyFor(latinA, ""); got != "" {
+	fonts = Fonts{}
+	if got := fonts.FamilyFor(latinA, ""); got != "" {
 		t.Errorf("with no chain loaded FamilyFor returned %q, want the empty default", got)
 	}
 }
@@ -127,7 +127,7 @@ func TestAnUnknownFamilyCoversNothing(t *testing.T) {
 // A font file that is not a font must not reach the registry: a family that
 // registers and then fails to parse draws nothing at all.
 func TestAnUnparseableFileIsNotRegistered(t *testing.T) {
-	restore(t)
+	var fonts Fonts
 	f, err := os.CreateTemp(t.TempDir(), "notafont*.ttf")
 	if err != nil {
 		t.Fatal(err)
@@ -137,14 +137,8 @@ func TestAnUnparseableFileIsNotRegistered(t *testing.T) {
 	}
 	f.Close()
 
-	fontCandidates = []struct{ family, file string }{{"Bogus", f.Name()}}
-	if got := LoadFonts(); len(got) != 0 {
+	fonts.candidates = []fontCandidate{{"Bogus", f.Name()}}
+	if got := fonts.Load(); len(got) != 0 {
 		t.Errorf("an unparseable file was registered as %v", got)
 	}
-}
-
-func restore(t *testing.T) {
-	t.Helper()
-	fonts, parsed, cands := UIFonts, parsedFonts, fontCandidates
-	t.Cleanup(func() { UIFonts, parsedFonts, fontCandidates = fonts, parsed, cands })
 }

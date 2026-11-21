@@ -613,16 +613,13 @@ type GenerateRequest struct {
 	IgnoreEos bool `protobuf:"varint,10,opt,name=ignore_eos,json=ignoreEos,proto3" json:"ignore_eos,omitempty"`
 	// Speculative decoding for this generate; unset takes the session's.
 	Speculation *SpeculationParams `protobuf:"bytes,30,opt,name=speculation,proto3" json:"speculation,omitempty"`
-	// Structured output: the reply is a sentence of this GBNF grammar
-	// (llama.cpp's format, root rule `root`), and ends where it does. A
+	// Structured output: the reply is a JSON value valid under this JSON Schema
+	// (2020-12), compiled by jitllm's grammar compiler, and ends where the value
+	// does. A keyword the compiler does not build is refused by name. A
 	// constrained generate runs alone and without speculation.
-	Grammar string `protobuf:"bytes,31,opt,name=grammar,proto3" json:"grammar,omitempty"`
-	// Structured output by JSON Schema, compiled to a grammar: the subset
-	// llama.cpp's json-schema-to-grammar builds, anything else refused by
-	// name. Not with `grammar`.
 	JsonSchema string `protobuf:"bytes,32,opt,name=json_schema,json=jsonSchema,proto3" json:"json_schema,omitempty"`
-	// The OpenAI API's response_format. Not with `grammar` or `json_schema`, and
-	// not with a forced tool call: each is one constraint.
+	// The OpenAI API's response_format. Not with `json_schema`, and not with a
+	// forced tool call: each is one constraint.
 	ResponseFormat *ResponseFormat `protobuf:"bytes,33,opt,name=response_format,json=responseFormat,proto3" json:"response_format,omitempty"`
 	// The number of continuations of one prompt (the API's `n`), 0 or 1 for one.
 	// The prompt is prefilled once; choice i samples with seed + i of
@@ -749,13 +746,6 @@ func (x *GenerateRequest) GetSpeculation() *SpeculationParams {
 		return x.Speculation
 	}
 	return nil
-}
-
-func (x *GenerateRequest) GetGrammar() string {
-	if x != nil {
-		return x.Grammar
-	}
-	return ""
 }
 
 func (x *GenerateRequest) GetJsonSchema() string {
@@ -1266,7 +1256,7 @@ type GenerateStarted struct {
 	// Where the blocks ran. A caller comparing two rates needs this, and the
 	// engine's own rule is that a backend is quoted with every number.
 	DeviceBlocks int32    `protobuf:"varint,7,opt,name=device_blocks,json=deviceBlocks,proto3" json:"device_blocks,omitempty"`
-	HostBlocks   int32    `protobuf:"varint,8,opt,name=host_blocks,json=hostBlocks,proto3" json:"host_blocks,omitempty"`
+	CpuBlocks    int32    `protobuf:"varint,8,opt,name=cpu_blocks,json=cpuBlocks,proto3" json:"cpu_blocks,omitempty"`
 	DeviceIds    []string `protobuf:"bytes,9,rep,name=device_ids,json=deviceIds,proto3" json:"device_ids,omitempty"`
 	// Prefill wall time. When `batched`, the prompt went in chunks inside steps
 	// shared with requests decoding, and this spans all of them.
@@ -1359,9 +1349,9 @@ func (x *GenerateStarted) GetDeviceBlocks() int32 {
 	return 0
 }
 
-func (x *GenerateStarted) GetHostBlocks() int32 {
+func (x *GenerateStarted) GetCpuBlocks() int32 {
 	if x != nil {
-		return x.HostBlocks
+		return x.CpuBlocks
 	}
 	return 0
 }
@@ -2223,7 +2213,7 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\tTYPE_TEXT\x10\x01\x12\x14\n" +
 	"\x10TYPE_JSON_OBJECT\x10\x02\x12\x14\n" +
 	"\x10TYPE_JSON_SCHEMA\x10\x03B\t\n" +
-	"\a_strict\"\xe5\x05\n" +
+	"\a_strict\"\xda\x05\n" +
 	"\x0fGenerateRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -2240,8 +2230,7 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\n" +
 	"ignore_eos\x18\n" +
 	" \x01(\bR\tignoreEos\x12>\n" +
-	"\vspeculation\x18\x1e \x01(\v2\x1c.jitllm.v1.SpeculationParamsR\vspeculation\x12\x18\n" +
-	"\agrammar\x18\x1f \x01(\tR\agrammar\x12\x1f\n" +
+	"\vspeculation\x18\x1e \x01(\v2\x1c.jitllm.v1.SpeculationParamsR\vspeculation\x12\x1f\n" +
 	"\vjson_schema\x18  \x01(\tR\n" +
 	"jsonSchema\x12B\n" +
 	"\x0fresponse_format\x18! \x01(\v2\x19.jitllm.v1.ResponseFormatR\x0eresponseFormat\x12\f\n" +
@@ -2250,7 +2239,7 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\ftop_logprobs\x18$ \x01(\x05H\x00R\vtopLogprobs\x88\x01\x01\x12#\n" +
 	"\rinclude_usage\x18% \x01(\bR\fincludeUsage\x12\x1a\n" +
 	"\bpriority\x18& \x01(\tR\bpriorityB\x0f\n" +
-	"\r_top_logprobs\"\xc9\x02\n" +
+	"\r_top_logprobsJ\x04\b\x1f\x10 R\agrammar\"\xc9\x02\n" +
 	"\x10GenerateResponse\x126\n" +
 	"\astarted\x18\x01 \x01(\v2\x1a.jitllm.v1.GenerateStartedH\x00R\astarted\x120\n" +
 	"\x05token\x18\x02 \x01(\v2\x18.jitllm.v1.GenerateTokenH\x00R\x05token\x129\n" +
@@ -2280,7 +2269,7 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"TopLogprob\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\x05R\atokenId\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\x12\x18\n" +
-	"\alogprob\x18\x03 \x01(\x02R\alogprob\"\x99\x03\n" +
+	"\alogprob\x18\x03 \x01(\x02R\alogprob\"\x97\x03\n" +
 	"\x0fGenerateStarted\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -2289,9 +2278,9 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\rprompt_tokens\x18\x04 \x01(\x05R\fpromptTokens\x12#\n" +
 	"\rqueued_millis\x18\x05 \x01(\x03R\fqueuedMillis\x12/\n" +
 	"\x14queue_depth_on_entry\x18\x06 \x01(\x05R\x11queueDepthOnEntry\x12#\n" +
-	"\rdevice_blocks\x18\a \x01(\x05R\fdeviceBlocks\x12\x1f\n" +
-	"\vhost_blocks\x18\b \x01(\x05R\n" +
-	"hostBlocks\x12\x1d\n" +
+	"\rdevice_blocks\x18\a \x01(\x05R\fdeviceBlocks\x12\x1d\n" +
+	"\n" +
+	"cpu_blocks\x18\b \x01(\x05R\tcpuBlocks\x12\x1d\n" +
 	"\n" +
 	"device_ids\x18\t \x03(\tR\tdeviceIds\x12%\n" +
 	"\x0eprefill_millis\x18\n" +

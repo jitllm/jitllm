@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // Preemption under memory pressure. A model may carry a KV budget
 // (SetKVBudget): the bytes its sessions' histories may hold at once, wherever
-// they live (model.State.HistoryBytes). A generate that would take the model
-// past it parks other sessions of the model first (model.State.Park: their
-// blocks' KV and recurrent state home from the device, their sealed pages
+// they live (engine.Instance.HistoryBytes). A generate that would take the model
+// past it parks other sessions of the model first (engine.Instance.Park: their
+// blocks' KV and recurrent state to the CPU from the device, their sealed pages
 // into a store) and the parked session resumes, byte for byte, the next time
 // it generates. Nothing is refused for it and nothing is recomputed.
 //
@@ -25,8 +25,8 @@ import (
 type preemptStats struct {
 	parks, resumes    atomic.Int64
 	pagesOut, pagesIn atomic.Int64
-	// blocksHome is the blocks parking brought home from a device.
-	blocksHome         atomic.Int64
+	// blocksToCPU is the blocks parking moved to the CPU device from a card.
+	blocksToCPU        atomic.Int64
 	overBudgetAdmitted atomic.Int64
 }
 
@@ -71,7 +71,8 @@ func (e *Engine) admitKV(s *Session, grow int) error {
 	if budget == 0 {
 		return nil
 	}
-	need := s.st.HistoryBytes() + uint64(max(grow, 0))*s.st.PositionBytes()
+	var need uint64
+	s.in().As(s.ms, func(in *engine.Instance) { need = in.HistoryBytes() + uint64(max(grow, 0))*in.PositionBytes() })
 	// busy is the sessions found stepping: looked past, not waited on.
 	var busy map[*Session]bool
 	for {
@@ -115,11 +116,11 @@ func (e *Engine) admitKV(s *Session, grow int) error {
 // lock is free; TryLock never waits on one that is stepping, which a later
 // admitKV may take once it is idle.
 //
-// With a memory cache the session parks into it (model.State.ParkInto), through
+// With a memory cache the session parks into it (engine.Instance.ParkInto), through
 // a view that pins what it is given until the session resumes: the model's
 // one store holds parked histories and cached prompts alike, counted in its
 // bytes and so in the model's budget, and no eviction can take a page a parked
-// session will fault back. Without one the State parks as it would alone.
+// session will fault back. Without one the instance parks as it would alone.
 func (e *Engine) park(v *Session) (bool, error) {
 	if !v.mu.TryLock() {
 		return false, nil
@@ -131,10 +132,12 @@ func (e *Engine) park(v *Session) (bool, error) {
 // resumeLocked resumes s if it is parked. The caller holds s.mu, or is the
 // step loop that owns s's row.
 func (e *Engine) resumeLocked(s *Session) error {
-	if !s.st.Parked() {
+	if !s.ms.Parked() {
 		return nil
 	}
-	in, err := s.st.Resume()
+	var in int
+	var err error
+	s.in().As(s.ms, func(st *engine.Instance) { in, err = st.Resume() })
 	if err != nil {
 		return fmt.Errorf("server: session %q could not resume: %w", s.id, err)
 	}
@@ -153,22 +156,24 @@ func (e *Engine) resumeLocked(s *Session) error {
 // parkLocked parks v. The caller holds v.mu, or is the step loop that owns
 // v's row (a time slice, batchfair.go).
 func (e *Engine) parkLocked(v *Session) error {
-	if v.closed.Load() || v.st.Parked() {
+	if v.closed.Load() || v.ms.Parked() {
 		v.snapHist.Store(0)
 		return nil
 	}
-	var ps model.ParkStats
+	var ps engine.ParkStats
 	var err error
-	if store := v.lm.ttft.store; store != nil {
-		view := store.Pinned()
-		if ps, err = v.st.ParkInto(view); err == nil {
-			v.parkView = view
-		} else {
-			view.Release()
+	v.in().As(v.ms, func(st *engine.Instance) {
+		if store := v.lm.ttft.store; store != nil {
+			view := store.Pinned()
+			if ps, err = st.ParkInto(view); err == nil {
+				v.parkView = view
+			} else {
+				view.Release()
+			}
+			return
 		}
-	} else {
-		ps, err = v.st.Park()
-	}
+		ps, err = st.Park()
+	})
 	if err != nil {
 		return fmt.Errorf("server: parking session %q: %w", v.id, err)
 	}
@@ -176,7 +181,7 @@ func (e *Engine) parkLocked(v *Session) error {
 	v.snapHist.Store(0)
 	e.preempt.parks.Add(1)
 	e.preempt.pagesOut.Add(int64(ps.PagesOut))
-	e.preempt.blocksHome.Add(int64(ps.Blocks))
+	e.preempt.blocksToCPU.Add(int64(ps.Blocks))
 	v.refresh()
 	return nil
 }

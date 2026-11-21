@@ -28,15 +28,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/sched"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -60,9 +62,14 @@ func verbs() []verb {
 	}
 }
 
-// version is the release version, set at link time
-// (-ldflags "-X main.version=v0.1.0"; see .goreleaser.yaml).
-var version = "dev"
+// buildVersion is the release version the module was built at, "dev" for a
+// build from an untagged tree.
+func buildVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -168,7 +175,7 @@ func serve(args []string) {
 	maxSeq := fs.Int("max-seq", 0, "default KV capacity per session, in positions (default: the model's context length)")
 	orchestrate := fs.Bool("orchestrate", true,
 		"move blocks between the host and the devices on the server's own initiative: a session that "+
-			"generates is promoted onto a card, idle ones demoted to make room (docs/design/orchestrator.md)")
+			"generates is promoted onto a card, idle ones demoted to make room (.notes/design/orchestrator.md)")
 	maxBatch := fs.Int("max-batch", 0,
 		"generates of one model that decode as rows of one step. 0 is the engine's "+
 			"bound (the widest step across sessions); 1 turns batching off")
@@ -188,6 +195,11 @@ func serve(args []string) {
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
+	decodeGroups := fs.Int("decode-groups", 0,
+		"how many groups a batch splits its decoding rows into on a model over several cards, each "+
+			"group stepping on its own so every card works at once: 0 or 1 one group, -1 one per card "+
+			"holding blocks where the steps are one kernel for every row count (the composer's) and the "+
+			"groups time faster than one, n at most n")
 	warm := fs.Bool("warm", true,
 		"after every load, run a short prefill and a decode step so the first request does not pay for them")
 	noStore := fs.Bool("no-mem-cache", false,
@@ -198,8 +210,6 @@ func serve(args []string) {
 	hostMem := fs.String("host-mem", "",
 		"host memory the loaded models divide, e.g. 64G (default: re-read at each load, eight tenths "+
 			"of the smallest of the cgroup limit, the bound NUMA nodes' memory and what is available)")
-	pool := fs.Int("session-pool", 0,
-		"reset sessions each model keeps for model_id requests; 0 is -sessions, -1 none")
 	maxQueue := fs.Int("max-queue", 0,
 		"requests one model holds, running or waiting, before it answers 429; 0 is 64, -1 unbounded")
 	retry := fs.Duration("retry-after", time.Second, "the Retry-After a 429 for a full queue names")
@@ -221,7 +231,7 @@ func serve(args []string) {
 	imagePixels := fs.Int64("image-max-pixels", server.DefaultImageMaxPixels, "the most pixels (width x height) one picture may be")
 	imageCount := fs.Int("image-max-count", server.DefaultImageMaxImages, "the most pictures one request may carry")
 	imageTimeout := fs.Duration("image-fetch-timeout", server.DefaultImageFetchTimeout, "how long one remote picture fetch may take")
-	version := fs.String("version", version, "version string reported by GetServerInfo")
+	version := fs.String("version", buildVersion(), "version string reported by GetServerInfo")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -238,7 +248,7 @@ func serve(args []string) {
 
 	var budget uint64
 	if *maxmem != "" {
-		b, err := tier.ParseBytes(*maxmem)
+		b, err := gpu.ParseBytes(*maxmem)
 		if err != nil {
 			fatal("-maxmem: %v", err)
 		}
@@ -247,18 +257,18 @@ func serve(args []string) {
 
 	var storeBytes uint64
 	if *storeMax != "" {
-		b, err := tier.ParseBytes(*storeMax)
+		b, err := gpu.ParseBytes(*storeMax)
 		if err != nil {
 			fatal("-mem-cache-max: %v", err)
 		}
 		storeBytes = b
 	}
 
-	imageBytes, err := tier.ParseBytes(*imageMax)
+	imageBytes, err := gpu.ParseBytes(*imageMax)
 	if err != nil {
 		fatal("-image-max: %v", err)
 	}
-	imageReqBytes, err := tier.ParseBytes(*imageReqMax)
+	imageReqBytes, err := gpu.ParseBytes(*imageReqMax)
 	if err != nil {
 		fatal("-image-max-request: %v", err)
 	}
@@ -280,7 +290,7 @@ func serve(args []string) {
 
 	var hostBytes uint64
 	if *hostMem != "" {
-		b, err := tier.ParseBytes(*hostMem)
+		b, err := gpu.ParseBytes(*hostMem)
 		if err != nil {
 			fatal("-host-mem: %v", err)
 		}
@@ -297,13 +307,13 @@ func serve(args []string) {
 	if wasSet(fs, "kv-f16") {
 		kvWidth = kvF16
 	}
-	var store model.KVStore
+	var store engine.KVStore
 	if *kvCache != "" {
-		max, err := tier.ParseBytes(*kvCacheMax)
+		max, err := gpu.ParseBytes(*kvCacheMax)
 		if err != nil {
 			fatal("-kv-cache-max: %v", err)
 		}
-		fsStore, err := model.NewFileStoreLimit(*kvCache, max)
+		fsStore, err := engine.NewFileStoreLimit(*kvCache, max)
 		if err != nil {
 			fatal("-kv-cache: %v", err)
 		}
@@ -318,6 +328,7 @@ func serve(args []string) {
 		NoOnDemand:       !*onDemand,
 		KVF16:            kvWidth,
 		OffHeap:          goheap.OffHeap,
+		GC:               sched.GCPlan{Reserve: goheap.Reserve()},
 		PromptStore:      store,
 		ModelDir:         *models,
 		MaxBatchRows:     *maxBatch,
@@ -327,17 +338,16 @@ func serve(args []string) {
 		StepCost:         *stepCost,
 		Fairness:         fairness,
 		JointSteps:       joint,
+		DecodeGroups:     *decodeGroups,
 		DefaultMaxSeq:    *maxSeq,
 		Version:          *version,
 		// The ROCm library directory; the server package reads no environment.
 		ROCm: rocmDir(),
 		// Where the device tuners' answers persist between runs.
-		TuneCache: tuneCacheDir(),
 
 		NoMemCache:    *noStore,
 		MemCacheBytes: storeBytes,
 		HostBudget:    hostBytes,
-		SessionPool:   *pool,
 		MaxQueue:      *maxQueue,
 		RetryAfter:    *retry,
 		WarmLoads:     *warm,

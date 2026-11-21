@@ -10,7 +10,7 @@ An Astro site: a hand-built landing page and Starlight docs under `/docs`.
 - `public/app.js`: the hero's pixel field, the theme picker and small behaviours.
 - `public/machine.js`: "Watch it schedule", an isometric simulation of placement,
   paging and the KV cache. It illustrates the policy; it is not telemetry.
-- `public/numbers.js`: the benchmark boards, transcribed from `docs/perf/current.md`.
+- `public/numbers.js`: the benchmark boards, transcribed from `.notes/perf/current.md`.
 - `src/content/docs/docs/`: the documentation, one Markdown file a page, served
   under `/docs`: start-here pages at the top, then `guides/`, `concepts/` and
   `reference/`. The sidebar is in `astro.config.mjs`.
@@ -38,7 +38,7 @@ site as its reference. The copy, wordmark, icons and code are original to jitllm
 - The hero is the "compile" scene over the "flow" noise. `?dev` (or `?hero=` / `?noise=`) shows a bar
   for switching to the other scenes and noise fields.
 - The docs quote the engine: flags, endpoints and numbers come from
-  `cmd/jitllm`, `server/`, `library/models.go` and `docs/perf/current.md`. When
+  `cmd/jitllm`, `server/`, `library/models.go` and `.notes/perf/current.md`. When
   those change, the pages that quote them need the same change.
 - `prefers-reduced-motion` draws the field once, skips the wordmark sweep, the
   typewriter and every transition; the page stays fully usable.

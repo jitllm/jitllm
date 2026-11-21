@@ -25,9 +25,9 @@ type k3Key struct {
 }
 
 // k3Sources converts one Kimi-K3 twice -- its HuggingFace directory through
-// the safetensors path, and the GGUF llama.cpp's converter wrote from the
-// same checkpoint -- and demands every Config field equal. It returns the two
-// tensor sets by identity.
+// the safetensors path, and the GGUF convert_hf_to_gguf.py wrote from the
+// same checkpoint -- and demands every Config field equal, the blocks' stated
+// graphs among them. It returns the two tensor sets by identity.
 func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 	t.Helper()
 	for _, p := range []string{filepath.Join(dir, "config.json"), gp} {
@@ -36,15 +36,15 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 				"checkpoints and their GGUFs come from) -- this gate proved nothing", err)
 		}
 	}
-	a, b := hfSource(t, dir), ggufSource(t, gp)
+	a, b := hfSource(t, dir), ggufConverted(t, gp, true)
 	ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 	for i := 0; i < ca.NumField(); i++ {
+		if !ca.Type().Field(i).IsExported() {
+			continue
+		}
 		if x, y := ca.Field(i).Interface(), cb.Field(i).Interface(); !reflect.DeepEqual(x, y) {
 			t.Errorf("Config.%s: safetensors %v, gguf %v", ca.Type().Field(i).Name, x, y)
 		}
-	}
-	if a.Config.Arch != jlm.ArchKimiK3 {
-		t.Fatalf("arch %v", a.Config.Arch)
 	}
 	index := func(s *jlm.Source) map[k3Key]*jlm.Tensor {
 		m := map[k3Key]*jlm.Tensor{}
@@ -88,7 +88,7 @@ func k3Values(t *testing.T, e *jlm.Tensor) []float32 {
 }
 
 // TestK3SafetensorsMatchesItsGGUF converts Kimi-K3 from its HuggingFace
-// checkpoint and from the F32 GGUF llama.cpp's converter wrote from it, and
+// checkpoint and from the F32 GGUF convert_hf_to_gguf.py wrote from it, and
 // demands the same container: every Config field, and every tensor byte for
 // byte. Both are F32, so a role, a join order, a split, the residual scores'
 // product or a dropped tensor is an inequality, not a tolerance. The GGUF
@@ -98,52 +98,59 @@ func k3Values(t *testing.T, e *jlm.Tensor) []float32 {
 // checkpoint none.
 //
 // One exception, measured: the KDA decay rate is -exp(A_log), which
-// llama.cpp's converter takes in float32 torch and this converter in float64
+// the GGUF's writer takes in float32 torch and this converter in float64
 // rounded once; the two may part by one ulp, and no more.
 func TestK3SafetensorsMatchesItsGGUF(t *testing.T) {
 	for _, c := range []struct{ name, dir, gguf string }{
 		{"synth-kimik3", filepath.Join(c6HFDir(), "synth-kimik3"), testmodels.Path("synth-kimik3.gguf")},
 		{"Kimi-K3-0.40B", testmodels.Path("kimik3/Kimi-K3-0.40B-hf"), testmodels.Path("kimik3/Kimi-K3-0.40B-F32.gguf")},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			hf, gg := k3Sources(t, c.dir, c.gguf)
-			same, ulp := 0, 0
-			for k, e := range gg {
-				x := hf[k]
-				if x == nil {
-					continue
-				}
-				switch {
-				case x.Type != e.Type || x.NDim != e.NDim || x.Dims != e.Dims:
-					t.Errorf("%v block %d: safetensors %v %v, gguf %v %v", k.role, k.block,
-						x.Type, x.Dims[:x.NDim], e.Type, e.Dims[:e.NDim])
-				case bytes.Equal(x.Data, e.Data):
-					same++
-				case k.role == jlm.RoleSSMA && e.Type == jlm.TypeF32:
-					a, b := k3Values(t, x), k3Values(t, e)
-					for i := range a {
-						d := int64(math.Float32bits(a[i])) - int64(math.Float32bits(b[i]))
-						if d < -1 || d > 1 {
-							t.Errorf("ssm_a block %d [%d]: %g against %g, past one ulp", k.block, i, a[i], b[i])
-							break
-						}
-					}
-					ulp++
-				default:
-					t.Errorf("%v block %d: the bytes differ", k.role, k.block)
-				}
-			}
-			if same == 0 {
-				t.Fatal("no tensor compared -- this gate proved nothing")
-			}
-			t.Logf("every Config field equal; %d tensors identical, %d decay rates within one ulp", same, ulp)
-		})
+		t.Run(c.name, func(t *testing.T) { kimiSameContainer(t, c.dir, c.gguf) })
 	}
+}
+
+// kimiSameContainer holds the container converted from a HuggingFace
+// directory and the one converted from the F32 GGUF convert_hf_to_gguf.py
+// wrote from the same checkpoint to one another: every Config field (k3Sources)
+// and every tensor byte for byte, the decay rates within one ulp.
+func kimiSameContainer(t *testing.T, dir, gp string) {
+	t.Helper()
+	hf, gg := k3Sources(t, dir, gp)
+	same, ulp := 0, 0
+	for k, e := range gg {
+		x := hf[k]
+		if x == nil {
+			continue
+		}
+		switch {
+		case x.Type != e.Type || x.NDim != e.NDim || x.Dims != e.Dims:
+			t.Errorf("%v block %d: safetensors %v %v, gguf %v %v", k.role, k.block,
+				x.Type, x.Dims[:x.NDim], e.Type, e.Dims[:e.NDim])
+		case bytes.Equal(x.Data, e.Data):
+			same++
+		case k.role == jlm.RoleSSMA && e.Type == jlm.TypeF32:
+			a, b := k3Values(t, x), k3Values(t, e)
+			for i := range a {
+				d := int64(math.Float32bits(a[i])) - int64(math.Float32bits(b[i]))
+				if d < -1 || d > 1 {
+					t.Errorf("ssm_a block %d [%d]: %g against %g, past one ulp", k.block, i, a[i], b[i])
+					break
+				}
+			}
+			ulp++
+		default:
+			t.Errorf("%v block %d: the bytes differ", k.role, k.block)
+		}
+	}
+	if same == 0 {
+		t.Fatal("no tensor compared -- this gate proved nothing")
+	}
+	t.Logf("every Config field equal; %d tensors identical, %d decay rates within one ulp", same, ulp)
 }
 
 // TestK3MXFP4ExpertsMatchTheGGUF converts inference-optimization's
 // Kimi-K3-0.40B-MXFP4 (compressed-tensors mxfp4-pack-quantized, the release's
-// format) from the checkpoint and from the MXFP4 GGUF llama.cpp's converter
+// format) from the checkpoint and from the MXFP4 GGUF convert_hf_to_gguf.py
 // wrote from it (murillo2000/Kimi-K3-0.40B-GGUF), and demands every routed
 // expert bank byte for byte: the codes and scales are moved, never
 // requantized. The GGUF stores the rest at F16, so the rest is compared by
@@ -242,7 +249,7 @@ func TestK3MXFP4ExpertsMatchTheGGUF(t *testing.T) {
 				w := map[jlm.Role]string{jlm.RoleExpGateBank: "w1", jlm.RoleExpDownBank: "w2", jlm.RoleExpUpBank: "w3"}[k.role]
 				sheet := len(e.Data) / int(e.Dims[2])
 				for x := range int(e.Dims[2]) {
-					base := k3BlockPrefix + itoa(int(k.block)) + ".block_sparse_moe.experts." + itoa(x) + "." + w
+					base := "language_model.model.layers." + itoa(int(k.block)) + ".block_sparse_moe.experts." + itoa(x) + "." + w
 					pt, ok1 := f.Get(base + ".weight_packed")
 					st, ok2 := f.Get(base + ".weight_scale")
 					if !ok1 || !ok2 {
@@ -410,7 +417,7 @@ func TestK3ConfigRefusals(t *testing.T) {
 		{"the low-rank KDA gate", `"use_full_rank_gate": true`, `"use_full_rank_gate": false`, "use_full_rank_gate"},
 		{"a softmax router", `"moe_router_activation_func": "sigmoid"`, `"moe_router_activation_func": "softmax"`, "sigmoid"},
 		{"a mixture every other block", `"moe_layer_freq": 1`, `"moe_layer_freq": 2`, "moe_layer_freq"},
-		{"other situ bounds", `"activation_situ_beta": 4.0`, `"activation_situ_beta": 3.0`, "situ"},
+		{"a situ bound of zero", `"activation_situ_beta": 4.0`, `"activation_situ_beta": 0.0`, "situ"},
 		{"a layer in both lists", `"full_attn_layers": [`, `"full_attn_layers": [1, `, "twice"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -422,7 +429,7 @@ func TestK3ConfigRefusals(t *testing.T) {
 			if err := jsonUnmarshalKeys([]byte(b), hc); err != nil {
 				t.Fatal(err)
 			}
-			_, err := kimiK3HFConfig(hc, []string{"language_model.lm_head.weight"})
+			_, err := k3ClassConfig(hc, []string{"language_model.lm_head.weight"})
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want a refusal naming %q", err, c.want)
 			}
@@ -430,13 +437,63 @@ func TestK3ConfigRefusals(t *testing.T) {
 	}
 }
 
+// TestK3SituBoundsAreTheFiles holds Kimi-K3's situ activation to the bounds
+// its file states, not the published 4 and 25: a file stating 3 and 20
+// converts, and every block's activation is b*tanh(x/b) at those bounds.
+func TestK3SituBoundsAreTheFiles(t *testing.T) {
+	dir := filepath.Join(c6HFDir(), "synth-kimik3")
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
+	}
+	b := string(raw)
+	for _, m := range [][2]string{{`"activation_situ_beta": 4.0`, `"activation_situ_beta": 3.0`},
+		{`"activation_situ_linear_beta": 25.0`, `"activation_situ_linear_beta": 20.0`}} {
+		if !strings.Contains(b, m[0]) {
+			t.Fatalf("the mutation %q matched nothing", m[0])
+		}
+		b = strings.Replace(b, m[0], m[1], 1)
+	}
+	hc := &hfConfig{path: "config.json"}
+	if err := jsonUnmarshalKeys([]byte(b), hc); err != nil {
+		t.Fatal(err)
+	}
+	c, err := k3ClassConfig(hc, []string{"language_model.lm_head.weight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SituBeta != 3 || c.SituLinearBeta != 20 {
+		t.Fatalf("situ bounds %g and %g, want the file's 3 and 20", c.SituBeta, c.SituLinearBeta)
+	}
+	want, err := Activation(Unstated(&jlm.Config{NLayer: 1, SituBeta: 3, SituLinearBeta: 20}), 0, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := Activation(Unstated(&jlm.Config{NLayer: 1, SituBeta: 4, SituLinearBeta: 25}), 0, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(want, published) {
+		t.Fatal("the activation does not depend on its bounds")
+	}
+	for li := 0; li < int(c.NLayer); li++ {
+		got, err := Activation(c, li, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("block %d's activation is %+v, want situ at 3 and 20", li, got)
+		}
+	}
+}
+
 // TestPlanIsTheWrite holds the dry run to the conversion: PlanSafetensors,
 // which reads headers only, states the header and the size FromSafetensors
 // then writes, byte for byte, on Kimi-K3's two inputs (F32, and the release's
-// compressed-tensors MXFP4).
+// compressed-tensors MXFP4) and on a class the model.json library converts.
 func TestPlanIsTheWrite(t *testing.T) {
 	for _, dir := range []string{filepath.Join(c6HFDir(), "synth-kimik3"),
-		testmodels.Path("kimik3/Kimi-K3-0.40B-MXFP4-hf")} {
+		testmodels.Path("kimik3/Kimi-K3-0.40B-MXFP4-hf"), testmodels.Path("synth-hf-qwen35")} {
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
@@ -473,26 +530,59 @@ func TestPlanIsTheWrite(t *testing.T) {
 }
 
 // TestALogPaddingIsTakenOnlyWhenZero: Kimi-K3's release stores A_log as 128
-// entries for 96 heads, the last 32 zero (read off the Hub). The heads'
-// entries are taken, as llama.cpp's converter takes them; a tail that is not
-// zero is another geometry and is refused.
+// entries for 96 heads, the last 32 zero (read off the Hub). Each Moonshot
+// class's table takes the heads' entries, as the GGUF holds them, as the
+// per-channel rate -exp(A_log) repeated over a head; a tail that
+// is not zero is another geometry and is refused.
 func TestALogPaddingIsTakenOnlyWhenZero(t *testing.T) {
-	c := &jlm.Config{SSM: jlm.SSMConfig{NHeadV: 2, StateSize: 3}}
-	e := jlm.Tensor{Type: jlm.TypeF32, NDim: 1, Dims: [4]uint64{4}, Name: "A_log"}
-	padded := f32AsBytes([]float32{0.5, -1, 0, 0})
-	out, err := kimiExpandALog(e, padded, c)
+	files, err := libraryFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := f32AsBytes([]float32{
-		float32(-math.Exp(0.5)), float32(-math.Exp(0.5)), float32(-math.Exp(0.5)),
-		float32(-math.Exp(-1)), float32(-math.Exp(-1)), float32(-math.Exp(-1))})
-	if !bytes.Equal(out[0].Data, want) || out[0].Dims[0] != 6 {
-		t.Fatalf("padded A_log expanded to %v", k3Values(t, &out[0]))
+	env := func(p string) any {
+		return map[string]any{"num_attention_heads": 2.0, "linear_attn_config.head_dim": 3.0}[p]
 	}
-	if _, err := kimiExpandALog(e, f32AsBytes([]float32{0.5, -1, 0, 2}), c); err == nil {
-		t.Fatal("a tail that is not zero padding was taken")
+	ran := 0
+	for _, mj := range files {
+		ts, ok := mj.Tensors.BlockLinear["self_attn.A_log"]
+		if !ok {
+			continue
+		}
+		ran++
+		p := ts[0].Do
+		run := func(vals []float32) (mjVal, error) {
+			return p.run(env, []mjVal{{shape: []uint64{4}, typ: jlm.TypeF32, data: f32AsBytes(vals)}})
+		}
+		out, err := run([]float32{0.5, -1, 0, 0})
+		if err != nil {
+			t.Fatalf("%s: %v", mj.name, err)
+		}
+		want := f32AsBytes([]float32{
+			float32(-math.Exp(0.5)), float32(-math.Exp(0.5)), float32(-math.Exp(0.5)),
+			float32(-math.Exp(-1)), float32(-math.Exp(-1)), float32(-math.Exp(-1))})
+		if !bytes.Equal(out.data, want) || len(out.shape) != 1 || out.shape[0] != 6 {
+			t.Fatalf("%s: padded A_log came out as %v", mj.name, out.shape)
+		}
+		if _, err := run([]float32{0.5, -1, 0, 2}); err == nil {
+			t.Fatalf("%s: a tail that is not zero padding was taken", mj.name)
+		}
 	}
+	if ran < 2 {
+		t.Fatalf("%d classes state A_log: Kimi-K3's and Kimi-Linear's both should", ran)
+	}
+}
+
+// k3ClassConfig is the Kimi-K3 class's config reader, the library's.
+func k3ClassConfig(hc *hfConfig, names []string) (*Config, error) {
+	lib, err := modelLibrary()
+	if err != nil {
+		return nil, err
+	}
+	ha, err := lib["KimiK3ForConditionalGeneration"].hfArch()
+	if err != nil {
+		return nil, err
+	}
+	return ha.config(hc, names)
 }
 
 // jsonUnmarshalKeys parses config.json the way readHFConfig does.

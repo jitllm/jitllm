@@ -1,10 +1,8 @@
 package engine
 
 import (
-	"fmt"
-
 	"github.com/jitllm/jitllm/common/session"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -44,7 +42,6 @@ func (e *Engine) publishModels() {
 			Active: e.active == en,
 		}
 		if en.m != nil {
-			lm.Arch = en.m.Cfg.Arch
 			lm.Blocks = en.m.Cfg.NLayer
 		}
 		out = append(out, lm)
@@ -98,7 +95,7 @@ func (e *Engine) Unload(path string) {
 		e.unload(en)
 		e.publishModels()
 		if e.active == nil {
-			e.sh.Post(func() { e.st.Loaded.Set(false); e.st.Vision.Set(false) })
+			e.sh.Post(func() { e.st.Loaded.Set(false); e.st.Vision.Set(false); e.st.Own.Set(session.Sampling{}) })
 		}
 		e.status("closed %s", short(path))
 	})
@@ -157,7 +154,7 @@ func (e *Engine) SetPriority(on bool) {
 }
 
 // errNoModel is returned when a switch is asked for with nothing to switch to.
-var errNoModel = fmt.Errorf("no model is open")
+const errNoModel engineError = "no model is open"
 
 // activeName is the running model's display name and palette index, for the
 // turn it is about to produce.

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // DeviceInfo is one enumerated compute resource, in Go terms.
@@ -42,11 +42,11 @@ type DeviceInfo struct {
 // DeviceKind mirrors the proto enum.
 type DeviceKind int
 
-// The device kinds: the host CPU, a discrete card with its own memory, and an
+// The device kinds: the CPU, a discrete card with its own memory, and an
 // integrated device whose memory is the host's.
 const (
 	KindUnspecified DeviceKind = iota
-	KindHost
+	KindCPU
 	KindDiscrete
 	KindIntegrated
 )
@@ -80,7 +80,7 @@ func (e *Engine) Devices(refresh bool) ([]DeviceInfo, error) {
 	}
 	probe := e.cfg.Probe
 	if probe == nil {
-		probe = func() ([]DeviceInfo, error) { return probeDevices(e.cfg.ROCm) }
+		probe = func() ([]DeviceInfo, error) { return probeDevices(e.cfg.ROCm, e.cfg.Admit) }
 	}
 	e.devices, e.devErr = probe()
 	// Dedupe whatever the probe returned, injected probes included.
@@ -99,12 +99,12 @@ func (e *Engine) snapshotDevices() []DeviceInfo {
 	return out
 }
 
-func probeDevices(rocm string) ([]DeviceInfo, error) {
+func probeDevices(rocm string, admit backend.Restriction) ([]DeviceInfo, error) {
 	out := []DeviceInfo{{
-		ID:                     HostGateID,
+		ID:                     CPUGateID,
 		Backend:                "cpu",
 		Name:                   hostName(),
-		Kind:                   KindHost,
+		Kind:                   KindCPU,
 		TotalMemory:            hostTotal(),
 		FreeMemory:             sched.MemBudget(),
 		CountsTowardHostBudget: true,
@@ -114,7 +114,7 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 	// Every Vulkan physical device is listed, not only the one backend.Open
 	// picks (discrete-first), so a caller can see and name vulkan:1. The query
 	// opens nothing.
-	if infos, err := backend.VulkanDevices(); err == nil {
+	if infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: admit}); err == nil {
 		for _, in := range infos {
 			d := DeviceInfo{
 				ID:        "vulkan:" + strconv.Itoa(in.Index),
@@ -141,9 +141,10 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 	// Every HIP device is listed as hip:N, as every Vulkan device is above. No
 	// ROCm is no entry, not an error: the card is then vulkan:N alone.
 	hipCfg := backend.HIPConfig{Path: rocm}
+	base := backend.Opts{HIP: hipCfg, Admit: admit}
 	for i := 0; i < backend.HIPCount(hipCfg); i++ {
 		d := DeviceInfo{ID: "hip:" + strconv.Itoa(i), Backend: "hip", Index: i, Kind: KindDiscrete}
-		hd, err := backend.OpenHIPWith(i, backend.Opts{HIP: hipCfg, Enumerating: true})
+		hd, err := backend.OpenHIPWith(i, backend.Opts{HIP: hipCfg, Admit: admit, Enumerating: true})
 		if err != nil {
 			d.Why = err.Error()
 			out = append(out, d)
@@ -161,7 +162,7 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 		out = append(out, d)
 	}
 
-	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
+	devs := backend.OpenWith(base)
 	defer func() {
 		for _, d := range devs {
 			d.Close()
@@ -213,7 +214,7 @@ func probeDevices(rocm string) ([]DeviceInfo, error) {
 // but only the unmarked entry is counted. The unmarked one is the preferred
 // backend by backend.APIRank (CUDA or Metal over Vulkan), not the first
 // listed, since Vulkan is enumerated first. See
-// docs/engineering-history/placement.md 15u.
+// .notes/engineering-history/placement.md 15u.
 func markSameDevice(devs []DeviceInfo) int {
 	primary := map[string]int{} // identity -> index of the entry that counts
 	n := 0
@@ -278,7 +279,7 @@ func apiName(api string) string {
 // Host reports the host's own memory and cores.
 func (e *Engine) Host() HostInfo {
 	return HostInfo{
-		WeightBudget: sched.MemBudget(),
+		WeightBudget: e.cfg.GC.Budget(),
 		Total:        hostTotal(),
 		Available:    hostAvailable(),
 		DecodeCores:  len(sched.DecodeCores()),
@@ -295,7 +296,7 @@ func (e *Engine) Host() HostInfo {
 func SpendableTotal(host HostInfo, devs []DeviceInfo) uint64 {
 	total := host.WeightBudget
 	for _, d := range devs {
-		if d.Kind == KindHost || d.CountsTowardHostBudget || !d.Available {
+		if d.Kind == KindCPU || d.CountsTowardHostBudget || !d.Available {
 			continue
 		}
 		// markSameDevice decided which entry of a shared card counts.

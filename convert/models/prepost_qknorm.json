@@ -1,0 +1,52 @@
+{
+  "describe": {"gemma3": "Gemma 3; EmbeddingGemma (pooled)",
+               "gemma-embedding": "EmbeddingGemma as llama.cpp writes it (pooled, bidirectional)"},
+  "gguf": ["gemma3", "gemma-embedding"],
+  "container": {
+    "gemma3": {"stop": ["<eos>", "<end_of_turn>", "<|eot_id|>"], "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
+                  "block": {"attn_qkv.weight": [
+                     {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "attn_qkv.bias": [
+                     {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
+      "attn_scale": "(src['embedding_length'] // src['attention.head_count']) ** -0.5 if src['block_count'] == 62 else src['attention.scale'] | default(0)", "flags": {"rope_neox": "true", "qk_norm": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5",
+               "window": {"size": "src['attention.sliding_window'] | default(0)", "pattern": "6",
+                          "rope_base": "src['rope.freq_base_swa'] | default(10000)"},
+               "final_softcap": "src['final_logit_softcapping'] | default(0)"},
+    "gemma-embedding": {"stop": ["<eos>", "<end_of_turn>", "<|eot_id|>"], "tensors": {"sizes": {"q": "at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"}, "block": {"attn_qkv.weight": [{"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]}, {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]}, {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}], "attn_qkv.bias": [{"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]}, {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]}, {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]}},
+      "attn_scale": "0", "flags": {"rope_neox": "true", "qk_norm": "true", "non_causal": "true"},
+      "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5", "pooling": "1",
+      "window": {"size": "src['attention.sliding_window'] | default(0)", "pattern": "6", "rope_base": "src['rope.freq_base_swa'] | default(10000)"}}
+  },
+  "graph": {
+    "block": [
+      {"op": "in",         "out": "x", "width": "embd"},
+      {"op": "norm",       "in": "x", "w": "attn_norm", "out": "n"},
+      {"op": "matvec",     "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "heads * head_dim", "out": "q"},
+      {"op": "matvec",     "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "kv_heads * head_dim", "out": "k"},
+      {"op": "matvec",     "in": "n", "w": ["attn_v", "attn_v.bias?"], "rows": "kv_heads * head_dim", "out": "v"},
+      {"op": "head_norm",  "in": "q", "w": "attn_q_norm", "out": "q"},
+      {"op": "head_norm",  "in": "k", "w": "attn_k_norm", "out": "k"},
+      {"op": "rope",       "if": "rope_at", "in": "q", "name": "q.rope", "out": "q"},
+      {"op": "rope",       "if": "rope_at", "in": "k", "name": "k.rope", "out": "k"},
+      {"op": "kv_append",  "in": ["k", "v"], "out": "kv"},
+      {"op": "attend",     "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
+      {"op": "matvec",     "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "norm",       "in": "o", "w": "post_attention_norm", "out": "o"},
+      {"op": "add",        "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
+      {"op": "norm",       "in": "h", "w": "ffn_norm", "out": "m"},
+      {"op": "matvec",     "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
+      {"op": "matvec",     "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
+      {"op": "act",        "in": ["g", "u"], "width": "ffn", "out": "a"},
+      {"op": "matvec",     "in": "a", "w": ["ffn_down", "ffn_down.bias?"], "rows": "embd", "out": "d"},
+      {"op": "norm",       "in": "d", "w": "post_ffw_norm", "out": "d"},
+      {"op": "add",        "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "out",        "in": "y"}
+    ]
+  }
+}

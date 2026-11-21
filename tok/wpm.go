@@ -8,25 +8,29 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// WordPiece: the BERT family's tokenizer, which every Ollama embedding model
-// on the bert and nomic-bert architectures ships.
+// WordPiece: the BERT family's tokenizer, the one the bert and nomic-bert
+// embedding models ship.
 //
-// The vocabulary is in llama.cpp's spelling, not BERT's: the GGUF converter
-// turned "##ing" into "ing" and "the" into "▁the", so a word is matched as
+// The vocabulary marks the word-initial piece rather than the continuation:
+// "ing" for BERT's "##ing" and "▁the" for "the", so a word is matched as
 // "▁" + word, greedily, longest piece first. The segmentation is the same,
 // since a piece at byte 0 can only be word-initial.
 //
-// It follows llama.cpp's llm_tokenizer_wpm_session line for line, the oracle
-// this path is gated against. Where it differs from HuggingFace's
-// BertTokenizer (a word over 100 characters is one [UNK] there and is
-// segmented here), the divergence is llama.cpp's.
+// It is the model's own WordPiece (its tokenizer.json): a word over
+// maxWordChars characters is one [UNK].
+
+// maxWordChars is WordPiece's max_input_chars_per_word: 100 in every census
+// model's tokenizer.json (all-MiniLM-L6-v2, nomic-embed-text-v1.5,
+// mxbai-embed-large-v1, snowflake-arctic-embed-xs) and the tokenizers
+// default; a GGUF does not carry it.
+const maxWordChars = 100
 
 type wpmState struct {
 	lower, strip bool
 	maxLen       int // the longest token, in BYTES: the match window
 	// special is every control token, longest first, so a literal "[SEP]" in
-	// the text is that token and not five characters -- llama.cpp's
-	// parse_special, which llama-embedding turns on.
+	// the text is that token and not five characters where the caller parses
+	// specials, as the tokenizers library matches an added token in the text.
 	special []int32
 }
 
@@ -50,17 +54,21 @@ func newWPM(vc *jlm.Vocab, v *Vocab) error {
 	return nil
 }
 
-// encodeWPM is [CLS] words [SEP], the BertProcessing template llama.cpp applies
-// to every WPM vocabulary (add_bos and add_sep).
-func (v *Vocab) encodeWPM(text string, addSpecial bool) []int32 {
+// encodeWPM is [CLS] words [SEP], the post-processor a WordPiece model's
+// tokenizer.json states (BertProcessing).
+func (v *Vocab) encodeWPM(text string, addSpecial, control bool) []int32 {
 	out := make([]int32, 0, len(text)/4+2)
+	special := v.wpm.special
+	if !control {
+		special = nil
+	}
 	if addSpecial && v.AddBOS && v.BOS >= 0 {
 		out = append(out, v.BOS)
 	}
 	last := 0
 	for i := 0; i < len(text); {
 		hit := int32(-1)
-		for _, id := range v.wpm.special {
+		for _, id := range special {
 			if strings.HasPrefix(text[i:], v.text[id]) {
 				hit = id
 				break
@@ -85,6 +93,10 @@ func (v *Vocab) encodeWPM(text string, addSpecial bool) []int32 {
 // wordPieces segments one run of ordinary text.
 func (v *Vocab) wordPieces(text string, out []int32) []int32 {
 	for _, word := range v.wpm.words(text) {
+		if utf8.RuneCountInString(word) > maxWordChars {
+			out = append(out, v.Unk)
+			continue
+		}
 		w := spaceMark + word
 		start := len(out)
 		for i := 0; i < len(w); {
@@ -157,16 +169,16 @@ func ucNFDBase(r rune) rune {
 	if u < 0xC0 {
 		return r
 	}
-	i := sort.Search(len(ucNFD), func(i int) bool { return ucNFD[i][0] > u }) - 1
-	if i >= 0 && u <= ucNFD[i][1] {
-		return rune(ucNFD[i][2])
+	i := ucLast(ucNFD, 9, u)
+	if i >= 0 && u <= ucWord(ucNFD, i*9+3) {
+		return rune(ucWord(ucNFD, i*9+6))
 	}
 	return r
 }
 
-// isCJK is BERT's _is_chinese_char, with llama.cpp's reading of the one range
-// the two write differently (0x2B920, which is what HuggingFace's Rust code
-// has, where the Python has 0x2B820).
+// isCJK is BERT's _is_chinese_char as the tokenizers library a tokenizer.json
+// runs under writes it: its one range that differs from the Python
+// BertTokenizer's starts at 0x2B920, where the Python's starts at 0x2B820.
 func isCJK(r rune) bool {
 	return (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3400 && r <= 0x4DBF) ||
 		(r >= 0x20000 && r <= 0x2A6DF) || (r >= 0x2A700 && r <= 0x2B73F) ||

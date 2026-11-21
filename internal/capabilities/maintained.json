@@ -41,7 +41,7 @@
     {
       "name": "cpu-amd64-avx2",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {"hardware": "Intel Core i9-12900HK laptop (AVX2, AVX-VNNI)", "evidence": ["TestGreedyMatchesLlamaCpp", "TestEveryModelRunsGenerated"]},
@@ -51,7 +51,7 @@
     {
       "name": "cpu-amd64-sse",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {"hardware": "Intel Atom (SSE4.2, no AVX)", "evidence": ["TestEveryModelRunsSSE", "TestGreedyMatchesLlamaCpp"]}
@@ -61,7 +61,7 @@
     {
       "name": "cpu-arm64",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "engine/device/cpu",
       "implemented": true,
       "verified": [
         {"hardware": "Apple M4", "evidence": ["TestGreedyMatchesLlamaCpp", "TestBatchMatchesForward", "TestEveryModelRunsGenerated"]}
@@ -70,7 +70,7 @@
     {
       "name": "cuda",
       "kind": "device",
-      "package": "jit/gpu/cuda",
+      "package": "backend/cuda",
       "implemented": true,
       "verified": [
         {"hardware": "NVIDIA Tesla V100-SXM2-16GB (sm_70)", "evidence": ["TestLayerRelocatesToAnotherDevice", "TestSynthLlama4OnEveryDevice"]},
@@ -86,7 +86,7 @@
     {
       "name": "vulkan",
       "kind": "device",
-      "package": "jit/gpu/vulkan",
+      "package": "backend/vulkan",
       "implemented": true,
       "verified": [
         {"hardware": "NVIDIA RTX 3050 Ti Laptop", "evidence": ["TestLayerRelocatesToAnotherDevice", "TestSynthLlama4OnEveryDevice"]}
@@ -95,7 +95,7 @@
     {
       "name": "metal",
       "kind": "device",
-      "package": "jit/gpu/metal",
+      "package": "backend/metal",
       "implemented": true,
       "verified": [
         {"hardware": "Apple M4 (10-core GPU)", "evidence": ["TestLayerRelocatesToAnotherDevice", "TestSynthLlama4OnEveryDevice"]}
@@ -104,10 +104,10 @@
     {
       "name": "hip",
       "kind": "device",
-      "package": "jit/gpu/hip",
+      "package": "backend/hip",
       "implemented": true,
       "verified": [],
-      "note": "built and gated offline (every kernel compiles for gfx90a, gfx942, gfx1030, gfx1100 and gfx1201 through comgr); not yet run on an AMD card -- the device gates (TestHIPDeviceRunsTheIR) skip without one. An AMD card without ROCm runs through vulkan. See docs/design/amd-hip.md"
+      "note": "built and gated offline (every kernel compiles for gfx90a, gfx942, gfx1030, gfx1100 and gfx1201 through comgr); not yet run on an AMD card -- the device gates (TestHIPDeviceRunsTheIR) skip without one. An AMD card without ROCm runs through vulkan. See .notes/design/amd-hip.md"
     }
   ]
 }

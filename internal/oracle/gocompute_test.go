@@ -15,45 +15,45 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// goComputeAllowed is every production function that may do float arithmetic
+// goComputeAllowed() is every production function that may do float arithmetic
 // on data inside a loop, and why. Anything else fails
 // TestNoGoComputeOnTheInferencePath, and so does an entry that no longer
 // matches -- a site that was fixed comes off this list rather than leaving a
 // hole shaped like it.
-var goComputeAllowed = map[string]string{
-	// Measurement, not model arithmetic: timing statistics and accounting.
-	"jit/gpu/tier/split.go:timeSequences": "median/IQR of the split tuner's timings",
-	"jit/gpu/tier/recipe.go:timeRecipes":  "per-round ratios, median and IQR of the recipe tuner's timings",
-	"engine/model/hotness.go:ExpertUses":  "expert-use accounting for the report",
-	// Diagnostics that compare the device against a reference, off by default.
-	"jit/gpu/tier/tier.go:verify":           "Config verify: a device matvec against the dequantized reference, a debugging knob",
-	"jit/gpu/tier/layer.go:softmaxAgreesAt": "a load-time probe: whether the subgroup softmax agrees with the plain one on this card",
-	// Constants built once at load from the config, like the tables a kernel is
-	// compiled with.
-	"engine/nn/ropetable.go:buildRopeTab":      "the rotary table's folded constant planes, once per configuration",
-	"engine/nn/ropetable.go:YarnFreqs":         "YaRN's per-dimension frequencies, once per configuration",
-	"jit/gpu/tier/layer.go:l4TempTab":          "Llama 4's attention-temperature table, once per plan",
-	"engine/model/image.go:bilinearTaps":       "the resize's resampling matrix: geometry from the image's sizes, once per image",
-	"engine/model/imageproc.go:aaFloats":       "the antialiased resize's filter taps: geometry from the image's sizes, once per image (and once per grid for Phi-4's position table)",
-	"engine/model/imageproc.go:normLUT":        "the normalisation's 256-entry table per channel, from the tower's mean and std",
-	"engine/model/llama4vision.go:bf16NormLUT": "the bfloat16 normalisation's 256-entry table per channel, from the tower's mean and std",
-	// Geometry of a picture or a grid, from its sizes alone: no pixel and no
-	// activation is read.
-	"engine/model/slices.go:slicedGrid":       "MiniCPM-V's slice grid: which cols x rows best matches the picture's aspect, from its width and height",
-	"engine/nn/ropeaxes.go:runFreqs":          "a multi-axis rotary's per-pair frequencies, once per configuration",
-	"engine/model/audio.go:audioBlocks":       "the relative positions' sinusoids: a table of the clip's row count, geometry as the rotary tables are; no activation is read",
-	"engine/model/audiodev.go:audioPE":        "the relative positions' sinusoids for a device's scratch: a table of its sizes, built once",
-	"engine/model/audio.go:tables":            "the windowed DFT bases: load-time constant tables of the tower's framing",
-	"engine/model/audio.go:slaneyFilterbank":  "the Slaney mel filterbank: a load-time constant table of the tower's framing",
-	"engine/model/wav.go:DecodeWAV":           "a WAV container's 16-bit PCM read into floats: a format decoder, as image/png's is for a picture",
-	"engine/model/videoproc.go:sampleIndices": "a video's sampled frame indices (np.linspace): geometry from the frame count and rate, once per video; no pixel is read",
+func goComputeAllowed() map[string]string {
+	return map[string]string{
+		// Measurement, not model arithmetic: accounting and the rates measured.
+		"engine/hotness.go:ExpertUses":       "expert-use accounting for the report",
+		"engine/device/gpu/choose.go:choose": "each device's measured read rate in GB/s, printed when choosing verbosely",
+		// Constants built once at load from the config, like the tables a kernel is
+		// compiled with.
+		"nn/ropetable.go:foldRopeTab": "the rotary table's folded constant planes, once per configuration",
+		"nn/ropeaxes.go:runFreqs":     "a multi-axis rotary's per-pair frequencies, once per configuration",
+		"graph/sample.go:selection":   "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
+		// A draw's parameters: kernel scalars once a draw.
+		"engine/cpuhead.go:staged": "a draw's DRY base as its logarithm, a scalar the generated stage reads, once a stage of a draw",
+		// Composition: an op's statement checked as it is decomposed.
+		"composer/decompose_expr.go:exprTerms": "a term's constant checked to be a whole word as its expression is decomposed: composition, once a term",
+		"graph/iterate.go:IterateElems":        "a term's constant checked to be a whole word as an iteration's terms are typed: composition, once a term",
+		// A clip's resample: libswresample's filter bank, once a pair of rates,
+		// as Pillow's taps are once a size (the sound op reads it).
+		"composer/swr.go:swrBank": "libswresample's polyphase filter bank, built once a pair of rates as resample.c builds it: a constant table the sound op reads",
+		"composer/swr.go:poly":    "av_bessel_i0's rational approximation, evaluated for the bank's Kaiser window once a tap",
+		// A request's and a picture's geometry, and a graph's attributes.
+		"engine/joint.go:decideJoint": "a question's temperature, 1/T for its type and option count, a scalar the decide kernel reads, once a question",
+		"engine/decide.go:answer":     "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
+		"graph/lower.go:LowerValues":  "a tower op's attention scale, 1/sqrt of its head width, once an op as the tower is lowered: the graph's attribute",
+		"model/video.go:SampleVideo":  "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
+		"model/video.go:evalTerms":    "a video's or a picture's stated size, count, index, stride or time, evaluated over its sides, frames and rate: geometry",
+		"model/video.go:groups":       "a frame group's index, first and last frame and their times (frame over rate), once a group, the values its prompt piece writes: text the prompt prints",
+	}
 }
 
 // TestNoGoComputeOnTheInferencePath is AGENTS.md RULE 8 read off the source:
 // every op a token runs is generated code, so production Go may not do float
 // arithmetic on data in a loop -- a float slice element in +,-,*,/ (or
 // op-assigned), a computed float stored into a float element, or a math.* call,
-// inside a for or range body -- outside goComputeAllowed. A scalar computed
+// inside a for or range body -- outside goComputeAllowed(). A scalar computed
 // once per call (a softmax scale) is a kernel argument and does not match.
 //
 // The import guard beside it stops production code borrowing the reference
@@ -68,7 +68,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	// walking the parent of the repository.
 	t.Chdir(root)
 	found := map[string][]int{}
-	for _, pkg := range []string{"engine/model", "engine/nn", "jit/gpu/tier", "jit/gpu/backend", "engine/sched", "jit/cpu"} {
+	for _, pkg := range []string{"model", "engine", "nn", "engine/device/gpu", "backend", "sched", "engine/device/cpu", "engine/device/cpudev", "composer", "graph"} {
 		fset := token.NewFileSet()
 		ents, err := os.ReadDir(filepath.Join(root, pkg))
 		if err != nil {
@@ -89,8 +89,8 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 			}
 			files = append(files, f)
 		}
-		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
-		conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: func(error) {}}
+		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
+		conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: unresolved(t, pkg)}
 		conf.Check(pkg, fset, files, info)
 		if len(info.Types) == 0 {
 			t.Fatalf("%s: the type checker saw nothing -- this gate would pass by seeing no code", pkg)
@@ -114,15 +114,15 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if _, ok := goComputeAllowed[k]; !ok {
+		if _, ok := goComputeAllowed()[k]; !ok {
 			t.Errorf("%s does float arithmetic on data in a loop at line(s) %v: RULE 8 -- generate a kernel "+
-				"(or, if it is measurement or a load-time constant, add it to goComputeAllowed with the reason)",
+				"(or, if it is measurement or a load-time constant, add it to goComputeAllowed() with the reason)",
 				k, found[k])
 		}
 	}
-	for k, why := range goComputeAllowed {
+	for k, why := range goComputeAllowed() {
 		if _, ok := found[k]; !ok {
-			t.Errorf("goComputeAllowed[%q] (%s) matches no code any more: take it off the list", k, why)
+			t.Errorf("goComputeAllowed()[%q] (%s) matches no code any more: take it off the list", k, why)
 		}
 	}
 	t.Logf("%d function(s) with float loop arithmetic, all accounted for", len(found))
@@ -155,15 +155,77 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		b, ok := tv.Type.Underlying().(*types.Basic)
 		return ok && b.Info()&types.IsFloat != 0
 	}
-	floatElem := func(n ast.Node) bool {
+	// tainted holds the float locals a loop assigns from data: an element
+	// of a float slice, or another such local. Arithmetic through them is
+	// arithmetic on data, as `g := float64(x[i]); s += g * g` is.
+	tainted := map[types.Object]bool{}
+	objOf := func(id *ast.Ident) types.Object {
+		if o := info.Defs[id]; o != nil {
+			return o
+		}
+		return info.Uses[id]
+	}
+	var floatElem func(n ast.Node) bool
+	floatElem = func(n ast.Node) bool {
 		hit := false
 		ast.Inspect(n, func(z ast.Node) bool {
-			if ix, ok := z.(*ast.IndexExpr); ok && isFloat(ix) {
-				hit = true
+			switch x := z.(type) {
+			case *ast.IndexExpr:
+				if isFloat(x) {
+					hit = true
+				}
+			case *ast.Ident:
+				if o := objOf(x); o != nil && tainted[o] {
+					hit = true
+				}
 			}
 			return !hit
 		})
 		return hit
+	}
+	taint := func(loop ast.Node) {
+		for changed := true; changed; {
+			changed = false
+			ast.Inspect(loop, func(m ast.Node) bool {
+				// A float a range takes from a slice or array is an element
+				// of it, as x[i] is.
+				if rs, ok := m.(*ast.RangeStmt); ok {
+					if id, ok := rs.Value.(*ast.Ident); ok {
+						if o := objOf(id); o != nil && !tainted[o] {
+							if b, ok := o.Type().Underlying().(*types.Basic); ok && b.Info()&types.IsFloat != 0 {
+								tainted[o], changed = true, true
+							}
+						}
+					}
+					return true
+				}
+				as, ok := m.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for i, l := range as.Lhs {
+					id, ok := l.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					o := objOf(id)
+					if o == nil {
+						continue
+					}
+					if b, ok := o.Type().Underlying().(*types.Basic); !ok || b.Info()&types.IsFloat == 0 {
+						continue
+					}
+					rhs := as.Rhs[0]
+					if len(as.Rhs) == len(as.Lhs) {
+						rhs = as.Rhs[i]
+					}
+					if !tainted[o] && floatElem(rhs) {
+						tainted[o], changed = true, true
+					}
+				}
+				return true
+			})
+		}
 	}
 	mathCall := func(c *ast.CallExpr) bool {
 		se, ok := c.Fun.(*ast.SelectorExpr)
@@ -199,6 +261,8 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		if loop == nil {
 			return true
 		}
+		// The loop with its header, where a range's value is declared.
+		taint(n)
 		ast.Inspect(loop, func(m ast.Node) bool {
 			switch x := m.(type) {
 			case *ast.CallExpr:
@@ -239,4 +303,16 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		return false
 	})
 	return lines
+}
+
+// unresolved is a type checker's error handler that fails on an import it
+// could not load: the checker leaves that package's names untyped, so the
+// gate would pass by seeing less code (a test binary run with no GOROOT
+// behind it reads no standard library).
+func unresolved(t *testing.T, pkg string) func(error) {
+	return func(err error) {
+		if strings.Contains(err.Error(), "could not import") {
+			t.Fatalf("%s: %v -- the type checker cannot see this package whole (set GOROOT)", pkg, err)
+		}
+	}
 }

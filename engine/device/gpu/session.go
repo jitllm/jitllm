@@ -1,0 +1,432 @@
+package gpu
+
+import (
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
+)
+
+// A session is one sequence; a tier is one model. The per-sequence state (the
+// KV cache, the recurrent state) belongs to the session, so several model.instances
+// can share one tier's weights without writing each other's history. See
+// .notes/design/device-sessions.md.
+//
+// nn.LayerDevice does not grow a session argument: model.State obtains its
+// device through a type assertion, so Attach hands back a view that satisfies
+// the same interface and carries the session with it.
+//
+// Sessions step on one device at once. A step (Layers, LayersRows, EmbedRows,
+// ReserveKV and the like) takes each device's call lock shared (step), runs
+// in a lane of its own (devsess.go) and submits on its own queue where the
+// device has them, beside any other session's; what it changes of the
+// device's -- pages, pool growth, a page-in -- is under the device's g.mu and
+// waits for the submissions in flight where they could read it
+// (inflight.go). Everything else -- placement, a release, a migration, the
+// head -- changes what every step reads, takes the call lock exclusively
+// (enter) and so runs with no step on the device.
+
+// Attach returns a device view bound to a fresh session. Every instance that wants
+// its own attention history calls it; two views on one GPU share the model's
+// weights and kernels and nothing else.
+//
+// The zero session -- a caller that uses *GPU directly -- still works and is
+// exactly the single-instance behaviour every existing gate measures.
+func (g *GPU) Attach() nn.LayerDevice {
+	s := &gpuSession{g: g, sid: g.sessions.Add(1)}
+	// GPU is the nn.LayerDevice a caller gets, and a session the same device
+	// bound to its own history.
+	var (
+		_ nn.LayerDevice   = g
+		_ nn.NamedDevice   = g
+		_ nn.RecRowsDevice = g
+		_ nn.ModelOwner    = g
+		_ nn.Ledger        = g
+		_ nn.NamedDevice   = s
+		_ nn.Session       = s
+		_ nn.RecRowsDevice = s
+		_ nn.ModelOwner    = s
+		_ nn.Ledger        = s
+	)
+	return s
+}
+
+type gpuSession struct {
+	g   *GPU
+	sid uint64
+	// held is enter's snapshot of the devices, kept between calls so taking it
+	// allocates nothing; nil while a call holds it (guarded by g.mu). excl
+	// says the call holding it took the call locks exclusively.
+	held []*devTier
+	excl bool
+	// sidBuf and slotBuf are LayersSessions' row lists, reused.
+	sidBuf  []uint64
+	slotBuf []int
+	// rows is the session's rows calls' own state (rowsCall).
+	rows rowsCall
+	// ple is the rows' per-layer inputs for the next call (SetLayerInputs).
+	ple []float32
+	// prompt says the calls are a prompt's (SetPrompt).
+	prompt bool
+	// toks is the rows' tokens for the next call (SetTokens).
+	toks []int32
+	// req is the request words the next calls' blocks read (SetRequest).
+	req []uint32
+	// cut is the cut rows the next call's first half writes (SetCut).
+	cut []float32
+}
+
+// SetPrompt says whether the session's calls that follow are a prompt's
+// (nn.PromptDevice), handed to every device a call holds with its inputs.
+func (s *gpuSession) SetPrompt(on bool) { s.prompt = on }
+
+// PlanBlocks forwards the placement's block count; see GPU.PlanBlocks.
+func (s *gpuSession) PlanBlocks(n int, extra uint64) { s.g.PlanBlocks(n, extra) }
+
+// BeginPlacement/EndPlacement bracket a session's whole offer sequence, so two
+// sessions placing at once do not interleave their offers and each see a
+// budget the other is spending. The lock is on the router, not a device,
+// because which device takes a block is the decision being serialised.
+func (s *gpuSession) BeginPlacement() { s.g.place.Lock() }
+func (s *gpuSession) EndPlacement() {
+	// Auto-streamed blocks get their expert caches from the room placement
+	// left (GPU.sizeAutoCaches), before another session can place.
+	s.g.sizeAutoCaches()
+	s.g.prewarmPromptWidths()
+	s.g.place.Unlock()
+}
+
+// enter takes every device's call lock exclusively, for a call that changes
+// what every step reads: no step of any session is on the device while it
+// runs. The session itself travels as an argument (s.sid) to whatever the call
+// runs. It returns the devices it locked, for leave.
+func (s *gpuSession) enter() []*devTier { return s.take(true) }
+
+// step takes every device's call lock shared, for a step: other sessions'
+// steps run beside it, and a call that took it exclusively waits for them.
+func (s *gpuSession) step() []*devTier { return s.take(false) }
+
+// take is enter (excl) or step. Every caller takes the devices in one order,
+// so two calls cannot each hold one and wait for the other.
+// A call holding a device exclusively is the session the device's own view
+// records a reason as (devTier.fail).
+func (s *gpuSession) take(excl bool) []*devTier {
+	s.g.mu.Lock()
+	ds := append(s.held[:0], s.g.devs...)
+	s.held = nil
+	s.g.mu.Unlock()
+	for _, d := range ds {
+		if !excl {
+			d.busy.RLock()
+			continue
+		}
+		d.busy.Lock()
+		d.mu.Lock()
+		d.exclSess.Store(d.sessOf(s.sid))
+		d.mu.Unlock()
+	}
+	s.excl = excl
+	return ds
+}
+
+// offer is enter for a call offering the device something it may decline:
+// the session's reasons start empty, its rows call's and its own on each
+// device (devSess.own), so Err reads this call's.
+func (s *gpuSession) offer() []*devTier {
+	ds := s.enter()
+	s.g.mu.Lock()
+	s.rows.err = ""
+	s.g.mu.Unlock()
+	for _, d := range ds {
+		d.exclSess.Load().setOwn("")
+	}
+	return ds
+}
+
+// leave releases what take took, in reverse, and keeps the snapshot for the
+// next call.
+func (s *gpuSession) leave(ds []*devTier) {
+	for i := len(ds) - 1; i >= 0; i-- {
+		if s.excl {
+			ds[i].exclSess.Store(nil)
+			ds[i].busy.Unlock()
+		} else {
+			ds[i].busy.RUnlock()
+		}
+	}
+	s.g.mu.Lock()
+	s.held = ds
+	s.g.mu.Unlock()
+}
+
+func (s *gpuSession) Layers(lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
+	defer s.leave(s.inputsTo(s.step()))
+	return s.g.layersFor(s.sid, lo, hi, pos, n, x, cs, head)
+}
+
+func (s *gpuSession) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
+	defer s.leave(s.offer())
+	return s.g.prepLayer(s.sid, li, p, w)
+}
+
+func (s *gpuSession) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
+	// Deliberately not under enter: PrewarmLayer must be safe to call while
+	// Layers is running, and it touches only the host-side pack.
+	return s.g.PrewarmLayer(li, p, w)
+}
+
+// PublishKV and MapKV are the tier's for this session's sequence
+// (nn.KVShareDevice, kvshare.go).
+func (s *gpuSession) PublishKV(li, page int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.publishKV(s.sid, li, page, key)
+}
+
+func (s *gpuSession) MapKV(li, page int, key string, end int) bool {
+	defer s.leave(s.enter())
+	return s.g.mapKV(s.sid, li, page, key, end)
+}
+
+// SnapRec, HasRec and LoadRec are the tier's for this session's state
+// (nn.RecShareDevice, recshare.go).
+func (s *gpuSession) SnapRec(li int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.recShare(s.sid, li, key, 0)
+}
+
+func (s *gpuSession) SnapRecs(lis []int32, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.snapRecs(s.sid, lis, key)
+}
+
+// SharePage is the tier's page of block li for this session (nn.KVShareDevice).
+func (s *gpuSession) SharePage(li int) int {
+	defer s.leave(s.enter())
+	return s.g.kvPageOf(s.sid, li)
+}
+
+func (s *gpuSession) PublishKVs(lis, pages []int32, keys []string) bool {
+	defer s.leave(s.enter())
+	return s.g.publishKVsBatch(s.sid, lis, pages, keys)
+}
+
+func (s *gpuSession) HasRec(li int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.recShare(s.sid, li, key, 1)
+}
+
+func (s *gpuSession) LoadRec(li int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.recShare(s.sid, li, key, 2)
+}
+
+func (s *gpuSession) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
+	defer s.leave(s.enter())
+	return s.g.migrateKV(s.sid, li, k, v, pos, toDevice)
+}
+
+func (s *gpuSession) MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool {
+	defer s.leave(s.enter())
+	return s.g.migrateHistory(s.sid, li, h, e, pos, toDevice)
+}
+
+// PerSequenceKV forwards the tier's answer (nn.SeqKVDevice); it carries no
+// per-sequence state.
+func (s *gpuSession) PerSequenceKV() bool { return s.g.PerSequenceKV() }
+
+func (s *gpuSession) ReserveKVSeqs(bases, ends []int) bool {
+	defer s.leave(s.step())
+	return s.g.reserveKVSeqs(s.sid, bases, ends)
+}
+
+func (s *gpuSession) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice bool) bool {
+	defer s.leave(s.enter())
+	return s.g.migrateKVSeq(s.sid, li, base, k, v, pos, toDevice)
+}
+
+// RecSteps forwards the device's count; see devTier.recSteps. It takes no
+// session lock because the caller reads it immediately after its own Layers
+// call returned, on the same goroutine.
+func (s *gpuSession) RecSteps() int { return s.g.recStepsOf(s.sid) }
+
+// PipelineDepth forwards the GPU's answer (nn.Pipeliner).
+func (s *gpuSession) PipelineDepth() int { return s.g.PipelineDepth() }
+
+// ChunkRows forwards the GPU's answer (nn.ChunkLimiter).
+func (s *gpuSession) ChunkRows() int { return s.g.ChunkRows() }
+
+// HoldsBlock is the tier's answer on the device this session runs block li
+// on (nn.BlockHolder).
+func (s *gpuSession) HoldsBlock(li int) bool { return s.g.holdsBlock(s.sid, li) }
+
+func (s *gpuSession) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
+	defer s.leave(s.enter())
+	return s.g.migrateRec(s.sid, li, conv, state, toDevice)
+}
+
+func (s *gpuSession) ReserveKV(pos int) bool {
+	defer s.leave(s.step())
+	return s.g.reserveKV(s.sid, pos)
+}
+
+// Refused forwards the tier's answer; see GPU.Refused.
+func (s *gpuSession) Refused() []int { return s.g.refusedBlocks(s.sid) }
+
+// SpillAfter forwards; see GPU.SpillAfter.
+func (s *gpuSession) SpillAfter(li int) bool { return s.g.spillAfter(li, s.sid) }
+
+// RoomGen forwards the tier's counter; see GPU.RoomGen.
+func (s *gpuSession) RoomGen() uint64 { return s.g.RoomGen() }
+
+// TrimKV shrinks the history on the devices this session is alone on; see
+// devTier.TrimKV.
+func (s *gpuSession) TrimKV(pos int) bool {
+	defer s.leave(s.step())
+	return s.g.trimKV(s.sid, pos)
+}
+
+// Detach gives back everything this session holds on every device -- its
+// attention history and its recurrent state on every block -- and leaves the
+// model's weights for the sessions still using them. Without it a closed instance
+// would keep its history on the card for the life of the tier.
+func (s *gpuSession) Detach() {
+	defer s.leave(s.enter())
+	s.g.mu.Lock()
+	ds := append([]*devTier(nil), s.g.devs...)
+	s.g.mu.Unlock()
+	for _, d := range ds {
+		d.dropSession(s.sid)
+	}
+	s.g.dropRoutes(s.sid)
+}
+
+// SetKeyRuns records the runs for this session's calls that follow; see
+// GPU.SetKeyRuns.
+func (s *gpuSession) SetKeyRuns(full, windowed []nn.KeyRun) {
+	defer s.leave(s.step())
+	s.g.setKeyRuns(s.sid, full, windowed)
+}
+
+// SetRowWindows records one window a row for this session's calls that
+// follow; see GPU.SetRowWindows.
+func (s *gpuSession) SetRowWindows(wins []nn.KeyRun) {
+	defer s.leave(s.step())
+	s.g.setRowWindows(s.sid, wins)
+}
+
+// HeldBytes is this session's history on every device (nn.Session).
+func (s *gpuSession) HeldBytes() uint64 {
+	s.g.mu.Lock()
+	ds := append([]*devTier(nil), s.g.devs...)
+	s.g.mu.Unlock()
+	var n uint64
+	for _, d := range ds {
+		n += d.heldBy(s.sid)
+	}
+	return n
+}
+
+func (s *gpuSession) ReleaseLayers(lo, hi int) {
+	defer s.leave(s.enter())
+	s.g.releaseLayers(s.sid, lo, hi)
+}
+
+// EmbedRows is nn.EmbedDevice: the rows are gathered on the card holding the
+// head, under this session's device locks like any other call.
+func (s *gpuSession) EmbedRows(ids []int32, pos int, dst []float32) bool {
+	// The session's inputs first: whether its calls are a prompt's decides
+	// whose gather a row is.
+	defer s.leave(s.inputsTo(s.step()))
+	return s.g.embedRows(s.sid, ids, pos, dst)
+}
+
+func (s *gpuSession) PrepHead(h *nn.Head) bool {
+	defer s.leave(s.offer())
+	return s.g.prepHead(s.sid, h)
+}
+
+// SetActWindow forwards the activation window (nn.ActWindower): a JIT that
+// offers its matvecs to the session sets it here, and the window is the
+// tier's, as GPU.SetActWindow keeps it.
+func (s *gpuSession) SetActWindow(w int) { s.g.SetActWindow(w) }
+
+// The rest is the tier's, not the session's: capability and accounting queries
+// carry no per-sequence state and must not queue behind another session's token.
+
+// Reserve sizes the shared scratch: a model property, not a sequence's.
+func (s *gpuSession) Reserve(maxRows, maxK int) bool {
+	defer s.leave(s.enter())
+	return s.g.Reserve(maxRows, maxK)
+}
+
+// Err is why the session's last call refused, its own: its rows call's
+// reason, or the one a device recorded for it, never another session's.
+func (s *gpuSession) Err() string {
+	s.g.mu.Lock()
+	e := s.rows.err
+	s.g.mu.Unlock()
+	if e != "" {
+		return e
+	}
+	for i := 0; ; i++ {
+		d := s.g.dev(i)
+		if d == nil {
+			return ""
+		}
+		if e := d.ownErr(s.sid); e != "" {
+			return e
+		}
+	}
+}
+
+func (s *gpuSession) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
+	defer s.leave(s.offer())
+	return s.g.prepLayerOn(s.sid, name, li, p, w)
+}
+
+func (s *gpuSession) PrepHeadOn(name string, h *nn.Head) (bool, error) {
+	defer s.leave(s.offer())
+	return s.g.prepHeadOn(s.sid, name, h)
+}
+
+func (s *gpuSession) ReleaseHead() {
+	defer s.leave(s.enter())
+	s.g.releaseHead(s.sid)
+}
+
+// StageBlock is nn.BlockMover's: deliberately not under enter, since it runs
+// beside this session's steps on the block's current device (GPU.stageBlock).
+func (s *gpuSession) StageBlock(li int, to string, p *nn.LayerPlan, w *nn.LayerWeights, positions int) bool {
+	return s.g.stageBlock(s.sid, li, to, p, w, positions)
+}
+
+// RetireMoved is nn.BlockMover's; see GPU.RetireMoved.
+func (s *gpuSession) RetireMoved() { s.g.RetireMoved() }
+
+func (s *gpuSession) StageHead(to string, h *nn.Head) bool { return s.g.stageHead(to, h) }
+
+func (s *gpuSession) Unstage(lo, hi int) {
+	defer s.leave(s.enter())
+	s.g.Unstage(lo, hi)
+}
+
+func (s *gpuSession) MoveBlock(li int, to string, p *nn.LayerPlan, w *nn.LayerWeights, pos int) (nn.BlockMoved, error) {
+	defer s.leave(s.enter())
+	return s.g.moveBlock(s.sid, li, to, p, w, pos)
+}
+
+func (s *gpuSession) DeviceOf(li int) (string, bool) { return s.g.deviceOf(s.sid, li) }
+func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.headDeviceName(s.sid) }
+func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.pin(s.sid, li, on) }
+func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
+func (s *gpuSession) StreamOn(name string, li int, on bool) error {
+	return s.g.StreamOn(name, li, on)
+}
+
+// HoldsExperts forwards to the tier (nn.ExpertHolder), ReleasesHostPage
+// (nn.HostPageReleaser) and FramesOf (nn.FramesHolder) likewise.
+func (s *gpuSession) HoldsExperts(li int) bool                 { return s.g.holdsExperts(s.sid, li) }
+func (s *gpuSession) ReleasesHostPage(li int) bool             { return s.g.releasesHostPage(s.sid, li) }
+func (s *gpuSession) SetFrameBudget(f *jlm.File, bytes uint64) { s.g.SetFrameBudget(f, bytes) }
+
+func (s *gpuSession) FramesOf(dev string, f *jlm.File) *jlm.Frames {
+	return s.g.FramesOf(dev, f)
+}

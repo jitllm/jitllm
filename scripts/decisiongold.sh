@@ -1,8 +1,8 @@
 #!/bin/sh
 # decisiongold.sh writes the decision models' llama.cpp goldens:
-# engine/model/testdata/decision/<model>.<request>.llamacpp.json, the answer
+# engine/testdata/decision/<model>.<request>.llamacpp.json, the answer
 # llama-server's POST /v1/systemone gives for each request on the same GGUF
-# the gate converts (engine/model/decide_test.go).
+# the gate converts (the engine's decision gates).
 #
 #   JITLLM_LCPP=/path/to/llama-b11514  JITLLM_MODELS=/path/to/models  scripts/decisiongold.sh
 #
@@ -21,7 +21,7 @@
 # or newer.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
-out=$here/engine/model/testdata/decision
+out=$here/engine/testdata/decision
 : "${JITLLM_LCPP:?JITLLM_LCPP names the llama.cpp build directory holding llama-server}"
 : "${JITLLM_MODELS:?JITLLM_MODELS names the model directory}"
 port=${PORT:-18089}

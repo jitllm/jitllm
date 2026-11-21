@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,7 +24,7 @@ func TestPreemptionKeepsEveryAnswer(t *testing.T) {
 // TestAParkedSessionResumesFromTheMemCache is the same three sessions with the
 // model's memory cache bounded to one byte, so every page it holds unpinned
 // goes as soon as another arrives: a parked session's pages survive only
-// because the view it parked into pins them (model.MemStore.Pinned), and every
+// because the view it parked into pins them (engine.MemStore.Pinned), and every
 // answer is still its solo run's, token for token. The cache is seen holding
 // pinned pages for the sessions still parked and evicting everything else.
 func TestAParkedSessionResumesFromTheMemCache(t *testing.T) {
@@ -74,7 +76,7 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 		path := modelPath(t, smallModel)
 		c := cfg
 		c.ModelDir, c.Probe, c.Version = filepath.Dir(path), oneCardProbe, "test"
-		e := New(c)
+		e := New(admitConfig(c))
 		defer e.Close()
 		lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"})
 		if err != nil {
@@ -91,8 +93,8 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 			}
 		}
 		if budgeted {
-			// Two sessions' full histories, measured on a probe State.
-			st := e.sessions["a"].st
+			// Two sessions' full histories, measured on a probe Instance.
+			st := e.sessions["a"].in()
 			per := st.PositionBytes()
 			if per == 0 {
 				t.Fatal("a position costs no bytes: the budget would be nothing")
@@ -118,7 +120,7 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 			for _, id := range ids {
 				s := e.sessions[id]
 				if s.Parked() {
-					held += s.st.ParkedOut - s.st.ParkedIn
+					held += s.ms.ParkedOut - s.ms.ParkedIn
 				}
 			}
 			if in+held != out {
@@ -152,6 +154,29 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 		time.Sleep(20 * time.Millisecond)
 	}
 	if n := runtime.NumGoroutine(); n > base {
-		t.Fatalf("%d goroutines after four engines closed, %d before", n, base)
+		t.Fatalf("%d goroutines after four engines closed, %d before; the stacks left:\n%s", n, base, goroutineStacks())
 	}
+}
+
+// goroutineStacks is every goroutine's stack but the caller's, each distinct
+// one with its count, for a gate that finds goroutines left behind.
+func goroutineStacks() string {
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	counts := map[string]int{}
+	var order []string
+	for _, g := range strings.Split(string(buf), "\n\n")[1:] {
+		lines := strings.Split(g, "\n")
+		// The header names the goroutine; its frames are what it runs.
+		key := strings.Join(lines[1:min(len(lines), 9)], "\n")
+		if counts[key] == 0 {
+			order = append(order, key)
+		}
+		counts[key]++
+	}
+	var b strings.Builder
+	for _, k := range order {
+		fmt.Fprintf(&b, "%d x\n%s\n\n", counts[k], k)
+	}
+	return b.String()
 }

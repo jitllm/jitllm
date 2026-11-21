@@ -1,12 +1,16 @@
 package convert
 
 import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok"
 	"github.com/jitllm/jitllm/tok/pretok"
 )
 
@@ -23,25 +27,20 @@ func vocabOf(f *meta.File) (*jlm.Vocab, error) { return VocabOf(f) }
 // section without writing a container can build one.
 func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	model, _ := f.KV["tokenizer.ggml.model"].String()
+	if model == "" {
+		return nil, nil // no tokenizer in this file; a tower, say
+	}
+	tms, err := tokenizerModels()
+	if err != nil {
+		return nil, err
+	}
+	tm, ok := tms[model]
+	if !ok {
+		return nil, fmt.Errorf("convert: tokenizer model %q is not one this container defines", model)
+	}
 	v := &jlm.Vocab{
 		BOS: -1, EOS: -1, Unk: -1, Pad: -1, Sep: -1, Mask: -1,
-	}
-	switch model {
-	case "llama":
-		v.Kind, v.ByteFallback, v.AddSpacePrefix, v.AddBOS = jlm.VocabSPM, true, true, true
-	case "gpt2":
-		v.Kind = jlm.VocabBPE
-	case "bert", "wordpiece":
-		v.Kind = jlm.VocabWPM
-	case "gemma4":
-		// SentencePiece-style BPE (llama.cpp's LLAMA_VOCAB_TYPE_BPE under the
-		// gemma4 pre-type): merges, no byte-level alphabet, byte fallback.
-		// add_space_prefix and add_bos are read below, as the file states them.
-		v.Kind, v.ByteFallback = jlm.VocabBPESPM, true
-	case "":
-		return nil, nil // no tokenizer in this file; a tower, say
-	default:
-		return nil, fmt.Errorf("convert: tokenizer model %q is not one this container defines", model)
+		Kind: vocabKinds()[tm.Kind], ByteFallback: tm.ByteFallback, AddSpacePrefix: tm.SpacePrefix, AddBOS: tm.AddBOS,
 	}
 
 	toks, ok := f.KV["tokenizer.ggml.tokens"]
@@ -85,12 +84,12 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 			*s.dst = int32(n)
 		}
 	}
-	// The ids the file states end a generation besides EOS: llama.cpp's
-	// special_eot_id and special_eom_id, and the FIM pad, repo and file
-	// separator it also stops on (llama-vocab.cpp, special_eog_ids). A GGUF has
-	// no list key; HunyuanOCR's <｜hy_Assistant｜> reaches its file only as
-	// eot_token_id.
-	for _, k := range []string{"eot", "eom", "fim_pad", "fim_rep", "fim_sep"} {
+	// The ids the file states end a generation besides EOS: its end of turn
+	// and end of message. A GGUF has no key for generation_config.json's
+	// eos_token_id list; HunyuanOCR's <｜hy_Assistant｜> reaches its file only
+	// as eot_token_id, and the rest of a family's list is its library
+	// statement's stop pieces.
+	for _, k := range []string{"eot", "eom"} {
 		n, ok := f.KV["tokenizer.ggml."+k+"_token_id"].Uint()
 		if !ok {
 			continue
@@ -100,6 +99,9 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 				k, n, len(v.Tokens))
 		}
 		v.Stop = addStop(v.Stop, v.EOS, int32(n))
+	}
+	if v.Stop, err = statedStops(f.Arch(), v); err != nil {
+		return nil, err
 	}
 	for _, s := range []struct {
 		key string
@@ -132,7 +134,7 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	v.Templates = ggufTemplates(f.KV)
 
 	if v.Kind == jlm.VocabWPM {
-		return wordPiece(f, v), nil
+		return wordPiece(f, v, tm.Pre), nil
 	}
 	if v.Kind != jlm.VocabBPE {
 		return v, nil
@@ -141,19 +143,25 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	if v.PreName == "" {
 		v.PreName = "default"
 	}
-	// Ollama's Llama 4 says "default", which is llama3's split. The model's
-	// own tokenizer.json (RULE 7m) splits with the o200k pattern, which
-	// llama.cpp's converter names "llama4", so a llama4 vocabulary carrying the
-	// fallback name gets that pipeline; a real name is kept.
-	if v.PreName == "default" && f.Arch() == "llama4" {
-		v.PreName = "llama4"
+	// A file naming no pre-tokenizer of its own ("default") splits with the
+	// one the library states for its architecture (a Llama 4 GGUF that says
+	// "default", where its tokenizer.json splits with the o200k pattern,
+	// RULE 7m); a real name is kept.
+	if v.PreName == "default" {
+		st, _, err := ggufStates(f.Arch())
+		if err != nil {
+			return nil, err
+		}
+		if st != nil && st.PreTokenizer != "" {
+			v.PreName = st.PreTokenizer
+		}
 	}
 	// A name with no entry is not an error here (the legacy family splitters
 	// cover several), but it is recorded as an empty pipeline, so the reader
 	// can tell "no stages" from "stages nobody verified".
 	ops, ok := pretok.PreOps(v.PreName)
 	if !ok && v.PreName == "default" {
-		ops, ok = pretok.LlamaCppDefault, true
+		ops, ok = pretok.DefaultBPE(), true
 	}
 	if ok {
 		pre, err := containerPreOps(ops)
@@ -162,19 +170,18 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 		}
 		v.Pre = pre
 	}
-	// AddBOS and IgnoreMerges default from the llama3 family and are stored as
-	// properties of the tokenizer rather than looked up by name at load. The
-	// add_bos_token key overrides the first; it is often absent (Llama-3.2 ships
-	// none and wants its BOS, qwen3 ships an explicit 0), and a wrong BOS is a
-	// fluent divergence a few tokens in.
-	v.AddBOS = llama3Family[v.PreName]
-	v.IgnoreMerges = llama3Family[v.PreName]
-	// Llama 4 is not in that family but shares both booleans: its own
-	// tokenizer.json says ignore_merges: true and prepends <|begin_of_text|>,
-	// where llama.cpp's gpt-4o branch sets ignore_merges false (RULE 7m).
-	if v.PreName == "llama4" {
-		v.AddBOS, v.IgnoreMerges = true, true
+	// AddBOS and IgnoreMerges default from the pre-tokenizer's entry in
+	// pretokenizers.json and are stored as properties of the tokenizer rather
+	// than looked up by name at load. The add_bos_token key overrides the
+	// first; it is often absent (Llama-3.2 ships none and wants its BOS, qwen3
+	// ships an explicit 0), and a wrong BOS is a fluent divergence a few
+	// tokens in.
+	pres, err := preTokenizers()
+	if err != nil {
+		return nil, err
 	}
+	p := pres[v.PreName]
+	v.AddBOS, v.IgnoreMerges = p.AddBOS, p.IgnoreMerges
 	if n, ok := f.KV["tokenizer.ggml.add_bos_token"].Uint(); ok {
 		v.AddBOS = n != 0
 	}
@@ -185,15 +192,22 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 // codes.
 //
 // It is the one translation for both input formats: the GGUF path gets its
-// []pretok.Op through pretok.Table by name, the safetensors path from
+// []pretok.Op through pretok.Table() by name, the safetensors path from
 // pretok.ParsePreTokenizer. A stage with no container code is a refusal rather
-// than routed to the nearest-looking one.
+// than routed to the nearest-looking one, and so is a stage the tokenizer
+// could not build, a pattern that does not compile among them.
 func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
+	if len(ops) > 0 {
+		if err := tok.CheckPreOps(ops); err != nil {
+			return nil, fmt.Errorf("convert: %w", err)
+		}
+	}
 	out := make([]jlm.PreOp, 0, len(ops))
 	for _, o := range ops {
 		p := jlm.PreOp{
 			UseRegex: o.UseRegex, AddPrefixSpace: o.AddPrefixSpace,
 			Individual: o.Individual, Behavior: o.Behavior,
+			Pattern: o.Pattern, Invert: o.Invert,
 			Contractions: o.Split.Contractions, CaseFold: o.Split.CaseFold,
 			CaseRuns: o.Split.CaseRuns, SuffixContract: o.Split.SuffixContract,
 			PunctSlash: o.Split.PunctSlash, HanRuns: o.Split.HanRuns, PunctNoNewline: o.Split.PunctNoNewline,
@@ -220,6 +234,8 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 			p.Kind = jlm.PreHunyuanSplit
 		case pretok.OpSparkSplit:
 			p.Kind = jlm.PreSparkSplit
+		case pretok.OpPattern:
+			p.Kind = jlm.PrePattern
 		default:
 			return nil, fmt.Errorf("convert: stage %v is one this container does not define", o.Kind)
 		}
@@ -228,15 +244,74 @@ func containerPreOps(ops []pretok.Op) ([]jlm.PreOp, error) {
 	return out, nil
 }
 
-// llama3Family is the pre-tokenizer group that takes the llama3 regex, and with
-// it add_bos and ignore_merges (llama.cpp's list, name for name). "default" is
-// not in it: llama.cpp gives an absent or "default" name its own pipeline with
-// neither boolean (pretok.LlamaCppDefault). This source-format heuristic is
-// resolved at conversion; nothing on the load path consults it.
-var llama3Family = map[string]bool{
-	"llama3": true, "llama-v3": true, "llama-bpe": true,
-	"falcon3": true, "falcon-h1": true, "pixtral": true,
-	"midm-2.0": true, "lfm2": true, "jina-v5-nano": true,
+// preTokenizersJSON is each pre-tokenizer name's add_bos and ignore_merges
+// where they are not false: llama3's regex group (the pre names that share its
+// pattern) and Llama 4, whose own tokenizer.json says ignore_merges: true and
+// prepends <|begin_of_text|> (RULE 7m). "default" is not in it: an absent or
+// "default" name gets its own pipeline with neither boolean
+// (pretok.DefaultBPE()). It is resolved at conversion; nothing on the
+// load path consults it.
+//
+//go:embed pretokenizers.json
+var preTokenizersJSON []byte
+
+// preTokenizer is a pre-tokenizer name's two booleans.
+type preTokenizer struct {
+	AddBOS       bool `json:"add_bos"`
+	IgnoreMerges bool `json:"ignore_merges"`
+}
+
+//go:embed tokenizers.json
+var tokenizerModelsJSON []byte
+
+// tokenizerModel is what a GGUF's tokenizer.ggml.model states
+// (tokenizers.json): the container's vocabulary kind (vocabKinds), whether
+// a piece no token covers falls back to byte tokens, the space prefix and the
+// BOS the file's own keys override, and the pre-tokenizer a WordPiece
+// vocabulary names (it runs one stage, BertPreTokenizer's).
+type tokenizerModel struct {
+	Kind         string `json:"kind"`
+	ByteFallback bool   `json:"byte_fallback"`
+	SpacePrefix  bool   `json:"add_space_prefix"`
+	AddBOS       bool   `json:"add_bos"`
+	Pre          string `json:"pre"`
+}
+
+// vocabKinds is each vocabulary kind a tokenizer model states, by its name.
+func vocabKinds() map[string]jlm.VocabKind {
+	return map[string]jlm.VocabKind{"spm": jlm.VocabSPM, "bpe": jlm.VocabBPE, "wpm": jlm.VocabWPM, "bpe_spm": jlm.VocabBPESPM}
+}
+
+// tokenizerModels is tokenizers.json, by model (tokenizerModelsOf).
+func tokenizerModels() (map[string]tokenizerModel, error) {
+	return tokenizerModelsOf(tokenizerModelsJSON)
+}
+
+// tokenizerModelsOf is a tokenizers.json, by model, each of a kind vocabKinds
+// names and a WordPiece one naming its pre-tokenizer.
+func tokenizerModelsOf(b []byte) (map[string]tokenizerModel, error) {
+	var out map[string]tokenizerModel
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&out); err != nil || len(out) == 0 {
+		return nil, fmt.Errorf("convert: tokenizers.json: %v, %d models", err, len(out))
+	}
+	for name, tm := range out {
+		k, ok := vocabKinds()[tm.Kind]
+		if !ok || (k == jlm.VocabWPM) != (tm.Pre != "") {
+			return nil, fmt.Errorf("convert: tokenizers.json: %s is of kind %q with pre-tokenizer %q", name, tm.Kind, tm.Pre)
+		}
+	}
+	return out, nil
+}
+
+// preTokenizers is pretokenizers.json, by name.
+func preTokenizers() (map[string]preTokenizer, error) {
+	var out map[string]preTokenizer
+	if err := json.Unmarshal(preTokenizersJSON, &out); err != nil || len(out) == 0 {
+		return nil, fmt.Errorf("convert: pretokenizers.json: %v, %d names", err, len(out))
+	}
+	return out, nil
 }
 
 // wordPiece resolves a WordPiece vocabulary's special ids and its one
@@ -245,9 +320,8 @@ var llama3Family = map[string]bool{
 // A BERT file's [CLS] opens the sequence and [SEP] closes it. Files spell
 // them two ways (bos/eos_token_id, or only cls/seperator_token_id), and
 // reading one spelling leaves the other with no opener, which a CLS-pooled
-// model reads its embedding from. Both are added, as llama.cpp does for every
-// WPM vocabulary and as BertProcessing does.
-func wordPiece(f *meta.File, v *jlm.Vocab) *jlm.Vocab {
+// model reads its embedding from. Both are added, as BertProcessing does.
+func wordPiece(f *meta.File, v *jlm.Vocab, pre string) *jlm.Vocab {
 	if n, ok := f.KV["tokenizer.ggml.cls_token_id"].Uint(); ok && v.BOS < 0 {
 		v.BOS = int32(n)
 	}
@@ -259,7 +333,7 @@ func wordPiece(f *meta.File, v *jlm.Vocab) *jlm.Vocab {
 	}
 	v.AddBOS, v.AddEOS, v.AddSpacePrefix = true, true, false
 	// BertNormalizer's two options. Absent keys mean an uncased model
-	// (llama.cpp's default), and strip_accents follows lowercase unless the
+	// (BertNormalizer's default), and strip_accents follows lowercase unless the
 	// file says otherwise, as in HuggingFace.
 	lower := true
 	if n, ok := f.KV["tokenizer.ggml.normalizer.lowercase"].Uint(); ok {
@@ -270,7 +344,7 @@ func wordPiece(f *meta.File, v *jlm.Vocab) *jlm.Vocab {
 		strip = n != 0
 	}
 	v.Pre = []jlm.PreOp{{Kind: jlm.PreBert, CaseFold: lower, LetterMarks: !strip}}
-	v.PreName = "bert"
+	v.PreName = pre
 	return v
 }
 

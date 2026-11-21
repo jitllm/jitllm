@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/model"
 )
 
 // toolText sits between the engine's token stream and a shim's output when a
@@ -29,7 +30,7 @@ type toolText struct {
 func newToolText(tools []byte) *toolText {
 	t := &toolText{on: len(tools) > 0, tools: tools}
 	if t.on {
-		t.ts = model.NewTextToolStream(model.ToolSyntaxHermes, model.ParseToolSet(tools))
+		t.ts = model.NewTextToolStream(model.ToolSyntaxFor(convert.DefaultToolForm()), model.ParseToolSet(tools))
 	}
 	return t
 }
@@ -62,6 +63,11 @@ func (t *toolText) push(tok *Token) (string, []model.ToolCall) {
 	t.calls = append(t.calls, calls...)
 	return s, calls
 }
+
+// generic is whether the stream reads the generic form, whose reply is a JSON
+// object: what the client is sent as content is the answer in it, and the
+// reply's own text is not.
+func (t *toolText) generic() bool { return t.ts != nil && t.ts.Syntax().Generic() }
 
 // finish returns the text a stream still owes, the calls not yet returned,
 // and the whole reply's text without its calls. stop is the stop string that

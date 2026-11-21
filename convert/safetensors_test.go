@@ -190,7 +190,7 @@ func TestSynthModelConverts(t *testing.T) {
 		t.Fatalf("the unmutated fixture does not convert, so no refusal below proves anything: %v", err)
 	}
 	c := s.Config
-	if c.Arch != jlm.ArchLlama || c.NLayer != sNLayer || c.NEmbd != sNEmbd ||
+	if c.NLayer != sNLayer || c.NEmbd != sNEmbd ||
 		c.NHead != sNHead || c.NKVHead != sNKV || c.HeadDim != sHeadD ||
 		c.NFFN != sNFFN || c.NVocab != sNVocab || c.NRot != sHeadD {
 		t.Fatalf("config %+v", c)
@@ -246,19 +246,26 @@ func TestSafetensorsRefusals(t *testing.T) {
 			"hyperparameters in config.json"},
 		{"no tokenizer.json", func(m *synthModel) { m.tokJSON = nil },
 			"tokenizer in tokenizer.json"},
-		{"mlp bias", func(m *synthModel) { m.cfg["mlp_bias"] = true },
-			"no feed-forward bias role"},
+		// mlp_bias is not read: its biases are tensors no role names.
+		{"mlp bias", func(m *synthModel) {
+			m.cfg["mlp_bias"] = true
+			m.tensors["model.layers.0.mlp.up_proj.bias"] = &synthTensor{safetensors.F32, []uint64{sNFFN}, f32Bytes(sNFFN, 4)}
+		}, "has no role in this container's vocabulary"},
 		{"gelu", func(m *synthModel) { m.cfg["hidden_act"] = "gelu" },
-			"feed-forward is silu-gated"},
-		{"llama3 rope scaling", func(m *synthModel) {
-			m.cfg["rope_scaling"] = map[string]any{"rope_type": "llama3", "factor": 32.0}
-		}, `rope_scaling "llama3" is not implemented`},
+			"activation gelu is not implemented"},
+		// llama3 and yarn are implemented (TestLlama3RopeScalingStatesItsFactors,
+		// TestYarnThroughTheLibrary); dynamic is not.
+		{"dynamic rope scaling", func(m *synthModel) {
+			m.cfg["rope_scaling"] = map[string]any{"rope_type": "dynamic", "factor": 32.0}
+		}, "rope scaling dynamic is not implemented"},
 		{"partial rotary", func(m *synthModel) { m.cfg["partial_rotary_factor"] = 0.5 },
-			"partial_rotary_factor 0.5"},
+			"partial_rotary_factor is 0.5, and convert/models/llama.json does not read it"},
 		{"sliding window", func(m *synthModel) { m.cfg["sliding_window"] = 4096 },
-			"sliding_window 4096"},
+			"a sliding window of 4096 is not one graph llama runs"},
+		// An absent vocab_size is LlamaConfig's 32000, and the embedding's 12
+		// rows disagree.
 		{"no vocab_size", func(m *synthModel) { delete(m.cfg, "vocab_size") },
-			"missing vocab_size"},
+			"token_embd wants [8 32000]"},
 		// The head is the absence of lm_head, and config.json must agree.
 		{"untied and headless", func(m *synthModel) { m.cfg["tie_word_embeddings"] = false },
 			"output head is missing, not tied"},
@@ -344,7 +351,7 @@ func TestBF16IsWidenedExactly(t *testing.T) {
 			t.Errorf("bf16 %04x -> f32 %08x, want %08x", p, w, uint32(p)<<16)
 		}
 	}
-	// And it is selected: a BF16 model must arrive as TypeF32, because jit/cpu
+	// And it is selected: a BF16 model must arrive as TypeF32, because engine/device/cpu
 	// emits a native matvec for F32 and F16 only and a BF16 weight would reach
 	// the oracle. See hfTypeOf.
 	m := newSynth()

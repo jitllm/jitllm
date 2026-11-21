@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/localserver"
 )
 
@@ -42,7 +44,7 @@ func embedCmd(args []string) error {
 	if fs.NArg() < 1 || (fs.NArg() < 2 && !*lines) {
 		return fmt.Errorf("usage: jitllm embed [-ids] [-lines] <model.jlm|NAME> <text...>")
 	}
-	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, embedRemoteFlags), os.Stderr)
+	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, embedRemoteFlags()), os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -62,7 +64,8 @@ func embedCmd(args []string) error {
 		return embedRemote(svc.Addr, keyOf(*apiKey), fs.Arg(0), texts, os.Stdout)
 	}
 	t0 := time.Now()
-	m, err := model.Open(path, loadOpts(nil, 0)...)
+	mo, io := loadOpts(nil, 0)
+	m, err := model.Open(path, mo...)
 	if err != nil {
 		return err
 	}
@@ -74,7 +77,7 @@ func embedCmd(args []string) error {
 	if m.Vocab == nil {
 		return fmt.Errorf("%s: no tokenizer: %v", fs.Arg(0), m.TokErr)
 	}
-	e, err := m.NewEmbedder()
+	e, err := engine.NewEmbedder(m, io...)
 	if err != nil {
 		return err
 	}
@@ -90,8 +93,8 @@ func embedCmd(args []string) error {
 		}
 		defer e.SetDeviceLayers(nil, 0)
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s, %d dims, %v pooling, %d blocks on %s, loaded in %v\n",
-		fs.Arg(0), m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), e.DeviceBlocks(), devName, time.Since(t0).Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "%s: %d dims, %v pooling, %d blocks on %s, loaded in %v\n",
+		fs.Arg(0), m.Cfg.NEmbd, m.Pooling(), e.DeviceBlocks(), devName, time.Since(t0).Round(time.Millisecond))
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(text string) error {

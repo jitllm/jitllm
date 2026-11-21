@@ -83,9 +83,9 @@ func TestConnectGenerateStreamsStartedTokensFinishedInThatOrder(t *testing.T) {
 		t.Fatalf("started carries queued=%dms depth=%d, want 1500 and 2",
 			started.GetQueuedMillis(), started.GetQueueDepthOnEntry())
 	}
-	if started.GetDeviceBlocks() != 22 || started.GetHostBlocks() != 10 {
+	if started.GetDeviceBlocks() != 22 || started.GetCpuBlocks() != 10 {
 		t.Fatalf("started carries the split %d/%d, want 22/10",
-			started.GetDeviceBlocks(), started.GetHostBlocks())
+			started.GetDeviceBlocks(), started.GetCpuBlocks())
 	}
 	if fin.GetReason() != v1.FinishReason_FINISH_REASON_EOS {
 		t.Fatalf("finish reason %v, want EOS", fin.GetReason())
@@ -170,7 +170,7 @@ func TestAChatPromptCarriesItsSystemFieldSeparately(t *testing.T) {
 // Open checks the extension first. Without the NotConvertedError arm in
 // connectErr it fails with "code is internal, want failed_precondition".
 func TestHandingAGGUFToLoadReturnsTheConvertCommand(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	url := connectServer(t, func(mux *http.ServeMux) {
 		p, h := jitllmv1connect.NewModelServiceHandler(&ModelService{E: e})
@@ -200,7 +200,7 @@ func TestHandingAGGUFToLoadReturnsTheConvertCommand(t *testing.T) {
 
 // TestAnUnknownModelIsNotFoundRatherThanInternal.
 func TestAnUnknownModelIsNotFoundRatherThanInternal(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	url := connectServer(t, func(mux *http.ServeMux) {
 		p, h := jitllmv1connect.NewModelServiceHandler(&ModelService{E: e})
@@ -217,7 +217,7 @@ func TestAnUnknownModelIsNotFoundRatherThanInternal(t *testing.T) {
 // TestGenerateRefusesBothSessionAndModel: one continues a sequence, the other
 // makes a throwaway, so neither is silently picked.
 func TestGenerateRefusesBothSessionAndModel(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	err := e.Generate(context.Background(), GenerateOptions{
 		SessionID: "s", ModelID: "m",
@@ -231,7 +231,7 @@ func TestGenerateRefusesBothSessionAndModel(t *testing.T) {
 // TestTheDeviceQueueReportsItsReason: the queue says how sessions share the
 // device, so a caller reading it knows nothing waits for the device as a whole.
 func TestTheDeviceQueueReportsItsReason(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
 	url := connectServer(t, func(mux *http.ServeMux) {
 		p, h := jitllmv1connect.NewSessionServiceHandler(&SessionService{E: e})
@@ -262,7 +262,7 @@ func noProbe() ([]DeviceInfo, error) { return nil, nil }
 func TestSpendableTotalSubtractsAUnifiedHeapInsteadOfAddingIt(t *testing.T) {
 	host := HostInfo{WeightBudget: 8 << 30}
 	devs := []DeviceInfo{
-		{ID: "cpu", Kind: KindHost, TotalMemory: 32 << 30, CountsTowardHostBudget: true, Available: true},
+		{ID: "cpu", Kind: KindCPU, TotalMemory: 32 << 30, CountsTowardHostBudget: true, Available: true},
 		{ID: "cuda:0", Kind: KindDiscrete, TotalMemory: 4 << 30, Available: true},
 		{ID: "vulkan:1", Kind: KindIntegrated, TotalMemory: 21 << 30, CountsTowardHostBudget: true, Available: true},
 		{ID: "vulkan:2", Kind: KindDiscrete, TotalMemory: 8 << 30, Available: false}, // no compute queue

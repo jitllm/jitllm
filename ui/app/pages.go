@@ -17,6 +17,7 @@ type pageStack struct {
 }
 
 func newPageStack(sel state.Signal[int], pages []widget.Widget) *pageStack {
+	var _ widget.Lifecycle = (*pageStack)(nil)
 	p := &pageStack{sel: sel, pages: pages}
 	for _, pg := range pages {
 		if s, ok := pg.(interface{ SetParent(widget.Widget) }); ok {
@@ -87,5 +88,3 @@ func (p *pageStack) Unmount() {
 		widget.UnmountTree(pg)
 	}
 }
-
-var _ widget.Lifecycle = (*pageStack)(nil)

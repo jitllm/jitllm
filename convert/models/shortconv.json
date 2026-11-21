@@ -1,0 +1,105 @@
+{
+  "describe": {"lfm2": "LFM2", "lfm2moe": "LFM2-8B-A1B, LFM2-24B-A2B"},
+  "gguf": ["lfm2", "lfm2moe"],
+  "container": {
+    "lfm2": {"tensors": {"sizes": {"q": "embedding_length", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
+"block": {"attn_qkv.weight": [
+        {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+"attn_qkv.bias": [
+        {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+
+        "shortconv.in_proj.weight": [
+          {"role": "shortconv.in_proj.b", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 0, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.c", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 1, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.x", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 2, 1]}, {"reshape": ["embedding_length", -1]}]}
+        ]
+      }},
+      "readouts": ["lfm2-d1-omni"], "retarget": [
+                 {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (the GGUF's name for LFM2's output norm) and is applied after the last block, not to the embeddings"}],
+      "flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]},
+    "lfm2moe": {"tensors": {"sizes": {"q": "embedding_length", "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))", "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
+"block": {"attn_qkv.weight": [
+        {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+"attn_qkv.bias": [
+        {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+        {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+        {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+
+        "shortconv.in_proj.weight": [
+          {"role": "shortconv.in_proj.b", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 0, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.c", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 1, 1]}, {"reshape": ["embedding_length", -1]}]},
+          {"role": "shortconv.in_proj.x", "do": [{"reshape": [3, "embedding_length", -1]}, {"slice": [0, 2, 1]}, {"reshape": ["embedding_length", -1]}]}
+        ]
+      }},
+      "retarget": [
+                 {"from": "token_embd_norm", "to": "output_norm", "why": "its final norm is named token_embd_norm (the GGUF's name for LFM2's output norm) and is applied after the last block, not to the embeddings"}],
+      "flags": {"rope_neox": "true", "qk_norm": "'attn_q_norm.weight' in layer_tensors"}, "recurrent": {"conv_kernel": "src['shortconv.l_cache'] | default(0)", "inner": "src['embedding_length']"}, "layers": [{"tensors": ["shortconv.conv.weight"], "kind": "short_conv"}]}
+  },
+  "graph": {
+    "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],
+    "block": [
+      {"op": "in", "out": "x", "width": "embd"},
+      {"op": "norm", "in": "x", "w": "attn_norm", "out": "n"},
+      {"op": "matvec", "if": "kind == 'shortconv'", "in": "n", "w": "shortconv.in_proj.b", "rows": "chans", "out": "bb"},
+      {"op": "matvec", "if": "kind == 'shortconv'", "in": "n", "w": "shortconv.in_proj.x", "rows": "chans", "out": "xx"},
+      {"op": "emit", "if": "kind == 'shortconv'", "kind": "map", "in": ["bb", "xx"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "bx", "width": "chans"}], "out": "bx"},
+      {"op": "emit", "if": "kind == 'shortconv' and not non_causal", "kind": "state_conv", "in": "bx", "attr": {"Taps": "conv"}, "advances": ["rec.conv"], "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
+      {"op": "emit", "if": "kind == 'shortconv' and non_causal", "kind": "row_conv", "in": "bx", "attr": {"Taps": "conv", "RowWindows": "row_windowed"}, "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
+      {"op": "matvec", "if": "kind == 'shortconv'", "in": "n", "w": "shortconv.in_proj.c", "rows": "chans", "out": "cc"},
+      {"op": "emit", "if": "kind == 'shortconv'", "kind": "map", "in": ["cc", "conv"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "cy", "width": "chans"}], "out": "mix"},
+      {"op": "matvec", "if": "kind == 'shortconv'", "in": "mix", "w": ["ssm_out", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "matvec", "if": "kind != 'shortconv'", "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "heads * head_dim", "out": "q"},
+      {"op": "matvec", "if": "kind != 'shortconv'", "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "kv_heads * head_dim", "out": "k"},
+      {"op": "matvec", "if": "kind != 'shortconv'", "in": "n", "w": ["attn_v", "attn_v.bias?"], "rows": "kv_heads * head_dim", "out": "v"},
+      {"op": "head_norm", "if": "kind != 'shortconv' and stored('attn_q_norm')", "in": "q", "w": "attn_q_norm", "out": "q"},
+      {"op": "head_norm", "if": "kind != 'shortconv' and stored('attn_k_norm')", "in": "k", "w": "attn_k_norm", "out": "k"},
+      {"op": "rope", "if": "kind != 'shortconv' and rope_at", "in": "q", "name": "q.rope", "out": "q"},
+      {"op": "rope", "if": "kind != 'shortconv' and rope_at", "in": "k", "name": "k.rope", "out": "k"},
+      {"op": "kv_append", "if": "kind != 'shortconv'", "in": ["k", "v"], "out": "kv"},
+      {"op": "attend", "if": "kind != 'shortconv'", "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
+      {"op": "matvec", "if": "kind != 'shortconv'", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "add", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
+      {"op": "layer_norm", "if": "layer_norm and stored('attn_out_norm')", "in": "h", "w": ["attn_out_norm", "attn_out_norm.bias?"], "out": "h"},
+      {"op": "norm", "in": "h", "w": "ffn_norm", "out": "m"},
+      {"op": "matvec", "if": "not moe", "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
+      {"op": "matvec", "if": "not moe", "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
+      {"op": "act", "if": "not moe", "in": ["g", "u"], "width": "ffn", "out": "a"},
+      {"op": "matvec", "if": "not moe", "in": "a", "w": ["ffn_down", "ffn_down.bias?"], "rows": "embd", "out": "d"},
+      {"op": "mark", "if": "moe", "out": "routed"},
+      {"op": "matvec", "if": "moe", "in": "m", "w": ["ffn_gate_inp", "ffn_gate_inp.bias?"], "rows": "experts", "out": "logits"},
+      {"op": "stated", "if": "moe", "of": "router_score", "name": "router.score", "in": "logits", "width": "experts", "out": "score"},
+      {"op": "let", "if": "moe", "in": "score", "out": "choose"},
+      {"op": "emit", "if": "moe and stored('exp_probs_b.bias')", "kind": "map", "in": "score", "attr": {"Fn": "'add'"}, "bind": [{"w": "exp_probs_b.bias"}], "outs": [{"name": "router.biased", "width": "experts"}], "out": "choose"},
+      {"op": "emit", "if": "moe and expert_groups > 1", "kind": "top_k", "in": "choose", "attr": {"TopK": "[2, experts // expert_groups] | min", "Span": "experts // expert_groups"}, "outs": [{"name": "router.group.sel", "width": "expert_groups * ([2, experts // expert_groups] | min)", "elem": "u32"}, {"name": "router.group.best", "width": "expert_groups * ([2, experts // expert_groups] | min)", "as": "gbest"}]},
+      {"op": "emit", "if": "moe and expert_groups > 1", "kind": "reduce", "in": "gbest", "attr": {"Fn": "'add'", "Span": "[2, experts // expert_groups] | min"}, "outs": [{"name": "router.group.score", "width": "expert_groups"}], "out": "gscore"},
+      {"op": "emit", "if": "moe and expert_groups > 1", "kind": "rank", "in": "gscore", "outs": [{"name": "router.group.rank", "width": "expert_groups", "elem": "u32"}], "out": "grank"},
+      {"op": "emit", "if": "moe and expert_groups > 1", "kind": "map", "in": "grank", "attr": {"Fn": "'less'", "Const": "expert_groups_used"}, "outs": [{"name": "router.group.kept", "width": "expert_groups"}], "out": "gkept"},
+      {"op": "emit", "if": "moe and expert_groups > 1", "kind": "map", "in": ["gkept", "choose"], "attr": {"Fn": "'where'", "Const": "-inf"}, "outs": [{"name": "router.kept", "width": "experts"}], "out": "choose"},
+      {"op": "emit", "if": "moe", "kind": "top_k", "in": "choose", "attr": {"TopK": "experts_used"}, "outs": [{"name": "router.sel", "width": "experts_used", "elem": "u32", "as": "sel"}, {"name": "router.best", "width": "experts_used"}]},
+      {"op": "emit", "if": "moe", "kind": "take", "in": ["score", "sel"], "outs": [{"name": "router.w", "width": "experts_used"}], "out": "w"},
+      {"op": "emit", "if": "moe and expert_norm", "kind": "reduce", "in": "w", "attr": {"Fn": "'add'"}, "outs": [{"name": "router.wsum", "width": "1"}], "out": "ws"},
+      {"op": "emit", "if": "moe and expert_norm", "kind": "map", "in": "ws", "attr": {"Fn": "'add'", "Const": "1e-20"}, "outs": [{"name": "router.sum", "width": "1"}], "out": "ws"},
+      {"op": "emit", "if": "moe and expert_norm", "kind": "map", "in": ["w", "ws"], "attr": {"Fn": "'div'"}, "outs": [{"name": "router.wn", "width": "experts_used"}], "out": "w"},
+      {"op": "emit", "if": "moe and expert_scale != 0 and expert_scale != 1", "kind": "map", "in": "w", "attr": {"Fn": "'mul'", "Const": "expert_scale"}, "outs": [{"name": "router.scaled", "width": "experts_used"}], "out": "w"},
+      {"op": "emit", "if": "moe", "kind": "tile", "in": "m", "attr": {"Span": "embd"}, "outs": [{"name": "experts.in", "width": "experts_used * embd"}], "out": "ein"},
+      {"op": "emit", "if": "(moe) and stored('ffn_gate_exps')", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.gate", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_gate_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_gate_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eg"},
+      {"op": "emit", "if": "moe", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.up", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_up_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_up_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eu"},
+      {"op": "act", "if": "(moe) and stored('ffn_gate_exps')", "name": "experts.act", "in": ["eg", "eu"], "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
+      {"op": "act", "if": "(moe) and not stored('ffn_gate_exps')", "name": "experts.act", "in": "eu", "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
+      {"op": "emit", "if": "moe", "kind": "expert_matvec", "in": ["ea", "sel"], "outs": [{"name": "experts.down", "width": "experts_used * embd"}], "bind": [{"w": "ffn_down_exps", "k": "rows('ffn_up_exps')", "rows": "embd", "sheets": "experts"}, {"w": "ffn_down_exps.bias?", "k": "embd", "rows": "experts"}], "out": "ed"},
+      {"op": "emit", "if": "moe", "kind": "map", "in": ["ed", "w"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "experts.weighted", "width": "experts_used * embd"}], "out": "ed"},
+      {"op": "split_sum", "if": "moe", "in": "ed", "parts": "experts_used", "name": "experts.out", "out": "d"},
+      {"op": "routed", "if": "moe", "from": "routed"},
+      {"op": "add", "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "layer_norm", "if": "layer_norm and stored('layer_out_norm')", "in": "y", "w": ["layer_out_norm", "layer_out_norm.bias?"], "out": "y"},
+      {"op": "norm", "if": "not layer_norm and stored('layer_out_norm')", "in": "y", "w": "layer_out_norm", "out": "y"},
+      {"op": "out", "in": "y"}
+    ]
+  }
+}

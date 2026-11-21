@@ -10,8 +10,8 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestSplitGGUFConvertsLikeTheWholeFile converts a model split by llama.cpp's
-// llama-gguf-split and the same model whole, and demands byte-identical
+// TestSplitGGUFConvertsLikeTheWholeFile converts a model split by
+// gguf-split and the same model whole, and demands byte-identical
 // containers. The parts are made once with
 //
 //	llama-gguf-split --split --split-max-tensors 60 tinyllama-1.1b-q3_K_M.gguf split-test/tl
@@ -23,7 +23,7 @@ func TestSplitGGUFConvertsLikeTheWholeFile(t *testing.T) {
 	part := testmodels.Path(filepath.Join("split-test", "tl-00001-of-00004.gguf"))
 	for _, p := range []string{whole, part} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 		}
 	}
 	dir, err := os.MkdirTemp(filepath.Dir(part), "splitgate")

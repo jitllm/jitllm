@@ -14,8 +14,7 @@ HEAVY = re.compile(
     r'(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*'          # leading VAR=val assignments
     r'(?:go\s+(?:test|build|run|vet|generate)\b'
     r'|(?:gcc|clang|clang\+\+|g\+\+|cc|nvcc|make)\b'
-    r'|\./[A-Za-z0-9_./-]*\.test\b'
-    r'|\./dev/probe/)'
+    r'|\./[A-Za-z0-9_./-]*\.test\b)'
 )
 
 def strip_quoted(s: str) -> str:

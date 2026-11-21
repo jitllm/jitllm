@@ -45,9 +45,14 @@ LONG = " ".join(
                            "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth",
                            "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth",
                            "eighteenth", "nineteenth", "twentieth"]))
-LONG_OK = {"nomic-embed-text", "qwen3-embedding-0.6b", "qwen3-embedding-0.6b-f16", "embeddinggemma-300m"}
+LONG_OK = {"nomic-embed-text", "qwen3-embedding-0.6b", "qwen3-embedding-0.6b-f16", "embeddinggemma-300m",
+           "embeddinggemma-300m-lcpp", "synth-gemma-embedding"}
 
 # name -> (gguf, sentence-transformers repo or None, st kwargs[, llama.cpp gguf])
+#
+# A repo "hf:<name>" is the fixture embedfixture.py wrote to $CV_HF/<name>; the
+# st kwarg "modules" keeps that many of the checkpoint's leading modules (and
+# normalises), for a GGUF converted without the rest.
 #
 # The fourth entry is for a model whose Ollama GGUF llama.cpp cannot load:
 # Ollama's embeddinggemma is arch "gemma3" with dense.0/dense.1, which b10825
@@ -67,6 +72,12 @@ TABLE = {
     "qwen3-embedding-0.6b-f16": ("qwen3-embedding-0.6b-f16.gguf", "Qwen/Qwen3-Embedding-0.6B", {}),
     "embeddinggemma-300m": ("embeddinggemma-300m.gguf", "unsloth/embeddinggemma-300m", {},
                             "embeddinggemma-300M-BF16-lcpp.gguf"),
+    # The oracle's spelling of the same weights read by jitllm itself: arch
+    # "gemma-embedding", no attention.causal key, and no dense heads, so its
+    # float32 arm is the checkpoint's Transformer and Pooling alone.
+    "embeddinggemma-300m-lcpp": ("embeddinggemma-300M-BF16-lcpp.gguf", "unsloth/embeddinggemma-300m",
+                                 {"modules": 2}),
+    "synth-gemma-embedding": ("synth-gemma-embedding.gguf", "hf:synth-gemma-embedding", {}),
 }
 
 
@@ -104,9 +115,15 @@ def llama_embed(gguf, text):
 
 
 def st_embed(repo, kw, texts):
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import SentenceTransformer, models
     shim_transformers()
+    kw = dict(kw)
+    keep = kw.pop("modules", 0)
+    if repo.startswith("hf:"):
+        repo = os.path.join(refenv.under("CV_HF", "hf"), repo[3:])
     m = SentenceTransformer(repo, device="cpu", **kw)
+    if keep:
+        m = SentenceTransformer(modules=[m[i] for i in range(keep)] + [models.Normalize()], device="cpu")
     # float32 throughout: the reference is the weights' own arithmetic, not a
     # half-precision approximation of it.
     m = m.float()

@@ -48,19 +48,19 @@ type Sample struct {
 // fewer than two tokens or no measurable decode time.
 func (s *Sample) DecodeRate() float64 {
 	if s.CompletionTokens < 2 || len(s.ITL) == 0 {
-		return nan
+		return nan()
 	}
 	var d time.Duration
 	for _, g := range s.ITL {
 		d += g
 	}
 	if d <= 0 {
-		return nan
+		return nan()
 	}
 	return float64(s.CompletionTokens-1) / d.Seconds()
 }
 
-// TPOT is the mean gap between text chunks: vLLM's time per output token.
+// TPOT is the mean gap between text chunks: the time per output token.
 func (s *Sample) TPOT() time.Duration {
 	if len(s.ITL) == 0 {
 		return 0
@@ -95,8 +95,8 @@ func (r Request) body() ([]byte, error) {
 		"max_tokens":  r.Max,
 		"temperature": r.Temp,
 		"stream":      true,
-		// vLLM and SGLang send usage on a stream only when asked; jitllm and
-		// llama-server send it either way.
+		// The OpenAI API sends usage on a stream only when asked; a server
+		// that sends it either way ignores the ask.
 		"stream_options": map[string]any{"include_usage": true},
 	}
 	if r.API == "chat" {

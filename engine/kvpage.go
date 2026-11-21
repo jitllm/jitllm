@@ -1,0 +1,3397 @@
+package engine
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"hash"
+	"io"
+	"math"
+	"slices"
+	"strconv"
+	"sync/atomic"
+	"unsafe"
+
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn/history"
+
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
+	"github.com/jitllm/jitllm/nn"
+)
+
+// The KV cache is paged, and its pages are its own.
+//
+// It is not the weight pager: a weight page is fixed at conversion, never
+// changes and always has a copy on disk, while KV pages grow one position per
+// token per layer, the tail page is written every token, and until something
+// stores a page there is no other copy. Consequences:
+//
+//   - Pages behind the tail are immutable, so they are safe to store, share or
+//     drop.
+//   - There is no fault on the write path: a new page is needed exactly when
+//     pos%P == 0, so the write path allocates.
+//   - Reads span every page: attention at position n reads 0..n (see kvSpan).
+//
+// The page size is per layer: a linear-attention layer gets no pages, a
+// sliding-window layer one page of its window, and an ordinary attention
+// layer a run of positions aligned to the score kernel's tile.
+
+// ErrNoPage is what a store returns when it simply does not hold the page.
+//
+// A miss means "compute it"; any other error means the store is broken, and
+// treating the two alike would silently drop a sequence's history.
+const ErrNoPage modelError = "model: no such kv page"
+
+// KVStore is where a KV page lives when no tier is holding it.
+//
+// The sink is the caller's io.Writer, so a store only moves bytes and never
+// learns about device buffers or layouts; io.Copy's ReaderFrom/WriterTo lets a
+// destination that can alias memory skip the copy.
+//
+// cacheId is opaque to the engine and identifies one history. The caller can
+// make it content-addressed ("<model>/<sha256 of the prompt prefix>"), which
+// is how a later process finds an earlier one's pages; a counter or a
+// batch row would address another prompt's pages. Two sessions sharing a
+// key must share a token prefix, model, KV element width and page geometry.
+// The engine cannot check that. Implementations must be safe for concurrent
+// use.
+type KVStore interface {
+	// Get writes page `index` of `layer` into page. It returns ErrNoPage when
+	// the store does not hold it.
+	Get(cacheId string, layer int, index int, page io.Writer) error
+	// Set takes the page's bytes. Only sealed pages are ever offered.
+	Set(cacheId string, layer int, index int, page io.Reader) error
+	// Drop forgets everything held for one cache.
+	Drop(cacheId string) error
+}
+
+// FillStore is a KVStore that can hold several pages which are byte prefixes
+// of one buffer over a single copy of it. SetFills takes, for one layer and
+// page index, src and for each i the page keys[i] = src[:lens[i]]; lens are
+// in bytes and none exceeds len(src). It has the effect of one Set per key.
+type FillStore interface {
+	KVStore
+	SetFills(layer, index int, src []byte, keys []string, lens []int) error
+}
+
+// NoStore holds nothing: every Get misses and every Set is discarded.
+//
+// It is the default: the cache is resident-only and a run that fits pays
+// nothing for the store.
+type NoStore struct{}
+
+// Get misses every page: it returns ErrNoPage.
+func (NoStore) Get(string, int, int, io.Writer) error { return ErrNoPage }
+
+// Set discards the page.
+func (NoStore) Set(string, int, int, io.Reader) error { return nil }
+
+// Drop has nothing to forget.
+func (NoStore) Drop(string) error { return nil }
+
+// kvKeyTile is how far past a row's causal width the score kernel may write, and
+// therefore the alignment a page boundary has to respect. engine/device/gpu carries
+// the same constant for the score-row padding it forces (sstride = MaxSeq + it).
+const kvKeyTile = 32
+
+// kvPageTarget is the positions a page holds when nothing constrains it.
+//
+// It is a target, not a tuning result: EmitAttnAcc re-reads the V window once
+// per column block per page, bounding it from below, and a page is the granule
+// of growth and spill, bounding it from above. 256 is a multiple of every key
+// tile and a power of two. A model's kvPage option overrides it (tests only).
+const kvPageTarget = 256
+
+// kvPagePositions is how many positions one page of layer li holds, or 0 when
+// the layer keeps no attention history at all. pin, when positive, replaces
+// kvPageTarget (the model's kvPage option); win is the window the layer's
+// graph states (attendWindows), 0 for none.
+func kvPagePositions(c *model.Config, li, pin, win int) int {
+	if !c.LayerKind(li).Attends() {
+		// A recurrent layer keeps a fixed-size summary, not a history.
+		return 0
+	}
+	// Only a window shorter than the context sizes a page (Phi-3.5 declares
+	// a window larger than its context, which would be gigabytes a layer).
+	if win > 0 && (c.NCtx == 0 || win < c.NCtx) {
+		return align(win, kvKeyTile)
+	}
+	p := align(kvPageTarget, kvKeyTile)
+	if pin > 0 {
+		p = pin
+	}
+	if c.NCtx > 0 && p > c.NCtx {
+		p = align(c.NCtx, kvKeyTile)
+	}
+	return p
+}
+
+func align(n, to int) int {
+	if to <= 0 || n <= 0 {
+		return n
+	}
+	return ((n + to - 1) / to) * to
+}
+
+// kvPages is one layer's paged history for one Instance.
+//
+// A page holds every sequence slot, laid out as the flat cache was with maxSeq
+// replaced by P, so kvLayout addresses within a page unchanged.
+type kvPages struct {
+	p  int // positions per page; 0 means this layer keeps none
+	pp int // float32 elements per page (nseq * p * kvDim, scaled by elem width)
+	// mem is the pages' memory: each page's key and value, in its session's
+	// view of the CPU device (history.Pages). The fields below decide what a
+	// page holds and when it goes; mem is where it is.
+	mem *history.Pages
+	// latent makes the value the same memory as the key, which is what MLA
+	// is: a cached row is the latent followed by the shared rotary key, and
+	// the value is the latent prefix. It is an alias, not a copy: a value's
+	// span is its key's base, and the accumulate kernel is emitted for
+	// KVLoraRank while scores use the whole row (nn.AddAttnKV).
+	latent bool
+	// lastSealed is how many pages have been offered to the store. A page is
+	// offered once, when it stops being the one the token writes into.
+	lastSealed int
+	// written is the high-water position this layer has actually had written
+	// into it. Resident is not written: the page straddling the end of a
+	// restored or migrated run is resident and partly zeros, and sealing it
+	// would store those zeros as history.
+	written int
+	// out[n] marks a page trim evicted with history still in it. A write into
+	// it faults it back first (kvCache.writable): in a batch the page holds
+	// every row's slots, and a readmitted row writes into pages the others
+	// sealed long ago, so allocating a zeroed one would wipe their history.
+	// A page dropped on purpose (a restore, a truncation) is not out.
+	out []bool
+	// win is a sliding or chunked layer's window, 0 for a layer that reads its
+	// whole history; chunked says the window is aligned chunks (llama4).
+	//
+	// A windowed layer's pages behind every row's window are never read
+	// again, so release hands them to its spares (mem) and the next page
+	// grows out of them: the layer holds the window and a page of slack, not
+	// the context.
+	win     int
+	chunked bool
+	// period, past 1, makes the layer a history of a block past its rows':
+	// one entry each period positions, entry j in the page of position
+	// (j+1)*period-1 (composer.History.Period); ew is an entry's width and
+	// efmt the history's format.
+	period, ew int
+	efmt       nn.KVFmt
+	// gone is where release's walk starts: every page below it was released
+	// or never written. A page grown below it (a row restarting in a batch)
+	// lowers it again.
+	gone int
+	// genuine is the first position whose bytes are history. Positions below
+	// it may be zeros a device sent back for pages it had released, so a page
+	// starting below it is never stored: under content addressing it would
+	// be another session's history.
+	genuine int
+	// shared[n] says page n aliases sh's single copy (kvshare.go): it is
+	// never written in place, never pooled, and its reference is dropped
+	// wherever the page is let go. cowFault is the sharing gate's violation:
+	// a write into a shared page lands in place.
+	shared   []bool
+	sh       *SharedStore
+	cowFault bool
+	// copy says the pages are the CPU device's copy of a history a card
+	// writes, which a block on the CPU device reads (histcross.go); copied
+	// is, per sequence base, how many of its positions they hold as one,
+	// and sent how many the card's copies of the block's own pages hold.
+	copy         bool
+	copied, sent map[int]int
+	// bound says the copy is held for a CPU device binding of the block
+	// alone, no block there reading it (lanesRead): no copy is written to
+	// it, and a page of it a restore let go is a fresh one, not a fault.
+	bound bool
+	// copySealed is the first page of the copy not yet offered to the shared
+	// store (kvCache.publishCopies).
+	copySealed int
+	// apart is the positions a page of the block's history holds on the card
+	// it runs on where that card cuts it apart from p, and apartSealed the
+	// first of those pages not yet named there (kvCache.nameApart).
+	apart, apartSealed int
+	// copyApart and copyApartSealed are apart and apartSealed for the copy
+	// a card holds of the block's history while it runs on the CPU device
+	// (kvCache.nameCopyApart).
+	copyApart, copyApartSealed int
+}
+
+// keyStart is the first key position pos attends on this layer: the start of
+// the window its block's attention states, or 0 on a layer with no window.
+func (s *kvPages) keyStart(pos int) int {
+	switch {
+	case s.win <= 0 || pos <= 0:
+		return 0
+	case s.chunked:
+		return pos / s.win * s.win
+	}
+	return max(0, pos+1-s.win)
+}
+
+// liveFrom is the first page a windowed layer must keep while its slowest row
+// is at low: the page holding the window start of nn.KVWindowSlack positions
+// earlier, so a rewind that short (a speculation round's rejected rows) still
+// finds its window resident. 0 on a layer with no window.
+func (s *kvPages) liveFrom(low int) int {
+	if s.win <= 0 || s.p == 0 {
+		return 0
+	}
+	return s.keyStart(max(0, low-nn.KVWindowSlack)) / s.p
+}
+
+// release hands every page below liveFrom(low) to spare. Callers pass the
+// lowest position any row with history still writes (Instance.advance), so no
+// row reads a released page again.
+//
+// fault is a gate's violation: the page the window starts in goes too, with
+// no slack, so the window reads a released page.
+func (s *kvPages) release(low int, fault bool) {
+	first := s.liveFrom(low)
+	if fault {
+		first = s.keyStart(low)/s.p + 1
+	}
+	for n := s.gone; n < first && n < s.mem.Len(); n++ {
+		s.recycle(n)
+	}
+	s.gone = max(s.gone, first)
+}
+
+// recycle lets page n go and leaves it non-resident, its buffers to the
+// spares while they hold under what a window and its slack turn over
+// (spareMax); a page past that goes to the collector.
+func (s *kvPages) recycle(n int) {
+	if s.isShared(n) {
+		s.drop(n) // others read it: the reference goes, the memory stays
+		return
+	}
+	s.mem.Release(n, s.spareMax())
+	if n < len(s.out) {
+		s.out[n] = false
+	}
+}
+
+// spareMax is the most released buffers a windowed layer keeps: the K and V
+// of the pages a window and its slack span, twice over.
+func (s *kvPages) spareMax() int {
+	if s.win <= 0 || s.p == 0 {
+		return 0
+	}
+	return 2 * 2 * ((s.win+nn.KVWindowSlack)/s.p + 2)
+}
+
+// reserve sizes the page index for maxSeq positions, so a decode crossing a
+// page boundary does not grow it.
+func (s *kvPages) reserve(maxSeq int) {
+	if s.p == 0 || maxSeq <= 0 {
+		return
+	}
+	n := (maxSeq + s.p - 1) / s.p
+	s.mem.Reserve(n, s.spareMax())
+	s.out = slices.Grow(s.out, n)
+}
+
+// setPage makes page n's key and value k and v (history.Pages.Set).
+func (s *kvPages) setPage(n int, k, v []float32) { s.mem.Set(n, k, v) }
+
+// drop lets page n go for good: nothing is to be faulted back into it.
+func (s *kvPages) drop(n int) {
+	s.unshare(n)
+	s.mem.Release(n, 0)
+	if n < len(s.out) {
+		s.out[n] = false
+	}
+}
+
+// resident says page n is here now. It is read-only because attention heads
+// fan out across the pool: a worker may ask "is it here", never "put it here".
+func (s *kvPages) resident(n int) bool { return s.mem.Resident(n) }
+
+// page returns the page index and the position within it.
+func (s *kvPages) page(pos int) (int, int) { return pos / s.p, pos % s.p }
+
+// grow makes sure page n exists, allocating it if this is the first time the
+// sequence has reached it. It is called on the write path, where the need is
+// known rather than discovered.
+func (s *kvPages) grow(n int) {
+	s.extend(n)
+	// A page below the released ones: a batch row restarting from zero, whose
+	// pages the others had left. Release walks from here again.
+	if n < s.gone {
+		s.gone = n
+	}
+	// It refills a hole, not only the tail: eviction and a restored prefix
+	// leave nil slots inside the slice.
+	s.mem.Grow(n)
+}
+
+// extend makes index n addressable without making it resident. The fault path
+// wants this and not grow: it fills the page from a store, and a buffer
+// allocated here could be read as history if a failure path kept it.
+func (s *kvPages) extend(n int) {
+	s.mem.Extend(n)
+	for len(s.out) <= n {
+		s.out = append(s.out, false)
+	}
+	if s.sh != nil {
+		for len(s.shared) <= n {
+			s.shared = append(s.shared, false)
+		}
+	}
+}
+
+// bytes is what this layer's pages occupy right now -- what has actually been
+// committed, not what the context could reach.
+func (s *kvPages) bytes() uint64 {
+	if s.p == 0 {
+		return 0
+	}
+	// Counted by what is resident, not by the slice's length: eviction nils a
+	// slot and leaves the length unchanged.
+	// A shared page is the store's, held once however many sessions read it
+	// (KVSharedBytes counts it).
+	var n uint64
+	for i := range s.mem.Len() {
+		if s.isShared(i) {
+			continue
+		}
+		if s.mem.K(i) != nil {
+			n++
+		}
+		if s.mem.V(i) != nil {
+			n++
+		}
+	}
+	return n * uint64(s.pp) * 4
+}
+
+// kvSpan is one page's share of a read window: which page, where in it the run
+// starts, and how many positions of it to read.
+type kvSpan struct {
+	page, first, n int
+}
+
+// spans splits the position window [w0, w0+want) into per-page runs, in
+// increasing position order.
+//
+// The order is load-bearing: the accumulate kernel seeds from Out for every
+// span after the first (nn.AttnAccInto), so increasing position order
+// reproduces the FMA sequence of one contiguous call and paged equals unpaged
+// bit for bit.
+//
+// The readers below walk it one span at a time (span), which costs nothing at
+// any context length; a slice of them would grow on this per-head, per-token
+// path once a window passed the array it started in -- four pages, 1024
+// positions, which a picture's prompt alone can pass.
+func (s *kvPages) spans(dst []kvSpan, w0, want int) []kvSpan {
+	if s.p == 0 || want <= 0 {
+		return nil
+	}
+	out := dst[:0]
+	for pos, end := w0, w0+want; pos < end; {
+		sp := s.span(pos, end)
+		out = append(out, sp)
+		pos += sp.n
+	}
+	return out
+}
+
+// span is the run of [pos, end) inside pos's page: one step of spans' walk.
+func (s *kvPages) span(pos, end int) kvSpan {
+	pg, off := s.page(pos)
+	return kvSpan{page: pg, first: off, n: min(s.p-off, end-pos)}
+}
+
+// kvCache is a instance's whole history: one kvPages per layer, plus the identity
+// the store knows it by.
+type kvCache struct {
+	// kvl and cfg are the history's layout and its model's geometry, a block's
+	// rows read at its own (kvLayout.atLayer).
+	kvl    kvLayout
+	cfg    *model.Config
+	id     string
+	layers []kvPages
+	// hs is each block's histories past its rows' (history 0): hs[li][h-1]
+	// is history h's slot in layers, past the blocks; 0 where the block
+	// keeps none.
+	hs [][]int
+	// hb is each block's histories past its rows' as a call binds them,
+	// hb[li][h-1] history h's, made once with hs.
+	hb    [][]nn.HistTable
+	store KVStore
+	// budget caps the resident bytes. Zero never evicts.
+	budget uint64
+	// ns is the namespace for content-addressed pages: set it and a page is named
+	// by the tokens that produced it rather than by this session. seq is those
+	// tokens and bh caches one boundary hash per page size. All three stay empty
+	// for a session that never names a namespace, which is the default.
+	ns string
+	// geom is the digest of everything a page's byte count cannot tell apart.
+	geom []byte
+	// named is the image rows seq refers to: a negative id -1-i in seq is
+	// named[i] (nameRow), the row of a picture the page keys hash by its
+	// full name rather than by a number.
+	named                                                                  []namedRow
+	seq                                                                    []int32
+	bh                                                                     map[int][]string
+	stored, fetched, evicted, failed, mismatched, unmigratable, syncFailed int64
+	// tailStored counts the partial pages written at a prompt boundary, which
+	// is a different event from a sealed page and is the one a short prompt
+	// produces. See sealTail.
+	tailStored int64
+	// recurrent says this model carries state outside the pages, so a restore
+	// point needs a summary as well as pages. See sealRecurrentTail.
+	recurrent bool
+	// view is the session's view of the CPU device's history: the table each
+	// block reads its pages through. src is each block's history block
+	// (Instance.histOf), noTable the page table of a block that keeps no
+	// history, and err the first page fault of the current step that could
+	// not be recovered: set inside a pool closure, which has no error path,
+	// and drained by Instance.kvCheck at the entry point.
+	view    *history.View
+	pool    *history.PagePool
+	src     []int
+	noTable []uint32
+	err     atomic.Pointer[error]
+	// more is the other blocks' histories each block reads past its history
+	// block's (Instance.histMore), and xb a reading block's tables of both,
+	// its history block's first (cpudev.HistoryBinding.Hists).
+	more [][]graph.HistoryRead
+	xb   [][]nn.HistTable
+	// recAt asks whether a hybrid's every summary is stored for a position
+	// (Instance.recPointAt), and mark is the instance's recMark for the restore in
+	// flight.
+	recAt func(pos int) bool
+	mark  int
+	// pubLi, pubPage and pubKey are the names a sharing session's device
+	// pages are to be given, sent in one call (flushPublish).
+	pubLi, pubPage []int32
+	pubKey         []string
+	// devAt is the device a history lives on when it names its pages
+	// (Instance.kvDevAt), by its name there (nn.HistoryKey), set by ShareKV;
+	// mapEnd is the position a page mapped there is written to, and mapped
+	// counts the planes mapped.
+	devAt  func(key int) nn.KVShareDevice
+	mapEnd int
+	mapped int64
+	// copyAt is the device holding a copy of a history for a block on it
+	// reading it, where the history's block runs on the CPU device
+	// (Instance.kvCopyAt), by the history's name there, set with devAt.
+	copyAt func(key int) nn.KVShareDevice
+	// keys is each slot's name on a device (nn.HistoryKey): a block's its own
+	// index, a history past a block's rows its block's and its index, so it
+	// is named and mapped where its block runs (dev, key).
+	keys []int
+	// chunked is how far aliasChunks has named this sequence's shared pages.
+	chunked int
+	// endsAt is Instance.endsAt, the prompt ends kept past a chunk boundary,
+	// set with recAt.
+	endsAt func(c int) [kvEndSeats]uint8
+	// ck is chunkKey's: the key of every whole kvChunk of seq so far, in
+	// order, computed in one pass over seq (fillChunkKeys) and cut back with
+	// it, as bh is for a page size.
+	ck []string
+	// hasher, hbuf and sum are digest's, kept; names is every key it has
+	// named, by digest (kvNames bounds it). probes is restore's probe list,
+	// and wr a page read's writer: kept, so a warm restore allocates nothing.
+	hasher hash.Hash
+	hbuf   []byte
+	sum    [sha256.Size]byte
+	names  map[[16]byte]string
+	probes []int
+	wr     sliceWriter
+	// rd is a sealed page's reader for the store's Set, which takes the
+	// bytes before it returns: kept, so sealing allocates nothing.
+	rd bytes.Reader
+	// lo is the first block this cache holds pages for: zero for a trunk, the
+	// first prediction block for a draft instance (Instance.lo). layers is indexed by
+	// block, so the slice runs from zero and the blocks below lo stay empty.
+	lo int
+	// keepWindow and relFault are the window gate's two arms beside the
+	// shipping one (TestWindowedLayersHoldTheirWindow): the control keeps
+	// every page, the violation releases the page a window starts in.
+	keepWindow, relFault bool
+	// walkWindow is the prefix gate's violation (TestPrefixCacheRestoresAWindowedLayer):
+	// a windowed layer's coverage is walked from zero, as a full layer's is.
+	walkWindow bool
+	// apartWalked says the last restore was decided by blocks paging apart
+	// on a card (restoreApart), which mapped their pages as they walked.
+	apartWalked bool
+	// share is the store this session's sealed pages are held once in
+	// (Instance.ShareKV), nil when it shares nothing.
+	share *SharedStore
+	// spent says no call reads a block's history past its own (a tower's
+	// run): each block's pages go when its call is done (Spent). peak is
+	// the most it held as a block's call ended.
+	spent bool
+	peak  uint64
+}
+
+// View is the session's view of the CPU device's history (cpudev.History).
+func (s *kvCache) View() *history.View {
+	if s == nil {
+		return nil
+	}
+	return s.view
+}
+
+// MigrateKV takes block li's history of pos positions from the floats k
+// and v (in), or gives it into them (cpudev.History): gathered from the
+// block's pages and widened where they are binary16 or q8, or narrowed and
+// scattered into them -- what scatter leaves out lying behind the window,
+// released as far as seal and the read walk are concerned. A binary16 history
+// returns its halves bit for bit; a q8 one each element's code, and each
+// scale within an ulp (the block's amax widens to 127*d).
+func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.KVConvDevice) bool {
+	pg := &kv.layers[li]
+	if pg.p == 0 || pos <= 0 {
+		return true
+	}
+	l := kv.kvl.atLayer(kv.cfg, li)
+	hk, hv, _, _ := kvMigBufs(l, pos)
+	rows := pos * l.nKV
+	own := func(x []float32) []byte {
+		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*nn.KVRowBytes(l.fmt, l.headDim))
+	}
+	widened := l.fmt != nn.KVF32 && rows > 0
+	if !widened {
+		hk, hv = k, v
+	} else if conv == nil {
+		return false
+	}
+	if !in {
+		if !pg.gather(l, 0, pos, hk, hv) {
+			return false
+		}
+		return !widened || conv.Convert(false, l.headDim, k[:rows*l.headDim], own(hk)) && conv.Convert(false, l.headDim, v[:rows*l.headDim], own(hv))
+	}
+	if widened && (!conv.Convert(true, l.headDim, k[:rows*l.headDim], own(hk)) || !conv.Convert(true, l.headDim, v[:rows*l.headDim], own(hv))) {
+		return false
+	}
+	if !pg.scatter(l, 0, pos, hk, hv) {
+		return false
+	}
+	pg.gone = max(pg.gone, pg.liveFrom(pos))
+	return true
+}
+
+func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil, nil, nil)
+}
+
+// newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
+// model (Instance.lo): the pages are indexed by block, and the blocks below lo
+// have none. Each block's pages are its memory in view (history.Pages), grown
+// from pool where its arena has no slot.
+//
+// A block keeping a history past its rows' (planes) keeps it in a slot past
+// the blocks, hi+i for planes[i], its pages the block's positions
+// (kvCache.hs). wins are the blocks' windows (attendWindows), nil for none.
+func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, more [][]graph.HistoryRead, planes []histPlane, wins []blockWindow) *kvCache {
+	if store == nil {
+		store = NoStore{}
+	}
+	n := hi + len(planes)
+	if view == nil {
+		view = history.NewView(n)
+	}
+	kc := &kvCache{id: id, store: store, layers: make([]kvPages, n), lo: lo, kvl: l, cfg: c,
+		bh: map[int][]string{}, geom: geomDigest(c, nseq, l, wins), view: view, pool: pool, src: make([]int, n), hs: make([][]int, hi), hb: make([][]nn.HistTable, hi)}
+	kc.keys = make([]int, n)
+	for li := range kc.src {
+		kc.src[li] = li
+		kc.keys[li] = li
+		if li < hi && li < len(hsrc) {
+			kc.src[li] = hsrc[li]
+		}
+	}
+	// A model with a layer that keeps no pages keeps its history somewhere
+	// else, and that somewhere has its own restore points.
+	for li := kc.lo; li < hi; li++ {
+		if c.LayerKind(li).Recurrent() {
+			kc.recurrent = true
+			break
+		}
+	}
+	for li := kc.lo; li < hi; li++ {
+		var w blockWindow
+		if li < len(wins) {
+			w = wins[li]
+		}
+		p := kvPagePositions(c, li, pin, w.w)
+		kc.layers[li].p = p
+		kc.layers[li].latent = c.MLA()
+		// A block reading another's history (kc.src) holds none of its own:
+		// its positions are its source's, and it sizes no page.
+		if p > 0 && kc.src[li] == li {
+			kc.layers[li].pp = l.atLayer(c, li).slots(nseq * p * c.KVRowAt(li))
+			// The window the block's attention applies, whatever sized the page.
+			kc.layers[li].win, kc.layers[li].chunked = w.w, w.chunked
+		}
+	}
+	for i, e := range planes {
+		b, s := &kc.layers[e.block], &kc.layers[hi+i]
+		for len(kc.hs[e.block]) < e.hist {
+			kc.hs[e.block] = append(kc.hs[e.block], 0)
+		}
+		kc.hs[e.block][e.hist-1] = hi + i
+		kc.keys[hi+i] = nn.HistoryKey(e.block, e.hist)
+		if b.p == 0 {
+			continue
+		}
+		s.p, s.latent, s.period = b.p, e.inKeys, e.period
+		// A history past the rows' is held at f32 under a quantized
+		// history, its rows no head's, and under a bfloat16 one, whose
+		// halves only the block's own pools take (composer.MoreOf states
+		// the entries' none): as the CPU device composes them.
+		// One whose values are its own is held at f32, keys and values a
+		// position's row each, as composer.MoreOf states it.
+		el := l.atLayer(c, e.block)
+		if el.quantized() || el.fmt == nn.KVBF16 || !e.inKeys {
+			el.fmt = nn.KVF32
+		}
+		s.ew, s.efmt = e.width, el.fmt
+		s.pp = el.slots(nseq * composer.History{Period: e.period}.Slots(b.p) * e.width)
+	}
+	for li := range kc.hs {
+		if len(kc.hs[li]) > 0 {
+			kc.hb[li] = make([]nn.HistTable, len(kc.hs[li]))
+		}
+	}
+	kc.more, kc.xb = make([][]graph.HistoryRead, hi), make([][]nn.HistTable, hi)
+	for li := kc.lo; li < hi && li < len(more); li++ {
+		if len(more[li]) > 0 {
+			kc.more[li] = more[li]
+			kc.xb[li] = make([]nn.HistTable, kc.nHist(kc.src[li])+len(more[li]))
+		}
+	}
+	for li := range kc.layers {
+		kc.layers[li].mem = view.Pages(li, kc.layers[li].pp, kc.layers[li].latent, pool)
+	}
+	return kc
+}
+
+// release frees every windowed layer's pages behind the window of low
+// (kvPages.release).
+func (kc *kvCache) release(low int) {
+	if kc.keepWindow {
+		return
+	}
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if s := &kc.layers[li]; s.win > 0 {
+			s.release(low, kc.relFault)
+		}
+	}
+}
+
+// reserve sizes every layer's page index and the token sequence for maxSeq
+// positions.
+func (kc *kvCache) reserve(maxSeq int) {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		kc.layers[li].reserve(maxSeq)
+	}
+	if cap(kc.seq) < maxSeq {
+		kc.seq = append(make([]int32, 0, maxSeq), kc.seq...)
+	}
+}
+
+// Bytes is what this cache occupies now. It grows with the conversation; it is
+// not a reservation.
+func (kc *kvCache) Bytes() uint64 {
+	var n uint64
+	for i := kc.lo; i < len(kc.layers); i++ {
+		n += kc.layers[i].bytes()
+	}
+	return n
+}
+
+// layout is kvLayout addressed within one page: the same value with maxSeq
+// replaced by the page's own position count. At P == maxSeq there is one page
+// and its bytes are the flat cache, element for element.
+func (s *kvPages) layout(l kvLayout) kvLayout { l.maxSeq = s.p; return l }
+
+// gather copies positions [0, n) of one slot into a flat contiguous buffer, and
+// scatter puts them back.
+//
+// They exist for relocation: nn.LayerDevice.MigrateKV takes a layer's history
+// as one contiguous run (backend.Buf has no offset on Write), so the seam
+// converts between tokens rather than pushing pages onto the tier.
+func (s *kvPages) gather(l kvLayout, slot, n int, k, v []float32) bool {
+	if s.p == 0 || n <= 0 {
+		return true
+	}
+	pl := s.layout(l)
+	kvDim := l.kvDim()
+	// A windowed layer's pages below what its window still reaches were
+	// released: nothing reads those positions again, so they travel as zeros.
+	live := s.liveFrom(n)
+	for pos := 0; pos < n; pos++ {
+		pg, off := s.page(pos)
+		if pg < max(live, s.gone) && !s.resident(pg) {
+			o, w := l.slots(pos*kvDim), l.slots(kvDim)
+			clear(k[o : o+w])
+			clear(v[o : o+w])
+			continue
+		}
+		// Resident, not merely addressable: eviction leaves nil slots. Nothing
+		// has faulted for a migration, so refuse and let the caller keep the
+		// block where it is.
+		if !s.resident(pg) {
+			return false
+		}
+		i := pl.At(slot, off, 0)
+		o := l.slots(pos * kvDim)
+		w := l.slots(kvDim)
+		copy(k[o:o+w], s.mem.K(pg)[i:i+w])
+		copy(v[o:o+w], s.mem.V(pg)[i:i+w])
+	}
+	return true
+}
+
+func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
+	if s.p == 0 || n <= 0 {
+		return true
+	}
+	// Grow every page, not only the last: grow(last) allocates only `last`,
+	// and a placed block's host pages are all nil on demotion. A windowed
+	// layer grows only what its window still reaches: below that, the device
+	// may hold nothing (it releases those pages too) and the host would read
+	// nothing.
+	last, _ := s.page(n - 1)
+	live := s.liveFrom(n)
+	for pg := live; pg <= last; pg++ {
+		s.grow(pg)
+	}
+	if s.win > 0 {
+		// What came back below the window of n-1-KVWindowSlack is the device's
+		// to vouch for and it does not: it releases pages behind that.
+		s.genuine = max(s.genuine, s.keyStart(max(0, n-1-nn.KVWindowSlack)))
+	}
+	pl := s.layout(l)
+	kvDim := l.kvDim()
+	for pos := live * s.p; pos < n; pos++ {
+		pg, off := s.page(pos)
+		s.cow(pg)
+		i := pl.At(slot, off, 0)
+		o := l.slots(pos * kvDim)
+		w := l.slots(kvDim)
+		copy(s.mem.K(pg)[i:i+w], k[o:o+w])
+		copy(s.mem.V(pg)[i:i+w], v[o:o+w])
+	}
+	if n > s.written {
+		s.written = n
+	}
+	return true
+}
+
+// nextCacheID hands out a fresh identity for every session's history. It is
+// unique and deliberately not reusable: a session that wants its pages found
+// again names itself with SetCacheKey. It is not a batch row, which admit
+// reuses as soon as its sequence retires. The model's random id is in the name:
+// a bare counter restarts in every process, and a second process would address
+// the first one's pages in a shared store.
+func (s *Instance) nextCacheID() string {
+	return "session-" + strconv.FormatUint(s.m.Id, 16) + "-" + strconv.FormatInt(s.storage().NextSequence(), 10)
+}
+
+// migrateKV moves block li's history between the host's pages and the tier.
+//
+// It gathers the pages into one contiguous run on the way out and scatters
+// them back on the way in (see gather). Sent to the card, the pages it
+// leaves are a copy of the history as far as pos, for a block on the CPU
+// device reading it (histcross.go).
+func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
+	// A block reading another's history has none of its own: it reads its
+	// source's, or a copy of it on its own side (histcross.go).
+	if s.ld == nil || s.readsOther(li) {
+		return true
+	}
+	defer s.migrated(li, pos, toDevice)
+	pg := &s.kv.layers[li]
+	from, to := s.moveRoutes(toDevice)
+	if pg.p == 0 || pos <= 0 {
+		// A linear-attention block has no history, and nothing to move at
+		// position zero is success -- the same answer the tier gives.
+		return s.moveKV(li, 0, nil, nil, from, to)
+	}
+	_, _, fk, fv := kvMigBufs(s.kvlAt(li), pos)
+	if !s.moveKV(li, pos, fk, fv, from, to) {
+		return false
+	}
+	// Every history of the block past its rows' moves with them: a device
+	// that cannot take one keeps the block where it is.
+	for h := 1; h <= s.kv.nHist(li); h++ {
+		e := s.kv.histSlot(li, h)
+		if e == 0 {
+			continue
+		}
+		ep := &s.kv.layers[e]
+		eb := make([]float32, pos/ep.period*ep.entryWidth())
+		if from.histmig == nil || to.histmig == nil || !from.histmig.MigrateHistory(li, h, eb, pos, false) || !to.histmig.MigrateHistory(li, h, eb, pos, true) {
+			return false
+		}
+	}
+	if toDevice && s.kv.share != nil {
+		s.kv.nameMoved(li, pos)
+		for h := 1; h <= s.kv.nHist(li); h++ {
+			if e := s.kv.histSlot(li, h); e > 0 {
+				s.kv.nameMoved(e, pos)
+			}
+		}
+	}
+	return true
+}
+
+// kvMigBufs is the buffers a migration of n positions of layout kvl moves
+// through: k and v in the host cache's format, which gather fills and scatter
+// reads, and fk and fv in the float32 a device takes (MigrateKV's contract).
+// They are the same buffers unless the cache is q8.
+func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
+	k = make([]float32, kvl.slots(n*kvl.kvDim()))
+	v = make([]float32, len(k))
+	if kvl.fmt == nn.KVF32 {
+		return k, v, k, v
+	}
+	fk = make([]float32, n*kvl.kvDim())
+	fv = make([]float32, len(fk))
+	return k, v, fk, fv
+}
+
+// migrateRec moves one placed linear block's running summary between the host
+// arrays and the device: migrateKV's twin, and every release path must call
+// both or the host resumes from a summary that never saw a token.
+//
+// A batch moves every row at once: rconv/rstate hold the rows back to back,
+// row r at r*convStateLen and r*deltaStateLen, which is the device's own
+// per-row layout (nn.LayerDevice.MigrateRec).
+func (s *Instance) migrateRec(li int, toDevice bool) bool {
+	if s.ld == nil || !s.keepsRec(li) {
+		return true // an attention block, or a session with no recurrence
+	}
+	return s.migrateRecLayer(li, toDevice)
+}
+
+// migrateRecLayer moves block li's whole recurrent state, the n-gram
+// block's predecessors among it, from the device it leaves to the one it
+// goes to, through the instance's buffer.
+func (s *Instance) migrateRecLayer(li int, toDevice bool) bool {
+	from, to := s.moveRoutes(toDevice)
+	conv, state := s.recStaged(li)
+	return from.recmig != nil && to.recmig != nil && from.recmig.MigrateRec(li, conv, state, false) && to.recmig.MigrateRec(li, conv, state, true)
+}
+
+// The paged read walk. Every attention read in model/ goes through these four,
+// so the page arithmetic exists once. The scores are written contiguously, so
+// softmax still normalises over the whole attended range, and the spans are
+// consumed in order (see spans).
+
+// ============================ residency ============================
+//
+// A sealed page is written through to the store, which makes eviction a free()
+// rather than a transfer; spilling at eviction time would put a write on the
+// path already short of memory. With NoStore a resident-only session pays
+// nothing beyond one no-op call per sealed page.
+
+// pageBytes is one page's size in bytes.
+func (s *kvPages) pageBytes() uint64 { return uint64(s.pp) * 4 }
+
+// kvBytesOf views a page as bytes for the store, without copying.
+func kvBytesOf(p []float32) []byte {
+	if len(p) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&p[0])), len(p)*4)
+}
+
+// SetKVBudget caps what this session's history may hold resident, in bytes.
+// Zero, the default, never evicts. A nonzero budget needs a store: trim only
+// evicts pages the store already holds, so without one the cap would silently
+// do nothing (and evicting anyway would lose history).
+func (s *Session) SetKVBudget(b uint64) error {
+	if b > 0 {
+		if _, ok := s.kv.store.(NoStore); ok {
+			return fmt.Errorf("model: a KV budget needs a store to evict into -- " +
+				"call SetKVStore first, or the cap would drop history rather than spill it")
+		}
+	}
+	s.kv.budget = b
+	return nil
+}
+
+// SetKVStore hands the session a backing store for its pages.
+func (s *Session) SetKVStore(st KVStore) {
+	if st == nil {
+		st = NoStore{}
+	}
+	s.kv.store = st
+}
+
+// SetCacheKey names a namespace for this session's history so a later one can
+// find it. The default key is process-local (see nextCacheID). With a
+// namespace, each page is stored under H(the tokens that produced it) inside
+// it, so PrefillCached can find the longest cached prefix of any prompt.
+//
+// The namespace must carry whatever must match for a page to be valid and the
+// hash does not cover: the model, its quantization and the KV element width
+// ("tinyllama/q3_K_M/f32"). The engine cannot check it.
+//
+// It is also the tenancy dial: the hash is scoped inside the namespace, so
+// what goes in front of it decides who shares with whom:
+//
+//	"llama3/q4/f32"              every session shares every prefix
+//	"llama3/q4/f32/tenant-42"    shared within one tenant, isolated between them
+//	"llama3/q4/f32/sess-<id>"    shared with nobody -- a private cache
+//
+// A cache hit is observable, so a shared namespace is a side channel on the
+// prefix; per-user namespaces trade sharing for isolation. A tiered design
+// (shared public prefix, private tail) is not built.
+//
+// Call it before the first token.
+func (s *Instance) SetCacheKey(ns string) error {
+	// It wants a fresh sequence: mid-flight, the token log would restart at the
+	// current position and name every later page by a shifted window.
+	return s.Session.SetCacheKey(ns)
+}
+
+// SetCacheKey is Instance.SetCacheKey for the session's own history.
+func (s *Session) SetCacheKey(ns string) error {
+	if ns != "" && s.pos > 0 {
+		return fmt.Errorf("model: SetCacheKey wants a fresh sequence, this one is at "+
+			"position %d -- the tokens before it were never recorded and the pages "+
+			"after it would be named by a shifted window", s.pos)
+	}
+	s.kv.ns = ns
+	return nil
+}
+
+// KVRestored is how many prompt positions the last PrefillCached took from the
+// store instead of computing. Zero is a miss, and a caller that does not look at
+// it cannot tell a working cache from a silently useless one.
+func (s *Session) KVRestored() int { return s.kvSkipped }
+
+// CacheNamespace is what SetCacheKey named, or "" when content addressing is
+// off. A content-addressed session has no single key: its pages are one key
+// each (count them with FileStore.Total).
+func (s *Session) CacheNamespace() string { return s.kv.ns }
+
+// RestoreKV pulls back every page the store holds under this session's key and
+// returns the number of positions that are now valid to attend over.
+//
+// The answer is the minimum across layers: every layer attends over the same
+// positions, and page sizes differ per layer, so the coarsest page decides.
+// Layers with more coverage are truncated rather than kept, or their high
+// lastSealed would stop seal() offering the rewritten pages and the store
+// would keep serving stale ones. A linear layer's summary is restored
+// separately (Instance.faultRecurrentAt).
+// A hybrid restores no further than limit: its summaries are at given
+// positions and cannot be shortened, so it asks for the points at or under
+// it rather than clamping a longer prefix (restoreKV).
+func (kc *kvCache) restore(limit int) (int, int, error) {
+	if _, ok := kc.store.(NoStore); ok {
+		return 0, 0, nil
+	}
+	// No namespace means no restore: the key is the only check that the pages
+	// belong to these tokens.
+	if kc.ns == "" {
+		return 0, 0, nil
+	}
+	// A hybrid resumes only at a restore point, and asking for one is a
+	// lookup where a page fault is a table write on the card: the highest
+	// point at or under limit bounds the pages faulted, and with none no page
+	// is.
+	if kc.recurrent && kc.recAt != nil {
+		if limit = kc.recFloor(limit); limit == 0 {
+			for li := kc.lo; li < len(kc.layers); li++ {
+				if pg := &kc.layers[li]; pg.p > 0 {
+					pg.dropResident()
+				}
+			}
+			return 0, 0, nil
+		}
+	}
+	best := -1
+	kc.apartWalked = false
+	for li := kc.lo; li < len(kc.layers); li++ {
+		pg := &kc.layers[li]
+		if pg.p == 0 {
+			// A linear layer has no pages; its summary is restored by
+			// Instance.faultRecurrentAt. Coverage is over the attention layers.
+			continue
+		}
+		// Drop residency first so the probe asks the store: fault() returns nil
+		// for a resident page, and a reused instance's leftovers would count as
+		// hits.
+		pg.dropResident()
+		if !kc.covers(li) {
+			// A windowed layer is not walked from zero: it stores only what
+			// its window reached, and restoreWin faults that once the
+			// coverage is known.
+			continue
+		}
+		n := 0
+		for {
+			if kc.recurrent && (n+1)*pg.p > limit {
+				break
+			}
+			err := kc.fault(li, n)
+			if errors.Is(err, ErrNoPage) {
+				break
+			}
+			if err != nil {
+				return 0, 0, err
+			}
+			n++
+		}
+		if cov := n * pg.p; best < 0 || cov < best {
+			best = cov
+		}
+	}
+	if best < 0 {
+		n, tail := kc.restoreApart(limit)
+		kc.apartWalked = n > 0
+		return n, tail, nil
+	}
+	// The partial tail (sealTail's page, keyed by its fill), which is the whole
+	// prompt on a short chat turn. The fill is probed downward from this
+	// prompt's remainder, exact when the prompt repeats, and is all-or-nothing
+	// across layers.
+	tail := 0
+	if best >= 0 && kc.ns != "" {
+		probe := -1
+		for li := kc.lo; li < len(kc.layers); li++ {
+			if kc.covers(li) {
+				probe = li
+				break
+			}
+		}
+		if probe >= 0 {
+			pg := &kc.layers[probe]
+			n := best / pg.p
+			max := len(kc.seq) - n*pg.p
+			if kc.recurrent {
+				max = min(len(kc.seq), limit) - n*pg.p
+			}
+			if max > pg.p-1 {
+				max = pg.p - 1
+			}
+			// One lookup per chunk boundary, the fills a partial page is
+			// sealed at (kvChunkFills). A hybrid probes its restore points
+			// (recpoint.go): the spaced ones, the exact end and the mark, each
+			// taken only with every summary there.
+			step := kvChunk
+			if kc.recurrent {
+				step = kvChunk // the spaced points and every prompt's mark are on it
+			}
+			kc.probes = appendProbes(kc.probes, max, step)
+			if f := kc.mark - n*pg.p; kc.recurrent && f > 0 && f < max && (step == 0 || f%step != 0) {
+				kc.probes = insertProbe(kc.probes, f)
+			}
+			for _, f := range kc.probes {
+				if kc.faultFill(probe, n, f) != nil {
+					continue
+				}
+				if kc.recurrent && (kc.recAt == nil || !kc.recAt(n*pg.p+f)) {
+					if n < pg.mem.Len() {
+						pg.keepOnReset(n)
+					}
+					continue
+				}
+				tail = f
+				break
+			}
+		}
+		if tail > 0 {
+			for li := kc.lo; li < len(kc.layers); li++ {
+				pg := &kc.layers[li]
+				if !kc.covers(li) || li == probe {
+					continue
+				}
+				if err := kc.faultFill(li, best/pg.p, tail); err != nil {
+					tail = 0
+					break
+				}
+			}
+		}
+		if tail == 0 {
+			// Drop whatever the probe brought in: a page present and unusable
+			// would be mistaken for history.
+			for li := kc.lo; li < len(kc.layers); li++ {
+				pg := &kc.layers[li]
+				if !kc.covers(li) {
+					continue
+				}
+				if n := best / pg.p; n < pg.mem.Len() {
+					pg.keepOnReset(n)
+				}
+			}
+		}
+	}
+	// A hybrid resumes only where its summaries are: past the pages it holds
+	// whole, its point below them, inside a page those pages already cover.
+	if kc.recurrent && tail == 0 && best > 0 && kc.recAt != nil && !kc.recAt(best) {
+		q := 0
+		kc.probes = appendProbes(kc.probes, best-1, kvChunk)
+		if kc.mark > 0 && kc.mark < best-1 {
+			kc.probes = insertProbe(kc.probes, kc.mark)
+		}
+		for _, f := range kc.probes {
+			if f%kvChunk == 0 || f == kc.mark {
+				if kc.recAt(f) {
+					q = f
+					break
+				}
+			}
+		}
+		if q == 0 {
+			return 0, 0, nil
+		}
+		for li := kc.lo; li < len(kc.layers); li++ {
+			if pg := &kc.layers[li]; kc.covers(li) && q%pg.p != 0 {
+				tail = q % pg.p
+				break
+			}
+		}
+		best = q - tail
+	}
+	if best+tail <= 0 {
+		return 0, 0, nil
+	}
+	for li := kc.lo; li < len(kc.layers); li++ {
+		pg := &kc.layers[li]
+		if !kc.covers(li) {
+			continue // a linear layer has no pages to truncate, a windowed one none yet
+		}
+		keep := best / pg.p
+		for n := keep + 1; n < pg.mem.Len(); n++ {
+			pg.drop(n)
+		}
+		if tail == 0 && keep < pg.mem.Len() {
+			pg.drop(keep)
+		}
+		pg.lastSealed = keep
+		if w := keep*pg.p + tail; w > pg.written {
+			pg.written = w // a restored page came out of the store whole
+		}
+	}
+	return best + tail, tail, nil
+}
+
+// unsealPast takes back what every layer counts as offered to the store
+// past position n (lastSealed, copySealed, apartSealed): the pages from
+// there are written again.
+func (kc *kvCache) unsealPast(n int) {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if pg := &kc.layers[li]; pg.p > 0 {
+			pg.lastSealed = min(pg.lastSealed, n/pg.p)
+			pg.copySealed = min(pg.copySealed, n/pg.p)
+			pg.apartSealed = min(pg.apartSealed, n/max(pg.apart, 1))
+			pg.copyApartSealed = min(pg.copyApartSealed, n/max(pg.copyApart, 1))
+		}
+	}
+}
+
+// dropResident lets every resident page go, its memory to spare for the
+// faults a restore makes next (keepOnReset): a restore asks the store, and a
+// reused instance's leftovers would otherwise count as hits.
+func (s *kvPages) dropResident() {
+	for n := range s.mem.Len() {
+		s.keepOnReset(n)
+	}
+	s.mem.Reset()
+	s.out, s.lastSealed = s.out[:0], 0
+	s.gone, s.genuine = 0, 0
+	s.crossForget(0)
+}
+
+// recFloor is the highest restore point at or under limit (kvCache.recAt),
+// 0 when there is none: asked at limit, at every kvChunk below it and at the
+// mark, the points a hybrid keeps.
+//
+// Past each chunk boundary it asks the prompt ends the store says were kept
+// there (Instance.noteEnd): a point at a prompt's end inside a chunk -- where
+// the next chat turn parts from -- is otherwise on no boundary a probe names.
+func (kc *kvCache) recFloor(limit int) int {
+	kc.probes = appendProbes(kc.probes, limit, kvChunk)
+	if m := kc.mark; m > 0 && m < limit && m%kvChunk != 0 {
+		kc.probes = insertProbe(kc.probes, m)
+	}
+	for _, f := range kc.probes {
+		if f%kvChunk == 0 && kc.endsAt != nil {
+			for _, e := range kc.endsAt(f) {
+				if g := f + int(e); e > 0 && g <= limit && kc.recAt(g) {
+					return g
+				}
+			}
+		}
+		if kc.recAt(f) {
+			return f
+		}
+	}
+	return 0
+}
+
+// covers reports whether layer li's stored pages decide how much of a prefix
+// restores: every attention layer but a windowed one, which keeps (and
+// stores) only what its window reaches, and one reading another block's
+// history, which keeps none. A range of blocks that is all windowed has
+// nothing else to decide by, and walks them as before. A block on a card
+// paging apart from this cache walks the card's pages instead (walksApart).
+func (kc *kvCache) covers(li int) bool { return kc.walks(li) && kc.apartAt(li) == 0 }
+
+// walksApart is covers for a block on a card paging apart from this cache.
+func (kc *kvCache) walksApart(li int) bool { return kc.walks(li) && kc.apartAt(li) > 0 }
+
+func (kc *kvCache) walks(li int) bool {
+	s := &kc.layers[li]
+	if s.p == 0 || kc.src[li] != li {
+		return false
+	}
+	if s.win == 0 || kc.walkWindow {
+		return true
+	}
+	for i := kc.lo; i < len(kc.layers); i++ {
+		if x := &kc.layers[i]; x.p > 0 && x.win == 0 && kc.src[i] == i {
+			return false
+		}
+	}
+	return true
+}
+
+// restoreWin faults every windowed layer's pages the restored prefix of n
+// positions reads from (the page its window starts in on: nothing rewinds
+// behind a restored prompt), out of a store whose prefix covers
+// cover >= n positions: a page wholly inside cover was stored whole, the one
+// straddling it by its fill. A block on a card paging apart from this
+// cache, windowed or not, maps its card's pages (mapApart), unless it
+// decided the coverage (restoreApart). It reports false, having kept
+// nothing it faulted, when any of them is missing.
+func (kc *kvCache) restoreWin(n, cover int) (bool, error) {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		if s.p == 0 || kc.src[li] != li || kc.covers(li) || n <= 0 || kc.apartWalked && kc.walksApart(li) {
+			continue
+		}
+		if kc.apartAt(li) > 0 {
+			if !kc.mapApart(li, n, cover) {
+				kc.dropWin()
+				return false, nil
+			}
+			continue
+		}
+		first, last := s.keyStart(n)/s.p, (n-1)/s.p
+		for j := first; j <= last; j++ {
+			var err error
+			if (j+1)*s.p <= cover {
+				err = kc.fault(li, j)
+			} else {
+				err = kc.faultFill(li, j, cover-j*s.p)
+			}
+			if errors.Is(err, ErrNoPage) {
+				kc.dropWin()
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+		}
+		// Below first is not history: nothing was faulted there, and no page
+		// starting there may be stored as if it were.
+		s.gone, s.genuine = first, first*s.p
+	}
+	return true, nil
+}
+
+// dropWin forgets every page a windowed layer holds, which a restore that
+// cannot serve its window gives back.
+func (kc *kvCache) dropWin() {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if s := &kc.layers[li]; s.p > 0 && !kc.covers(li) {
+			for j := range s.mem.Len() {
+				s.drop(j)
+			}
+		}
+	}
+}
+
+// dropTail forgets the partial page at coverage n, which is how a caller gives
+// a tail back when it cannot use it.
+func (kc *kvCache) dropTail(n int) {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		pg := &kc.layers[li]
+		if pg.p == 0 {
+			continue
+		}
+		idx := n / pg.p
+		if idx < pg.mem.Len() {
+			pg.drop(idx)
+		}
+		if w := idx * pg.p; pg.written > w {
+			pg.written = w
+		}
+		pg.crossForget(idx * pg.p)
+	}
+}
+
+// PrefillCached runs a prompt, skipping whatever prefix of it the store already
+// holds under this session's key.
+//
+// It checks that every layer can serve the positions it skips; it trusts that
+// the skipped tokens produced those pages, which the key (see SetCacheKey)
+// asserts. RoPE is applied before the cache write, so a stored key carries its
+// absolute position and only a prefix is reusable.
+func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
+	defer s.fr.Enter()()
+	if len(tokens) == 0 {
+		return nil, errEmptyPrompt{}
+	}
+	if s.seqPos(0) != 0 {
+		return nil, fmt.Errorf("model: PrefillCached wants a fresh sequence, this one is at position %d", s.seqPos(0))
+	}
+	return s.prefillCachedKey(tokens, len(tokens), func(n int) ([]float32, error) { return s.prefillInto(0, tokens[n:]) })
+}
+
+// PrefillCachedMixed is PrefillCached for a prompt of token and embedding
+// spans -- a chat turn with a picture in its history.
+//
+// A page is named by the rows that produced it, so every row needs an id: a
+// token's own, and for an image row the picture's name (Span.Key, RowsKey),
+// the row's index in it and, on a model whose rotary is multi-axis, its
+// (t, h, w) -- one image's rows under another grid or at another rotary
+// position are different rows (kvCache.nameRow). The pages after the image
+// are then named as text pages are, so a second turn about the same picture
+// restores everything up to its own new tokens.
+//
+// An embedding span with no key stops the naming there: its rows and every
+// row after them are prefilled, never restored. A bidirectional run (Gemma
+// 3's image rows) is restored whole or not at all: its rows' history depends
+// on rows after them, which the run's name covers, and a restore that ended
+// inside it would leave the tail a chunk that cuts the run.
+func (s *Instance) PrefillCachedMixed(spans ...model.Span) ([]float32, error) {
+	defer s.fr.Enter()()
+	if s.seqPos(0) != 0 {
+		return nil, fmt.Errorf("model: PrefillCachedMixed wants a fresh sequence, this one is at position %d", s.seqPos(0))
+	}
+	rows := 0
+	for _, sp := range spans {
+		rows += sp.N(s.c.NEmbd)
+	}
+	s.bidirRuns(0, spans)
+	defer func() {
+		if len(s.bidir) > 0 {
+			if kd, ok := s.ld.(nn.KeyRunDevice); ok {
+				kd.SetKeyRuns(nil, nil)
+			}
+		}
+		s.bidir = s.bidir[:0]
+	}()
+	next, err := s.spanRope(0, 0, spans)
+	if err != nil {
+		return nil, err
+	}
+	key := s.spanKey(0, spans)
+	s.markRope(0, rows, next-rows)
+	return s.prefillCachedKey(key, rows, func(n int) ([]float32, error) {
+		enc, err := s.encodePictures(spans, n)
+		if err != nil {
+			return nil, err
+		}
+		src, err := s.spanSrc(enc)
+		if err != nil {
+			return nil, err
+		}
+		defer s.tokensOf(enc)()
+		s.spanTok = s.spanTok[min(n, len(s.spanTok)):]
+		return s.prefillSrc(0, src.from(n, s.c.NEmbd))
+	})
+}
+
+// spanKey is the id per row the pages of a mixed prompt starting at position
+// p0 are named by: a token's own id, and for an image row a reference to the
+// row's name in the cache's table (kvCache.nameRow). It stops at the first
+// embedding span with no key, so it may be shorter than the prompt. The ids
+// are the instance's (spanKeys), good until its next call.
+func (s *Instance) spanKey(p0 int, spans []model.Span) []int32 {
+	s.spanKeys = s.appendSpanKey(s.spanKeys[:0], p0, spans)
+	return s.spanKeys
+}
+
+// appendSpanKey is spanKey appended to key.
+func (s *Instance) appendSpanKey(key []int32, p0 int, spans []model.Span) []int32 {
+	nembd := s.c.NEmbd
+	for _, sp := range spans {
+		if !sp.Rows() {
+			key = append(key, sp.Tokens...)
+			continue
+		}
+		if sp.Key == nil || sp.Key.Zero() {
+			return key
+		}
+		for i := 0; i < sp.N(nembd); i++ {
+			key = append(key, s.kv.nameRow(*sp.Key, i, sp.Grid, p0+len(key)))
+		}
+	}
+	return key
+}
+
+// prefillCachedKey is PrefillCached over a prompt of rows rows whose key is
+// the id per row the pages are named by: the tokens for a text prompt, and for
+// a mixed one (PrefillCachedMixed) a token's id or an image row's name. A key
+// shorter than the prompt restores no further than it reaches. run prefills
+// the rows from n on, after the restore.
+func (s *Instance) prefillCachedKey(key []int32, rows int, run func(n int) ([]float32, error)) ([]float32, error) {
+	s.markParting(key)
+	n, full, err := s.restoreKey(key, rows, true)
+	if err != nil {
+		return nil, err
+	}
+	if full != nil && n == rows {
+		// Nothing to prefill: the position is already past the prompt and the
+		// logits are the ones that run produced. The tail is already in the
+		// store under this key, so there is nothing to seal either.
+		return full, nil
+	}
+	lg, err := run(n)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.SealPrompt(lg); err != nil {
+		return nil, err
+	}
+	return lg, nil
+}
+
+// RestorePrefix is the restore half of PrefillCached: it restores the
+// longest prefix of tokens the store holds under this session's key, leaving
+// at least the last token to run, and returns how many positions it took.
+// The instance is then at that position, and the caller runs tokens[n:] by any
+// path that records its ids (Prefill, Forward, StepRuns) and calls SealPrompt
+// with the last logits, so the next request finds this prompt too. A server's
+// step loop restores this way and then runs the rest as a row.
+func (s *Instance) RestorePrefix(tokens []int32) (int, error) {
+	defer s.fr.Enter()()
+	if len(tokens) == 0 {
+		return 0, errEmptyPrompt{}
+	}
+	if s.seqPos(0) != 0 {
+		return 0, fmt.Errorf("model: RestorePrefix wants a fresh sequence, this one is at position %d", s.seqPos(0))
+	}
+	n, _, err := s.restoreKey(tokens, len(tokens), false)
+	return n, err
+}
+
+// SealPrompt offers the store what a prompt just run left: the pages a
+// placed block holds on its device, the partial last page, a hybrid's
+// recurrent summary at the position, and the logits lg the prompt ended on.
+// PrefillCached calls it itself; a caller that restored with RestorePrefix
+// calls it once the rest of the prompt has run. Without a store or a cache
+// key it does nothing.
+func (s *Instance) SealPrompt(lg []float32) error {
+	if err := s.syncKVFromDevice(); err != nil {
+		return err
+	}
+	// Seal the prompt's own partial page too: seal only offers pages the
+	// position has passed, and a short prompt would store nothing.
+	s.kv.tailStored += int64(s.kv.sealTail(s.pos))
+	s.aliasMark(s.kvSkipped, s.pos)
+	if s.kv.share != nil {
+		// A prompt ending inside a chunk names its page on the card by its
+		// fill, beside the restore point kept there: a chat's next turn
+		// parts from it exactly.
+		if s.pos%kvChunk != 0 {
+			s.kv.publishTail(s.pos, true)
+		}
+		s.kv.flushPublish() // the prompt's names on the card, in one call
+	}
+	s.sealRecurrentTail(s.pos)
+	// A prompt whose head projected only picked rows (PickIDs, nn.Head.Pick)
+	// left lg as the last full projection made it: not this prompt's logits,
+	// so none are stored, and a whole-prompt hit runs its last position again.
+	if !s.Picked && (s.head == nil || !s.head.Picked) {
+		s.sealLogits(s.pos, lg)
+	}
+	return nil
+}
+
+// restoreKey restores what the store holds of a prompt of rows rows named by
+// key and advances the instance past it, returning the positions restored and,
+// for a whole-prompt hit when logits says the caller can take one, the
+// logits the prompt ended on. Without them a whole-prompt hit gives its last
+// position back, so something is left to run.
+func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float32, error) {
+	tokens := key
+	if s.kv.recurrent && s.kv.recAt == nil {
+		s.kv.recAt, s.kv.endsAt = s.recFns()
+	}
+	s.kv.mark = s.recMark
+	if s.opt.staleKeyFault != nil {
+		tokens = s.opt.staleKeyFault(key)
+	}
+	// The tokens come first: restore() names the pages by H(tokens[0:boundary]).
+	s.kv.seq = append(s.kv.seq[:0], tokens...)
+	for p := range s.kv.bh {
+		s.kv.bh[p] = s.kv.bh[p][:0]
+	}
+	s.kv.ck = s.kv.ck[:0]
+	// Before the restore reserves the prefix on the card, so a shorter prompt
+	// than the last sequence's gives its room back first.
+	s.relocateFresh(rows)
+	// The whole prompt may restore, because sealLogits stores the final
+	// logits: a full hit with its logits leaves nothing to run. (A hybrid's
+	// summary cannot be shortened by one position to make room for a token.)
+	n, err := s.restoreKV(len(tokens))
+	if err != nil {
+		s.kv.unsealPast(0)
+		return 0, nil, err
+	}
+	full := []float32(nil)
+	if n == rows {
+		// Into the instance's own logits, which a prefill would have written.
+		if lg := s.logits; logits && len(lg) >= s.c.NVocab && s.faultLogits(n, lg[:s.c.NVocab]) {
+			full = lg[:s.c.NVocab]
+		} else {
+			// No logits for this boundary: give the last position back so
+			// something is left to run. A hybrid cannot shorten a restored
+			// tail, so it gives the tail up entirely -- restoreKV's rule.
+			if n, err = s.restoreKV(rows - 1); err != nil {
+				s.kv.unsealPast(0)
+				return 0, nil, err
+			}
+		}
+	}
+	// A restore that ends inside a bidirectional run gives the run back
+	// whole: the rows left to prefill would be a chunk that cuts it.
+	for _, r := range s.bidir {
+		if r.Lo < n && n < r.Hi {
+			if n, err = s.restoreKV(r.Lo); err != nil {
+				s.kv.unsealPast(0)
+				return 0, nil, err
+			}
+			full = nil
+		}
+	}
+	// Past the restored prefix the sequence is whatever the caller goes on to
+	// generate, so the tail of the prompt stays and the rest is appended as it
+	// arrives. Trimming to n would lose the tail this call is about to prefill.
+	s.kv.seq = append(s.kv.seq[:0], tokens...)
+	// A restored prefix is pushed onto the card for placed blocks, whose
+	// history lives there (host pages are written only for host blocks). This
+	// runs before advance, which seals and trims, so gather finds the pages
+	// resident. Reserve the card's KV first, since it otherwise grows only as
+	// tokens run; a migration that still cannot happen is a miss (a full
+	// prefill), not a failed run.
+	// A sharing session's placed blocks were restored where they live: their
+	// pages are mapped into its table on the card (kvCache.faultShared), and
+	// nothing goes up.
+	shared := s.kv.share != nil && s.kvShareDevice()
+	if n > 0 && !shared && s.ld != nil && s.devCount() > 0 && !s.ld.ReserveKV(n) {
+		s.kv.unmigratable++
+		n = 0
+	}
+	for li := s.lo; li < len(s.blockRoutes) && n > 0 && !shared; li++ {
+		if s.blockRoutes[li] != routeView {
+			continue
+		}
+		if !s.migrateKV(li, n, true) {
+			s.kv.unmigratable++
+			n = 0
+			break
+		}
+	}
+	// A restore given up, or cut short, runs its positions again, and they
+	// are offered to the store again as they seal.
+	s.kv.unsealPast(n)
+	s.kv.chunked = n / kvChunk * kvChunk
+	if n > 0 {
+		s.advance(0, n)
+	} else if s.recurrent() {
+		// A probe may have faulted a summary in for a prefix it then gave
+		// up; the prompt runs from zero, from an empty one.
+		s.ResetRecurrent(0)
+	}
+	s.kvSkipped = n
+	return n, full, nil
+}
+
+// syncKVFromDevice brings a placed block's history down into the host pages so
+// that seal has something to store.
+//
+// attnPrep writes host pages only for host blocks, so without this a fully
+// offloaded model would store nothing. It runs once, after the prompt, not per
+// token, to keep device round trips off decode; positions generated after it
+// are not stored for placed blocks.
+func (s *Instance) syncKVFromDevice() error {
+	if s.devCount() == 0 || s.kv.ns == "" || s.pos == 0 {
+		return nil
+	}
+	if _, ok := s.kv.store.(NoStore); ok {
+		return nil
+	}
+	// The recurrent summary is read back too: sealRecurrentTail writes through
+	// the view's recurrent states, which are stale for a placed linear block.
+	// A sharing session's placed blocks are named on the card (kvCache.seal)
+	// and keep their restore points there (recshare.go): neither their
+	// history nor their state is read back.
+	if s.kv.share != nil && s.kvShareDevice() {
+		s.kv.seal(s.pos)
+		return nil
+	}
+	for _, li := range s.placedFrom(s.lo) {
+		if !s.migrateKV(li, s.pos, false) {
+			// A capability gap, not a wrong answer: the f16 V cache cannot be
+			// copied as float32 and MigrateKV says so. The run continues with
+			// nothing cached for those blocks rather than failing.
+			s.kv.syncFailed++
+			return nil
+		}
+	}
+	s.kv.seal(s.pos)
+	return nil
+}
+
+// restoreKV restores at most max positions, which is how the caller keeps a
+// token to actually run: a prompt entirely in cache still has to produce
+// logits, and Prefill of nothing is an error.
+func (s *Instance) restoreKV(max int) (int, error) {
+	n, tail, err := s.kv.restore(max)
+	if err != nil {
+		return 0, err
+	}
+	cover := n
+	// Clamp in positions for a partial page and in whole pages otherwise. A
+	// hybrid gives the tail up rather than clamping it: its recurrent summary
+	// covers exactly the positions it was taken after, and resuming earlier
+	// would apply a token twice.
+	if n > max {
+		if tail > 0 && s.recurrent() && s.recurrentBoundary() > 0 {
+			s.kv.dropTail(n)
+			n, tail = n-tail, 0
+		}
+		if n > max {
+			if tail > 0 {
+				n = max
+			} else {
+				for li := s.kv.lo; li < len(s.kv.layers); li++ {
+					if p := s.kv.layers[li].p; p > 0 {
+						n = (max / p) * p
+					}
+				}
+			}
+		}
+	}
+	if n <= 0 {
+		return 0, nil
+	}
+	// Both halves of a hybrid's history, or neither: without the summary for
+	// this boundary, the prefix is given up and the prompt prefilled in full.
+	if p := s.recurrentBoundary(); s.recurrent() && p > 0 {
+		// Named as it was kept (recPointKey).
+		key, idx := s.recPointKey(n)
+		if idx < 0 || key == "" || !s.faultRecurrentAt(idx, key, true) {
+			s.kv.unmigratable++
+			return 0, nil
+		}
+	}
+
+	// The windowed layers' pages, once the length is known: only what n's
+	// window reads was ever stored, so that is all a restore can bring back.
+	ok, err := s.kv.restoreWin(n, cover)
+	if f := s.opt.restoreMissFault; f != nil {
+		*f, ok = n, false
+	}
+	if err != nil || !ok {
+		return 0, err
+	}
+
+	// Truncate again at the clamped length, for the reason restore() truncates:
+	// a page past the position we will resume from would never be re-sealed.
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		pg := &s.kv.layers[li]
+		if pg.p == 0 {
+			continue // a linear layer has no pages to truncate
+		}
+		// Keep the page holding position n-1 (for a partial n, the tail).
+		keep := n / pg.p
+		if n%pg.p != 0 {
+			keep++
+		}
+		for j := keep; j < pg.mem.Len(); j++ {
+			pg.keepOnReset(j)
+		}
+		// Only whole pages have been offered to the store; the tail is written
+		// through by sealTail and stays mutable.
+		pg.lastSealed = n / pg.p
+		pg.written = n
+	}
+	return n, nil
+}
+
+// KVBytes is what this session's history holds resident right now. It grows with
+// the conversation and falls when pages are evicted; it is not a reservation.
+func (s *Session) KVBytes() uint64 { return s.kv.Bytes() }
+
+// KVPageStats is pages written to the store, fetched back, and evicted.
+func (s *Session) KVPageStats() (stored, fetched, evicted int64) {
+	return s.kv.stored, s.kv.fetched, s.kv.evicted
+}
+
+// KVDeviceSyncFailures is how many placed blocks would not hand their history
+// back, so nothing was cached for them. It is not a store failure: the store
+// was never reached.
+func (s *Session) KVDeviceSyncFailures() int64 { return s.kv.syncFailed }
+
+// KVPrefixUnmigratable is how many times a restored prefix had to be given up
+// because it could not be moved onto a device (or its recurrent summary was
+// missing): a reuse of 0 with a full store is otherwise unexplainable.
+func (s *Session) KVPrefixUnmigratable() int64 { return s.kv.unmigratable }
+
+// KVStoreMismatches is how many pages came back the wrong shape and were dropped.
+// It is separate from KVStoreFailures because the causes differ: a mismatch is a
+// stale or foreign cache directory and costs a prefill, a failure is a store that
+// cannot write and costs the budget.
+func (s *Instance) KVStoreMismatches() int64 { return s.kv.mismatched }
+
+// KVStoreFailures is how many times a write-through was refused by the store. A
+// store that is failing every Set is otherwise indistinguishable from no store
+// at all: the budget stops working and nothing else changes.
+func (s *Instance) KVStoreFailures() int64 { return s.kv.failed }
+
+// seal offers every page of every layer that has just become immutable to the
+// store, once each.
+func (kc *kvCache) seal(pos int) {
+	if _, ok := kc.store.(NoStore); ok {
+		return // nothing to write through to; do not walk the layers
+	}
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		if s.p == 0 {
+			continue
+		}
+		cur, _ := s.page(pos)
+		if kc.share != nil && kc.dev(li) != nil {
+			// On the card: every page the position has passed is named there
+			// -- at the card's page where it cuts the history apart from this
+			// cache (nameApart) -- and held once on the host too where the
+			// CPU device keeps a copy of it (histcross.go).
+			if kc.cardPage(li) == nil {
+				kc.nameApart(li, pos)
+			}
+			for n := s.lastSealed; n < cur && kc.cardPage(li) != nil; n++ {
+				if key := kc.pageKey(li, n); key != "" {
+					kc.publishSealed(li, n, key)
+				}
+			}
+			s.lastSealed = max(s.lastSealed, cur)
+			kc.publishCopies(li, cur)
+			continue
+		}
+		// The copy a card keeps of it for a block there, where the card
+		// pages it apart from this cache, is named there at the card's page.
+		kc.nameCopyApart(li, pos)
+		// lastSealed means "stored", not "walked past": stop at the first page
+		// that cannot be stored, so a later pull-down from the card can still
+		// seal it, and trim (which evicts below the mark) never drops a page
+		// the store lacks.
+		n := s.lastSealed
+		if n > cur {
+			n = cur // a rollback makes pages mutable again; see below
+		}
+		for ; n < cur; n++ {
+			// A windowed layer's page that is not history: released behind
+			// the window, or below what a device vouched for. Nothing is
+			// stored for it, and a restore reads only the window (restoreWin).
+			if s.win > 0 && (n < s.gone && !s.resident(n) || s.resident(n) && n*s.p < s.genuine) {
+				continue
+			}
+			if n >= s.mem.Len() || s.mem.K(n) == nil {
+				break
+			}
+			// It must be full: a page is named by the whole boundary's tokens.
+			if s.written < (n+1)*s.p {
+				break
+			}
+			key := kc.pageKey(li, n)
+			if key == "" {
+				break // the tokens behind this page are not known; it cannot be named
+			}
+			if kc.share != nil {
+				// Held once: the page becomes the store's copy, or the
+				// store's copy replaces it (kvshare.go).
+				kc.publishSealed(li, n, key)
+				kc.stored += 2
+				continue
+			}
+			if err := kc.store.Set(key, li*2, n, kc.page(s.mem.K(n))); err != nil {
+				kc.failed++
+				break
+			}
+			if err := kc.store.Set(key, li*2+1, n, kc.page(s.mem.V(n))); err != nil {
+				kc.failed++
+				break
+			}
+			kc.stored += 2
+		}
+		// The mark falls as well as rises: a rollback makes a page mutable
+		// again, and trim must not treat it as evictable.
+		s.lastSealed = n
+	}
+}
+
+// trim evicts sealed pages, oldest first, until the resident set is inside the
+// budget. A page is only a candidate once the store has it.
+func (kc *kvCache) trim(pos int) {
+	if kc.budget == 0 || kc.Bytes() <= kc.budget {
+		return
+	}
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		if s.p == 0 {
+			continue
+		}
+		for n := 0; n < s.lastSealed && kc.Bytes() > kc.budget; n++ {
+			if n >= s.mem.Len() || s.mem.K(n) == nil {
+				continue
+			}
+			s.unshare(n)
+			s.mem.Release(n, 0)
+			s.out[n] = true
+			kc.evicted += 2
+		}
+	}
+}
+
+// fault brings page n of layer li back from the store. It is called from the
+// read path, which is the only place a missing page can be discovered -- the
+// write path allocates, because growth is known rather than found.
+func (kc *kvCache) fault(li, n int) error {
+	s := &kc.layers[li]
+	if n < s.mem.Len() && s.mem.K(n) != nil {
+		return nil
+	}
+	s.extend(n)
+	// The slot is addressable, not resident (extend, not grow), so every
+	// failure path below leaves it nil: a zeroed page present would read as
+	// history.
+	s.setPage(n, nil, nil)
+	key := kc.pageKey(li, n)
+	if key == "" {
+		return ErrNoPage // nothing names this page, so nothing can hold it
+	}
+	if kc.share != nil {
+		kc.mapEnd = (n + 1) * s.p
+		return kc.faultShared(li, n, key)
+	}
+	// The length is checked here, where the geometry is: a short page would
+	// leave zeros read back as keys the model never wrote. A layer with an
+	// arena reads the page back into its slot, where a composed CPU block
+	// addresses it (history.Arena); a failed read hands the slot back zeroed.
+	k, v := s.mem.Take()
+	switch {
+	case k != nil:
+	case s.latent:
+		k = s.mem.Alloc()
+		v = k
+	default:
+		k, v = s.mem.Alloc(), s.mem.Alloc()
+	}
+	miss := func(err error) error {
+		s.mem.Give(k)
+		return kc.miss(key, err)
+	}
+	kw := newSliceWriter(kvBytesOf(k))
+	if err := kc.store.Get(key, li*2, n, kw); err != nil {
+		return miss(err)
+	}
+	if kw.n != len(kw.b) {
+		return miss(shortPage(li, n, kw.n, len(kw.b)))
+	}
+	vw := newSliceWriter(kvBytesOf(v))
+	if err := kc.store.Get(key, li*2+1, n, vw); err != nil {
+		return miss(err)
+	}
+	if vw.n != len(vw.b) {
+		return miss(shortPage(li, n, vw.n, len(vw.b)))
+	}
+	s.setPage(n, k, v)
+	s.out[n] = false
+	kc.fetched += 2
+	return nil
+}
+
+// faultCopyAt is fault for the CPU device's copy of a card's block, shared
+// (faultCopy).
+func (kc *kvCache) faultCopyAt(li, n int) error { return kc.faultCopy(li, n, kc.pageKey(li, n)) }
+
+// faultFill is fault for a page stored under its fill rather than as a whole
+// one. A short read is still a miss.
+func (kc *kvCache) faultFill(li, n, fill int) error {
+	s := &kc.layers[li]
+	if kc.share != nil {
+		// The page held under the fill's name, or under the chunk it ends
+		// (aliasChunks): aliased, the positions past fill another prompt's,
+		// never read, and copied away before this session writes
+		// (kvPages.cow).
+		s.extend(n)
+		kc.mapEnd = n*s.p + fill
+		// A fill on a chunk boundary is named by its chunk wherever its fill
+		// name was given (retireTail and aliasChunks name every chunk a
+		// page holds), and the chunk's key is kept (chunkKey) where the
+		// fill's is hashed afresh: asked that way alone, a probe that misses
+		// hashes nothing.
+		if fill%kvChunk == 0 && s.p%kvChunk == 0 {
+			if key := kc.chunkKey(n*s.p + fill); key != "" {
+				return kc.faultShared(li, n, key)
+			}
+			return ErrNoPage
+		}
+		if key := kc.pageKeyFill(li, n, fill); key != "" && kc.faultShared(li, n, key) == nil {
+			return nil
+		}
+		return ErrNoPage
+	}
+	key := kc.pageKeyFill(li, n, fill)
+	if key == "" {
+		return ErrNoPage
+	}
+	s.extend(n)
+	s.setPage(n, nil, nil)
+	// The buffer is a whole page and the read is its filled prefix; restore's
+	// coverage stops before the zero tail.
+	row := s.pp / s.p
+	want := fill * row
+	if fill >= s.p || want <= 0 || want > s.pp {
+		return ErrNoPage
+	}
+	// Into a slot of the layer's arena where it has one, zero past the fill.
+	k, v := s.mem.Take()
+	switch {
+	case k != nil:
+	case s.latent:
+		k = s.mem.Alloc()
+		v = k
+	default:
+		k, v = s.mem.Alloc(), s.mem.Alloc()
+	}
+	miss := func(err error) error {
+		s.mem.Give(k)
+		return kc.miss(key, err)
+	}
+	kw := newSliceWriter(kvBytesOf(k[:want]))
+	if err := kc.store.Get(key, li*2, n, kw); err != nil {
+		return miss(err)
+	}
+	if kw.n != len(kw.b) {
+		return miss(shortPage(li, n, kw.n, len(kw.b)))
+	}
+	vw := newSliceWriter(kvBytesOf(v[:want]))
+	if err := kc.store.Get(key, li*2+1, n, vw); err != nil {
+		return miss(err)
+	}
+	if vw.n != len(vw.b) {
+		return miss(shortPage(li, n, vw.n, len(vw.b)))
+	}
+	s.setPage(n, k, v)
+	s.out[n] = false
+	kc.fetched += 2
+	return nil
+}
+
+// kvChunk is the cache's addressing granularity, in positions, and it is
+// deliberately not the page size: the page size is set by the attention
+// kernel, while what a prefix cache can name is a different question. 16 is
+// not a tuned value; a shared prefix shorter than a chunk misses.
+const kvChunk = 16
+
+// kvChunkFills is the fills a partial page is sealed at: every chunk boundary
+// it has passed, plus the exact end.
+//
+// The exact end covers the identical prompt, the only restore point a hybrid
+// has (see sealRecurrentTail).
+func kvChunkFills(fill int) []int {
+	var out []int
+	for f := kvChunk; f < fill; f += kvChunk {
+		out = append(out, f)
+	}
+	if fill > 0 {
+		out = append(out, fill)
+	}
+	return out
+}
+
+// queuePublish is a name for page n of block li on the card, at the card's
+// page (namedPage), sent with the prompt's others (flushPublish).
+func (kc *kvCache) queuePublish(li, n int, key string) {
+	if key == "" || kc.cardPage(li) == nil && kc.apartAt(li) == 0 {
+		return
+	}
+	kc.pubLi = append(kc.pubLi, int32(kc.key(li)))
+	kc.pubPage = append(kc.pubPage, int32(n))
+	kc.pubKey = append(kc.pubKey, key)
+}
+
+// key is slot li's name on a device: the block's own index, or a history
+// past a block's rows by its block and index (nn.HistoryKey).
+func (kc *kvCache) key(li int) int {
+	if li < len(kc.keys) {
+		return kc.keys[li]
+	}
+	return li
+}
+
+// dev is devAt for slot li: a history past a block's rows is where its
+// block runs.
+func (kc *kvCache) dev(li int) nn.KVShareDevice { return kc.devAt(kc.key(li)) }
+
+// copyDev is copyAt for slot li.
+func (kc *kvCache) copyDev(li int) nn.KVShareDevice { return kc.copyAt(kc.key(li)) }
+
+// cardPage is the device holding block li's history where it cuts the
+// history into pages as this cache does, so a page key names the same
+// positions there; nil where it does not, or where the block is on the CPU.
+func (kc *kvCache) cardPage(li int) nn.KVShareDevice {
+	if d := kc.dev(li); d != nil && d.SharePage(kc.key(li)) == kc.layers[li].p {
+		return d
+	}
+	return nil
+}
+
+// flushPublish sends the queued names to the device, in one call.
+func (kc *kvCache) flushPublish() {
+	if len(kc.pubLi) > 0 {
+		if d := kc.devAt(int(kc.pubLi[0])); d != nil {
+			d.PublishKVs(kc.pubLi, kc.pubPage, kc.pubKey)
+		}
+	}
+	kc.pubLi, kc.pubPage = kc.pubLi[:0], kc.pubPage[:0]
+	clear(kc.pubKey)
+	kc.pubKey = kc.pubKey[:0]
+}
+
+// retireTail is a sharing session letting its sequence go at pos: the page
+// it was writing into is handed to the store under the key of its fill
+// (pageKeyFill) and named by the chunks it holds, so the next prompt that
+// shares that much aliases it -- ownership moves, no byte does.
+func (kc *kvCache) retireTail(pos int) {
+	if kc.share == nil || kc.ns == "" || pos <= 0 {
+		return
+	}
+	kc.publishTail(pos, false)
+	for li := kc.lo; li < len(kc.layers); li++ {
+		p := kc.namedPage(li)
+		if p == 0 || p%kvChunk != 0 {
+			continue
+		}
+		for e := pos/p*p + kvChunk; e <= pos; e += kvChunk {
+			kc.aliasPage(li, pos/p, kc.chunkKey(e))
+		}
+	}
+	kc.flushPublish()
+}
+
+// publishTail hands every layer's partial page at pos to the shared store
+// under the key of its fill (pageKeyFill). It returns the pages published.
+func (kc *kvCache) publishTail(pos int, cardOnly bool) int {
+	n := 0
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		if s.p == 0 {
+			continue
+		}
+		cur := pos / s.p
+		if d := kc.dev(li); d != nil {
+			// On the card, named where it lives, at the card's page.
+			p := kc.namedPage(li)
+			if c, f := pos/p, pos%p; f > 0 {
+				kc.queuePublish(li, c, kc.pageKeyFillP(p, c, f))
+				n++
+			}
+			continue
+		}
+		if cardOnly {
+			continue
+		}
+		have := s.written - cur*s.p
+		if have <= 0 || have >= s.p || cur >= s.mem.Len() || s.mem.K(cur) == nil || s.mem.V(cur) == nil ||
+			cur*s.p < s.genuine || s.isShared(cur) {
+			continue
+		}
+		key := kc.pageKeyFill(li, cur, have)
+		if key == "" {
+			continue
+		}
+		kc.publishSealed(li, cur, key)
+		n++
+	}
+	return n
+}
+
+// aliasChunks names every shared page below pos by the chunks of history it
+// holds (chunkKey), from where the last call left off: a prompt that parts
+// from this one inside a page aliases it by the chunk it shares. It returns
+// the names added.
+func (kc *kvCache) aliasChunks(pos int) int {
+	from, to := kc.chunked, pos/kvChunk*kvChunk
+	if to <= from {
+		return 0
+	}
+	added := 0
+	for li := kc.lo; li < len(kc.layers); li++ {
+		p := kc.namedPage(li)
+		if p == 0 || p%kvChunk != 0 {
+			continue
+		}
+		for e := from + kvChunk; e <= to; e += kvChunk {
+			if e%p == 0 {
+				continue // a whole page is named by its own key
+			}
+			if kc.aliasPage(li, (e-1)/p, kc.chunkKey(e)) {
+				added++
+			}
+		}
+	}
+	kc.chunked = to
+	return added
+}
+
+// aliasPage names shared page n of layer li by key as well (SharedStore.alias):
+// on a card, its page n there (namedPage).
+func (kc *kvCache) aliasPage(li, n int, key string) bool {
+	s := &kc.layers[li]
+	if key == "" {
+		return false
+	}
+	if d := kc.dev(li); d != nil {
+		kc.queuePublish(li, n, key) // one more name for the page on the card
+		return d != nil
+	}
+	if !s.isShared(n) {
+		return false
+	}
+	kc.share.alias(kvStoreKey{key, li * 2, n}, s.mem.K(n))
+	if !s.latent {
+		kc.share.alias(kvStoreKey{key, li*2 + 1, n}, s.mem.V(n))
+	}
+	return true
+}
+
+// appendProbes is kvChunkProbes into dst, at step: max, then every multiple
+// of step below it, largest first; a step of zero is max alone. A hybrid
+// probes at its restore points' spacing (Instance.recEvery).
+func appendProbes(dst []int, max, step int) []int {
+	out := dst[:0]
+	if max <= 0 {
+		return out
+	}
+	out = append(out, max)
+	if step <= 0 {
+		return out
+	}
+	for f := max / step * step; f >= step; f -= step {
+		if f != max {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// insertProbe puts fill f into probes, kept largest first.
+func insertProbe(probes []int, f int) []int {
+	i := 0
+	for i < len(probes) && probes[i] > f {
+		i++
+	}
+	probes = append(probes, 0)
+	copy(probes[i+1:], probes[i:])
+	probes[i] = f
+	return probes
+}
+
+// sealTail offers the page the position is currently inside, named by how many
+// positions it holds, which makes a prompt shorter than a page cacheable.
+//
+// Only the filled prefix is stored. That is a byte prefix only at nseq == 1,
+// which SetCacheKey guarantees by refusing a namespace for a batch.
+//
+// It does not advance lastSealed: the page is still mutable, and marking it
+// sealed would make trim treat it as evictable and stop seal offering the full
+// page later.
+func (kc *kvCache) sealTail(pos int) int {
+	if _, ok := kc.store.(NoStore); ok {
+		return 0
+	}
+	if kc.ns == "" || pos <= 0 {
+		return 0
+	}
+	// A sharing session names its sealed pages by the chunks of history they
+	// hold; the page it is still writing is its own until it lets the
+	// sequence go (Instance.Reset, kvCache.retireTail).
+	if kc.share != nil {
+		return kc.aliasChunks(pos)
+	}
+	stored := 0
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		if s.p == 0 {
+			continue
+		}
+		cur, _ := s.page(pos)
+		have := s.written - cur*s.p
+		if have <= 0 || have >= s.p {
+			continue // nothing partial here, or seal() already owns it
+		}
+		if cur >= s.mem.Len() || s.mem.K(cur) == nil || s.mem.V(cur) == nil {
+			continue
+		}
+		if cur*s.p < s.genuine {
+			continue // part of it is zeros a device sent for a released page
+		}
+		row := s.pp / s.p // floats per position, which is nseq*kvDim at nseq 1
+		var keys []string
+		var lens []int
+		for _, fill := range kvChunkFills(have) {
+			key := kc.pageKeyFill(li, cur, fill)
+			if key == "" {
+				continue
+			}
+			n := fill * row
+			if n > len(s.mem.K(cur)) || n > len(s.mem.V(cur)) {
+				continue
+			}
+			keys, lens = append(keys, key), append(lens, n)
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		// The fills are byte prefixes of one another. A store that can hold
+		// them over one copy is offered them so (FillStore); any other takes
+		// each as a page of its own.
+		if fs, ok := kc.store.(FillStore); ok {
+			top := lens[len(lens)-1]
+			bk, bv := kvBytesOf(s.mem.K(cur)[:top]), kvBytesOf(s.mem.V(cur)[:top])
+			for i := range lens {
+				lens[i] *= 4 // float32 elements to bytes
+			}
+			if err := fs.SetFills(li*2, cur, bk, keys, lens); err != nil {
+				kc.failed++
+				continue
+			}
+			if err := fs.SetFills(li*2+1, cur, bv, keys, lens); err != nil {
+				kc.failed++
+				continue
+			}
+			stored += 2 * len(keys)
+			continue
+		}
+		for i, key := range keys {
+			n := lens[i]
+			if err := kc.store.Set(key, li*2, cur, kc.page(s.mem.K(cur)[:n])); err != nil {
+				kc.failed++
+				continue
+			}
+			if err := kc.store.Set(key, li*2+1, cur, kc.page(s.mem.V(cur)[:n])); err != nil {
+				kc.failed++
+				continue
+			}
+			stored += 2
+		}
+	}
+	return stored
+}
+
+// miss turns "these bytes are not a page of this shape" into a miss, and drops
+// the offending key on the way past, so a page left by a differently
+// configured process costs one prefill rather than failing that prefix
+// forever. A genuine I/O failure still stops the request.
+func (kc *kvCache) miss(key string, err error) error {
+	if !errors.Is(err, errPageMismatch) {
+		return err
+	}
+	kc.mismatched++
+	kc.store.Drop(key) // best effort: a store that cannot forget still misses
+	return ErrNoPage
+}
+
+// sliceWriter is the io.Writer a resident page presents to a store: it fills a
+// buffer the engine already owns and refuses anything that does not fit.
+//
+// A page whose size does not match the geometry is from a different
+// configuration, and accepting it would attend over a reinterpreted history.
+type sliceWriter struct {
+	b []byte
+	n int
+}
+
+func newSliceWriter(b []byte) *sliceWriter { return &sliceWriter{b: b} }
+
+// writer is the cache's kept sliceWriter over b: one read at a time.
+func (kc *kvCache) writer(b []byte) *sliceWriter {
+	kc.wr = sliceWriter{b: b}
+	return &kc.wr
+}
+
+func (w *sliceWriter) Write(p []byte) (int, error) {
+	if w.n+len(p) > len(w.b) {
+		return 0, fmt.Errorf("%w: kv page is %d bytes, the store offered at least %d",
+			errPageMismatch, len(w.b), w.n+len(p))
+	}
+	copy(w.b[w.n:], p)
+	w.n += len(p)
+	return len(p), nil
+}
+
+// faultIn brings a page back if it was evicted. On a resident-only session --
+// no store, no budget -- it is one nil compare.
+func (kv *kvCache) faultIn(li, page int) bool {
+	pg := &kv.layers[li]
+	if page < pg.mem.Len() && pg.mem.K(page) != nil {
+		return true
+	}
+	if pg.bound {
+		pg.grow(page)
+		return true
+	}
+	fault := kv.fault
+	if pg.copy && kv.share != nil {
+		fault = kv.faultCopyAt
+	}
+	if err := fault(li, page); err != nil {
+		// A page the store cannot return is a hole in the sequence's past, so
+		// the request fails. The error is recorded because this may run in a
+		// pool closure with no error path; kvCheck surfaces it at the entry
+		// point. Returning false stops the walk over the nil page.
+		kv.err.CompareAndSwap(nil, &err)
+		return false
+	}
+	return true
+}
+
+// writable brings back the page pos falls in before it is written, when trim
+// evicted it with history still in it. On a session with no budget it is one
+// bounds check.
+func (kv *kvCache) writable(li, pos int) {
+	pg := &kv.layers[li]
+	if pg.p == 0 {
+		return
+	}
+	if n, _ := pg.page(pos); n < len(pg.out) && pg.out[n] {
+		kv.faultIn(li, n)
+	}
+}
+
+// The prefix solver: page n of layer li is named by H(tokens[0 : (n+1)*p])
+// inside the namespace, so the store answers "which prefix is cached". A hit
+// proves every token up to that boundary matches, the longest prefix is found
+// by walking boundaries until a miss, and sessions sharing a prefix share its
+// pages. The hash is cumulative, each boundary's key covering every token
+// before it, because RoPE is applied before the cache write: a span is
+// reusable only as a prefix.
+
+// geomDigest is everything a page's byte count cannot distinguish. Different
+// head factorizations (tinyllama, Qwen2-1.5B and gemma-2b all have kvDim 256)
+// and head-major versus row-major layouts produce same-sized pages, so the
+// geometry is hashed into every key and a mismatch is a clean miss. Model
+// identity (two fine-tunes of one architecture) remains the namespace's job.
+func geomDigest(c *model.Config, nseq int, l kvLayout, wins []blockWindow) []byte {
+	h := sha256.New()
+	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%s|hm=false|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/0|exp=%d/%d",
+		nseq, l.elemTag(), c.NKVHead, c.HeadDim, c.NLayer,
+		c.NEmbd, c.NHead, c.NRot, c.NFFN, c.NVocab, c.RopeBase,
+		modelWindow(wins), c.NExpert, c.NExpertUsed)
+	// Which blocks slide, only where some do: a model that slides nowhere
+	// digests as it did.
+	for li, w := range wins {
+		if w.w > 0 {
+			fmt.Fprintf(h, "|win%d=%d/%t", li, w.w, w.chunked)
+		}
+	}
+	// The blocks' own geometries, only where they have them: every other
+	// model's digest, and so every page it stored, is unchanged.
+	if c.MixedGeom() {
+		for li := range c.NLayer {
+			fmt.Fprintf(h, "|geom%d=%d/%d/%d", li, c.NKVHeadAt(li), c.HeadDimAt(li), c.NRotAt(li))
+		}
+	}
+	return h.Sum(nil)
+}
+
+// pageKeyFill names page n of layer li when it holds `fill` positions rather
+// than a whole page.
+//
+// The fill is in the digest, not only in the prefix, so a partial page cannot
+// alias a full one. fill == p returns the ordinary key, so a full page is
+// stored under one name only.
+func (kc *kvCache) pageKeyFill(li, n, fill int) string {
+	return kc.pageKeyFillP(kc.layers[li].p, n, fill)
+}
+
+// pageKeyFillP is pageKeyFill for a page of p positions, whoever's it is: a
+// DeepSeek V4 block's entry page covers p = its entries times its rate.
+func (kc *kvCache) pageKeyFillP(p, n, fill int) string {
+	if fill >= p {
+		return kc.pageKeyP(p, n)
+	}
+	if kc.ns == "" || fill <= 0 {
+		return ""
+	}
+	end := n*p + fill
+	if end > len(kc.seq) {
+		return ""
+	}
+	return kc.digest(p, fill, end)
+}
+
+func (kc *kvCache) pageKey(li, n int) string { return kc.pageKeyP(kc.layers[li].p, n) }
+
+// pageKeyP is pageKey for a page of p positions; see pageKeyFillP.
+func (kc *kvCache) pageKeyP(p, n int) string {
+	if kc.ns == "" {
+		return kc.id // no namespace: one key for the session, no sharing
+	}
+	end := (n + 1) * p
+	if end > len(kc.seq) {
+		return "" // the tokens for this page are not all known yet
+	}
+	h := kc.bh[p]
+	for len(h) <= n {
+		// One sha256 per boundary, computed once and kept.
+		e := (len(h) + 1) * p
+		if e > len(kc.seq) {
+			break
+		}
+		h = append(h, kc.digest(p, 0, e))
+	}
+	kc.bh[p] = h
+	if n >= len(h) {
+		return ""
+	}
+	return h[n]
+}
+
+// digest is the key of positions [0, end) as a page of p positions holding
+// fill of them (0: a whole page), in the namespace: sha256 over the geometry
+// first, so a geometry change can never alias, then the page shape and the
+// ids. The hasher and its scratch are the cache's, and a key named before
+// comes back from names, so naming a prompt seen before allocates nothing.
+func (kc *kvCache) digest(p, fill, end int) string {
+	x := kc.digestHead(p, fill)
+	kc.writeSeq(x, 0, end)
+	return kc.digestName(x)
+}
+
+// digestHead is digest's hasher, reset and fed what comes before the ids.
+func (kc *kvCache) digestHead(p, fill int) hash.Hash {
+	if kc.hasher == nil {
+		kc.hasher = sha256.New()
+	}
+	x := kc.hasher
+	x.Reset()
+	x.Write(kc.geom)
+	b := append(kc.hbuf[:0], "|p="...)
+	b = strconv.AppendInt(b, int64(p), 10)
+	if fill > 0 {
+		b = append(b, "|fill="...)
+		b = strconv.AppendInt(b, int64(fill), 10)
+	}
+	b = append(b, '|')
+	kc.hbuf = b
+	x.Write(b)
+	return x
+}
+
+// page is the cache's reader over a sealed page's floats, for one Set.
+func (kc *kvCache) page(f []float32) *bytes.Reader {
+	kc.rd.Reset(kvBytesOf(f))
+	return &kc.rd
+}
+
+// digestName is the key of what x has been fed so far; Sum leaves x as it
+// was, so a caller can go on feeding it.
+func (kc *kvCache) digestName(x hash.Hash) string {
+	var id [16]byte
+	copy(id[:], x.Sum(kc.sum[:0]))
+	if name, ok := kc.names[id]; ok {
+		return name
+	}
+	if kc.names == nil || len(kc.names) >= kvNames {
+		kc.names = make(map[[16]byte]string, 64)
+	}
+	name := kc.ns + "/" + hex.EncodeToString(id[:])
+	kc.names[id] = name
+	return name
+}
+
+// kvNames bounds the keys a cache keeps named: past it they are named again.
+const kvNames = 1 << 16
+
+// chunkKey names the kvChunk of history that ends at position end, by every
+// id before end: a page size no layer has (-kvChunk) keeps it apart from
+// every page key.
+func (kc *kvCache) chunkKey(end int) string {
+	if kc.ns == "" || end <= 0 || end > len(kc.seq) {
+		return ""
+	}
+	if end%kvChunk != 0 {
+		return kc.digest(-kvChunk, 0, end)
+	}
+	n := end/kvChunk - 1
+	if n >= len(kc.ck) {
+		kc.fillChunkKeys()
+	}
+	return kc.ck[n]
+}
+
+// fillChunkKeys names every whole kvChunk of seq not yet in ck, in one pass
+// over the ids: chunk keys are prefix hashes, so each is the running hash's
+// sum at its boundary, where hashing each from position 0 cost a sequence's
+// length per chunk, per layer that asked.
+func (kc *kvCache) fillChunkKeys() {
+	x := kc.digestHead(-kvChunk, 0)
+	at := 0
+	for e := kvChunk; e <= len(kc.seq); e += kvChunk {
+		kc.writeSeq(x, at, e)
+		at = e
+		if e/kvChunk > len(kc.ck) {
+			kc.ck = append(kc.ck, kc.digestName(x))
+		}
+	}
+}
+
+// int32bytes views the ids as bytes for hashing. The byte order is this machine's
+// and that is correct: a page written on one box and read on another would differ in
+// far more than the hash.
+func int32bytes(v []int32) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
+}
+
+// note records the ids this sequence has consumed: what pageKey hashes under a
+// namespace, and what rebuilds the history on a fresh session
+// (Session.HistorySpans) with or without one.
+func (kc *kvCache) note(pos int, ids ...int32) {
+	// seq[i] is the id at position i: a token's, or a named picture row's
+	// (nameRow; PrefillMixed notes every row of a mixed prompt). Only rows
+	// with no name advance the position with no id -- ForwardEmbd's, and an
+	// embedding span with no Key -- leaving a gap; appending across it would
+	// shift every later id. Stop instead: pageKey refuses boundaries past
+	// len(seq), so nothing after the gap is cached.
+	if pos > len(kc.seq) {
+		return
+	}
+	if pos < len(kc.seq) {
+		kc.seq = kc.seq[:pos] // a rollback rewrites the tail
+		kc.chunked = min(kc.chunked, pos/kvChunk*kvChunk)
+		for p := range kc.bh {
+			if n := pos / p; n < len(kc.bh[p]) {
+				kc.bh[p] = kc.bh[p][:n]
+			}
+		}
+		if n := pos / kvChunk; n < len(kc.ck) {
+			kc.ck = kc.ck[:n]
+		}
+	}
+	kc.seq = append(kc.seq, ids...)
+}
+
+// reset drops every page and forgets what was sealed, so an instance that is being
+// reused starts with nothing resident and nothing claimed.
+//
+// The token stream goes with the pages, because it names them: paths that
+// record no ids (ForwardEmbd, PrefillMixed) would otherwise store their pages
+// under the previous prompt's hash.
+func (kc *kvCache) reset() {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		for n := range s.mem.Len() {
+			s.keepOnReset(n)
+		}
+		s.mem.Reset()
+		s.out, s.lastSealed, s.written = s.out[:0], 0, 0
+		s.crossForget(0)
+	}
+	kc.seq, kc.named = kc.seq[:0], kc.named[:0]
+	if kc.bh == nil {
+		kc.bh = map[int][]string{}
+	}
+	for p := range kc.bh {
+		kc.bh[p] = kc.bh[p][:0]
+	}
+	kc.ck = kc.ck[:0]
+	kc.chunked = 0
+}
+
+// keepOnReset lets page n go as reset does, its memory kept in spare for the
+// next sequence to grow into: an instance reused prompt after prompt (a Decider's)
+// would otherwise hand the collector its whole history each time and make it
+// again. A layer with no window keeps what it held; a windowed layer what its
+// window turns over (spareMax), so it still holds its window and not the
+// context. A shared page is the store's: its reference goes.
+func (s *kvPages) keepOnReset(n int) {
+	if s.isShared(n) {
+		s.drop(n)
+		return
+	}
+	keep := -1
+	if s.win > 0 {
+		keep = s.spareMax()
+	}
+	s.mem.Release(n, keep)
+	if n < len(s.out) {
+		s.out[n] = false
+	}
+}
+
+// window faults every page of layer li covering [w0, w0+want) into
+// residence, on one goroutine, before the attention heads fan out. Faulting
+// from inside the pool is a data race (extend can reallocate the slice another
+// worker holds), so residency is decided here and workers only read.
+func (kv *kvCache) window(li, w0, want int) {
+	pg := &kv.layers[li]
+	if pg.p == 0 {
+		return
+	}
+	// A windowed layer's released pages are behind every live row's window
+	// (kvPages.release): a caller asking from zero for a superset of the rows'
+	// windows asks for nothing there.
+	if lo := pg.gone * pg.p; w0 < lo {
+		want -= lo - w0
+		w0 = lo
+	}
+	for pos, end := w0, w0+want; pos < end; {
+		sp := pg.span(pos, end)
+		kv.faultIn(li, sp.page)
+		pos += sp.n
+	}
+}
+
+// kvCheck reports the first unrecoverable page fault of this step, and clears
+// it. Every entry point calls it before returning logits, so it is also where a
+// step's placement moves (growth, relocation, a demotion, the KV a device grew)
+// reach the system memory's budgets (followSystem).
+func (s *Instance) kvCheck() error {
+	s.followSystem()
+	if s.kv == nil {
+		return nil
+	}
+	if p := s.kv.err.Swap(nil); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// The recurrent half of a hybrid's history.
+//
+// A hybrid's past is in two places and only the attention half is paged. The
+// recurrent summary is a function of exactly the tokens the page key names,
+// so it is stored under the same name; it is constant in the context length.
+//
+// It rides the same KVStore: the layer index is offset past the k and v range
+// (2*NLayer + li), so no interface changes and a store sees one more page kind.
+func (s *Instance) recurrentLayer(li int) int { return 2*s.c.NLayer + li }
+
+// logitsLayer is the store index the prompt's final logits go under. The
+// attention planes take 0..2*NLayer-1 and the recurrent summaries the NLayer
+// after them, so this sits past both and cannot collide with either.
+func (s *Instance) logitsLayer() int { return 3 * s.c.NLayer }
+
+// sealLogits stores the logits the prompt ended on, under the same fill-named
+// key as its partial page.
+//
+// It makes a fully cached prompt possible: with the logits stored there is
+// nothing left to run, which a hybrid needs because its summary cannot be
+// shortened by one position. The cost is one vocabulary row per prompt.
+func (s *Instance) sealLogits(pos int, lg []float32) {
+	if s.kv.ns == "" || pos <= 0 || len(lg) == 0 {
+		return
+	}
+	if _, ok := s.kv.store.(NoStore); ok {
+		return
+	}
+	al := s.attnLayer()
+	if al < 0 {
+		return
+	}
+	p := s.kv.layers[al].p
+	cur := pos / p
+	key := s.kv.pageKeyFill(al, cur, pos-cur*p)
+	if key == "" {
+		return
+	}
+	if err := s.kv.store.Set(key, s.logitsLayer(), cur, s.kv.page(lg)); err != nil {
+		s.kv.failed++
+	}
+}
+
+// faultLogits reads back what sealLogits wrote, or reports that it cannot.
+func (s *Instance) faultLogits(pos int, out []float32) bool {
+	al := s.attnLayer()
+	if al < 0 || s.kv.ns == "" || pos <= 0 || len(out) == 0 {
+		return false
+	}
+	if _, ok := s.kv.store.(NoStore); ok {
+		return false
+	}
+	p := s.kv.layers[al].p
+	cur := pos / p
+	key := s.kv.pageKeyFill(al, cur, pos-cur*p)
+	if key == "" {
+		return false
+	}
+	w := s.kv.writer(kvBytesOf(out))
+	if err := s.kv.store.Get(key, s.logitsLayer(), cur, w); err != nil {
+		return false
+	}
+	// Exact length, as in fault(): a short read would leave zeros.
+	return w.n == len(w.b)
+}
+
+// recurrentBoundary is the page size the snapshots are aligned to: the
+// attention layers' page, since the linear ones have none and the two halves
+// must be restorable at the same position.
+func (s *Instance) recurrentBoundary() int {
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		if p := s.kv.layers[li].p; p > 0 {
+			return p
+		}
+	}
+	return 0
+}
+
+// sealRecurrent stores every linear layer's summary when the position lands
+// exactly on a page boundary.
+//
+// Exactly, because a summary cannot be sliced: the state for boundary n exists
+// only when the position is n*p, which is why prefill snaps its chunk width to
+// the boundary when a hybrid is being cached.
+func (s *Instance) sealRecurrent(pos int) {
+	if !s.recurrent() || s.kv.ns == "" || pos == 0 {
+		return
+	}
+	if _, ok := s.kv.store.(NoStore); ok {
+		return
+	}
+	p := s.recurrentBoundary()
+	if p == 0 || pos%p != 0 {
+		return
+	}
+	// A prefill that keeps restore points has stored this one already
+	// (recRowPoint).
+	if s.recPrefill && s.recPointsOn() {
+		return
+	}
+	for li := range s.c.NLayer {
+		// A placed block's summary is its device's to seal.
+		if !s.keepsRec(li) || s.devAt(li) {
+			continue
+		}
+		if !s.sealRecLayer(li, pos) {
+			return
+		}
+	}
+	s.sealRecOnDevice(pos)
+}
+
+// sealRecurrentTail snapshots the recurrent summary at a prompt boundary rather
+// than at a page boundary, under the same fill-named key sealTail uses: a
+// restored partial page needs a matching summary or no tail at all.
+func (s *Instance) sealRecurrentTail(pos int) {
+	if !s.recurrent() || s.kv.ns == "" || pos == 0 {
+		return
+	}
+	if _, ok := s.kv.store.(NoStore); ok {
+		return
+	}
+	p := s.recurrentBoundary()
+	if p == 0 || pos%p == 0 {
+		return // a whole boundary is sealRecurrent's, and it is the better copy
+	}
+	al := s.attnLayer()
+	if al < 0 {
+		return
+	}
+	// The prompt's end, beside the points the prefill kept on the way
+	// (recpoint.go), under the fill-named key its partial page has.
+	for li := range s.c.NLayer {
+		if s.keepsRec(li) && s.recDev(li) == nil && !s.sealRecLayer(li, pos) {
+			return
+		}
+	}
+	if s.sealRecOnDevice(pos) {
+		s.noteEnd(pos)
+	}
+}
+
+// endsLayer is the store index the prompt ends past a chunk boundary go
+// under, past the logits' (logitsLayer).
+func (s *Instance) endsLayer() int { return 3*s.c.NLayer + 1 }
+
+// kvEndSeats is how many prompt ends one chunk boundary remembers.
+const kvEndSeats = 4
+
+// noteEnd tells the store a restore point was kept at pos, inside a chunk:
+// under the chunk boundary before it, the fills past that boundary points
+// were kept at, newest first, packed in one word. Through the store, so a
+// Instance that never saw the prompt -- a chat's next turn -- finds it
+// (kvCache.recFloor), whatever the store is.
+func (s *Instance) noteEnd(pos int) {
+	c := pos / kvChunk * kvChunk
+	if c == 0 || c == pos {
+		return
+	}
+	key := s.kv.chunkKey(c)
+	if key == "" {
+		return
+	}
+	e := s.endsAt(c)
+	fill, at := uint8(pos-c), kvEndSeats-1
+	for i, f := range e {
+		if f == fill {
+			at = i
+			break
+		}
+	}
+	copy(e[1:at+1], e[:at]) // to the front
+	e[0] = fill
+	s.endWord[0] = math.Float32frombits(uint32(e[0]) | uint32(e[1])<<8 | uint32(e[2])<<16 | uint32(e[3])<<24)
+	s.recRd.Reset(kvBytesOf(s.endWord[:]))
+	if err := s.kv.store.Set(key, s.endsLayer(), 0, &s.recRd); err != nil {
+		s.kv.failed++
+	}
+}
+
+// endsAt is what noteEnd told the store past chunk boundary c: no fill is 0.
+func (s *Instance) endsAt(c int) [kvEndSeats]uint8 {
+	var e [kvEndSeats]uint8
+	key := s.kv.chunkKey(c)
+	if key == "" {
+		return e
+	}
+	w := s.kv.writer(kvBytesOf(s.endWord[:]))
+	if s.kv.store.Get(key, s.endsLayer(), 0, w) != nil || w.n != len(w.b) {
+		return e
+	}
+	u := math.Float32bits(s.endWord[0])
+	return [kvEndSeats]uint8{uint8(u), uint8(u >> 8), uint8(u >> 16), uint8(u >> 24)}
+}
+
+// attnLayer is any layer with pages, so that pageKey has a page size to hash.
+func (s *Instance) attnLayer() int {
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		if s.kv.layers[li].p > 0 {
+			return li
+		}
+	}
+	return 0
+}
+
+// faultRecurrentAt brings every linear layer's summary back for position n,
+// under key -- a boundary's page key, or a partial page's, which is named by
+// its fill rather than by a boundary (see sealRecurrentTail). All of them or
+// none: a hybrid with half its summaries restored is worse than one with none.
+func (s *Instance) faultRecurrentAt(n int, key string, apply bool) bool {
+	if !s.recurrent() {
+		return true
+	}
+	if key == "" || n < 0 {
+		return false
+	}
+	// A block whose restore points live on its device (nn.RecShareDevice)
+	// is asked there; its state is loaded there, by apply, after every
+	// block has answered.
+	for li := range s.c.NLayer {
+		if !s.keepsRec(li) {
+			continue
+		}
+		if d := s.recDev(li); d != nil && !d.HasRec(li, key) {
+			return false
+		}
+	}
+	// Staged in buffers the instance keeps, one a block, and applied only once
+	// every layer has answered, so a failure half way leaves the session's
+	// own summaries untouched.
+	if s.recStage == nil {
+		s.recStage = make([][]float32, s.c.NLayer)
+	}
+	for li := range s.c.NLayer {
+		if !s.keepsRec(li) || s.recDev(li) != nil {
+			continue
+		}
+		nc, ns := s.recLens(li)
+		w := nc + ns
+		if cap(s.recStage[li]) < w {
+			s.recStage[li] = make([]float32, w)
+		}
+		wr := s.kv.writer(kvBytesOf(s.recStage[li][:w]))
+		if err := s.kv.store.Get(key, s.recurrentLayer(li), n, wr); err != nil {
+			return false
+		}
+		if wr.n != len(wr.b) {
+			s.kv.mismatched++
+			return false
+		}
+	}
+	if !apply {
+		return true
+	}
+	for li := range s.c.NLayer {
+		if !s.keepsRec(li) {
+			continue
+		}
+		if d := s.recDev(li); d != nil {
+			if !d.LoadRec(li, key) {
+				return false
+			}
+			continue
+		}
+		nc, ns := s.recLens(li)
+		buf := s.recStage[li]
+		if !s.recIO(li, buf[:nc], buf[nc:nc+ns], true) {
+			return false
+		}
+	}
+	return true
+}
+
+// namedRow is one image row as the page keys see it: the picture's name, the
+// row's index in the run that name covers, and the run's grid. Its rotary
+// position follows from the grid and the prefix, which the key hashes
+// before it.
+type namedRow struct {
+	key  model.RowsKey
+	row  int32
+	grid [5]int32
+}
+
+// nameRow records image row row of the picture named k, laid out as grid g,
+// as the row at cache position pos, and returns the id seq holds for it:
+// negative, so no vocabulary id is one. A row named again at the same position
+// reuses its entry; the table never grows past the rows the sequence holds.
+func (kc *kvCache) nameRow(k model.RowsKey, row int, g model.ImageGrid, pos int) int32 {
+	r := namedRow{key: k, row: int32(row), grid: [5]int32{int32(g.T), int32(g.H), int32(g.W), int32(g.Line), int32(g.Ends)}}
+	if pos < len(kc.seq) && kc.seq[pos] < 0 {
+		if i := int(-1 - kc.seq[pos]); i < len(kc.named) && kc.named[i] == r {
+			return kc.seq[pos]
+		}
+	}
+	kc.named = append(kc.named, r)
+	return -int32(len(kc.named))
+}
+
+// writeSeq hashes the ids of positions [0, e) into h: a run of token ids as
+// they are, and an image row as a tag no id run can produce followed by its
+// whole name -- the picture's digest, never a truncation of it -- its row and
+// its position.
+func (kc *kvCache) writeSeq(h io.Writer, a, e int) {
+	seq := kc.seq[a:e]
+	for len(seq) > 0 {
+		i := 0
+		for i < len(seq) && seq[i] >= 0 {
+			i++
+		}
+		if i > 0 {
+			h.Write(int32bytes(seq[:i]))
+			seq = seq[i:]
+			continue
+		}
+		r := kc.named[-1-seq[0]]
+		var b [4 + 32 + 4 + 20]byte
+		// "IMG\xff" read as a little-endian int32 is negative, which no
+		// token id is, so no run of ids hashes to the tag.
+		copy(b[:4], "IMG\xff")
+		copy(b[4:36], r.key[:])
+		binary.LittleEndian.PutUint32(b[36:], uint32(r.row))
+		for j, v := range r.grid {
+			binary.LittleEndian.PutUint32(b[40+4*j:], uint32(v))
+		}
+		h.Write(b[:])
+		seq = seq[1:]
+	}
+}
+
+// Own is owned for block li's history block, where its history is paged
+// (cpudev.History).
+func (kv *kvCache) Own(li, pos int) {
+	if hl := kv.src[li]; kv.layers[hl].p > 0 {
+		kv.owned(hl, pos)
+	}
+}
+
+// owned makes the page block li writes pos into resident and its own.
+func (kv *kvCache) owned(li, pos int) {
+	pg := &kv.layers[li]
+	kv.writable(li, pos)
+	n, _ := pg.page(pos)
+	pg.grow(n)
+	pg.cow(n)
+}
+
+// readable makes the pages of block li's positions [start, pos] resident,
+// in the layer's arena, or says why one is not (pageErr).
+func (kv *kvCache) readable(li, start, pos int) error {
+	pg := &kv.layers[li]
+	n, _ := pg.page(pos)
+	kv.window(li, start, pos-start)
+	for p := start / pg.p; p <= n; p++ {
+		if !pg.mem.ArenaPage(p) {
+			return kv.pageErr(li, p)
+		}
+	}
+	return nil
+}
+
+// prepare makes block li's history ready for a row at pos: its page written
+// and its window read.
+func (kv *kvCache) prepare(li, pos int) error {
+	kv.owned(li, pos)
+	return kv.readable(li, kv.layers[li].keyStart(pos), pos)
+}
+
+// table is block li's page table, nseq sequences wide, from the session's
+// view of the CPU device's history.
+func (kv *kvCache) table(li, nseq int) ([]uint32, error) {
+	nseq = max(nseq, 1)
+	t := kv.view.At(li)
+	switch {
+	case t != kv.layers[li].arena():
+		return nil, fmt.Errorf("model: block %d's pages are not its session's view's", li)
+	case t == nil:
+		if len(kv.noTable) < nseq {
+			kv.noTable = make([]uint32, nseq)
+		}
+		return kv.noTable[:nseq], nil
+	}
+	return t.Pages(nseq), nil
+}
+
+// Prepare is cpudev.History's: block li's history block (its own, or the one
+// it shares) ready for a row at pos, and how a call binds it.
+func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline, error) {
+	hl := kv.src[li]
+	pg := &kv.layers[hl]
+	if pg.p > 0 {
+		if err := kv.prepare(hl, pos); err != nil {
+			return cpudev.HistoryBinding{}, nn.DeclineServes, err
+		}
+	}
+	pages, err := kv.table(hl, nseq)
+	if err != nil {
+		return cpudev.HistoryBinding{}, nn.DeclineServes, err
+	}
+	b := cpudev.HistoryBinding{Pages: pages, KeyStart: pg.keyStart(pos), PagePos: pg.p}
+	b.Keys, b.Values = kvAddrs(pg)
+	for h := 1; h <= kv.nHist(hl); h++ {
+		e := kv.histSlot(hl, h)
+		if e == 0 {
+			continue
+		}
+		kv.owned(e, pos)
+		if err := kv.readable(e, 0, pos); err != nil {
+			return cpudev.HistoryBinding{}, nn.DeclineServes, err
+		}
+		if err := kv.bindHist(&b, hl, h, e, nseq); err != nil {
+			return cpudev.HistoryBinding{}, nn.DeclineServes, err
+		}
+	}
+	if err := kv.bindMore(&b, li, pos, pos, nseq); err != nil {
+		return cpudev.HistoryBinding{}, nn.DeclineServes, err
+	}
+	return b, nn.DeclineServes, nil
+}
+
+// moreSlot is the slot in layers of the history r names, -1 where it keeps
+// no pages.
+func (kv *kvCache) moreSlot(r graph.HistoryRead) int {
+	if r.Hist == 0 {
+		if r.Block >= 0 && r.Block < len(kv.layers) && kv.layers[r.Block].p > 0 {
+			return r.Block
+		}
+		return -1
+	}
+	if e := kv.histSlot(r.Block, r.Hist); e > 0 {
+		return e
+	}
+	return -1
+}
+
+// bindMore binds into b, after block li's history block's, every other
+// block's history li reads (graph.Graph.ReadsMore), its pages for the rows
+// from lo to pos resident where pos is not negative: b's tables become li's
+// own (kvCache.xb).
+func (kv *kvCache) bindMore(b *cpudev.HistoryBinding, li, lo, pos, nseq int) error {
+	if li < 0 || li >= len(kv.more) || len(kv.more[li]) == 0 {
+		return nil
+	}
+	t := kv.xb[li]
+	n := kv.nHist(kv.src[li])
+	clear(t[:n])
+	copy(t[:n], b.Hists)
+	for j, r := range kv.more[li] {
+		e := kv.moreSlot(r)
+		if e < 0 {
+			return fmt.Errorf("model: block %d reads block %d's history %d, which keeps no pages", li, r.Block, r.Hist)
+		}
+		if pos >= 0 {
+			start := 0
+			if r.Hist == 0 {
+				start = kv.layers[e].keyStart(lo)
+			}
+			if err := kv.readable(e, start, pos); err != nil {
+				return err
+			}
+		}
+		pages, err := kv.table(e, nseq)
+		if err != nil {
+			return err
+		}
+		t[n+j].Pages = pages
+		t[n+j].Keys, t[n+j].Values = kvAddrs(&kv.layers[e])
+	}
+	b.Hists = t
+	return nil
+}
+
+// unread is why a block's history could not be read for a step: the page
+// fault that left a page out of its arena (faultIn), which fails the request
+// pageErr is why block li's page p is not in its arena after its read: the
+// fault the store gave (faultIn), or the page itself.
+func (kv *kvCache) pageErr(li, p int) error {
+	if e := kv.err.Swap(nil); e != nil {
+		return *e
+	}
+	return fmt.Errorf("model: block %d's history page %d is not in its arena after its read", li, p)
+}
+
+// nHist is how many histories block li keeps past its rows'.
+func (kv *kvCache) nHist(li int) int {
+	if li < 0 || li >= len(kv.hs) {
+		return 0
+	}
+	return len(kv.hs[li])
+}
+
+// histSlot is block li's history h's slot in layers, 0 where it keeps none
+// or its rows keep no pages.
+func (kv *kvCache) histSlot(li, h int) int {
+	if h < 1 || h > kv.nHist(li) {
+		return 0
+	}
+	if e := kv.hs[li][h-1]; e != 0 && kv.layers[e].p != 0 {
+		return e
+	}
+	return 0
+}
+
+// bindHist binds block li's history h, at slot e, into b
+// (cpudev.HistoryBinding.Hists).
+func (kv *kvCache) bindHist(b *cpudev.HistoryBinding, li, h, e, nseq int) error {
+	t := &kv.hb[li][h-1]
+	var err error
+	if t.Pages, err = kv.table(e, nseq); err != nil {
+		return err
+	}
+	t.Keys, t.Values = kvAddrs(&kv.layers[e])
+	b.Hists = kv.hb[li]
+	return nil
+}
+
+// Commit is cpudev.History's: block li's history holds the row at pos.
+func (kv *kvCache) Commit(li, pos int) {
+	if pg := &kv.layers[kv.src[li]]; pg.p > 0 && pos+1 > pg.written {
+		pg.written = pos + 1
+	}
+	hl := kv.src[li]
+	for h := 1; h <= kv.nHist(hl); h++ {
+		if e := kv.histSlot(hl, h); e > 0 && pos+1 > kv.layers[e].written {
+			kv.layers[e].written = pos + 1
+		}
+	}
+}
+
+// PrepareRows is cpudev.History's: block li's history block's pages for the
+// rows at pos, every row's page written before any is read (a step's rows
+// stand in any order, and a page holds every sequence's positions).
+func (kv *kvCache) PrepareRows(li int, pos []int, keys int) (nn.Decline, error) {
+	hl := kv.src[li]
+	pg := &kv.layers[hl]
+	if pg.p == 0 {
+		return nn.DeclineServes, nil
+	}
+	start, end := pos[0], 0
+	for _, p := range pos {
+		kv.owned(hl, p)
+		for h := 1; h <= kv.nHist(hl); h++ {
+			if e := kv.histSlot(hl, h); e > 0 {
+				kv.owned(e, p)
+			}
+		}
+		start, end = min(start, pg.keyStart(p)), max(end, p+1)
+	}
+	// Rows past the keys the form holds are a shape it was not formed for.
+	if end > keys {
+		return nn.DeclineNotFormed, nil
+	}
+	for h := 1; h <= kv.nHist(hl); h++ {
+		if e := kv.histSlot(hl, h); e > 0 {
+			if err := kv.readable(e, 0, end-1); err != nil {
+				return nn.DeclineServes, err
+			}
+		}
+	}
+	if li < len(kv.more) {
+		for _, r := range kv.more[li] {
+			if e := kv.moreSlot(r); e >= 0 {
+				from := 0
+				if r.Hist == 0 {
+					from = kv.layers[e].keyStart(start)
+				}
+				if err := kv.readable(e, from, end-1); err != nil {
+					return nn.DeclineServes, err
+				}
+			}
+		}
+	}
+	return nn.DeclineServes, kv.readable(hl, start, end-1)
+}
+
+// Rows is cpudev.History's: how a call of rows binds block li's history
+// block.
+func (kv *kvCache) Rows(li, nseq int) (cpudev.HistoryBinding, error) {
+	pg := &kv.layers[kv.src[li]]
+	pages, err := kv.table(kv.src[li], nseq)
+	if err != nil {
+		return cpudev.HistoryBinding{}, err
+	}
+	b := cpudev.HistoryBinding{Pages: pages, PagePos: pg.p, Slots: max(pg.arenaSlots(), 1)}
+	b.Keys, b.Values = kvAddrs(pg)
+	for h := 1; h <= kv.nHist(kv.src[li]); h++ {
+		if e := kv.histSlot(kv.src[li], h); e > 0 {
+			if err := kv.bindHist(&b, kv.src[li], h, e, nseq); err != nil {
+				return cpudev.HistoryBinding{}, err
+			}
+		}
+	}
+	if err := kv.bindMore(&b, li, 0, -1, nseq); err != nil {
+		return cpudev.HistoryBinding{}, err
+	}
+	return b, nil
+}
+
+// KeyStart is cpudev.History's: where block li's keys the row at pos reads
+// start.
+func (kv *kvCache) KeyStart(li, pos int) int { return kv.layers[kv.src[li]].keyStart(pos) }
+
+// Spent is cpudev.History's: a history that is its run's alone (spent) lets
+// block li's pages go once its call is done, so a run holds one block's
+// keys at a time.
+func (kv *kvCache) Spent(li int) {
+	kv.peak = max(kv.peak, kv.Bytes())
+	if !kv.spent || kv.src[li] != li {
+		return
+	}
+	pg := &kv.layers[li]
+	pg.dropResident()
+	pg.written = 0
+}
+
+// entryWidth is the floats an entry of a history past its rows' moves as:
+// its keys, and its values after them where they are not its keys.
+func (s *kvPages) entryWidth() int {
+	if s.latent {
+		return s.ew
+	}
+	return 2 * s.ew
+}
+
+// MigrateHistory is cpudev.History's: block li's history hist past its rows,
+// entry j of the pos positions' at slot ((j+1)*period-1)%p/period of the
+// page of position (j+1)*period-1 (composer.History.Period), into or out of
+// e, an entry its keys and, where its values are not its keys, its values
+// after them (kvPages.entryWidth). A binary16 history's rows are narrowed
+// and widened through conv.
+func (kv *kvCache) MigrateHistory(li, hist int, e []float32, pos int, in bool, conv nn.KVConvDevice) bool {
+	sl := kv.histSlot(li, hist)
+	if sl == 0 {
+		return false
+	}
+	s := &kv.layers[sl]
+	w, n := s.ew, pos/s.period
+	if n == 0 {
+		return true
+	}
+	if len(e) < n*s.entryWidth() {
+		return false
+	}
+	if !s.latent {
+		return s.migrateEntries(e, n, pos, in)
+	}
+	el := kvLayout{fmt: s.efmt, nKV: 1, headDim: w}
+	rw := el.slots(w)
+	var h []float32
+	if s.efmt != nn.KVF32 {
+		if conv == nil {
+			return false
+		}
+		h = make([]float32, n*rw)
+	}
+	hb := func() []byte { return unsafe.Slice((*byte)(unsafe.Pointer(&h[0])), len(h)*4) }
+	if in && h != nil && !conv.Convert(true, w, e[:n*w], hb()) {
+		return false
+	}
+	for j := 0; j < n; j++ {
+		q := (j+1)*s.period - 1
+		pg, at := q/s.p, el.slots(q%s.p/s.period*w)
+		row := e[j*w : (j+1)*w]
+		if h != nil {
+			row = h[j*rw : (j+1)*rw]
+		}
+		if in {
+			s.grow(pg)
+			s.cow(pg)
+			copy(s.mem.K(pg)[at:at+rw], row)
+			continue
+		}
+		if !s.resident(pg) {
+			return false
+		}
+		copy(row, s.mem.K(pg)[at:at+rw])
+	}
+	if !in {
+		return h == nil || conv.Convert(false, w, e[:n*w], hb())
+	}
+	s.written = max(s.written, pos)
+	return true
+}
+
+// migrateEntries is MigrateHistory for a history whose values are its own,
+// held at f32: n entries into or out of e, each its keys then its values.
+func (s *kvPages) migrateEntries(e []float32, n, pos int, in bool) bool {
+	w := s.ew
+	for j := 0; j < n; j++ {
+		q := (j+1)*s.period - 1
+		pg, at := q/s.p, q%s.p/s.period*w
+		k, v := e[2*j*w:(2*j+1)*w], e[(2*j+1)*w:(2*j+2)*w]
+		if in {
+			s.grow(pg)
+			s.cow(pg)
+			copy(s.mem.K(pg)[at:at+w], k)
+			copy(s.mem.V(pg)[at:at+w], v)
+			continue
+		}
+		if !s.resident(pg) {
+			return false
+		}
+		copy(k, s.mem.K(pg)[at:at+w])
+		copy(v, s.mem.V(pg)[at:at+w])
+	}
+	if in {
+		s.written = max(s.written, pos)
+	}
+	return true
+}

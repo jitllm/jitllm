@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // testFuncs is every Test function declared in the module's *_test.go files
@@ -155,8 +155,12 @@ func TestManifestIsDerived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Architectures) != len(convert.Architectures()) || len(m.SafetensorsClasses) != len(convert.HFClasses()) ||
-		len(m.Projectors) != len(convert.Projectors()) || len(m.Quantization.Packed) != len(quant.PackedTypes) {
+	names, err := convert.Architectures()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Architectures) != len(names) || len(m.SafetensorsClasses) != len(convert.HFClasses()) ||
+		len(m.Projectors) != len(convert.Projectors()) || len(m.Quantization.Packed) != len(quant.PackedTypes()) {
 		t.Fatal("the manifest's lists are not the converter's")
 	}
 	for _, g := range append(append([]Graph{}, m.Architectures...), m.SafetensorsClasses...) {

@@ -25,10 +25,12 @@ import (
 // It is keyed by hash because the file carries no name and the pattern lives
 // in Python source (tokenization_kimi.py's pat_str): one vocabulary identity
 // pairs with one pattern (RULE 7m). An unlisted hash is refused, naming it.
-var tiktokenPre = map[string]string{
-	// Kimi-K2, Moonlight-16B-A3B and Kimi-Linear-48B-A3B share one file,
-	// checked against the Hub's x-linked-etag for all three.
-	"b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103": "kimi-k2",
+func tiktokenPre(key string) (string, bool) {
+	switch key {
+	case "b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103":
+		return "kimi-k2", true
+	}
+	return "", false
 }
 
 // hfTiktokenVocab builds the container's tokenizer from tiktoken.model and
@@ -40,7 +42,7 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(raw)
-	pre, ok := tiktokenPre[hex.EncodeToString(sum[:])]
+	pre, ok := tiktokenPre(hex.EncodeToString(sum[:]))
 	if !ok {
 		return nil, fmt.Errorf("convert: %s (sha256 %x) is a tiktoken vocabulary this "+
 			"converter has not paired with a pre-tokenizer; its pattern lives in the "+
@@ -72,8 +74,7 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 		v.Tokens[r], v.Kinds[r] = pretok.ByteLevel(t), jlm.TokenNormal
 	}
 
-	// The merges are recovered from the ranks, as llama.cpp's converter does
-	// (QwenModel.bpe): a token of rank r is the merge of the two parts that
+	// The merges are recovered from the ranks: a token of rank r is the merge of the two parts that
 	// BPE with every rank below r leaves it in, and only two can be left.
 	for r, t := range byRank {
 		if len(t) < 2 {
@@ -113,10 +114,10 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	const tiktokenReserved = 256 // TikTokenTokenizer.num_reserved_special_tokens
 	for k := range tc.AddedTokensDecoder {
 		id, err := strconv.Atoi(k)
-		if err == nil && uint32(id) >= nvocab && id >= len(byRank)+tiktokenReserved {
+		if err == nil && id >= int(nvocab) && id >= len(byRank)+tiktokenReserved {
 			continue
 		}
-		if err != nil || id < len(byRank) || uint32(id) >= nvocab {
+		if err != nil || id < len(byRank) || id >= int(nvocab) {
 			return nil, fmt.Errorf("convert: tokenizer_config.json names special %q, "+
 				"outside rows %d..%d", k, len(byRank), nvocab-1)
 		}

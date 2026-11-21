@@ -1,0 +1,129 @@
+package convert
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
+
+// StateSelection states how the blocks' attention selects the history it
+// reads (jlm.Selection), as each reference builds its indexer:
+//
+//   - DeepSeek V3.2's lightning indexer (an MLA model): a LayerNormed key
+//     and a query on the query latent, both turned neox-style, a weight a
+//     head; every position ranked by the relu'd heads' weighted sum, the
+//     IdxTopK best read;
+//   - MiniMax Sparse Attention (IdxBlock): a key and a query each RMS-normed
+//     and turned, one query head per kv group; blocks of IdxBlock positions
+//     ranked by their best, IdxTopK read, the IdxLocal ending at the query's
+//     forced in, on every block past the dense lead;
+//   - Qwen3.8-Flash-Next's QSA (QSARatio): the raw key cached, padded to a
+//     head; the query's heads RMS-normed and turned; blocks of QSARatio
+//     positions ranked by their keys pooled, normed and turned at the
+//     block's first position, IdxTopK/QSARatio read, on every attention
+//     block.
+//
+// The selection covers the trunk and the predict prediction blocks after it.
+// A block selects where it stores the indexer's key. Outside an MLA model
+// the key is cached as one more head of the block's history, so a key of
+// another width, groups that are neither one nor the kv heads, blocks of
+// several geometries or KV sharing are refused here, with the file in front
+// of a person.
+func StateSelection(c *jlm.Config, predict uint32, stores func(r jlm.Role, li int32) bool) error {
+	if c.IdxHeads == 0 || c.NLayer == 0 {
+		return nil
+	}
+	n := c.NLayer + predict
+	id := int32(c.IdxHeadDim)
+	s := &jlm.Selection{Blocks: make([]bool, n), Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, KeyWidth: c.IdxHeadDim,
+		Groups: 1, Rank: jlm.RankBest, Block: 1, Keep: c.IdxTopK}
+	prog := func(nin uint16, ops ...jlm.TowerOp) *jlm.Program {
+		for i := range ops {
+			if ops[i].In == nil {
+				ops[i].In = []uint16{nin + uint16(i) - 1}
+			}
+		}
+		return &jlm.Program{NIn: nin, Ops: ops, Out: nin + uint16(len(ops)) - 1}
+	}
+	on := func(v uint16) []uint16 { return []uint16{v} }
+	linear := func(r jlm.Role) jlm.TowerOp { return jlm.TowerOp{Code: jlm.TOpLinear, Bind: []jlm.Role{r}} }
+	rope := func(layout uint8) jlm.TowerOp { return jlm.TowerOp{Code: jlm.TOpRope, Span: id, Chain: layout} }
+	headNorm := func(r jlm.Role) jlm.TowerOp {
+		return jlm.TowerOp{Code: jlm.TOpRMSNorm, Bind: []jlm.Role{r}, Span: id, Eps: c.RMSEps}
+	}
+	at := func(li uint32) bool { return stores(jlm.RoleIdxK, int32(li)) }
+	weight := func() *jlm.Program {
+		var e jlm.ExprBuilder
+		e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(float32(1/math.Sqrt(float64(c.IdxHeadDim*c.IdxHeads)))))
+		return prog(1, linear(jlm.RoleIdxProj), jlm.TowerOp{Code: jlm.TOpStated, Width: int32(c.IdxHeads), Expr: &jlm.Expr{Terms: e.T}})
+	}
+	switch {
+	case len(c.CompKinds) != 0:
+		// DeepSeek V4's compressed sparse attention: the indexer's key is
+		// the block's entries' own (its compressor pooled beside the
+		// attention's), so no key program; the query on the query latent
+		// turned as the block turns, a weight a head, every visible entry
+		// ranked by the relu'd heads' weighted sum, IdxTopK read.
+		for li := range n {
+			s.Blocks[li] = int(li) < len(c.CompKinds) && c.CompKinds[li] == jlm.CompCSA
+		}
+		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, rope(jlm.RopeAsBlock))
+		s.Weight, s.Relu = weight(), true
+	case c.QSARatio != 0:
+		for li := range n {
+			s.Blocks[li] = at(li) && !(int(li) < len(c.LayerKinds) && c.LayerKinds[li].Recurrent())
+		}
+		s.Key = prog(1, jlm.TowerOp{Code: jlm.TOpLinear, In: on(0), Bind: []jlm.Role{jlm.RoleIdxK}})
+		s.KeyWidth = c.HeadDim
+		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(0), Bind: []jlm.Role{jlm.RoleIdxQ}},
+			headNorm(jlm.RoleIdxQNorm), rope(jlm.RopeAsBlock))
+		s.Rank, s.Block, s.Keep = jlm.RankPooled, c.QSARatio, c.IdxTopK/c.QSARatio
+		s.PoolNorm, s.Eps = jlm.RoleIdxKNorm, c.RMSEps
+	case c.IdxBlock != 0:
+		for li := range n {
+			s.Blocks[li] = at(li) && li >= c.NDenseLead
+		}
+		s.Key = prog(1, jlm.TowerOp{Code: jlm.TOpLinear, In: on(0), Bind: []jlm.Role{jlm.RoleIdxK}},
+			jlm.TowerOp{Code: jlm.TOpRMSNorm, Bind: []jlm.Role{jlm.RoleIdxKNorm}, Eps: c.RMSEps}, rope(jlm.RopeAsBlock))
+		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(0), Bind: []jlm.Role{jlm.RoleIdxQ}},
+			headNorm(jlm.RoleIdxQNorm), rope(jlm.RopeAsBlock))
+		s.Groups, s.Block, s.Local = c.IdxHeads, c.IdxBlock, c.IdxLocal
+	case c.KVLoraRank != 0:
+		for li := range n {
+			s.Blocks[li] = at(li)
+		}
+		// The key's LayerNorm is nn.LayerNorm's default epsilon.
+		s.Key = prog(1, jlm.TowerOp{Code: jlm.TOpLinear, In: on(0), Bind: []jlm.Role{jlm.RoleIdxK}},
+			jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: []jlm.Role{jlm.RoleIdxKNorm, jlm.RoleIdxKNormB}, Eps: 1e-6},
+			rope(jlm.RopeNeox))
+		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, rope(jlm.RopeNeox))
+		s.Weight, s.Relu = weight(), true
+	default:
+		return nil
+	}
+	if err := selectionFits(c, s); err != nil {
+		return err
+	}
+	c.Selection = s
+	return nil
+}
+
+// selectionFits refuses a non-MLA selection whose key is not one head of
+// the history it is cached in.
+func selectionFits(c *jlm.Config, s *jlm.Selection) error {
+	if c.KVLoraRank != 0 {
+		return nil
+	}
+	mixed := false
+	for b := range int(c.NLayer) {
+		g := c.GeomAt(b)
+		mixed = mixed || g.HeadDim != c.HeadDim || g.NKVHead != c.NKVHead || g.NRot != c.NRot
+	}
+	if s.KeyWidth != c.HeadDim || s.Groups != 1 && s.Groups != c.NKVHead || mixed || c.NKVShared != 0 {
+		return fmt.Errorf("convert: the model selects with %d group(s) of keys %d wide over %d kv heads of %d "+
+			"(blocks of several geometries %v, %d sharing their KV): the key is cached as one head of the "+
+			"history: %w", s.Groups, s.KeyWidth, c.NKVHead, c.HeadDim, mixed, c.NKVShared, ErrNotImplemented)
+	}
+	return nil
+}

@@ -46,9 +46,14 @@ func qwen35File(arch string) *meta.File {
 	add("blk.0.post_attention_norm.weight", small, embd)
 	add("blk.0.attn_qkv.weight", small, embd, uint64(chans))
 	add("blk.0.attn_gate.weight", small, embd, nv*vdim)
-	// Row vh of beta is the constant 100+vh, of alpha 200+vh.
-	add("blk.0.ssm_beta.weight", func(i int) float32 { return float32(100 + i/embd) }, embd, nv)
-	add("blk.0.ssm_alpha.weight", func(i int) float32 { return float32(200 + i/embd) }, embd, nv)
+	// Row vh of beta is the constant 100+vh, of alpha 200+vh. qwen3next's
+	// loader reads them joined (ssm_ba), as its files store them.
+	if arch == "qwen3next" {
+		add("blk.0.ssm_ba.weight", small, embd, 2*nv)
+	} else {
+		add("blk.0.ssm_beta.weight", func(i int) float32 { return float32(100 + i/embd) }, embd, nv)
+		add("blk.0.ssm_alpha.weight", func(i int) float32 { return float32(200 + i/embd) }, embd, nv)
+	}
 	add("blk.0.ssm_conv1d.weight", small, conv, uint64(chans))
 	add("blk.0.ssm_a", small, nv)
 	add("blk.0.ssm_dt.bias", small, nv)
@@ -99,17 +104,14 @@ func qwen35File(arch string) *meta.File {
 // run: stacking beta above alpha, or pairing a head's beta with the next
 // head's alpha, has the right shape and decays at another head's rate.
 func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
-	s, err := sourceOf(qwen35File("qwen35"))
+	s, err := sourceOf(qwen35File("qwen35"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := s.Config
-	if c.Arch != jlm.ArchQwen3Next {
-		t.Fatalf("arch %v, want qwen3next's graph", c.Arch)
-	}
-	if c.NLayer != 1 || c.NMTP != 1 {
-		t.Fatalf("NLayer %d, NMTP %d: the MTP block must be one prediction block past a one-block trunk",
-			c.NLayer, c.NMTP)
+	if np := predictionBlocks(c, s.Tensors); c.NLayer != 1 || np != 1 {
+		t.Fatalf("NLayer %d, %d prediction blocks: the MTP block must be one prediction block past a one-block trunk",
+			c.NLayer, np)
 	}
 	mtp := map[jlm.Role]bool{}
 	for i := range s.Tensors {
@@ -117,8 +119,8 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 			mtp[e.Role] = true
 		}
 	}
-	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RoleNextnEHProj, jlm.RoleNextnENorm,
-		jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm} {
+	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RolePredictProj, jlm.RolePredictTokenNorm,
+		jlm.RolePredictHiddenNorm, jlm.RolePredictHeadNorm} {
 		if !mtp[r] {
 			t.Fatalf("the prediction block lost its %v", r)
 		}
@@ -157,9 +159,9 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 		}
 	}
 
-	// The same file under qwen3next's name is grouped: llama.cpp's qwen3next
-	// converter does not reorder, so the flag is about the qwen35 converter.
-	g, err := sourceOf(qwen35File("qwen3next"))
+	// The same file under qwen3next's name is grouped: a qwen3next GGUF is
+	// not reordered, so the flag is about the qwen35 file.
+	g, err := sourceOf(qwen35File("qwen3next"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,19 +170,22 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 	}
 }
 
-// TestQwen35RefusesAnUnpairedGate: an alpha with no beta was skipped by the
-// fuse and must not vanish silently.
+// TestQwen35RefusesAnUnpairedGate: a block storing beta or alpha without the
+// other is refused by the join, naming the one it lacks, rather than losing a
+// layer's decay gate.
 func TestQwen35RefusesAnUnpairedGate(t *testing.T) {
-	f := qwen35File("qwen35")
-	var keep []meta.Tensor
-	for _, tt := range f.Tensors {
-		if tt.Name != "blk.0.ssm_beta.weight" {
-			keep = append(keep, tt)
+	for _, gone := range []string{"ssm_beta", "ssm_alpha"} {
+		f := qwen35File("qwen35")
+		var keep []meta.Tensor
+		for _, tt := range f.Tensors {
+			if tt.Name != "blk.0."+gone+".weight" {
+				keep = append(keep, tt)
+			}
 		}
-	}
-	f.Tensors = keep
-	f.Reindex()
-	if _, err := sourceOf(f); err == nil || !strings.Contains(err.Error(), "ssm_alpha") {
-		t.Fatalf("an alpha without its beta converted (err %v)", err)
+		f.Tensors = keep
+		f.Reindex()
+		if _, err := sourceOf(f, nil); err == nil || !strings.Contains(err.Error(), gone) {
+			t.Errorf("a block without its %s converted (err %v)", gone, err)
+		}
 	}
 }

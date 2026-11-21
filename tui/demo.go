@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/server/client"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -38,7 +39,7 @@ type demoOptions struct {
 const defaultDemoPrompt = "Write a long, detailed story about a lighthouse keeper who finds a message in a bottle. Take your time and keep going."
 
 // The scripted run moves the blocks when the reply reaches these tokens.
-var autoMoveTokens = [...]int{80, 160}
+func autoMoveTokens() []int { return []int{80, 160} }
 
 const (
 	rateWindow = 250 * time.Millisecond // one sparkline sample
@@ -52,6 +53,14 @@ type moveReq struct {
 	First, Last int
 	To          string // a device id; hostID when Home
 	Home        bool
+}
+
+// device is the device the request names: the CPU when Home.
+func (r moveReq) device() string {
+	if r.Home {
+		return nn.CPU
+	}
+	return r.To
 }
 
 // moveInfo is a finished move as the banner tells it.
@@ -154,7 +163,7 @@ func newDemo(ctx context.Context, c *client.Conn, opt demoOptions) (*demo, error
 	}
 	d := &demo{c: c, opt: opt, sid: cs.Msg.GetSession().GetSessionId(), modelName: info.GetName(), chat: info.GetChatCapable(),
 		devices: info.GetDefaultDeviceIds(), maxSeq: int(cs.Msg.GetSession().GetMaxSeq()),
-		slides: map[int]slide{}, events: make(chan tea.Msg, 64), auto: opt.Auto, moveAt: autoMoveTokens[:]}
+		slides: map[int]slide{}, events: make(chan tea.Msg, 64), auto: opt.Auto, moveAt: autoMoveTokens()}
 	if opt.Prompt == "" {
 		d.opt.Prompt = defaultDemoPrompt
 	}
@@ -386,7 +395,7 @@ func (d *demo) relocate(r moveReq) tea.Cmd {
 		before := prefilled()
 		t0 := time.Now()
 		resp, err := c.Placement.RelocateBlocks(ctx, connect.NewRequest(&v1.RelocateBlocksRequest{
-			SessionId: sid, FirstBlock: int32(r.First), LastBlock: int32(r.Last), ToDeviceId: r.To, ToHost: r.Home}))
+			SessionId: sid, FirstBlock: int32(r.First), LastBlock: int32(r.Last), ToDeviceId: r.device()}))
 		took := time.Since(t0)
 		info := moveInfo{From: from, To: to, First: r.First, Last: r.Last, AtToken: atToken, Took: took,
 			Recomputed: prefilled() - before, Err: err}
@@ -572,7 +581,7 @@ const (
 
 func (d *demo) View() string {
 	if d.w < 60 || d.h < 24 {
-		return sDim.Render("the relocation demo wants a terminal of at least 60 x 24")
+		return sDim().Render("the relocation demo wants a terminal of at least 60 x 24")
 	}
 	bodyH := d.h - 1 - bannerRows - 2
 	leftW := max(34, d.w*2/5)
@@ -589,9 +598,9 @@ func (d *demo) View() string {
 }
 
 func (d *demo) header() string {
-	l := sBrand.Render("jitllm") + sDim.Render(" · live relocation · ") + sFg.Render(strings.TrimSuffix(d.modelName, ".jlm")) +
-		sDim.Render(" · "+d.c.Base)
-	state := sDim.Render("idle")
+	l := sBrand().Render("jitllm") + sDim().Render(" · live relocation · ") + sFg().Render(strings.TrimSuffix(d.modelName, ".jlm")) +
+		sDim().Render(" · "+d.c.Base)
+	state := sDim().Render("idle")
 	if d.generating {
 		state = lipgloss.NewStyle().Foreground(cBrand).Render("● streaming")
 	}
@@ -602,10 +611,10 @@ func (d *demo) replyPanel(w, h int) string {
 	iw, ih := inner(w, h)
 	text := d.reply.String()
 	if text == "" {
-		text = sDim.Render("g starts a reply · a runs the scripted demo")
+		text = sDim().Render("g starts a reply · a runs the scripted demo")
 	}
 	if d.genErr != nil && !errors.Is(d.genErr, context.Canceled) {
-		text += "\n" + sErr.Render(d.genErr.Error())
+		text += "\n" + sErr().Render(d.genErr.Error())
 	}
 	wrapped := strings.Split(lipgloss.NewStyle().Width(iw).Foreground(cFg).Render(text), "\n")
 	if len(wrapped) > ih {
@@ -618,21 +627,21 @@ func (d *demo) replyPanel(w, h int) string {
 func (d *demo) ratePanel(w, h int) string {
 	iw, _ := inner(w, h)
 	last, peak, mean := rateStats(d.rates)
-	head := sBrand.Render(fmt.Sprintf("%.1f", last)) + sDim.Render(" tok/s") +
-		sDim.Render(fmt.Sprintf("   peak %.1f   mean %.1f", peak, mean))
+	head := sBrand().Render(fmt.Sprintf("%.1f", last)) + sDim().Render(" tok/s") +
+		sDim().Render(fmt.Sprintf("   peak %.1f   mean %.1f", peak, mean))
 	if len(d.rates) == 0 {
-		head = sDim.Render("decode rate appears with the first tokens")
+		head = sDim().Render("decode rate appears with the first tokens")
 	}
 	return panel("decode tok/s", head+"\n"+sparkline(d.rates, d.marks, iw, sparkRows), w, h, cBlue)
 }
 
 func (d *demo) footer() string {
-	keys := sDim.Render("m") + sMuted.Render(" next device  ") + sDim.Render("h") + sMuted.Render(" home  ") +
-		sDim.Render("1-9") + sMuted.Render(" block group  ") + sDim.Render("a") + sMuted.Render(" demo  ") +
-		sDim.Render("g") + sMuted.Render(" reply  ") + sDim.Render("s") + sMuted.Render(" stop  ") + sDim.Render("q") + sMuted.Render(" quit")
-	proof := sDim.Render(fmt.Sprintf("prompt rows recomputed across %d move(s): ", d.moves)) +
-		sBrand.Render(fmt.Sprint(d.recomputed)) +
-		sDim.Render(fmt.Sprintf(" · position %d of %d", d.pos, d.maxSeq))
+	keys := sDim().Render("m") + sMuted().Render(" next device  ") + sDim().Render("h") + sMuted().Render(" home  ") +
+		sDim().Render("1-9") + sMuted().Render(" block group  ") + sDim().Render("a") + sMuted().Render(" demo  ") +
+		sDim().Render("g") + sMuted().Render(" reply  ") + sDim().Render("s") + sMuted().Render(" stop  ") + sDim().Render("q") + sMuted().Render(" quit")
+	proof := sDim().Render(fmt.Sprintf("prompt rows recomputed across %d move(s): ", d.moves)) +
+		sBrand().Render(fmt.Sprint(d.recomputed)) +
+		sDim().Render(fmt.Sprintf(" · position %d of %d", d.pos, d.maxSeq))
 	if d.note != "" {
 		proof = lipgloss.NewStyle().Foreground(cOrange).Render(d.note)
 	}
@@ -697,12 +706,12 @@ func banner(m *moveInfo, pending *moveReq, blocks []mapBlock, w, h int) string {
 	if pending != nil {
 		to := columnLabel(pending.To)
 		body := lipgloss.NewStyle().Foreground(cOrange).Bold(true).Render("moving") +
-			sFg.Render(fmt.Sprintf(" blocks %s to %s", span(pending.First, pending.Last), to)) +
-			sDim.Render("  waiting for the service")
+			sFg().Render(fmt.Sprintf(" blocks %s to %s", span(pending.First, pending.Last), to)) +
+			sDim().Render("  waiting for the service")
 		return panel("move", body, w, h, cOrange)
 	}
 	if m == nil {
-		return panel("move", sDim.Render("nothing moved yet. m moves the device blocks to the next device, h brings them home."), w, h, cLine)
+		return panel("move", sDim().Render("nothing moved yet. m moves the device blocks to the next device, h brings them home."), w, h, cLine)
 	}
 	if m.Err != nil {
 		iw, _ := inner(w, h)
@@ -710,12 +719,12 @@ func banner(m *moveInfo, pending *moveReq, blocks []mapBlock, w, h int) string {
 	}
 	r := m.Resp
 	arrow := lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render(" → ")
-	l1 := sBold.Render(columnLabel(m.From)) + arrow + sBold.Render(columnLabel(m.To)) +
-		sDim.Render("   blocks ") + sFg.Render(fmt.Sprintf("%s (%d moved)", span(m.First, m.Last), r.GetBlocksMoved())) +
-		sDim.Render("   history moved ") + sFg.Render(session.Bytes(r.GetHistory().GetBytes())) +
-		sDim.Render("   ") + pauseText(r, m.Took)
+	l1 := sBold().Render(columnLabel(m.From)) + arrow + sBold().Render(columnLabel(m.To)) +
+		sDim().Render("   blocks ") + sFg().Render(fmt.Sprintf("%s (%d moved)", span(m.First, m.Last), r.GetBlocksMoved())) +
+		sDim().Render("   history moved ") + sFg().Render(session.Bytes(r.GetHistory().GetBytes())) +
+		sDim().Render("   ") + pauseText(r, m.Took)
 	if m.AtToken > 0 {
-		l1 += sDim.Render(fmt.Sprintf("   at token %d", m.AtToken))
+		l1 += sDim().Render(fmt.Sprintf("   at token %d", m.AtToken))
 	}
 	path := "host cache"
 	switch r.GetPath() {
@@ -730,15 +739,15 @@ func banner(m *moveInfo, pending *moveReq, blocks []mapBlock, w, h int) string {
 	if r.GetHeadMoved() {
 		head = "yes"
 	}
-	l2 := sDim.Render("path ") + sFg.Render(path)
+	l2 := sDim().Render("path ") + sFg().Render(path)
 	if c := r.GetCopied().GetBytes(); c > 0 {
-		l2 += sDim.Render("   copied ") + sFg.Render(session.Bytes(c))
+		l2 += sDim().Render("   copied ") + sFg().Render(session.Bytes(c))
 	}
-	l2 += sDim.Render("   prompt rows recomputed ") + sBrand.Render(fmt.Sprint(m.Recomputed)) +
-		sDim.Render("   projection moved ") + sFg.Render(head)
+	l2 += sDim().Render("   prompt rows recomputed ") + sBrand().Render(fmt.Sprint(m.Recomputed)) +
+		sDim().Render("   projection moved ") + sFg().Render(head)
 	l3 := ""
 	if n := r.GetStagedBlocks(); n > 0 {
-		l3 = sDim.Render(fmt.Sprintf("%d block(s) prepared in %d ms while the reply kept decoding", n, r.GetPrepareMillis()))
+		l3 = sDim().Render(fmt.Sprintf("%d block(s) prepared in %d ms while the reply kept decoding", n, r.GetPrepareMillis()))
 	}
 	for _, dec := range r.GetDeclined() {
 		l3 += "  " + lipgloss.NewStyle().Foreground(cOrange).Render(fmt.Sprintf("block %d declined: %s", dec.GetBlockIndex(), dec.GetReason()))
@@ -750,9 +759,9 @@ func banner(m *moveInfo, pending *moveReq, blocks []mapBlock, w, h int) string {
 // service reports no pause (a move between the host and a device).
 func pauseText(r *v1.RelocateBlocksResponse, took time.Duration) string {
 	if us := r.GetPauseMicros(); us > 0 {
-		return sDim.Render("paused ") + sBrand.Render(fmt.Sprintf("%.1f ms", float64(us)/1000))
+		return sDim().Render("paused ") + sBrand().Render(fmt.Sprintf("%.1f ms", float64(us)/1000))
 	}
-	return sDim.Render("took ") + sFg.Render(fmt.Sprintf("%d ms", max(r.GetMillis(), took.Milliseconds())))
+	return sDim().Render("took ") + sFg().Render(fmt.Sprintf("%d ms", max(r.GetMillis(), took.Milliseconds())))
 }
 
 func span(first, last int) string {

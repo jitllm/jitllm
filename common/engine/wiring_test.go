@@ -3,22 +3,23 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/model"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/engine"
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
-// loadFor opens modelPath on a fresh engine with the given setup applied first.
+// loadFor opens modelPath() on a fresh engine with the given setup applied first.
 func loadFor(t *testing.T, setup func(*testStore)) (*Engine, *testShell) {
 	t.Helper()
-	fresh.Must(t, modelPath)
-	if _, err := os.Stat(modelPath); err != nil {
+	fresh.Must(t, modelPath())
+	if _, err := os.Stat(modelPath()); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}
 	sh := newTestShell()
@@ -27,7 +28,7 @@ func loadFor(t *testing.T, setup func(*testStore)) (*Engine, *testShell) {
 	}
 	e := New(sh, sh.state())
 	t.Cleanup(e.Close)
-	e.Load(modelPath)
+	e.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the load to finish", func() bool { return !sh.Store.Busy.Get() })
 	return e, sh
 }
@@ -67,7 +68,7 @@ func TestRelocationFollowsTheDeviceChoice(t *testing.T) {
 		e.Send(session.ChatRequest{Prompt: "Once upon a time", Reply: reply, MaxTokens: 4})
 		pump(t, sh, 90*time.Second, "the turn", func() bool { return !sh.Store.Busy.Get() })
 		var got bool
-		e.inspect(func(st *model.State) { got = st.Relocating() })
+		e.inspect(func(st *engine.Instance) { got = st.Relocating() })
 		if got != tc.want {
 			t.Errorf("devices %q: relocation %v after a turn, want %v", tc.spec, got, tc.want)
 		}
@@ -85,7 +86,7 @@ func TestAMissingDeviceLeavesNothingLooksLoaded(t *testing.T) {
 	}
 	// Re-loading an open model under another device choice re-opens it there.
 	sh.Store.DeviceSpec.Set("cuda:9")
-	e.Load(modelPath)
+	e.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the switch to fail", func() bool {
 		return !sh.Store.Busy.Get() && sh.Store.Problem.Get().Seq != 0
 	})
@@ -125,11 +126,12 @@ func TestALoadThatWorksClearsTheProblem(t *testing.T) {
 func TestThePlacementSettingReachesTheLoad(t *testing.T) {
 	_, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu"); st.Placement.Set("*=host") })
 	if !sh.Store.Loaded.Get() {
-		t.Fatal("a host-only placement did not load")
+		p := sh.Store.Problem.Get()
+		t.Fatalf("a CPU-only placement did not load: %s: %s", p.Title, p.Detail)
 	}
 	e, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu") })
 	sh.Store.Placement.Set("0=cuda:0")
-	e.Load(modelPath)
+	e.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the placement to be refused", func() bool {
 		return !sh.Store.Busy.Get() && sh.Store.Problem.Get().Seq != 0
 	})

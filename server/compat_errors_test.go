@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/model"
 )
 
 // The compat shims' refusal and failure paths. A client library dispatches on
@@ -148,6 +150,7 @@ func TestABackendErrorBecomesTheStatusAClientActsOn(t *testing.T) {
 		{fmt.Errorf("%w: session %q", ErrNotFound, "s"), 404, "invalid_request_error", "not_found_error"},
 		{ErrQueueTimeout, 429, "rate_limit_error", "overloaded_error"},
 		{fmt.Errorf("%w: no prompt", ErrInvalid), 400, "invalid_request_error", "invalid_request_error"},
+		{chatErr(&model.SystemRoleError{}), 400, "invalid_request_error", "invalid_request_error"},
 		{errors.New("the card fell off the bus"), 500, "server_error", "api_error"},
 	} {
 		for _, path := range []string{oaChat, oaText, anMsgs} {

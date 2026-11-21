@@ -63,7 +63,9 @@ func (f *File) Close() error {
 	if f.CloseFn == nil {
 		return nil
 	}
-	return f.CloseFn()
+	err := f.CloseFn()
+	f.Data, f.CloseFn = nil, nil
+	return err
 }
 
 // Size is the mapped file size.
@@ -194,8 +196,6 @@ func (f *File) TensorBytes() uint64 {
 	}
 	return n
 }
-
-func alignUp(v, a uint64) uint64 { return (v + a - 1) &^ (a - 1) }
 
 // Arch is general.architecture: "llama", "gemma", "bert", ...
 // Every hyperparameter key is namespaced under it.

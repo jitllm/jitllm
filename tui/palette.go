@@ -37,10 +37,10 @@ const paletteRows = 12
 func newPalette(r *root) *palette {
 	in := textinput.New()
 	in.Placeholder = "Type a command…"
-	in.Prompt = sBrand.Render("❯ ")
-	in.PlaceholderStyle = sDim
-	in.TextStyle = sFg
-	in.Cursor.Style = sBrand
+	in.Prompt = sBrand().Render("❯ ")
+	in.PlaceholderStyle = sDim()
+	in.TextStyle = sFg()
+	in.Cursor.Style = sBrand()
 	p := &palette{in: in, all: actions(r), keys: paletteKeys{
 		Up:    bind("↑", "up", "up", "ctrl+p"),
 		Down:  bind("↓", "down", "down", "ctrl+n"),
@@ -152,7 +152,7 @@ func (p *palette) Update(r *root, msg tea.Msg) tea.Cmd {
 
 func (p *palette) View(w int) string {
 	w = min(72, w-8)
-	frame := sCard.GetHorizontalFrameSize()
+	frame := sCard().GetHorizontalFrameSize()
 	iw := w - frame
 	var b strings.Builder
 	b.WriteString(p.in.View() + "\n")
@@ -167,12 +167,12 @@ func (p *palette) View(w int) string {
 			b.WriteString(lipgloss.NewStyle().Foreground(cBg).Background(cBrand).Bold(true).Width(iw).
 				Render(fmt.Sprintf("%-8s%s%s%s", a.group, title, pad, keys)) + "\n")
 		} else {
-			b.WriteString(lipgloss.NewStyle().Width(8).Foreground(cDim).Render(a.group) + sFg.Render(title) + pad + sDim.Render(keys) + "\n")
+			b.WriteString(lipgloss.NewStyle().Width(8).Foreground(cDim).Render(a.group) + sFg().Render(title) + pad + sDim().Render(keys) + "\n")
 		}
 	}
 	if len(p.shown) == 0 {
-		b.WriteString(sDim.Render("nothing matches") + "\n")
+		b.WriteString(sDim().Render("nothing matches") + "\n")
 	}
-	return sCard.BorderForeground(cBrand).Background(cPanel).Width(w - sCard.GetHorizontalBorderSize()).
+	return sCard().BorderForeground(cBrand).Background(cPanel).Width(w - sCard().GetHorizontalBorderSize()).
 		Render(strings.TrimRight(b.String(), "\n"))
 }

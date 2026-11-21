@@ -2,10 +2,13 @@
 """Encode a fixed corpus with Moonshot's own tokenizer and write the ids.
 
 The authority for a Kimi model's tokenization is tokenization_kimi.py: a
-tiktoken Encoding over tiktoken.model with the pat_str in that file, and
-specials matched literally (allowed_special="all"). This runs that class
-itself, so the golden is the reference's behaviour rather than a
-re-implementation of it.
+tiktoken Encoding over tiktoken.model with the pat_str in that file. Its
+encode matches specials written in the text by default
+(allow_special_tokens=True, allowed_special="all"), and reads them as
+characters with allow_special_tokens=False (disallowed_special=()): "ids"
+is the first, which tok.Vocab.EncodeSpecial answers, and "plain" the
+second, tok.Vocab.Encode's. This runs that class itself, so the golden is
+the reference's behaviour rather than a re-implementation of it.
 
     $JITLLM_HF_PY scripts/tiktokgold.py \
         models/Kimi-Linear-48B-A3B-Instruct > tok/testdata/kimi_tiktoken.json
@@ -32,6 +35,6 @@ corpus = [
     "ſ K 'ſ 'K",
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 ]
-out = [{"text": t, "ids": tk.encode(t)} for t in corpus]
+out = [{"text": t, "ids": tk.encode(t), "plain": tk.encode(t, allow_special_tokens=False)} for t in corpus]
 json.dump({"source": "tokenization_kimi.TikTokenTokenizer over tiktoken.model sha256 b6c497a7...",
            "cases": out}, sys.stdout, ensure_ascii=False, indent=1)

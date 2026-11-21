@@ -1,6 +1,9 @@
 package engine
 
-import "github.com/jitllm/jitllm/common/session"
+import (
+	"github.com/jitllm/jitllm/common/crash"
+	"github.com/jitllm/jitllm/common/session"
+)
 
 // Front is the front end the engine reports to. Every method is safe from any
 // goroutine; Post is the way onto the front end's own goroutine, and the
@@ -27,6 +30,8 @@ type Front interface {
 	SetTurn(i int, t session.Turn)
 	// SetThinkOpen opens or folds turn i's reasoning.
 	SetThinkOpen(i int, open bool)
+	// Crashes is where a panic in a command is reported.
+	Crashes() *crash.Guard
 }
 
 // State is the shared state the engine reads and writes. The front end owns
@@ -54,6 +59,10 @@ type State struct {
 	Vision       session.Value[bool]
 	Chat         session.Value[bool]
 	ChatCapable  session.Value[bool]
+	// Own is the open model's stated draw as settings (Own set), what the
+	// knobs show while the settings are the model's own; none (Own false)
+	// where the model states none or the service does not say.
+	Own session.Value[session.Sampling]
 
 	PromptTokS  session.Value[float64]
 	DecodeTokS  session.Value[float64]

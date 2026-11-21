@@ -7,7 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/internal/offheap"
+	"github.com/jitllm/jitllm/sched"
 
 	"syscall"
 	"testing"
@@ -90,13 +91,53 @@ func hugeAdvised(t *testing.T, b []byte) bool {
 // of a page-aligned word-line has one node for every word of a tensor whose row
 // count is a multiple of 2048. Asked of the kernel, page by page, on a real
 // two-node host; a one-node host has no second node to alternate with.
+//
+// The interleave names the node a page prefers. A node below its low watermark
+// hands the page to the other (zone_reclaim_mode 0; numastat's numa_miss),
+// which a box whose page cache fills both nodes does at random, so each attempt
+// gives both nodes room first and a miss says how much room its node had. A
+// frame without the policy, or with one node in its mask, misses at page 1 on
+// every attempt.
 func TestInterleaveFollowsThePageAddress(t *testing.T) {
 	if _, err := os.Stat("/sys/devices/system/node/node1"); err != nil {
 		t.Skip("one NUMA node: nothing to interleave over")
 	}
+	var misses []string
+	for attempt := 1; attempt <= 5; attempt++ {
+		c, miss := interleaveMiss(t)
+		if miss == "" {
+			t.Logf("4096 pages, node = (addr>>12 + %d) mod 2 on every one, attempt %d", c, attempt)
+			return
+		}
+		misses = append(misses, miss)
+	}
+	t.Fatalf("every attempt put a page off its node:\n%s", strings.Join(misses, "\n"))
+}
+
+// interleaveMiss maps a frame as Frames.buf maps one, interleaves it over
+// nodes 0 and 1, gives each node room (a mapping bound to it, touched and
+// given back) and faults the frame in. It returns the offset c and, if a page
+// is off node (addr>>12 + c) mod 2, which.
+func interleaveMiss(t *testing.T) (int, string) {
+	t.Helper()
 	const pages = 4096
-	b := alignedBuf(pages * 4096)
+	b, mapped, err := offheap.MapOffHeap(pages * 4096)
+	if err != nil || !mapped {
+		t.Fatalf("MapOffHeap: mapped %v, %v", mapped, err)
+	}
+	defer offheap.UnmapOffHeap(b)
 	placeMemory(b, true, []uint64{3})
+	for node := range 2 {
+		room, mapped, err := offheap.MapOffHeap(256 << 20)
+		if err != nil || !mapped {
+			t.Fatalf("MapOffHeap: mapped %v, %v", mapped, err)
+		}
+		bindNode(room, []uint64{1 << node})
+		for i := 0; i < len(room); i += 4096 {
+			room[i] = 1
+		}
+		offheap.UnmapOffHeap(room)
+	}
 	for i := 0; i < len(b); i += 4096 {
 		b[i] = 1 // fault every page in under the policy
 	}
@@ -112,9 +153,32 @@ func TestInterleaveFollowsThePageAddress(t *testing.T) {
 			c = n ^ want
 		}
 		if n != want^c {
-			t.Fatalf("page %d is on node %d; pages %d..%d alternated as (addr>>12 + %d) mod 2",
-				i, n, 0, i-1, c)
+			return c, fmt.Sprintf("page %d is on node %d; pages 0..%d alternated as (addr>>12 + %d) mod 2; node %d %s",
+				i, n, i-1, c, n^1, zoneRoom(n^1))
 		}
 	}
-	t.Logf("%d pages, node = (addr>>12 + %d) mod 2 on every one", pages, c)
+	return c, ""
+}
+
+// zoneRoom is a node's Normal zone's free pages against its low watermark, as
+// /proc/zoneinfo has them now.
+func zoneRoom(node int) string {
+	raw, err := os.ReadFile("/proc/zoneinfo")
+	if err != nil {
+		return err.Error()
+	}
+	in := false
+	free, low := "?", "?"
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		switch {
+		case len(f) == 4 && f[0] == "Node" && f[2] == "zone":
+			in = f[1] == fmt.Sprintf("%d,", node) && f[3] == "Normal"
+		case in && len(f) == 3 && f[0] == "pages" && f[1] == "free":
+			free = f[2]
+		case in && len(f) == 2 && f[0] == "low":
+			low = f[1]
+		}
+	}
+	return fmt.Sprintf("has %s free pages, low watermark %s", free, low)
 }

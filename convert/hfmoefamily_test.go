@@ -13,7 +13,7 @@ import (
 // TestMixtureFamiliesConvertAlikeFromEitherInput holds each mixture family's
 // two inputs to one container. scripts/moegold.py saves one fixture with the
 // family's own class (safetensors, linked as <name>-hf) and writes the same
-// weights to GGUF with llama.cpp's converter, every tensor F32 -- so the two
+// weights to GGUF with convert_hf_to_gguf.py, every tensor F32 -- so the two
 // converters must agree on every config field this gate names and on every
 // tensor BYTE for byte: a role, a squeeze, a fold or a rotary base that one
 // path gets and the other does not is a difference here, where the transformers
@@ -36,7 +36,8 @@ func TestMixtureFamiliesConvertAlikeFromEitherInput(t *testing.T) {
 				name string
 				x, y any
 			}{
-				{"Arch", ca.Arch, cb.Arch}, {"NLayer", ca.NLayer, cb.NLayer}, {"NMTP", ca.NMTP, cb.NMTP},
+				{"NLayer", ca.NLayer, cb.NLayer},
+				{"prediction blocks", predictionBlocks(ca, a.Tensors), predictionBlocks(cb, b.Tensors)},
 				{"NEmbd", ca.NEmbd, cb.NEmbd}, {"NHead", ca.NHead, cb.NHead}, {"NKVHead", ca.NKVHead, cb.NKVHead},
 				{"HeadDim", ca.HeadDim, cb.HeadDim}, {"NRot", ca.NRot, cb.NRot}, {"NFFN", ca.NFFN, cb.NFFN},
 				{"NVocab", ca.NVocab, cb.NVocab}, {"RMSEps", ca.RMSEps, cb.RMSEps},

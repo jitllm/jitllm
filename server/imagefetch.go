@@ -46,9 +46,9 @@ const imageFetchHeaderBytes = 64 << 10
 
 // errImageFetchOff is a remote picture on a server that lists no host to
 // fetch from.
-var errImageFetchOff = errors.New("names a picture by a remote URL, and this server does not fetch " +
+const errImageFetchOff serverError = "names a picture by a remote URL, and this server does not fetch " +
 	"remote images: send it inline (base64), or start the server with the hosts it may fetch from " +
-	"(jitllmd -image-fetch-allow host1,host2; server.Config.Images.FetchAllow)")
+	"(jitllmd -image-fetch-allow host1,host2; server.Config.Images.FetchAllow)"
 
 // normHost is a host name as the allow-list compares it: lower case, IDNA's
 // ASCII form, no trailing dot. An IP literal is its canonical text.
@@ -228,36 +228,38 @@ func pfx4(a, b, c, d byte, bits int) netip.Prefix {
 // unspecified, loopback, IPv4-mapped, both NAT64 prefixes, discard-only, the
 // IETF protocol block (Teredo inside it), documentation, 6to4, unique-local,
 // link-local and multicast.
-var deniedPrefixes = []netip.Prefix{
-	pfx4(0, 0, 0, 0, 8),
-	pfx4(10, 0, 0, 0, 8),
-	pfx4(100, 64, 0, 0, 10),
-	pfx4(127, 0, 0, 0, 8),
-	pfx4(169, 254, 0, 0, 16),
-	pfx4(172, 16, 0, 0, 12),
-	pfx4(192, 0, 0, 0, 24),
-	pfx4(192, 0, 2, 0, 24),
-	pfx4(192, 88, 99, 0, 24),
-	pfx4(192, 168, 0, 0, 16),
-	pfx4(198, 18, 0, 0, 15),
-	pfx4(198, 51, 100, 0, 24),
-	pfx4(203, 0, 113, 0, 24),
-	pfx4(224, 0, 0, 0, 4),
-	pfx4(240, 0, 0, 0, 4),
-	pfx4(255, 255, 255, 255, 32),
-	netip.MustParsePrefix("::/128"),
-	netip.MustParsePrefix("::1/128"),
-	netip.MustParsePrefix("::ffff:0:0/96"),
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("100::/64"),
-	netip.MustParsePrefix("2001::/23"),
-	netip.MustParsePrefix("2001::/32"),
-	netip.MustParsePrefix("2001:db8::/32"),
-	netip.MustParsePrefix("2002::/16"),
-	netip.MustParsePrefix("fc00::/7"),
-	netip.MustParsePrefix("fe80::/10"),
-	netip.MustParsePrefix("ff00::/8"),
+func deniedPrefixes() []netip.Prefix {
+	return []netip.Prefix{
+		pfx4(0, 0, 0, 0, 8),
+		pfx4(10, 0, 0, 0, 8),
+		pfx4(100, 64, 0, 0, 10),
+		pfx4(127, 0, 0, 0, 8),
+		pfx4(169, 254, 0, 0, 16),
+		pfx4(172, 16, 0, 0, 12),
+		pfx4(192, 0, 0, 0, 24),
+		pfx4(192, 0, 2, 0, 24),
+		pfx4(192, 88, 99, 0, 24),
+		pfx4(192, 168, 0, 0, 16),
+		pfx4(198, 18, 0, 0, 15),
+		pfx4(198, 51, 100, 0, 24),
+		pfx4(203, 0, 113, 0, 24),
+		pfx4(224, 0, 0, 0, 4),
+		pfx4(240, 0, 0, 0, 4),
+		pfx4(255, 255, 255, 255, 32),
+		netip.MustParsePrefix("::/128"),
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("::ffff:0:0/96"),
+		netip.MustParsePrefix("64:ff9b::/96"),
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+		netip.MustParsePrefix("100::/64"),
+		netip.MustParsePrefix("2001::/23"),
+		netip.MustParsePrefix("2001::/32"),
+		netip.MustParsePrefix("2001:db8::/32"),
+		netip.MustParsePrefix("2002::/16"),
+		netip.MustParsePrefix("fc00::/7"),
+		netip.MustParsePrefix("fe80::/10"),
+		netip.MustParsePrefix("ff00::/8"),
+	}
 }
 
 // deniedAddr is whether a fetch may not connect to a. An IPv4-mapped IPv6
@@ -268,7 +270,7 @@ func deniedAddr(a netip.Addr) bool {
 		return true
 	}
 	for _, x := range []netip.Addr{a, a.Unmap()} {
-		for _, p := range deniedPrefixes {
+		for _, p := range deniedPrefixes() {
 			if p.Contains(x) {
 				return true
 			}

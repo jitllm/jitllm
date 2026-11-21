@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
 // The -devices flag, at the CLI's own level: what it accepts, what it refuses,
@@ -53,7 +54,7 @@ func TestOpenDevicesRefusalsNameBothSides(t *testing.T) {
 // device's heap is the host's own RAM.
 func TestOpenDevicesNamesTwoDevicesAndPoolsThem(t *testing.T) {
 	sel := -1
-	infos, err := backend.VulkanDevices()
+	infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()})
 	if err != nil {
 		t.Skipf("no Vulkan here (%v): this gate needs a second backend", err)
 	}
@@ -73,7 +74,7 @@ func TestOpenDevicesNamesTwoDevicesAndPoolsThem(t *testing.T) {
 		t.Fatalf("-devices %q: %v", spec, err)
 	}
 	defer closeDev()
-	g := d.(*tier.GPU)
+	g := d.(*gpu.GPU)
 	t.Logf("-devices %q opened %q", spec, name)
 	t.Log(strings.TrimLeft(deviceBudgets(d), "\n"))
 	if g.Devices() != 2 {

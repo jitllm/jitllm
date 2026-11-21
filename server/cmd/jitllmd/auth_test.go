@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -39,7 +40,7 @@ func TestBindingBeyondLoopbackWithoutAKeyWarns(t *testing.T) {
 
 func guardedServer(t *testing.T, key string) string {
 	t.Helper()
-	e := server.New(server.Config{ModelDir: t.TempDir(), Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Probe: func() ([]server.DeviceInfo, error) { return nil, nil }})
 	t.Cleanup(e.Close)
 	s := httptest.NewServer(nil)
 	s.Config.Handler = server.Guard{APIKey: key, Addr: s.Listener.Addr().String()}.Wrap(e.Handler())
@@ -83,11 +84,10 @@ func TestVerbsFindAServiceOnTheOldPort(t *testing.T) {
 	t.Setenv("JITLLM_API_KEY", "")
 	old, _ := engineServer(t, server.Config{})
 	primary := unusedPort(t)
-	addrOpts = []localserver.Option{localserver.WithDefaults(primary, strings.TrimPrefix(old, "http://"))}
-	defer func() { addrOpts = nil }()
+	addrOpts := []localserver.Option{localserver.WithDefaults(primary, strings.TrimPrefix(old, "http://"))}
 
 	var o, e syncBuffer
-	if err := runVerb(t, cmdDevices, cli{out: &o, err: &e}, []string{"-addr", primary}, 20*time.Second); err != nil {
+	if err := runVerb(t, cmdDevices, cli{out: &o, err: &e, addrOpts: addrOpts}, []string{"-addr", primary}, 20*time.Second); err != nil {
 		t.Fatalf("%v\n%s", err, e.String())
 	}
 	if o.String() == "" || strings.Count(e.String(), localserver.LegacyNotice) != 1 {
@@ -95,7 +95,7 @@ func TestVerbsFindAServiceOnTheOldPort(t *testing.T) {
 	}
 	// A typed address is not swapped for the old one.
 	var o2, e2 syncBuffer
-	err := runVerb(t, cmdDevices, cli{out: &o2, err: &e2}, []string{"-addr", unusedPort(t)}, 20*time.Second)
+	err := runVerb(t, cmdDevices, cli{out: &o2, err: &e2, addrOpts: addrOpts}, []string{"-addr", unusedPort(t)}, 20*time.Second)
 	if err == nil || strings.Contains(e2.String(), localserver.LegacyNotice) {
 		t.Fatalf("a typed address fell back: %v %q", err, e2.String())
 	}

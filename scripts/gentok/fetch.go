@@ -18,18 +18,26 @@ import (
 	"time"
 )
 
-var repoLine = regexp.MustCompile(`\{"name":\s*"([^"]+)",\s*"tokt":\s*TOKENIZER_TYPE\.(\w+),\s*"repo":\s*"https://huggingface\.co/([^"]+)"`)
+func repoLine() *regexp.Regexp {
+	return regexp.MustCompile(`\{"name":\s*"([^"]+)",\s*"tokt":\s*TOKENIZER_TYPE\.(\w+),\s*"repo":\s*"https://huggingface\.co/([^"]+)"`)
+}
 
 // Latest, not pinned: the directory's value is currency, since new models mint
 // new names. The generated file records the resolved SHA and is checked in, so
 // a regeneration is a reviewable diff.
 
-// fetchDirectory pulls the name -> HF repo map from llama.cpp at lcppRev, so the
-// generator needs no local checkout of anything.
-func fetchDirectory() (map[string][]string, string, error) {
-	rev, err := resolveHead()
-	if err != nil {
-		return nil, "", err
+// fetchDirectory pulls the name -> HF repo map at rev, or at the latest
+// revision when rev is "", so the generator needs no local checkout of
+// anything. A pinned rev regenerates the checked-in table's names exactly,
+// which is how a change to what a stage parses to is reviewed apart from new
+// names.
+func fetchDirectory(rev string) (map[string][]string, string, error) {
+	if rev == "" {
+		head, err := resolveHead()
+		if err != nil {
+			return nil, "", err
+		}
+		rev = head
 	}
 	url := "https://raw.githubusercontent.com/ggml-org/llama.cpp/" + rev +
 		"/convert_hf_to_gguf_update.py"
@@ -91,7 +99,7 @@ func resolveHead() (string, error) {
 // way. Only BPE has a regex pre-tokenizer.
 func hfRepos(updateScript string) map[string][]string {
 	out := map[string][]string{}
-	for _, m := range repoLine.FindAllStringSubmatch(updateScript, -1) {
+	for _, m := range repoLine().FindAllStringSubmatch(updateScript, -1) {
 		r := strings.TrimSuffix(m[3], "/")
 		if m[2] == "BPE" && !slices.Contains(out[m[1]], r) {
 			out[m[1]] = append(out[m[1]], r)
@@ -103,7 +111,11 @@ func hfRepos(updateScript string) map[string][]string {
 // ErrGated is a repo HuggingFace will not serve without credentials, and
 // ErrMissing one it does not have at all. Both answer 401 anonymously; the body
 // tells them apart.
-var (
-	ErrGated   = fmt.Errorf("gated repo: needs HF_TOKEN")
-	ErrMissing = fmt.Errorf("repo not found on HuggingFace")
+const (
+	ErrGated   fetchError = "gated repo: needs HF_TOKEN"
+	ErrMissing fetchError = "repo not found on HuggingFace"
 )
+
+type fetchError string
+
+func (e fetchError) Error() string { return string(e) }

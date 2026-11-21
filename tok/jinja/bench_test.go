@@ -39,34 +39,36 @@ func BenchmarkRender_Simple(b *testing.B) {
 // Chat template benchmarks – Qwen3 with tool calling (real-world)
 // =============================================================================
 
-var chatBenchData = map[string]any{
-	"messages": []any{
-		map[string]any{
-			"role":    "user",
-			"content": "What is the weather in London?",
+func chatBenchData() map[string]any {
+	return map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "What is the weather in London?",
+			},
 		},
-	},
-	"tools": []any{
-		map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        "get_weather",
-				"description": "Get the current weather for a location",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"location": map[string]any{
-							"type":        "string",
-							"description": "The location to get weather for",
+		"tools": []any{
+			map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "get_weather",
+					"description": "Get the current weather for a location",
+					"parameters": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"location": map[string]any{
+								"type":        "string",
+								"description": "The location to get weather for",
+							},
 						},
+						"required": []any{"location"},
 					},
-					"required": []any{"location"},
 				},
 			},
 		},
-	},
-	"add_generation_prompt": true,
-	"enable_thinking":       true,
+		"add_generation_prompt": true,
+		"enable_thinking":       true,
+	}
 }
 
 func BenchmarkCompile_Qwen3(b *testing.B) {
@@ -86,7 +88,7 @@ func BenchmarkRender_Qwen3(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := tmpl.Render(chatBenchData); err != nil {
+		if _, err := tmpl.Render(chatBenchData()); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -113,7 +115,7 @@ func BenchmarkRender_Qwen35(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := tmpl.Render(chatBenchData); err != nil {
+		if _, err := tmpl.Render(chatBenchData()); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -123,62 +125,64 @@ func BenchmarkRender_Qwen35(b *testing.B) {
 // Complex template benchmarks – Gemma4 multi-turn tool calling (heaviest)
 // =============================================================================
 
-var gemmaMultiTurnData = map[string]any{
-	"messages": []any{
-		map[string]any{
-			"role":    "user",
-			"content": "What is the weather in London?",
-		},
-		map[string]any{
-			"role":    "assistant",
-			"content": "",
-			"tool_calls": []any{
-				map[string]any{
-					"id":   "call_1",
-					"type": "function",
-					"function": map[string]any{
-						"name":      "get_weather",
-						"arguments": `{"location": "London"}`,
-					},
-				},
+func gemmaMultiTurnData() map[string]any {
+	return map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "What is the weather in London?",
 			},
-		},
-		map[string]any{
-			"role":         "tool",
-			"tool_call_id": "call_1",
-			"name":         "get_weather",
-			"content":      `{"temperature": 15, "condition": "cloudy"}`,
-		},
-		map[string]any{
-			"role":    "assistant",
-			"content": "The weather in London is 15°C and cloudy.",
-		},
-		map[string]any{
-			"role":    "user",
-			"content": "What about Paris?",
-		},
-	},
-	"tools": []any{
-		map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        "get_weather",
-				"description": "Get the current weather for a location",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"location": map[string]any{
-							"type":        "string",
-							"description": "The location to get weather for",
+			map[string]any{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []any{
+					map[string]any{
+						"id":   "call_1",
+						"type": "function",
+						"function": map[string]any{
+							"name":      "get_weather",
+							"arguments": `{"location": "London"}`,
 						},
 					},
-					"required": []any{"location"},
+				},
+			},
+			map[string]any{
+				"role":         "tool",
+				"tool_call_id": "call_1",
+				"name":         "get_weather",
+				"content":      `{"temperature": 15, "condition": "cloudy"}`,
+			},
+			map[string]any{
+				"role":    "assistant",
+				"content": "The weather in London is 15°C and cloudy.",
+			},
+			map[string]any{
+				"role":    "user",
+				"content": "What about Paris?",
+			},
+		},
+		"tools": []any{
+			map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "get_weather",
+					"description": "Get the current weather for a location",
+					"parameters": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"location": map[string]any{
+								"type":        "string",
+								"description": "The location to get weather for",
+							},
+						},
+						"required": []any{"location"},
+					},
 				},
 			},
 		},
-	},
-	"add_generation_prompt": true,
-	"enable_thinking":       true,
+		"add_generation_prompt": true,
+		"enable_thinking":       true,
+	}
 }
 
 func BenchmarkCompile_Gemma4(b *testing.B) {
@@ -198,7 +202,7 @@ func BenchmarkRender_Gemma4(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := tmpl.Render(gemmaMultiTurnData); err != nil {
+		if _, err := tmpl.Render(gemmaMultiTurnData()); err != nil {
 			b.Fatal(err)
 		}
 	}

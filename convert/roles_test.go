@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -26,8 +27,9 @@ import (
 func TestEveryTensorHasARole(t *testing.T) {
 	paths := testmodels.Glob("*.gguf")
 	if len(paths) == 0 {
-		t.Skip("MODEL MISSING: no *.gguf in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no *.gguf in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
+	vocab := testNames(t)
 	seenRole := map[jlm.Role]int{}
 	unplaced := map[string]string{} // name -> first model that has it
 	files, tensors := 0, 0
@@ -50,40 +52,47 @@ func TestEveryTensorHasARole(t *testing.T) {
 		// is a scope decision (ErrNotImplemented), not a missing role.
 		supported := cfgErr == nil
 		var vis *jlm.Vision
+		var proj *projStates
 		if f.Arch() == "clip" {
 			// A bare mmproj has no text config: visionOf is where the projector
 			// list lives and where an unimplemented one is refused.
 			var visErr error
-			vis, visErr = visionOf(f)
+			vis, proj, visErr = visionOf(f)
 			supported = !errors.Is(visErr, ErrNotImplemented)
 		}
-		renames := towerNames(f, vis)
+		var names *towerVocab
+		if vis != nil {
+			if names, err = towerVocabOf(vis, vocab); err != nil {
+				t.Fatalf("%s: %v", filepath.Base(p), err)
+			}
+		}
+		renames := towerNames(f, proj)
+		gathered := func(string) bool { return false }
+		if proj != nil {
+			st, err := proj.statement()
+			if err != nil {
+				t.Fatalf("%s: %v", filepath.Base(p), err)
+			}
+			gathered = st.gatherReads
+		}
 		for i := range f.Tensors {
 			n := f.Tensors[i].Name
 			if r, ok := renames[n]; ok {
 				n = r
 			}
 			tensors++
-			// Qwen3.5's and Qwen3.8-Flash-Next's split gates never reach the
-			// name table: sourceOf fuses them into ssm_ba first
-			// (fuseBetaAlpha, gated by its own test).
-			if (f.Arch() == "qwen35" || f.Arch() == "qwen35moe" || f.Arch() == "qwen4exp") && splitBetaAlpha(n) {
-				continue
-			}
 			// A tower's tensors are named as conversion names them
 			// (towerRoleOf), and the ones it reads into another or not at all
-			// are accounted for by the same predicates sourceOf uses. The
-			// newer towers' fused q|k|v and deepstack mergers are resolved by
-			// familyTowerTensors (gated by the towers' own end-to-end gates).
+			// are accounted for by the same predicates sourceOf uses.
 			var role jlm.Role
 			var err error
 			switch {
-			case vis != nil && (towerUnread(vis, n) || towerGathered(n) || familyTowerName(n)):
+			case vis != nil && (names.unreadName(n) || gathered(n)):
 				continue
 			case vis != nil:
-				role, _, _, err = towerRoleOf(vis, n)
+				role, _, _, err = names.roleOf(n)
 			default:
-				role, _, _, err = identify(n)
+				role, _, _, err = vocab.identify(n)
 			}
 			if err != nil {
 				// A tensor-level ErrNotImplemented is a scope decision too, even
@@ -97,8 +106,8 @@ func TestEveryTensorHasARole(t *testing.T) {
 				}
 				continue
 			}
-			// A state-space in_proj is split at conversion (unfuseSSD, unfuseLFM2,
-			// unfuseMamba1): its role names the source and stays reserved, since
+			// A state-space in_proj is split at conversion (unfuseSSD, unfuseShortConv,
+			// unfuseScan): its role names the source and stays reserved, since
 			// no container carries one.
 			if !role.Valid() && role != jlm.RoleSSMInProj {
 				t.Errorf("%s: %q mapped to %v, which the schema does not name", filepath.Base(p), n, role)
@@ -107,11 +116,20 @@ func TestEveryTensorHasARole(t *testing.T) {
 			// The type check is scoped the same way: an unsupported
 			// architecture may also carry a weight type this engine has no
 			// kernel for, and the refusal for that belongs to configOf.
-			// DeepSeek V4's token table is I32 ids in the file and F32 in the
-			// container: sourceOf rewrites it (ds4HashTable) rather than
-			// storing the file's type.
-			if _, err := typeOf(f.Tensors[i].Type); err != nil && supported && role != jlm.RoleHashExperts {
-				t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
+			// An I32 tensor (DeepSeek V4's token table) is its values as F32
+			// (i32AsF32), and a ternary type with no code is re-packed
+			// (ternaryGGUF), so the types they become are checked.
+			stored := []quant.Type{f.Tensors[i].Type}
+			if repackedTernary(stored[0]) {
+				stored = ternaryPacked()
+			}
+			if stored[0] == quant.Type(26) {
+				stored = []quant.Type{quant.F32}
+			}
+			for _, st := range stored {
+				if _, err := typeOf(st); err != nil && supported {
+					t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
+				}
 			}
 		}
 		f.Close()
@@ -135,6 +153,30 @@ func TestEveryTensorHasARole(t *testing.T) {
 		back, err := typeOf(st)
 		if err != nil || back != ty {
 			t.Errorf("%v -> %v -> %v, %v", ty, st, back, err)
+		}
+	}
+}
+
+// TestGLM4VMergerHasNoBiases: GLM-4.xV's merger, transformers'
+// Glm4vVisionPatchMerger as Glm4vVisionModel builds it (bias=False), has no
+// bias on its gate, up and down projections, and no published tower carries
+// one; a tower file that does is not GLM-4.xV's, so those names take no role
+// and its conversion is refused. The weights beside them take theirs.
+func TestGLM4VMergerHasNoBiases(t *testing.T) {
+	vocab, err := readTensorNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := towerVocabOf(&jlm.Vision{Projector: jlm.ProjGLM4V, NLayer: 2}, vocab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"gate", "up", "down"} {
+		if _, _, _, err := names.roleOf("mm." + part + ".weight"); err != nil {
+			t.Errorf("mm.%s.weight: %v", part, err)
+		}
+		if r, _, _, err := names.roleOf("mm." + part + ".bias"); err == nil {
+			t.Errorf("VIOLATION: a GLM-4.xV tower's mm.%s.bias takes role %v", part, r)
 		}
 	}
 }

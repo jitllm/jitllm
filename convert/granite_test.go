@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/convert/meta"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -56,8 +55,8 @@ func TestGraniteCarriesItsFourScales(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != jlm.ArchGranite {
-		t.Errorf("arch %v, want granite", c.Arch)
+	if c.Name != "granite" {
+		t.Errorf("arch %v, want granite", c.Name)
 	}
 	if c.NKVHead != 2 {
 		t.Errorf("head_count_kv array read as %d, want 2", c.NKVHead)
@@ -74,15 +73,15 @@ func TestGraniteCarriesItsFourScales(t *testing.T) {
 	k["expert_used_count"] = meta.MakeUint(2)
 	k["expert_feed_forward_length"] = meta.MakeUint(32)
 	delete(k, "expert_shared_feed_forward_length")
-	if c, err = configOf(headerOnly("granitemoe", k)); err != nil || c.Arch != jlm.ArchGranite || c.NExpert != 8 {
+	if c, err = configOf(headerOnly("granitemoe", k)); err != nil || c.Name != "granitemoe" || c.NExpert != 8 {
 		t.Errorf("granitemoe: %v %+v", err, c)
 	}
 
-	// A head count that differs by layer is a geometry the container cannot
-	// say, and no logit_scale is not a Granite.
+	// A head count that differs by layer is each block's geometry, and no
+	// logit_scale is not a Granite.
 	k["attention.head_count_kv"] = meta.MakeInt32s([]int32{2, 2, 4, 2})
-	if _, err := configOf(headerOnly("granite", k)); !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("a per-layer head_count_kv converted: %v", err)
+	if c, err := configOf(headerOnly("granite", k)); err != nil || len(c.Geoms) != 4 || c.Geoms[0].NKVHead != 2 || c.Geoms[2].NKVHead != 4 {
+		t.Errorf("a per-layer head_count_kv: %v %+v", err, c)
 	}
 	k["attention.head_count_kv"] = meta.MakeUint(2)
 	delete(k, "logit_scale")

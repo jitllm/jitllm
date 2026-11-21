@@ -161,7 +161,7 @@ func sessionEmpty(sh *app.Shell) widget.Widget {
 					FontSize(sh.P.Type.BodyMedium.FontSize).
 					LineHeight(sh.P.Type.BodyMedium.LineHeight/sh.P.Type.BodyMedium.FontSize).
 					Color(sh.P.Muted()).
-					Font(app.Prose),
+					Font(sh.P.Prose()),
 				open,
 			).Gap(sh.P.Space.S).CrossAlign(primitives.CrossAxisStart).
 				Padding(sh.P.Space.M),
@@ -251,7 +251,7 @@ func sessionBubble(sh *app.Shell, idx int, t app.Turn, live bool) widget.Widget 
 		primitives.Expanded(headText(sh, name).ColorSignal(nameFg)),
 		// The name is unbounded so it is Expanded; the footer is short and must
 		// not be cut, so it is intrinsic. It is figures, so it is set in mono.
-		headText(sh, footer).Intrinsic().Color(sh.P.Muted()).Font(app.Mono),
+		headText(sh, footer).Intrinsic().Color(sh.P.Muted()).Font(sh.P.Mono()),
 	).Gap(8)
 
 	// A Paragraph, not primitives.Text: Text measures as wrapped but paints one
@@ -260,7 +260,7 @@ func sessionBubble(sh *app.Shell, idx int, t app.Turn, live bool) widget.Widget 
 	var body widget.Widget = widgets.NewParagraph(t.Text).
 		FontSize(sh.P.Type.BodyMedium.FontSize).Color(fg).
 		LineHeight(bodyLineHeight).
-		Font(app.Prose).
+		Font(sh.P.Prose()).
 		SelectionColor(sh.P.Colors.PrimaryContainer).
 		Selectable()
 	var think widget.Widget = thinkingSection(sh, idx, t.Think, nil)
@@ -278,7 +278,7 @@ func sessionBubble(sh *app.Shell, idx int, t app.Turn, live bool) widget.Widget 
 			}, sh.Store.Stream.AsReadonly())).
 			FontSize(sh.P.Type.BodyMedium.FontSize).Color(fg).
 			LineHeight(bodyLineHeight).
-			Font(app.Prose).
+			Font(sh.P.Prose()).
 			SelectionColor(sh.P.Colors.PrimaryContainer).
 			Selectable()
 		// The reasoning falls back to the turn's own copy for the same reason.
@@ -296,7 +296,7 @@ func sessionBubble(sh *app.Shell, idx int, t app.Turn, live bool) widget.Widget 
 		// model received them in -- ChatMessage puts Images before Content.
 		row := make([]widget.Widget, len(t.Images))
 		for i, p := range t.Images {
-			row[i] = widgets.NewThumb(p, sessionTurnThumb)
+			row[i] = sh.Thumbs.New(p, sessionTurnThumb)
 		}
 		parts = append(parts, primitives.HBox(row...).Gap(8))
 	}
@@ -321,7 +321,7 @@ func userBubble(sh *app.Shell, t app.Turn) widget.Widget {
 	body := widgets.NewParagraph(t.Text).
 		FontSize(sh.P.Type.BodyMedium.FontSize).Color(fg).
 		LineHeight(bodyLineHeight).
-		Font(app.Prose).
+		Font(sh.P.Prose()).
 		SelectionColor(sh.P.Colors.PrimaryContainer).
 		Selectable().
 		Intrinsic()
@@ -329,7 +329,7 @@ func userBubble(sh *app.Shell, t app.Turn) widget.Widget {
 	if len(t.Images) > 0 {
 		row := make([]widget.Widget, len(t.Images))
 		for i, p := range t.Images {
-			row[i] = widgets.NewThumb(p, sessionTurnThumb)
+			row[i] = sh.Thumbs.New(p, sessionTurnThumb)
 		}
 		parts = append(parts, primitives.HBox(row...).Gap(8))
 	}
@@ -348,13 +348,13 @@ func userBubble(sh *app.Shell, t app.Turn) widget.Widget {
 func sessionTurnActions(sh *app.Shell, idx int, live bool) widget.Widget {
 	st := sh.Store
 	ic := iconColors(sh)
-	copyBtn := widgets.NewIconButton(widgets.IconCopy, "Copy the reply", func() {
+	copyBtn := widgets.NewIconButton(widgets.IconCopy(), "Copy the reply", func() {
 		if t := st.Turn(idx).Text; t != "" {
 			sh.Copy(t)
 			sh.SetStatus("reply copied")
 		}
 	}, ic).Size(28)
-	retry := widgets.NewIconButton(widgets.IconRetry, "Write the reply again",
+	retry := widgets.NewIconButton(widgets.IconRetry(), "Write the reply again",
 		func() { Regenerate(sh) }, ic).Size(28)
 	last := state.NewComputed(func() bool { return idx == st.Turns.Get()-1 }, st.Turns.AsReadonly())
 	row := primitives.HBox(copyBtn, widgets.Hide(last, retry)).Gap(2)
@@ -398,7 +398,7 @@ func headText(sh *app.Shell, sig state.ReadonlySignal[string]) *widgets.Paragrap
 	p := widgets.NewParagraph("").
 		ContentSignal(sig).
 		FontSize(sh.P.Type.LabelSmall.FontSize).
-		Font(app.Prose).
+		Font(sh.P.Prose()).
 		MaxLines(1)
 	if sh.P.Type.LabelSmall.LineHeight > 0 && sh.P.Type.LabelSmall.FontSize > 0 {
 		p = p.LineHeight(sh.P.Type.LabelSmall.LineHeight / sh.P.Type.LabelSmall.FontSize)
@@ -444,7 +444,7 @@ func thinkingSection(sh *app.Shell, idx int, static string, sig state.ReadonlySi
 	body := widgets.NewParagraph(static).
 		FontSize(sh.P.Type.BodySmall.FontSize).Color(sh.P.Muted()).
 		LineHeight(sh.P.Type.BodySmall.LineHeight / sh.P.Type.BodySmall.FontSize).
-		Font(app.Prose)
+		Font(sh.P.Prose())
 	if sig != nil {
 		body = body.ContentSignal(sig)
 	}

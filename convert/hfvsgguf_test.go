@@ -18,7 +18,7 @@ import (
 // It is the only gate that can see a wrong name mapping: a q projection wired
 // to k, a norm applied in the wrong place, or an unpermuted q all load and run
 // fluently, and no oracle inside one format sees them. SmolLM2-360M-Instruct
-// is used as a bf16 HuggingFace directory and as llama.cpp's Q8_0 GGUF;
+// is used as a bf16 HuggingFace directory and as its published Q8_0 GGUF;
 // converting both and comparing tensor by tensor turns each into a number.
 //
 // The bound is Q8_0's own quantisation error, not a tolerance: an unpermuted q
@@ -38,7 +38,7 @@ func hfModelDir(t testing.TB) (dir, ggufPath string) {
 	ggufPath = testmodels.Path(hfGGUF)
 	for _, p := range []string{dir, ggufPath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing. "+
+			testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing. "+
 				"Fetch it: huggingface.co/HuggingFaceTB/%s", p, err, hfDirName)
 		}
 	}
@@ -67,14 +67,44 @@ func hfSource(t testing.TB, dir string) *jlm.Source {
 	return s
 }
 
+// ggufSource is the source of the GGUF at path as sourceOf reads it, its
+// rotary stated per pair as every source the converter builds states it
+// (StateRotary), so it compares with a built safetensors source.
 func ggufSource(t testing.TB, path string) *jlm.Source {
+	t.Helper()
+	s := ggufConverted(t, path, false)
+	f, err := gguf.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	// The converter states a GGUF's rotary before its block graphs
+	// (buildGGUF): the method's divisors over the file's factors, then
+	// StateRotary's fold of YaRN's score.
+	if err := stateGGUFRotary(f, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := StateRotary(s.Config, s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// ggufConverted is the source of the GGUF at path as sourceOf reads it, or,
+// built, as the converter builds it, its blocks' graphs stated.
+func ggufConverted(t testing.TB, path string, built bool) *jlm.Source {
 	t.Helper()
 	f, err := gguf.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.Close() })
-	s, err := sourceOf(f)
+	var s *jlm.Source
+	if built {
+		s, err = buildGGUF(f, nil, path, "", options{})
+	} else {
+		s, err = sourceOf(f, nil)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +114,8 @@ func ggufSource(t testing.TB, path string) *jlm.Source {
 // TestSafetensorsConfigMatchesItsGGUF compares the two converters' answers to
 // every hyperparameter question.
 //
-// config.json and a GGUF header are two independent witnesses (llama.cpp's
-// converter read the same config.json), so a disagreement is one of the two
+// config.json and a GGUF header are two independent witnesses (the GGUF's
+// writer read the same config.json), so a disagreement is one of the two
 // readers being wrong about what a key means.
 func TestSafetensorsConfigMatchesItsGGUF(t *testing.T) {
 	dir, gp := hfModelDir(t)
@@ -94,7 +124,6 @@ func TestSafetensorsConfigMatchesItsGGUF(t *testing.T) {
 		name string
 		x, y any
 	}{
-		{"Arch", a.Arch, b.Arch},
 		{"NLayer", a.NLayer, b.NLayer},
 		{"NEmbd", a.NEmbd, b.NEmbd},
 		{"NHead", a.NHead, b.NHead},
@@ -122,8 +151,8 @@ func TestSafetensorsConfigMatchesItsGGUF(t *testing.T) {
 	if n != len(fields) {
 		t.Fatalf("%d of %d config fields agree", n, len(fields))
 	}
-	t.Logf("%d config fields agree; arch=%v L=%d d=%d heads=%d/%d hd=%d ffn=%d vocab=%d flags=%v",
-		n, a.Arch, a.NLayer, a.NEmbd, a.NHead, a.NKVHead, a.HeadDim, a.NFFN, a.NVocab, a.Flags)
+	t.Logf("%d config fields agree; L=%d d=%d heads=%d/%d hd=%d ffn=%d vocab=%d flags=%v",
+		n, a.NLayer, a.NEmbd, a.NHead, a.NKVHead, a.HeadDim, a.NFFN, a.NVocab, a.Flags)
 }
 
 // TestSafetensorsTensorsMatchTheirGGUF is the name-mapping and rotary-layout
@@ -231,7 +260,7 @@ func TestSafetensorsTensorsMatchTheirGGUF(t *testing.T) {
 // than asserted.
 //
 // The safetensors arm parses the model's own tokenizer.json; the GGUF arm
-// resolves its label through pretok.Table. Disagreement is a finding, so this
+// resolves its label through pretok.Table(). Disagreement is a finding, so this
 // reports every field rather than asserting one.
 func TestSafetensorsTokenizerMatchesItsGGUF(t *testing.T) {
 	dir, gp := hfModelDir(t)

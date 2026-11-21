@@ -1,0 +1,414 @@
+package graph
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
+
+// block is a small attention-then-MLP block over d and its inventory.
+func block(d, ffn int) (*Graph, Facts) {
+	b := NewBlock(0)
+	x := b.In("x", d)
+	n := b.Norm(x, jlm.RoleAttnNorm, 1e-5)
+	q := b.MatVec(n, jlm.RoleAttnQ, d)
+	k := b.MatVec(n, jlm.RoleAttnK, d)
+	v := b.MatVec(n, jlm.RoleAttnV, d)
+	hist := b.KVAppend(k, v, 0)
+	a := b.Attend(q, hist, Attrs{NHead: 2, NKVHead: 2, HeadDim: d / 2, Scale: 1})
+	x2 := b.Add(x, b.MatVec(a, jlm.RoleAttnOut, d))
+	m := b.Norm(x2, jlm.RoleFFNNorm, 1e-5)
+	g := b.MatVec(m, jlm.RoleFFNGate, ffn)
+	u := b.MatVec(m, jlm.RoleFFNUp, ffn)
+	b.Out(b.Add(x2, b.MatVec(b.Expr("act", ffn, []Term{
+		{Fn: MapSigmoid, Args: [3]Arg{{Kind: ArgIn, Index: 0}}},
+		{Fn: MapMul, Args: [3]Arg{{Kind: ArgIn, Index: 0}, {Kind: ArgTerm, Index: 0}}},
+		{Fn: MapMul, Args: [3]Arg{{Kind: ArgTerm, Index: 1}, {Kind: ArgIn, Index: 1}}},
+	}, nil, g, u), jlm.RoleFFNDown, d)))
+	inv := map[jlm.Role]Shape{
+		jlm.RoleAttnNorm: {K: d}, jlm.RoleFFNNorm: {K: d},
+		jlm.RoleAttnQ: {K: d, Rows: d}, jlm.RoleAttnK: {K: d, Rows: d}, jlm.RoleAttnV: {K: d, Rows: d}, jlm.RoleAttnOut: {K: d, Rows: d},
+		jlm.RoleFFNGate: {K: d, Rows: ffn}, jlm.RoleFFNUp: {K: d, Rows: ffn}, jlm.RoleFFNDown: {K: ffn, Rows: d},
+	}
+	return b.G, Facts{Inventory: inv}
+}
+
+// TestVerifierHoldsTheStructure verifies a correct block, then each
+// violation of what the verifier checks, every one of which must be refused
+// naming its fault.
+func TestVerifierHoldsTheStructure(t *testing.T) {
+	g, f := block(8, 16)
+	if err := Verify(g, f); err != nil {
+		t.Fatalf("a correct block is refused: %v", err)
+	}
+	if u := Unbound(g, f); len(u) != 0 {
+		t.Fatalf("a correct block leaves %v unbound", u)
+	}
+	for _, c := range []struct {
+		name, want string
+		break_     func(g *Graph, f Facts)
+	}{
+		{"another version", "op language", func(g *Graph, f Facts) { g.Version = Version + 1 }},
+		{"a read before its write", "before anything writes it", func(g *Graph, f Facts) { g.Ops[0], g.Ops[1] = g.Ops[1], g.Ops[0] }},
+		{"two producers", "already has a producer", func(g *Graph, f Facts) { g.Ops[2].Out = g.Ops[1].Out }},
+		{"an attention before its append", "in force", func(g *Graph, f Facts) { g.Ops[4].Reads[0].Version = 2 }},
+		{"a role the container does not store", "does not store", func(g *Graph, f Facts) { delete(f.Inventory, jlm.RoleAttnQ) }},
+		{"a weight bound at another shape", "stored", func(g *Graph, f Facts) { f.Inventory[jlm.RoleFFNDown] = Shape{K: 8, Rows: 16} }},
+		{"a norm's scale wider than its row", "a scale of", func(g *Graph, f Facts) { g.Ops[0].Weight[0].K = 16; f.Inventory[jlm.RoleAttnNorm] = Shape{K: 16} }},
+		{"an output never written", "never written", func(g *Graph, f Facts) { g.Out = append(g.Out, ValueID(len(g.Values))) }},
+		{"a value of another grid's rows", "rows", func(g *Graph, f Facts) { g.Values[g.Ops[1].Out[0]].Rows = 3 }},
+	} {
+		g, f := block(8, 16)
+		c.break_(g, f)
+		err := Verify(g, f)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+	g, f = block(8, 16)
+	f.Inventory[jlm.RoleAttnQBias] = Shape{K: 8}
+	if u := Unbound(g, f); len(u) != 1 || u[0] != jlm.RoleAttnQBias {
+		t.Errorf("a stored bias no op binds is reported as %v", u)
+	}
+}
+
+// TestVerifierHoldsALayerNormsBias holds a LayerNorm's optional second weight
+// to a vector of the row's width, and a stored bias the op does not bind to
+// being reported.
+func TestVerifierHoldsALayerNormsBias(t *testing.T) {
+	const d = 8
+	build := func() (*Graph, Facts) {
+		b := NewBlock(0)
+		b.Out(b.LayerNorm(b.In("x", d), jlm.RoleAttnNorm, 1e-5, jlm.RoleAttnNormBias))
+		return b.G, Facts{Inventory: map[jlm.Role]Shape{jlm.RoleAttnNorm: {K: d}, jlm.RoleAttnNormBias: {K: d}}}
+	}
+	g, f := build()
+	if err := Verify(g, f); err != nil {
+		t.Fatalf("a LayerNorm with its bias is refused: %v", err)
+	}
+	if u := Unbound(g, f); len(u) != 0 {
+		t.Fatalf("a LayerNorm with its bias leaves %v unbound", u)
+	}
+	for _, c := range []struct {
+		name   string
+		break_ func(g *Graph, f Facts)
+	}{
+		{"a bias wider than the row", func(g *Graph, f Facts) {
+			g.Ops[0].Weight[1].K = 2 * d
+			f.Inventory[jlm.RoleAttnNormBias] = Shape{K: 2 * d}
+		}},
+		{"a bias that is a matrix", func(g *Graph, f Facts) {
+			g.Ops[0].Weight[1].Rows = d
+			f.Inventory[jlm.RoleAttnNormBias] = Shape{K: d, Rows: d}
+		}},
+		{"a third weight", func(g *Graph, f Facts) {
+			g.Ops[0].Weight = append(g.Ops[0].Weight, Binding{Role: jlm.RoleFFNNormBias, K: d})
+			f.Inventory[jlm.RoleFFNNormBias] = Shape{K: d}
+		}},
+	} {
+		g, f := build()
+		c.break_(g, f)
+		if err := Verify(g, f); err == nil || !strings.Contains(err.Error(), "a scale and a bias") {
+			t.Errorf("%s: Verify said %v, want an error naming the scale and the bias", c.name, err)
+		}
+	}
+	g, f = build()
+	g.Ops[0].Weight = g.Ops[0].Weight[:1]
+	if err := Verify(g, f); err != nil {
+		t.Fatalf("a LayerNorm without a bias is refused: %v", err)
+	}
+	if u := Unbound(g, f); len(u) != 1 || u[0] != jlm.RoleAttnNormBias {
+		t.Errorf("a stored norm bias no op binds is reported as %v", u)
+	}
+}
+
+// TestVerifierHoldsAMapsWindow verifies a map reading one element of a stored
+// vector, then each window the vector cannot give, every one refused naming it.
+func TestVerifierHoldsAMapsWindow(t *testing.T) {
+	build := func(off, width int, bound bool) (*Graph, Facts) {
+		b := NewBlock(0)
+		x := b.In("x", 8)
+		var w []Binding
+		if bound {
+			w = []Binding{{Role: jlm.RoleXIELU, K: 4}}
+		}
+		b.Out(b.Emit(OpMap, []ValueID{x}, []Result{{Name: "y", Width: 8}}, w, Attrs{Fn: MapMul, Offset: off, Width: width}, nil, nil)[0])
+		return b.G, Facts{Inventory: map[jlm.Role]Shape{jlm.RoleXIELU: {K: 4}}}
+	}
+	if g, f := build(3, 1, true); Verify(g, f) != nil {
+		t.Fatalf("the last element of the vector is refused: %v", Verify(g, f))
+	}
+	// A table of several rows is its elements in order: a window on its
+	// second row is held to the table, past it refused.
+	table := func(off int) error {
+		b := NewBlock(0)
+		x := b.In("x", 8)
+		w := []Binding{{Role: jlm.RoleXIELU, K: 4, Rows: 2}}
+		b.Out(b.Emit(OpMap, []ValueID{x}, []Result{{Name: "y", Width: 8}}, w, Attrs{Fn: MapMul, Offset: off, Width: 4}, nil, nil)[0])
+		return Verify(b.G, Facts{Inventory: map[jlm.Role]Shape{jlm.RoleXIELU: {K: 4, Rows: 2}}})
+	}
+	if err := table(4); err != nil {
+		t.Fatalf("a window on a table's second row is refused: %v", err)
+	}
+	if err := table(5); err == nil || !strings.Contains(err.Error(), "a window of") {
+		t.Errorf("a window past a table of two rows: Verify said %v", err)
+	}
+	for _, c := range []struct {
+		name       string
+		off, width int
+		bound      bool
+	}{
+		{"past the vector", 4, 1, true},
+		{"wider than the vector", 2, 3, true},
+		{"before the vector", -1, 1, true},
+		{"a negative width", 0, -1, true},
+		{"no vector", 0, 1, false},
+	} {
+		g, f := build(c.off, c.width, c.bound)
+		if err := Verify(g, f); err == nil || !strings.Contains(err.Error(), "a window of") {
+			t.Errorf("%s: Verify said %v, want an error naming the window", c.name, err)
+		}
+	}
+}
+
+// TestVerifierHoldsAnEmbeddingsRange verifies an embedding of a range of
+// its table's rows, from row 0 and from a later row, and refuses a range
+// past the table and a first row on an op that is not an embedding.
+func TestVerifierHoldsAnEmbeddingsRange(t *testing.T) {
+	inv := map[jlm.Role]Shape{jlm.RoleNGramTable: {K: 4, Rows: 9}}
+	embed := func(from, rows int) error {
+		b := NewBlock(0)
+		ix := b.In("ix", 1)
+		b.G.Values[ix].Elem = ElemU32
+		b.Out(b.Emit(OpEmbed, []ValueID{ix}, []Result{{Name: "e", Width: 4}},
+			[]Binding{{Role: jlm.RoleNGramTable, K: 4, Rows: rows, From: from}}, Attrs{}, nil, nil)[0])
+		return Verify(b.G, Facts{Inventory: inv})
+	}
+	for _, c := range []struct{ from, rows int }{{0, 9}, {0, 4}, {3, 4}, {5, 4}} {
+		if err := embed(c.from, c.rows); err != nil {
+			t.Errorf("rows %d to %d of a table of 9 are refused: %v", c.from, c.from+c.rows, err)
+		}
+	}
+	for _, c := range []struct{ from, rows int }{{6, 4}, {0, 10}, {-1, 4}} {
+		if err := embed(c.from, c.rows); err == nil {
+			t.Errorf("rows %d to %d of a table of 9 verify", c.from, c.from+c.rows)
+		}
+	}
+	b := NewBlock(0)
+	x := b.In("x", 4)
+	b.Out(b.Emit(OpMatVec, []ValueID{x}, []Result{{Name: "y", Width: 4}},
+		[]Binding{{Role: jlm.RoleNGramTable, K: 4, Rows: 4, From: 3}}, Attrs{}, nil, nil)[0])
+	if err := Verify(b.G, Facts{Inventory: inv}); err == nil || !strings.Contains(err.Error(), "only an embedding") {
+		t.Errorf("a matrix-vector product from row 3: Verify said %v", err)
+	}
+}
+
+// TestVerifierHoldsASelection verifies an attention over a selection of its
+// own history's keys, then each violation of a selection's structure.
+func TestVerifierHoldsASelection(t *testing.T) {
+	build := func(a Attrs, cut func(g *Graph)) error {
+		b := NewBlock(0)
+		k := b.In("k", 48)
+		h := StateRef{State: StateKV, Version: b.KVAppend(k, k, 0)}
+		sel := b.Select(b.In("iq", 32), h, a, b.In("iw", 2))
+		b.Out(b.AttendSelected(b.In("q", 64), h, sel, Attrs{NHead: 4, NKVHead: 2, HeadDim: 16, Width: 48}))
+		if cut != nil {
+			cut(b.G)
+		}
+		return Verify(b.G, Facts{})
+	}
+	good := Attrs{NHead: 2, NKVHead: 2, HeadDim: 16, Offset: 32, Width: 48, Span: 4, TopK: 2, Local: 1}
+	if err := build(good, nil); err != nil {
+		t.Fatalf("a correct selection is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name, want string
+		a          func(a *Attrs)
+		cut        func(g *Graph)
+	}{
+		{"a key past the row", "a key of", func(a *Attrs) { a.Offset = 40 }, nil},
+		{"groups that do not divide the heads", "groups", func(a *Attrs) { a.NKVHead = 3 }, nil},
+		{"no block", "blocks of", func(a *Attrs) { a.Span = 0 }, nil},
+		{"weights of another count", "weights", func(a *Attrs) {}, func(g *Graph) { g.Values[g.Ops[1].In[1]].Width = 3 }},
+		{"a selection over another history", "its own history", func(a *Attrs) {},
+			func(g *Graph) { g.Ops[len(g.Ops)-1].Reads[0] = SharedHistory(0) }},
+	} {
+		a := good
+		c.a(&a)
+		err := build(a, c.cut)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}
+
+// TestVerifierHoldsAGridsRows verifies a regroup and a row drop (a row
+// gather) that state their output's rows, over an input of the step's rows
+// and of its own, and refuses a regroup that states none over the step's rows
+// or whose rows are not its input's arithmetic, and a drop that reads past
+// its input's rows.
+func TestVerifierHoldsAGridsRows(t *testing.T) {
+	build := func(inRows, groupRows, dropRows int) error {
+		b := NewBlock(-1)
+		x := b.In("x", 4)
+		b.G.Values[x].Rows = inRows
+		g := b.Emit(OpRegroup, []ValueID{x}, []Result{{Name: "g", Width: 16, Rows: groupRows}}, nil, Attrs{Span: 2}, nil, nil)[0]
+		b.Out(b.Emit(OpGatherRows, []ValueID{g}, []Result{{Name: "d", Width: 16, Rows: dropRows}}, nil, DropRows(1), nil, nil)[0])
+		return Verify(b.G, Facts{})
+	}
+	for _, c := range []struct{ in, group, drop int }{{0, 16, 15}, {64, 16, 15}, {0, 9, 8}} {
+		if err := build(c.in, c.group, c.drop); err != nil {
+			t.Errorf("%+v: a regroup and a drop stating their rows are refused: %v", c, err)
+		}
+	}
+	for _, c := range []struct {
+		in, group, drop int
+		want            string
+	}{{0, 0, 15, "states no rows"}, {64, 15, 14, "writes 15, not 16"}, {64, 16, 16, "reads row 16 of 16"}, {0, 16, 16, "reads row 16 of 16"}} {
+		if err := build(c.in, c.group, c.drop); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%+v: Verify said %v, want an error naming %q", c, err, c.want)
+		}
+	}
+	// A fold of Span consecutive rows states its rows as a regroup does.
+	fold := func(inRows, out int) error {
+		b := NewBlock(-1)
+		x := b.In("x", 4)
+		b.G.Values[x].Rows = inRows
+		b.Out(b.Emit(OpFold, []ValueID{x}, []Result{{Name: "f", Width: 16, Rows: out}}, nil, Attrs{Span: 4}, nil, nil)[0])
+		return Verify(b.G, Facts{})
+	}
+	for _, c := range []struct{ in, out int }{{0, 16}, {64, 16}} {
+		if err := fold(c.in, c.out); err != nil {
+			t.Errorf("a fold of %d rows into %d is refused: %v", c.in, c.out, err)
+		}
+	}
+	for _, c := range []struct {
+		in, out int
+		want    string
+	}{{0, 0, "states no rows"}, {64, 15, "writes 15, not 16"}} {
+		if err := fold(c.in, c.out); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("a fold of %d rows into %d: Verify said %v, want an error naming %q", c.in, c.out, err, c.want)
+		}
+	}
+}
+
+// TestVerifierHoldsAGathersBound refuses a row gather whose bound, read off
+// its counts, leaves rows of its output unwritten, and verifies one whose
+// bound reaches them.
+func TestVerifierHoldsAGathersBound(t *testing.T) {
+	build := func(last int) error {
+		b := NewBlock(-1)
+		x := b.In("x", 16)
+		b.G.Values[x].Rows = 2
+		var ix Index
+		ix.Bound(ix.Sub(ix.In(GatherInRows), ix.K(2-last)))
+		b.Out(b.Emit(OpGatherRows, []ValueID{x}, []Result{{Name: "d", Width: 16, Rows: 2}}, nil, ix.Attrs(ix.In(GatherRow)), nil, nil)[0])
+		return Verify(b.G, Facts{})
+	}
+	if err := build(1); err != nil {
+		t.Errorf("a gather bounded at its last row is refused: %v", err)
+	}
+	if err := build(0); err == nil || !strings.Contains(err.Error(), "writes 1 of its 2 rows") {
+		t.Errorf("Verify said %v, want an error naming the unwritten row", err)
+	}
+}
+
+// TestVerifierHoldsAnIterationsRuns verifies an iteration summing a float
+// term over runs of four elements of a row of twelve, then each way a sum
+// can be wrong, every one of which must be refused naming its fault.
+func TestVerifierHoldsAnIterationsRuns(t *testing.T) {
+	in := Arg{Kind: ArgIn}
+	k := func(v float64) Arg { return Arg{Kind: ArgConst, Const: v} }
+	st := Arg{Kind: ArgState}
+	sum := func(j int) Arg { return Arg{Kind: ArgSum, Index: j} }
+	build := func(edit func(o *Op)) error {
+		b := New()
+		x := b.In("x", 12)
+		b.G.Values[x].Elem = ElemU32
+		terms := []Term{
+			{Fn: MapMul, Args: [3]Arg{in, k(0.5)}},
+			{Fn: MapAdd, Args: [3]Arg{in, k(1)}},
+			{Fn: MapMul, Args: [3]Arg{st, k(0.5)}},
+			{Fn: MapAdd, Args: [3]Arg{sum(2), st}},
+		}
+		b.Out(b.Emit(OpIterate, []ValueID{x}, []Result{{Name: "y", Width: 12}}, nil,
+			Attrs{Taps: 1, Span: 3, Width: 4, Expr: terms}, nil, nil)[0])
+		if edit != nil {
+			edit(&b.G.Ops[len(b.G.Ops)-1])
+		}
+		return Verify(b.G, Facts{})
+	}
+	if err := build(nil); err != nil {
+		t.Fatalf("a sum over runs of four is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name, want string
+		edit       func(o *Op)
+	}{
+		{"a sum with no runs", "over runs of 0", func(o *Op) { o.Attr.Width = 0 }},
+		{"runs of three", "no power of two", func(o *Op) { o.Attr.Width = 3 }},
+		{"runs past the row", "in a row of 12", func(o *Op) { o.Attr.Width = 8 }},
+		{"a sum of a word", "no float", func(o *Op) { o.Attr.Expr[3].Args[0] = sum(1) }},
+		{"a sum before the first trip", "sums term", func(o *Op) { o.Attr.Expr[0].Args[1] = sum(0) }},
+		{"a sum of a later term", "sums term", func(o *Op) { o.Attr.Expr[2].Args[0] = sum(3) }},
+	} {
+		if err := build(c.edit); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}
+
+// TestVerifierHoldsAnIterationsTypes verifies an iteration carrying a word
+// index beside a float sum of a float table's elements, then each way the
+// types can disagree, every one of which must be refused naming its fault.
+func TestVerifierHoldsAnIterationsTypes(t *testing.T) {
+	in := Arg{Kind: ArgIn}
+	k := func(v float64) Arg { return Arg{Kind: ArgConst, Const: v} }
+	st := func(j int) Arg { return Arg{Kind: ArgState, Index: j} }
+	tm := func(j int) Arg { return Arg{Kind: ArgTerm, Index: j} }
+	build := func(edit func(g *Graph, o *Op)) error {
+		b := New()
+		x := b.In("x", 8)
+		b.G.Values[x].Elem = ElemU32
+		tab := b.In("table", 64)
+		terms := []Term{
+			{Fn: MapAdd, Args: [3]Arg{in, k(0)}},
+			{Fn: MapMul, Args: [3]Arg{in, k(0.25)}},
+			{Fn: MapTake, Args: [3]Arg{{Kind: ArgIn, Index: 1}, st(0)}},
+			{Fn: MapAdd, Args: [3]Arg{st(1), tm(2)}},
+			{Fn: MapAdd, Args: [3]Arg{st(0), k(5)}},
+			{Fn: MapAnd, Args: [3]Arg{tm(4), k(63)}},
+		}
+		ys := b.Emit(OpIterate, []ValueID{x, tab}, []Result{{Name: "at", Width: 8}, {Name: "sum", Width: 8}}, nil,
+			Attrs{Taps: 2, Span: 4, Words: []uint64{5, 3}, Expr: terms}, nil, nil)
+		b.G.Values[ys[0]].Elem = ElemU32
+		b.Out(ys[0])
+		b.Out(ys[1])
+		if edit != nil {
+			edit(b.G, &b.G.Ops[len(b.G.Ops)-1])
+		}
+		return Verify(b.G, Facts{})
+	}
+	if err := build(nil); err != nil {
+		t.Fatalf("a word carried beside a float is refused: %v", err)
+	}
+	for _, c := range []struct {
+		name, want string
+		edit       func(g *Graph, o *Op)
+	}{
+		{"a float carried out by a word", "carried out by term", func(g *Graph, o *Op) { o.Attr.Words = []uint64{5, 4} }},
+		{"a float's output of words", "no word", func(g *Graph, o *Op) { g.Values[o.Out[1]].Elem = ElemU32 }},
+		{"a float read into a word", "a float into a word", func(g *Graph, o *Op) { g.Values[o.In[0]].Elem = ElemF32 }},
+		{"a take at a float", "no word", func(g *Graph, o *Op) { o.Attr.Expr[2].Args[1] = st(1) }},
+		{"a word of a fraction", "which is no word", func(g *Graph, o *Op) { o.Attr.Expr[4].Args[1] = k(5.5) }},
+		{"a term of constants alone", "constants alone", func(g *Graph, o *Op) { o.Attr.Expr[4].Args[0] = k(1) }},
+		{"a table of codes", "neither a word nor a float", func(g *Graph, o *Op) { g.Values[o.In[1]].Elem = ElemI8 }},
+		{"an output of another width", "values carried", func(g *Graph, o *Op) { g.Values[o.Out[1]].Width = 16 }},
+		{"a table read outside a take", "outside a take", func(g *Graph, o *Op) { o.Attr.Expr[3].Args[1] = Arg{Kind: ArgIn, Index: 1} }},
+	} {
+		if err := build(c.edit); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}

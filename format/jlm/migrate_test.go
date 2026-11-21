@@ -14,15 +14,15 @@ import (
 // the migration from the version before it: a container its source no
 // longer exists for would otherwise have no way forward.
 func TestEveryVersionHasItsMigration(t *testing.T) {
-	if migrations[Version-1] == nil {
+	if migrationFor(Version-1, nil) == nil {
 		t.Fatalf("Version is %d and there is no migration from %d (migrate.go): every bump adds one",
 			Version, Version-1)
 	}
 	if !Upgradable(26) {
 		t.Fatalf("version 26 no longer upgrades to %d: a migration in the chain is missing", Version)
 	}
-	for v := range migrations {
-		if v >= Version {
+	for v := uint32(0); v < 1000; v++ {
+		if migrationFor(v, nil) != nil && v >= Version {
 			t.Errorf("a migration from version %d, which is not older than %d", v, Version)
 		}
 	}
@@ -60,7 +60,7 @@ func migrateSource(audio, unfolded bool) *Source {
 	add(RoleAttnQ, 0, TypeQ4, q4(2), k, rows)
 	add(RoleAttnNorm, 0, TypeF32, vec(k, func(int) float32 { return 1 }), k)
 	src := &Source{
-		Config: &Config{Arch: ArchLlama, NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
+		Config: &Config{NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
 			NFFN: k, NVocab: rows, NCtx: 128, RMSEps: 1e-5, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: FlagTiedEmbd},
 		Vocab: &Vocab{Kind: VocabSPM, Tokens: []string{"<unk>", "a", "b", "c", "d", "e", "f", "g"},
@@ -109,10 +109,9 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 			}
 			old := func() string {
 				p := filepath.Join(t.TempDir(), "old"+Ext)
-				if _, err := Write(p, migrateSource(audio, true), fp); err != nil {
-					t.Fatal(err)
-				}
-				if err := setVersion(p, 29); err != nil {
+				// v29's config record, which carries the prediction blocks'
+				// count v33's does not.
+				if _, err := writeAt(p, migrateSource(audio, true), fp, 29); err != nil {
 					t.Fatal(err)
 				}
 				return p
@@ -124,7 +123,7 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 			} else if !strings.Contains(err.Error(), "jitllm upgrade") {
 				t.Fatalf("the refusal %q does not name jitllm upgrade", err)
 			}
-			from, err := Upgrade(p)
+			from, err := Upgrade(p, nil)
 			if err != nil || from != 29 {
 				t.Fatalf("Upgrade: from %d, %v", from, err)
 			}
@@ -140,18 +139,21 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.Close()
-			if from, err := Upgrade(p); err != nil || from != Version {
+			if from, err := Upgrade(p, nil); err != nil || from != Version {
 				t.Fatalf("upgrading a current container: from %d, %v", from, err)
 			}
 			if !audio {
 				return
 			}
 			// The violation: the step that only stamps the version.
-			saved := migrations[29]
-			migrations[29] = func(path string) error { return setVersion(path, 30) }
-			defer func() { migrations[29] = saved }()
+			stamp := func(v uint32) func(string) error {
+				if v == 29 {
+					return func(path string) error { return setVersion(path, 30) }
+				}
+				return migrationFor(v, nil)
+			}
 			q := old()
-			if _, err := Upgrade(q); err != nil {
+			if _, err := upgradeWith(stamp, q); err != nil {
 				t.Fatal(err)
 			}
 			bad, err := os.ReadFile(q)

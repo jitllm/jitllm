@@ -103,7 +103,7 @@ func (j *jobs) convertSteps(cleanup func()) convertjob.Progress {
 // it streams from the Hub, as the window's Discover tab does
 // ([discover.Get]). cancel stops it, keeping what it wrote.
 func (j *jobs) download(lm library.Model) tea.Cmd {
-	dir := discover.Dir(j.env.dirs)
+	dir := discover.Dir(j.env.dirs, j.env.cfg.DefaultModelDir())
 	dst := discover.ContainerFor(dir, lm)
 	if note := discover.SpaceNote(lm, dir, discover.FreeBytes); note != "" {
 		return notify(note)
@@ -186,23 +186,23 @@ func (j *jobs) View(w int) string {
 	if j.title == "" {
 		return ""
 	}
-	iw := w - sCard.GetHorizontalFrameSize()
+	iw := w - sCard().GetHorizontalFrameSize()
 	j.bar.Width = iw
 	var b strings.Builder
-	head := sBold.Render(truncate(j.title, iw-14))
+	head := sBold().Render(truncate(j.title, iw-14))
 	switch {
 	case j.err != "":
-		b.WriteString(sErr.Bold(true).Render("✗ ") + head + "\n")
+		b.WriteString(sErr().Bold(true).Render("✗ ") + head + "\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(cRed).Width(iw).Render(j.err))
 	case j.done:
-		b.WriteString(sBrand.Render("✓ ") + head + "\n")
+		b.WriteString(sBrand().Render("✓ ") + head + "\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Width(iw).Render(j.label))
 	default:
-		b.WriteString(j.env.spin.View() + " " + sMuted.Render(j.stage) + " " + head + "\n")
+		b.WriteString(j.env.spin.View() + " " + sMuted().Render(j.stage) + " " + head + "\n")
 		b.WriteString(j.bar.View() + "\n")
-		b.WriteString(sDim.Render(truncate(j.label, iw)))
+		b.WriteString(sDim().Render(truncate(j.label, iw)))
 	}
-	return sCard.Width(w - sCard.GetHorizontalBorderSize()).Render(b.String())
+	return sCard().Width(w - sCard().GetHorizontalBorderSize()).Render(b.String())
 }
 
 // header is the job in a few words, for the top bar.
@@ -210,5 +210,5 @@ func (j *jobs) header() string {
 	if !j.running {
 		return ""
 	}
-	return j.env.spin.View() + " " + sMuted.Render(fmt.Sprintf("%s %s · %.0f%%", j.stage, j.title, 100*j.bar.Percent()))
+	return j.env.spin.View() + " " + sMuted().Render(fmt.Sprintf("%s %s · %.0f%%", j.stage, j.title, 100*j.bar.Percent()))
 }

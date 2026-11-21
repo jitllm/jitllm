@@ -1,14 +1,16 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jitllm/jitllm/engine"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -76,8 +78,8 @@ func wantEarlyThenFull(t *testing.T, what string, run func(ignore bool) (string,
 	t.Logf("%s: %d tokens without ignore_eos, %d with", what, n, n2)
 }
 
-// TestIgnoreEOSRunsToMaxTokens: `ignore_eos` (the vLLM and llama-server
-// extension) on /v1/chat/completions, /v1/completions and the Connect
+// TestIgnoreEOSRunsToMaxTokens: `ignore_eos` (an extension field beyond the
+// OpenAI API) on /v1/chat/completions, /v1/completions and the Connect
 // GenerateRequest keeps a greedy generate going past the end-of-turn token
 // it otherwise stops on, to exactly max_tokens.
 func TestIgnoreEOSRunsToMaxTokens(t *testing.T) {
@@ -127,7 +129,7 @@ func TestIgnoreEOSRunsToMaxTokens(t *testing.T) {
 // test: the instruct model on the first GPU.
 func TestIgnoreEOSRunsToMaxTokensBatched(t *testing.T) {
 	path := modelPath(t, instructModel)
-	e := New(Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 512})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 512}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "inst", DeviceIDs: []string{"gpu:0"}, Sessions: 1})
 	if err != nil {
@@ -156,4 +158,77 @@ func TestIgnoreEOSRunsToMaxTokensBatched(t *testing.T) {
 			v1.FinishReason_FINISH_REASON_MAX_TOKENS: "length",
 		}[r.finished.GetReason()], len(r.ids)
 	})
+}
+
+// TestIgnoreEOSRunsToTheGrammarsEnd: ignore_eos under a grammar keeps the
+// reply from ending while the grammar lets it go on, and ends it where the
+// grammar can go no further. A grammar of letters runs to max_tokens where
+// the same generate without ignore_eos ends early; a grammar of two words
+// ends on one of them, with ignore_eos or without.
+func TestIgnoreEOSRunsToTheGrammarsEnd(t *testing.T) {
+	e, lm, c := loadedEngine(t, instructModel, "inst", LoadOptions{})
+	conv, err := lm.m.ChatIDsTools([]model.ChatMessage{{Role: "user", Content: ignoreEOSQuestion}}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(grammar string, ignore bool) (string, *Finished) {
+		var text strings.Builder
+		var fin *Finished
+		err := e.Generate(context.Background(), GenerateOptions{ModelID: "inst", Prompt: Prompt{Kind: PromptIDs, IDs: conv},
+			MaxTokens: ignoreEOSMax, Sampling: &engine.Sampler{Temp: 0}, Grammar: grammar, IgnoreEOS: ignore},
+			func(ev Event) error {
+				switch ev.Kind {
+				case EventToken:
+					text.WriteString(ev.Token.Text)
+				case EventFinished:
+					fin = ev.Finished
+				}
+				return nil
+			})
+		if err != nil || fin == nil {
+			t.Fatalf("grammar %q, ignore_eos %v: %v", grammar, ignore, err)
+		}
+		return text.String(), fin
+	}
+	letters := `root ::= [a-zA-Z ,.]+`
+	early, f0 := run(letters, false)
+	if f0.Reason != FinishEOS || f0.CompletionTokens >= ignoreEOSMax {
+		t.Fatalf("letters without ignore_eos: %q, finish %v after %d tokens; the gate needs a reply that ends "+
+			"before the limit", early, f0.Reason, f0.CompletionTokens)
+	}
+	long, f1 := run(letters, true)
+	if f1.Reason != FinishMaxTokens || f1.CompletionTokens != ignoreEOSMax {
+		t.Fatalf("letters with ignore_eos: %q, finish %v after %d tokens, want max_tokens after %d", long,
+			f1.Reason, f1.CompletionTokens, ignoreEOSMax)
+	}
+	// /completion takes the grammar and ignore_eos together.
+	prompt, err := json.Marshal(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(c.url+"/completion", "application/json", strings.NewReader(fmt.Sprintf(
+		`{"prompt":%s,"n_predict":%d,"temperature":0,"grammar":%q,"ignore_eos":true}`, prompt, ignoreEOSMax, letters)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Predicted int    `json:"tokens_predicted"`
+		StopType  string `json:"stop_type"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || resp.StatusCode != 200 || out.Predicted != ignoreEOSMax ||
+		out.StopType != "limit" {
+		t.Fatalf("/completion, letters with ignore_eos: %d %s, want %d tokens to the limit", resp.StatusCode, b, ignoreEOSMax)
+	}
+	for _, ignore := range []bool{false, true} {
+		txt, f := run(`root ::= "Paris" | "London"`, ignore)
+		if (txt != "Paris" && txt != "London") || f.Reason != FinishEOS {
+			t.Fatalf("two words, ignore_eos %v: %q, finish %v", ignore, txt, f.Reason)
+		}
+	}
+	t.Logf("letters: %q in %d tokens, %d with ignore_eos", early, f0.CompletionTokens, f1.CompletionTokens)
 }

@@ -3,6 +3,7 @@ package oracle
 import (
 	"math"
 	"math/rand"
+	"runtime"
 	"testing"
 )
 
@@ -95,7 +96,7 @@ func BenchmarkExp(b *testing.B) {
 				s += math.Exp(v)
 			}
 		}
-		sink = s
+		runtime.KeepAlive(s)
 	})
 	b.Run("fastExp", func(b *testing.B) {
 		var s float64
@@ -104,11 +105,9 @@ func BenchmarkExp(b *testing.B) {
 				s += fastExp(v)
 			}
 		}
-		sink = s
+		runtime.KeepAlive(s)
 	})
 }
-
-var sink float64
 
 // TestSoftmaxOnlineAgrees keeps the benchmark's B arm honest: a wrong answer
 // would make the measurement that rejected it meaningless.

@@ -2,9 +2,13 @@
 
 package gguf
 
-import "syscall"
+import (
+	"syscall"
 
-// Evict drops a range of the mapping from the page cache, so the memory it
+	"github.com/jitllm/jitllm/convert/meta"
+)
+
+// Evict drops a range of f's mapping from the page cache, so the memory it
 // occupied is available for something jitllm would rather keep. It returns the
 // bytes it actually handed back, which is zero when the range holds no whole
 // page or the kernel refused.
@@ -22,11 +26,11 @@ import "syscall"
 // fine), and tensor ranges start on the GGUF's 32-byte alignment, so the range
 // is narrowed to whole pages first (pageAlignIn). The returned byte count lets
 // a gate assert that eviction actually happened.
-func Evict(b []byte) int {
+func Evict(f *meta.File, b []byte) int {
 	// It refuses anything that is not one of this package's mappings: on
 	// anonymous memory (the Go heap) MADV_DONTNEED silently zeroes the page.
 	// See mapped.go.
-	if !Mapped(b) {
+	if !Mapped(f, b) {
 		return 0
 	}
 	p := pageAlignIn(b)

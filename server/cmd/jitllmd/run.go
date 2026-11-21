@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -40,7 +41,7 @@ func cmdRun(ctx context.Context, c cli, args []string) error {
 	queueMS := fs.Int("queue-timeout", 0,
 		"milliseconds to wait for a device another session is holding; 0 waits indefinitely")
 
-	temp := fs.Float64("temp", 0, "sampling temperature; 0 = greedy (default)")
+	temp := fs.Float64("temp", 0, "sampling temperature; 0 = greedy; unset, the draw the model states")
 	topK := fs.Int("top-k", 0, "keep only the k most likely tokens; 0 = off")
 	topP := fs.Float64("top-p", 0, "nucleus sampling; 0 or 1 = off")
 	minP := fs.Float64("min-p", 0, "keep tokens above min-p * p(best); 0 = off")
@@ -261,7 +262,7 @@ func printStarted(w io.Writer, s *v1.GenerateStarted) {
 	if s == nil {
 		return
 	}
-	where := "host"
+	where := nn.CPU
 	if s.GetDeviceBlocks() > 0 {
 		where = strings.Join(s.GetDeviceIds(), ",")
 		if where == "" {
@@ -277,8 +278,8 @@ func printStarted(w io.Writer, s *v1.GenerateStarted) {
 		durMS(s.GetPrefillMillis()))
 	fmt.Fprintf(w, "queued   %s behind %d request(s)\n",
 		durMS(s.GetQueuedMillis()), s.GetQueueDepthOnEntry())
-	fmt.Fprintf(w, "blocks   %d on %s, %d on host\n",
-		s.GetDeviceBlocks(), where, s.GetHostBlocks())
+	fmt.Fprintf(w, "blocks   %d on %s, %d on cpu\n",
+		s.GetDeviceBlocks(), where, s.GetCpuBlocks())
 }
 
 // printFinished reports the rate with the bytes behind it, so it can be
@@ -304,7 +305,7 @@ func printFinished(w io.Writer, s *v1.GenerateStarted, f *v1.GenerateFinished, c
 		finishName(f.GetReason()), stop,
 		f.GetPromptTokens(), f.GetCompletionTokens(), f.GetPosition())
 
-	where := "host"
+	where := nn.CPU
 	if s != nil && s.GetDeviceBlocks() > 0 {
 		if ids := strings.Join(s.GetDeviceIds(), ","); ids != "" {
 			where = fmt.Sprintf("%s + host", ids)

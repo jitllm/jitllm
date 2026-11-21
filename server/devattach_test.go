@@ -17,14 +17,14 @@ import (
 // conversation on from there, and brings them home again, each reply the
 // token-for-token continuation an unmoved host session gives.
 //
-// VIOLATION SIGNATURE. Put back the host-only refusal in RelocateBlocks and
-// the first move fails with "loaded host-only"; skip bindSession and the move
+// VIOLATION SIGNATURE. Put back the CPU-only refusal in RelocateBlocks and
+// the first move fails with "loaded CPU-only"; skip bindSession and the move
 // answers 0 blocks moved; drop the history on the way and a reply parts from
 // the control's.
 func TestAHostLoadedModelRelocatesToADeviceAndBack(t *testing.T) {
 	devs := testdevices.Take(t, 1, "cuda:0")
 	dev := devs[0]
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	// The device gates' small model when it is on the box, else a Qwen3
 	// container the model directory holds.
@@ -92,7 +92,7 @@ func TestAHostLoadedModelRelocatesToADeviceAndBack(t *testing.T) {
 		t.Fatalf("after the move to %s the reply parts from the host control: %v and %v", dev, got, ctl[1])
 	}
 	if _, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
-		SessionId: "moved", FirstBlock: 0, LastBlock: int32(devBlocks("moved")) - 1, ToHost: true,
+		SessionId: "moved", FirstBlock: 0, LastBlock: int32(devBlocks("moved")) - 1, ToDeviceId: "cpu",
 	})); err != nil {
 		t.Fatalf("bringing the blocks home: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestADeviceOutsideTheTierJoinsIt(t *testing.T) {
 	if _, err := os.Stat(testmodels.Path(name)); err != nil {
 		name = "Qwen3-0.6B-Q8_0.jlm"
 	}
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: modelPath(t, name), ModelID: "one", DeviceIDs: devs[:1]})
 	if err != nil {
@@ -167,7 +167,7 @@ func TestADeviceOutsideTheTierJoinsIt(t *testing.T) {
 	}
 }
 
-// TestAMiddleRangeMovesUpAndASubRangeComesHome: blocks of a host-loaded
+// TestAMiddleRangeMovesUpAndASubRangeMovesToTheCPU: blocks of a host-loaded
 // model's session go to a device as a range in the middle of the stack, with
 // the blocks either side left at home, and a sub-range of them comes home
 // again leaving a hole between two device runs; each reply is the unmoved
@@ -176,13 +176,13 @@ func TestADeviceOutsideTheTierJoinsIt(t *testing.T) {
 // VIOLATION SIGNATURE. Put back "only a range that EXTENDS the set" and the
 // first move is refused; send the range to the head and the placement holds
 // no host block below the range.
-func TestAMiddleRangeMovesUpAndASubRangeComesHome(t *testing.T) {
+func TestAMiddleRangeMovesUpAndASubRangeMovesToTheCPU(t *testing.T) {
 	dev := testdevices.Take(t, 1, "cuda:0")[0]
 	name := deviceModel
 	if _, err := os.Stat(testmodels.Path(name)); err != nil {
 		name = "Qwen3-0.6B-Q8_0.jlm"
 	}
-	e := New(Config{Version: "test", NoMemCache: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: modelPath(t, name), ModelID: "host", DeviceIDs: []string{"cpu"}})
 	if err != nil {
@@ -222,9 +222,9 @@ func TestAMiddleRangeMovesUpAndASubRangeComesHome(t *testing.T) {
 	}
 	move := func(first, last int, toHost bool) {
 		t.Helper()
-		r := &v1.RelocateBlocksRequest{SessionId: "moved", FirstBlock: int32(first), LastBlock: int32(last), ToHost: toHost}
-		if !toHost {
-			r.ToDeviceId = dev
+		r := &v1.RelocateBlocksRequest{SessionId: "moved", FirstBlock: int32(first), LastBlock: int32(last), ToDeviceId: dev}
+		if toHost {
+			r.ToDeviceId = "cpu"
 		}
 		resp, err := c.placement.RelocateBlocks(ctx, req(r))
 		if err != nil {

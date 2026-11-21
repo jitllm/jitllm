@@ -35,9 +35,9 @@ func mmapFile(path string, noWarm bool) ([]byte, func() error, error) {
 	// No readahead advice (fadvise SEQUENTIAL, MAP_POPULATE, WILLNEED): measured
 	// cold, it bought nothing on a dense model (fault-around is already at the
 	// device limit) and was worse on a mixture, where whole-file advice reads
-	// experts the router never selects. See docs/engineering-history/placement.md
+	// experts the router never selects. See .notes/engineering-history/placement.md
 	// ("No mmap of files") for the madvise measurement, and model-correctness.md
-	// 14h for what the missing advice means to a cold comparison with llama.cpp.
+	// 14h for what the missing advice means to a cold comparison row.
 	//
 	// Fault the mapping in from several goroutines behind the caller, bounded
 	// by the budget; see warm and warmSpan. The stop must run before the

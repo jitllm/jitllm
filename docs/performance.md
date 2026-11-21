@@ -40,6 +40,6 @@ decoding together (0.94x; four together are 1.06x). Some pairs could not run:
 vLLM cannot load several of these models on a V100, SGLang refuses below sm_75 and TensorRT-LLM supports Ampere and newer, mistral.rs has no V100
 build, and ZML's CUDA build dropped Volta.
 
-The [scoreboard](perf/current.md) has every row, the commands and engine
+The [scoreboard](../.notes/perf/current.md) has every row, the commands and engine
 versions, and what is measured about each loss.
 [`scripts/vs-llamacpp.sh`](../scripts/vs-llamacpp.sh) measures your own machine.

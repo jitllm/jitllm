@@ -9,23 +9,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/server"
 )
 
 // TestModelsSetsAliasesAndDisables: `jitllmd models -alias/-disable/-enable`
 // reach the server's models folder and `jitllmd models` shows them.
 func TestModelsSetsAliasesAndDisables(t *testing.T) {
+	fresh.Must(t, testmodels.Path("stories260K.jlm"))
 	b, err := os.ReadFile(testmodels.Path("stories260K.jlm"))
 	if err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "stories260K.jlm"), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := server.New(server.Config{ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
-		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindHost, Available: true}}, nil
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
+		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindCPU, Available: true}}, nil
 	}})
 	defer e.Close()
 	s := httptest.NewServer(e.Handler())

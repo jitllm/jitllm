@@ -81,7 +81,7 @@ func TestSendCarriesThePicture(t *testing.T) {
 // "Prompt file..." takes text, not whatever file it is handed.
 func TestPromptFileRefusesAPictureAndBinary(t *testing.T) {
 	dir := t.TempDir()
-	png := filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
+	png := filepath.Join("..", "..", "engine", "testdata", "quad-and-disc.png")
 	bin := filepath.Join(dir, "blob.dat")
 	if err := os.WriteFile(bin, []byte{'a', 0, 'b'}, 0o644); err != nil {
 		t.Fatal(err)

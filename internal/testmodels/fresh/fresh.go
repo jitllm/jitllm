@@ -16,33 +16,31 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-var done sync.Map
-
-type result struct {
-	once sync.Once
-	err  error
-}
-
-// Container makes the container at path one this build reads, once per
-// process: a container that does not open and has X.gguf beside it is
-// reconverted from that. A container that opens, a path that is not a
-// container, an absent one and one with no single GGUF beside it (a merged
-// vision container) are left alone, and the caller's load says what is wrong.
+// Container makes the container at path one this build reads: a container that
+// does not open and has X.gguf beside it is reconverted from that, and a
+// merged vision container X-vlm.jlm written before the converter stated its
+// projector's tower is reconverted from X.gguf and mmproj-X.gguf, and one
+// whose chat template states no tool form is reconverted too, as is one whose
+// tower states its pictures causal beside the layers its text model states
+// they see each other on (Gemma 4's, before the converter stated it), as is one
+// that states no graph for some of its blocks (written before the converter
+// stated them, which the front end refuses). An absent
+// container with its source beside it is converted from it: a missing
+// artefact is a task. A container that opens and states all of that, a path
+// that is not a container and one with no source are left alone, and the
+// caller's load says what is wrong.
 func Container(path string) error {
 	if !strings.HasSuffix(path, jlm.Ext) {
 		return nil
 	}
-	v, _ := done.LoadOrStore(path, &result{})
-	r := v.(*result)
-	r.once.Do(func() { r.err = reconvert(path) })
-	return r.err
+	return reconvert(path)
 }
 
 // Must is Container failing t.
@@ -56,25 +54,98 @@ func Must(t testing.TB, path string) {
 func reconvert(path string) error {
 	c, openErr := jlm.Open(path)
 	if openErr == nil {
+		stated := len(c.Config().Acts) > 0
+		v := c.Vision()
+		tower := v == nil || v.Tower != nil || !convert.StatesTower(v.Projector)
+		voc := c.Vocab()
+		tools := voc == nil || len(voc.Templates) == 0 || len(voc.Tools.Calls) > 0
+		cfg := c.Config()
+		streams := (cfg.AttnResBlock == 0 && cfg.HCLowRank == 0 || cfg.Streams.N > 1) &&
+			(cfg.NGramBlock == 0 || convert.StatesPre(cfg)) &&
+			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
+		// Fitted temperatures and head blocks are a decision model's, routing
+		// blocks a joint head's, and a head with a tower d1-omni's media
+		// prefix: each converted since its readout was stated states it.
+		labels := cfg.Decides() || len(cfg.DecisionTemps) == 0 && cfg.DecisionBlocks == 0
+		joint := cfg.JointHead != nil || cfg.DecisionRouting == 0
+		media := cfg.Flags2.Has(jlm.Flag2MediaPrefix) || !cfg.Flags2.Has(jlm.Flag2HeadBlocks) || v == nil
+		audio := v == nil || v.Audio == nil || v.Audio.Tower != nil
+		video := v == nil || v.Tower == nil || v.Tower.Video != nil || !convert.StatesVideo(v.Projector)
+		bidir := v == nil || v.Tower == nil || len(c.Config().BidirLayers) == 0 || v.Tower.Span.Bidir
+		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0
+		heads := len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.PredictionBlocks())
+		rev := (cfg.Revision >= 1 || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
+			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
+			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&
+			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
-		return nil
+		switch {
+		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video && bidir && heads:
+			return nil
+		case !heads:
+			openErr = fmt.Errorf("it states no graph for some of its blocks")
+		case !bidir:
+			openErr = fmt.Errorf("it states the layers a picture's rows see each other on, and its pictures causal")
+		case !video:
+			openErr = fmt.Errorf("it states no video for its tower")
+		case !audio:
+			openErr = fmt.Errorf("it states no audio tower")
+		case !media:
+			openErr = fmt.Errorf("it states no media prefix")
+		case !joint:
+			openErr = fmt.Errorf("it states no joint head")
+		case !marker:
+			openErr = fmt.Errorf("it states no marker prompt for its head")
+		case !labels:
+			openErr = fmt.Errorf("it states no readout for its decision head")
+		case !rev:
+			openErr = fmt.Errorf("it states nothing of its sliding layers or its rotary layout")
+		case !streams:
+			openErr = fmt.Errorf("it states no residual streams")
+		case stated && tower:
+			openErr = fmt.Errorf("its chat template states no tool form")
+		case !stated:
+			// Written before the converter stated activations: it opens, and
+			// the front end refuses its blocks.
+			openErr = fmt.Errorf("it states no activations")
+		default:
+			openErr = fmt.Errorf("it states no tower for its %v projector", v.Projector)
+		}
 	}
-	if _, err := os.Stat(path); err != nil {
-		return nil
+	base := strings.TrimSuffix(path, jlm.Ext)
+	src, mm := base+".gguf", ""
+	if text, ok := strings.CutSuffix(base, "-vlm"); ok {
+		src = text + ".gguf"
+		mm = filepath.Join(filepath.Dir(text), "mmproj-"+filepath.Base(text)+".gguf")
+		if _, err := os.Stat(mm); err != nil {
+			return nil
+		}
 	}
-	src := strings.TrimSuffix(path, jlm.Ext) + ".gguf"
 	if _, err := os.Stat(src); err != nil {
 		return nil
 	}
-	// A private name and a rename: another test binary must not open a
-	// half-written container. The private name keeps the extension, as the
-	// converter writes nothing else.
+	// A private name and a rename: another test binary, or another test of
+	// this one, must not open a half-written container or write the same
+	// file. The private name keeps the extension, as the converter writes
+	// nothing else.
 	tmp := filepath.Join(filepath.Dir(path),
-		fmt.Sprintf(".%s.%d%s", strings.TrimSuffix(filepath.Base(path), jlm.Ext), os.Getpid(), jlm.Ext))
-	if _, err := convert.FromGGUFs(src, "", tmp, jlm.Fingerprint{Host: "test"}); err != nil {
+		fmt.Sprintf(".%s.%d.%d%s", strings.TrimSuffix(filepath.Base(path), jlm.Ext), os.Getpid(), time.Now().UnixNano(), jlm.Ext))
+	if _, err := convert.FromGGUFs(src, mm, tmp, jlm.Fingerprint{Host: "test"}); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("%s does not open (%v), and reconverting it from %s failed: %w",
 			filepath.Base(path), openErr, filepath.Base(src), err)
 	}
 	return os.Rename(tmp, path)
+}
+
+// storesAny reports that some block of c stores one of rs.
+func storesAny(c *jlm.File, rs ...jlm.Role) bool {
+	for bi := range c.Config().NLayer {
+		for _, r := range rs {
+			if c.Has(r, int32(bi), -1) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -1,14 +1,12 @@
 package jlm
 
-import "fmt"
-
 // Clef's joint schema head (Cloudflare/clef-flash, joint_schema_model.py's
-// JointSchemaHead), as llama.cpp's converter names it (conversion/clef.py):
+// JointSchemaHead), as its GGUF names it:
 // the decision.* tensors are model-level, and the head's blocks, dec.blk.N,
-// are stored at DenseBlock with Index N -- the routing blocks first
-// (Config.DecisionRouting of them), then the joint ones (Config.DecisionBlocks)
-// -- so they never meet a backbone block's number. A group of its own, counted
-// up from 800.
+// are model-level too under roles of their own (RoleDecBlock) -- the routing
+// blocks first (Config.DecisionRouting of them), then the joint ones
+// (Config.DecisionBlocks) -- so they never meet a backbone block's number. A
+// group of its own, counted up from 800.
 const (
 	// The LayerNorm over the backbone's final hidden states, and the six
 	// projections out of the backbone's width into the head's.
@@ -63,37 +61,130 @@ const (
 	RoleDecFFNDownBias     Role = 847
 )
 
-var decisionRoleNames = map[Role]string{
-	RoleDecHiddenNorm: "decision.hidden_norm", RoleDecHiddenNormBias: "decision.hidden_norm.bias",
-	RoleDecProjMemory: "decision.proj_memory", RoleDecProjQuestion: "decision.proj_question",
-	RoleDecProjOptQ: "decision.proj_option_question", RoleDecProjGlobal: "decision.proj_global",
-	RoleDecProjOptCtx: "decision.proj_option_context", RoleDecProjOptLex: "decision.proj_option_lexical",
-	RoleDecOptSumNorm: "decision.option_summary_norm", RoleDecOptSumNormBias: "decision.option_summary_norm.bias",
-	RoleDecFieldNorm: "decision.field_norm", RoleDecFieldNormBias: "decision.field_norm.bias",
-	RoleDecOptNorm: "decision.option_norm", RoleDecOptNormBias: "decision.option_norm.bias",
-	RoleDecScales:   "decision.scales",
-	RoleDecSelfNorm: "dec.attn_norm", RoleDecSelfNormBias: "dec.attn_norm.bias",
-	RoleDecSelfQ: "dec.attn_q", RoleDecSelfK: "dec.attn_k", RoleDecSelfV: "dec.attn_v", RoleDecSelfOut: "dec.attn_o",
-	RoleDecSelfQBias: "dec.attn_q.bias", RoleDecSelfKBias: "dec.attn_k.bias",
-	RoleDecSelfVBias: "dec.attn_v.bias", RoleDecSelfOutBias: "dec.attn_o.bias",
-	RoleDecCrossNorm: "dec.cross_attn_norm", RoleDecCrossNormBias: "dec.cross_attn_norm.bias",
-	RoleDecCrossKVNorm: "dec.cross_attn_norm_kv", RoleDecCrossKVNormBias: "dec.cross_attn_norm_kv.bias",
-	RoleDecCrossQ: "dec.cross_attn_q", RoleDecCrossK: "dec.cross_attn_k",
-	RoleDecCrossV: "dec.cross_attn_v", RoleDecCrossOut: "dec.cross_attn_o",
-	RoleDecCrossQBias: "dec.cross_attn_q.bias", RoleDecCrossKBias: "dec.cross_attn_k.bias",
-	RoleDecCrossVBias: "dec.cross_attn_v.bias", RoleDecCrossOutBias: "dec.cross_attn_o.bias",
-	RoleDecFFNNorm: "dec.ffn_norm", RoleDecFFNNormBias: "dec.ffn_norm.bias",
-	RoleDecFFNUp: "dec.ffn_up", RoleDecFFNUpBias: "dec.ffn_up.bias",
-	RoleDecFFNDown: "dec.ffn_down", RoleDecFFNDownBias: "dec.ffn_down.bias",
+// A joint head's block k stores its tensors under roles of its own,
+// RoleDecBlock(k, r) for r of RoleDecSelfNorm..RoleDecFFNDownBias: from
+// RoleDecBlockBase, 32 a block, for decBlocks blocks.
+const (
+	RoleDecBlockBase Role = 2000
+	decBlockRoles         = 32
+	decBlocks             = 64
+)
+
+// RoleDecBlock is head block k's role of kind r (RoleDecSelfNorm ..
+// RoleDecFFNDownBias).
+func RoleDecBlock(k int, r Role) Role {
+	return RoleDecBlockBase + Role(k*decBlockRoles) + (r - RoleDecSelfNorm)
 }
 
-func init() {
-	for r, n := range decisionRoleNames {
-		// Another group taking the same number would rename its role here
-		// and read one tensor as the other.
-		if was, ok := roleNames[r]; ok {
-			panic(fmt.Sprintf("jlm: role %d is both %q and %q", r, was, n))
-		}
-		roleNames[r] = n
+// DecBlockOf is the head block and the kind of a RoleDecBlock role, false
+// for any other.
+func DecBlockOf(r Role) (int, Role, bool) {
+	if r < RoleDecBlockBase || r >= RoleDecBlockBase+decBlockRoles*decBlocks {
+		return 0, 0, false
 	}
+	o := int(r - RoleDecBlockBase)
+	kind := RoleDecSelfNorm + Role(o%decBlockRoles)
+	if kind > RoleDecFFNDownBias {
+		return 0, 0, false
+	}
+	return o / decBlockRoles, kind, true
+}
+
+func decisionRoleName(r Role) (string, bool) {
+	if k, kind, ok := DecBlockOf(r); ok {
+		n, ok := decisionRoleName(kind)
+		if !ok {
+			return "", false
+		}
+		return "dec.blk." + itoa(uint64(k)) + n[len("dec"):], true
+	}
+	switch r {
+	case RoleDecHiddenNorm:
+		return "decision.hidden_norm", true
+	case RoleDecHiddenNormBias:
+		return "decision.hidden_norm.bias", true
+	case RoleDecProjMemory:
+		return "decision.proj_memory", true
+	case RoleDecProjQuestion:
+		return "decision.proj_question", true
+	case RoleDecProjOptQ:
+		return "decision.proj_option_question", true
+	case RoleDecProjGlobal:
+		return "decision.proj_global", true
+	case RoleDecProjOptCtx:
+		return "decision.proj_option_context", true
+	case RoleDecProjOptLex:
+		return "decision.proj_option_lexical", true
+	case RoleDecOptSumNorm:
+		return "decision.option_summary_norm", true
+	case RoleDecOptSumNormBias:
+		return "decision.option_summary_norm.bias", true
+	case RoleDecFieldNorm:
+		return "decision.field_norm", true
+	case RoleDecFieldNormBias:
+		return "decision.field_norm.bias", true
+	case RoleDecOptNorm:
+		return "decision.option_norm", true
+	case RoleDecOptNormBias:
+		return "decision.option_norm.bias", true
+	case RoleDecScales:
+		return "decision.scales", true
+	case RoleDecSelfNorm:
+		return "dec.attn_norm", true
+	case RoleDecSelfNormBias:
+		return "dec.attn_norm.bias", true
+	case RoleDecSelfQ:
+		return "dec.attn_q", true
+	case RoleDecSelfK:
+		return "dec.attn_k", true
+	case RoleDecSelfV:
+		return "dec.attn_v", true
+	case RoleDecSelfOut:
+		return "dec.attn_o", true
+	case RoleDecSelfQBias:
+		return "dec.attn_q.bias", true
+	case RoleDecSelfKBias:
+		return "dec.attn_k.bias", true
+	case RoleDecSelfVBias:
+		return "dec.attn_v.bias", true
+	case RoleDecSelfOutBias:
+		return "dec.attn_o.bias", true
+	case RoleDecCrossNorm:
+		return "dec.cross_attn_norm", true
+	case RoleDecCrossNormBias:
+		return "dec.cross_attn_norm.bias", true
+	case RoleDecCrossKVNorm:
+		return "dec.cross_attn_norm_kv", true
+	case RoleDecCrossKVNormBias:
+		return "dec.cross_attn_norm_kv.bias", true
+	case RoleDecCrossQ:
+		return "dec.cross_attn_q", true
+	case RoleDecCrossK:
+		return "dec.cross_attn_k", true
+	case RoleDecCrossV:
+		return "dec.cross_attn_v", true
+	case RoleDecCrossOut:
+		return "dec.cross_attn_o", true
+	case RoleDecCrossQBias:
+		return "dec.cross_attn_q.bias", true
+	case RoleDecCrossKBias:
+		return "dec.cross_attn_k.bias", true
+	case RoleDecCrossVBias:
+		return "dec.cross_attn_v.bias", true
+	case RoleDecCrossOutBias:
+		return "dec.cross_attn_o.bias", true
+	case RoleDecFFNNorm:
+		return "dec.ffn_norm", true
+	case RoleDecFFNNormBias:
+		return "dec.ffn_norm.bias", true
+	case RoleDecFFNUp:
+		return "dec.ffn_up", true
+	case RoleDecFFNUpBias:
+		return "dec.ffn_up.bias", true
+	case RoleDecFFNDown:
+		return "dec.ffn_down", true
+	case RoleDecFFNDownBias:
+		return "dec.ffn_down.bias", true
+	}
+	return "", false
 }

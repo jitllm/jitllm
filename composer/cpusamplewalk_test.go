@@ -1,0 +1,88 @@
+package composer
+
+import (
+	"math"
+	"math/rand"
+	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/oracle"
+)
+
+// TestComposedCPUSampleWalk holds graph.SampleWalk on the CPU device to its
+// definition, the host sampler's top-k draw: the token of every draw whose
+// point clears each edge of the survivors' cumulative mass by a margin
+// float32 cannot cross, over random logits, k, temperatures, cuts and
+// uniforms, u at 0 and just under 1 among them (u at 0 held whatever its
+// margin: it lands on the best).
+func TestComposedCPUSampleWalk(t *testing.T) {
+	const n, K, H = 300, 16, 8
+	g := (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K}}).Build()
+	if err := graph.Verify(g, graph.Facts{}); err != nil {
+		t.Fatal(err)
+	}
+	in := map[string]graph.ValueID{}
+	for _, v := range g.In {
+		in[g.Values[v].Name] = v
+	}
+	tokV := g.Out[0]
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	win := make([]uint32, n)
+	walk := func(logits []float32, k int, invT, topp, minp, u float32) uint32 {
+		lw := make([]uint32, n)
+		for i, v := range logits {
+			lw[i] = math.Float32bits(v)
+		}
+		vals := map[graph.ValueID][]uint32{
+			in["logits"]: lw, in["sample.window"]: append([]uint32(nil), win...), in["sample.penalty"]: {math.Float32bits(1), 0, 0},
+			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u), math.Float32bits(float32(math.Inf(1))), math.Float32bits(float32(math.Inf(1))), 0, 0, math.Float32bits(1), math.Float32bits(invT)},
+			tokV:              {0},
+		}
+		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
+			t.Fatal(err)
+		}
+		return vals[tokV][0]
+	}
+	rng := rand.New(rand.NewSource(29))
+	decisive, cases := 0, 0
+	for c := range 600 {
+		l := make([]float32, n)
+		for i := range l {
+			l[i] = float32(rng.NormFloat64() * 3)
+		}
+		k := 1 + rng.Intn(K)
+		invT := 1 / (0.3 + 1.5*rng.Float64())
+		topp, minp := math.Inf(1), 0.0
+		if c%3 != 0 {
+			topp = 0.3 + 0.7*rng.Float64()
+		}
+		if c%2 == 0 {
+			minp = 0.1 * rng.Float64()
+		}
+		u := float64(float32(rng.Float64()))
+		switch c % 50 {
+		case 0:
+			u = 0
+		case 1:
+			u = float64(math.Nextafter32(1, 0))
+		}
+		want, margin := oracle.SampleWalk(l, K, k, invT, topp, minp, math.Inf(1), math.Inf(1), [2]float64{}, u)
+		got := walk(l, k, float32(invT), float32(topp), float32(minp), float32(u))
+		cases++
+		if margin < 1e-4 && c%50 != 0 {
+			continue
+		}
+		decisive++
+		if got != want {
+			t.Fatalf("case %d (k %d, 1/T %.3f, top-p %.3f, min-p %.3f, u %.6f): drew %d, want %d (margin %.3g)", c, k, invT, topp, minp, u, got, want, margin)
+		}
+	}
+	if decisive < cases*9/10 {
+		t.Fatalf("%d of %d draws decisive: the comparison sees too little", decisive, cases)
+	}
+	t.Logf("%d of %d walks decisive and right", decisive, cases)
+}

@@ -29,14 +29,14 @@
       "note": "the CLI: flags, environment, doctor, capabilities"
     },
     "jit-cpu": {
-      "module": ".", "packages": ["./jit/cpu/..."], "cap": "8G",
-      "note": "every host emitter against the oracle at ragged widths (RULE 8), and no assembly but the trampolines"
+      "module": ".", "packages": ["./engine/device/cpu/...", "./engine/device/cpudev/..."], "cap": "8G",
+      "note": "every host emitter against the oracle at ragged widths (RULE 8), the CPU device's runtime, and no pregenerated kernel but the trampolines"
     },
     "nn": {
-      "module": ".", "packages": ["./engine/nn/...", "./engine/grammar/..."], "cap": "8G"
+      "module": ".", "packages": ["./nn/...", "./grammar/..."], "cap": "8G"
     },
     "sched": {
-      "module": ".", "packages": ["./engine/sched/..."], "cap": "8G",
+      "module": ".", "packages": ["./sched/..."], "cap": "8G",
       "note": "the pool, core sets and memory budgets"
     },
     "format": {
@@ -54,36 +54,45 @@
       "note": "tokenizers against their references"
     },
     "model-correctness": {
-      "module": ".", "packages": ["./engine/model"], "run": "TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestSafetensorsMatchTransformers|TestTowerEncodes", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestSafetensorsMatchTransformers|TestStatedTowerEncodesAPicture", "cap": "16G",
       "needs": {"models": true},
-      "note": "the engine against llama.cpp, transformers and its own batched path (RULE 7, RULE 11d); run the same on the arm64 host"
+      "note": "the engine against its reference oracles, transformers and its own batched path (RULE 7, RULE 11d); run the same on the arm64 host"
     },
     "five-principles": {
-      "module": ".", "packages": ["./engine/model"], "run": "TestEveryModelRunsGenerated|TestDecodeDoesNotAllocate|TestPagingDoesNotChangeTheAnswer|TestOpenHonoursAPageBudget|TestForwardBatchFaultsItsBlocksIn|TestTwoPagedModels|TestWindowedLayersHoldTheirWindow|TestPrefixCacheRestoresAWindowedLayer", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "TestEveryModelRunsGenerated|TestDecodeDoesNotAllocate|TestPagingDoesNotChangeTheAnswer|TestOpenHonoursAPageBudget|TestForwardBatchFaultsItsBlocksIn|TestTwoPagedModels|TestWindowedLayersHoldTheirWindow|TestPrefixCacheRestoresAWindowedLayer", "cap": "16G",
       "needs": {"models": true},
       "note": "the five principles' host gates: generated code, paging and zero-allocation decode"
     },
     "relocation": {
-      "module": ".", "packages": ["./engine/model"], "run": "TestLayerRelocatesToAnotherDevice|TestRelocatedBlocksComeBack|TestKVPagesRelocateWithTheLayer|TestBatchSeamMovesCarryEveryRow|TestMLASeamMovesWithItsHistory|TestShrinkingTheSeamBringsTheSummaryHome", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "TestLayerRelocatesToAnotherDevice|TestRelocatedBlocksComeBack|TestKVPagesRelocateWithTheLayer|TestBatchSeamMovesCarryEveryRow|TestMLASeamMovesWithItsHistory|TestShrinkingTheSeamMovesTheSummaryToTheCPU|TestBlocksPageOnTheListedCard", "cap": "16G",
       "needs": {"models": true, "device": true},
       "note": "relocation, host <-> device and between devices"
     },
     "device-model": {
-      "module": ".", "packages": ["./engine/model"], "run": "OnEveryDevice|TestDeviceMatchesHost|TestTowerOnDeviceMatchesHost", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "OnEveryDevice|TestDeviceMatchesHost|TestStatedTowerRunsOnTheCard", "cap": "16G",
       "needs": {"models": true, "device": true},
       "note": "every graph feature on the device, every block placed against the host (RULE 11c)"
     },
     "gpu-lowering": {
-      "module": ".", "packages": ["./jit/gpu/ir/...", "./jit/gpu/ptx/...", "./jit/gpu/spirv/...", "./jit/gpu/msl/...", "./jit/gpu/amdgpu/...", "./jit/gpu/lowertest/...", "./jit/gpu/kernels/..."], "cap": "8G",
+      "module": ".", "packages": ["./composer/ir/...", "./composer/ptx/...", "./composer/spirv/...", "./composer/msl/...", "./composer/amdgpu/..."], "cap": "8G",
       "note": "the IR and its four lowerings; runs with no GPU"
     },
     "gpu-backend": {
-      "module": ".", "packages": ["./jit/gpu/backend/...", "./jit/gpu/cuda/...", "./jit/gpu/vulkan/...", "./jit/gpu/metal/...", "./jit/gpu/hip/...", "./jit/gpu/ffi/..."], "cap": "8G",
+      "module": ".", "packages": ["./backend/...", "./backend/cuda/...", "./backend/vulkan/...", "./backend/metal/...", "./backend/hip/...", "./backend/ffi/..."], "cap": "8G",
       "needs": {"device": true},
       "note": "the backends against the oracle on a real device"
     },
+    "composer": {
+      "module": ".", "packages": ["./composer", "./composer/x86/...", "./graph/...", "./engine/cost/...", "./engine/probe/..."], "cap": "16G",
+      "note": "the composer: the graph, its lowering and passes, the one keyed cache, the estimator and the hardware probes"
+    },
+    "composed": {
+      "module": ".", "packages": ["./engine"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestComposedHead|TestC6ServesComposed|TestPrefillFoldsALayerNormHead|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnce|TestSessionsRelocateAtOnce|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
+      "needs": {"models": true, "device": true},
+      "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; every device gate runs composed (docs/testing.md)"
+    },
     "gpu-tier": {
-      "module": ".", "packages": ["./jit/gpu/tier/..."], "cap": "16G",
+      "module": ".", "packages": ["./engine/device/gpu/..."], "cap": "16G",
       "needs": {"device": true},
       "note": "placement, budgets and multi-device"
     },
@@ -102,7 +111,7 @@
       "module": "tui", "packages": ["./..."], "cap": "8G"
     },
     "dev-tools": {
-      "module": ".", "packages": ["./dev/tools/...", "./dev/probe/...", "./dev/httpbench/...", "./dev/decisionbench/..."], "cap": "8G",
+      "module": ".", "packages": ["./dev/tools/...", "./dev/httpbench/...", "./dev/decisionbench/..."], "cap": "8G",
       "note": "the harnesses' own tests; dev/bench's perf floors are measured serially by the main session (RULE 2, RULE 4) and are not run here"
     },
     "scripts": {
@@ -115,48 +124,55 @@
     }
   },
   "entries": [
-    {"prefix": "engine/model/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "vet"]},
-    {"prefix": "engine/nn/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
-    {"prefix": "engine/grammar/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
-    {"prefix": "engine/sched/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
-    {"prefix": "jit/cpu/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
-    {"prefix": "jit/gpu/ir/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/ptx/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/spirv/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/msl/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/amdgpu/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/lowertest/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/kernels/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "five-principles", "vet"]},
-    {"prefix": "jit/gpu/backend/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "relocation", "capabilities", "vet"]},
-    {"prefix": "jit/gpu/cuda/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/vulkan/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/metal/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/hip/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/ffi/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/tier/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "vet"]},
-    {"prefix": "format/jlm/", "evidence": "docs/engineering-history/placement.md", "checks": ["format", "five-principles", "model-correctness", "capabilities", "vet"]},
-    {"prefix": "format/quant/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["format", "jit-cpu", "capabilities", "srcgate", "vet"]},
-    {"prefix": "convert/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["convert", "srcgate", "capabilities", "model-correctness", "vet"]},
-    {"prefix": "tok/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["tok", "model-correctness", "vet"]},
+    {"prefix": "model/", "evidence": ".notes/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "composed", "vet"]},
+    {"prefix": "engine/*", "evidence": ".notes/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "composed", "vet"]},
+    {"prefix": "nn/", "evidence": ".notes/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
+    {"prefix": "grammar/", "evidence": ".notes/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
+    {"prefix": "sched/", "evidence": ".notes/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
+    {"prefix": "engine/device/cpu/", "evidence": ".notes/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
+    {"prefix": "composer/ir/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/ptx/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/spirv/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/msl/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "composer/amdgpu/", "evidence": ".notes/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
+    {"prefix": "backend/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "relocation", "capabilities", "vet"]},
+    {"prefix": "backend/cuda/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
+    {"prefix": "backend/vulkan/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
+    {"prefix": "backend/metal/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
+    {"prefix": "backend/hip/", "evidence": ".notes/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
+    {"prefix": "backend/ffi/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
+    {"prefix": "engine/device/gpu/", "evidence": ".notes/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "composed", "vet"]},
+    {"prefix": "engine/device/cpudev/", "evidence": ".notes/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "model-correctness", "five-principles", "relocation", "composed", "vet"]},
+    {"prefix": "engine/testdata/", "evidence": "docs/testing.md", "checks": ["model-correctness", "five-principles", "composed", "vet"]},
+    {"prefix": "composer/x86/", "evidence": ".notes/engineering-history/cpu-kernels.md", "checks": ["composer", "vet"]},
+    {"prefix": "composer/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
+    {"prefix": "graph/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
+    {"prefix": "engine/cost/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
+    {"prefix": "engine/probe/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
+    {"prefix": "format/jlm/", "evidence": ".notes/engineering-history/placement.md", "checks": ["format", "five-principles", "model-correctness", "capabilities", "vet"]},
+    {"prefix": "format/quant/", "evidence": ".notes/engineering-history/cpu-kernels.md", "checks": ["format", "jit-cpu", "capabilities", "srcgate", "vet"]},
+    {"prefix": "format/layout/", "evidence": ".notes/engineering-history/gpu-kernels.md", "checks": ["format", "gpu-tier", "composer", "five-principles", "vet"]},
+    {"prefix": "convert/", "evidence": ".notes/engineering-history/model-correctness.md", "checks": ["convert", "srcgate", "capabilities", "model-correctness", "vet"]},
+    {"prefix": "tok/", "evidence": ".notes/engineering-history/model-correctness.md", "checks": ["tok", "model-correctness", "vet"]},
     {"prefix": "internal/capabilities/", "evidence": "docs/capabilities.md", "checks": ["capabilities", "capabilities-api", "vet"]},
     {"prefix": "internal/modelsdoc/", "evidence": "docs/models.md", "checks": ["srcgate", "vet"]},
-    {"prefix": "internal/oracle/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["srcgate", "jit-cpu", "nn", "vet"]},
+    {"prefix": "internal/oracle/", "evidence": ".notes/engineering-history/cpu-kernels.md", "checks": ["srcgate", "jit-cpu", "nn", "vet"]},
     {"prefix": "internal/testmodels/", "evidence": "docs/testing.md", "checks": ["srcgate", "vet"]},
     {"prefix": "internal/", "evidence": "docs/testing.md", "checks": ["srcgate", "vet"]},
     {"prefix": "cmd/", "evidence": "README.md", "checks": ["cmd", "vet"]},
     {"prefix": "server/capabilities.go", "evidence": "docs/capabilities.md", "checks": ["capabilities-api", "capabilities"]},
     {"prefix": "server/gen/", "evidence": "proto/jitllm/v1", "checks": ["proto", "server"]},
-    {"prefix": "server/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["server", "capabilities-api", "vet-server"]},
+    {"prefix": "server/", "evidence": ".notes/engineering-history/scheduling-and-measurement.md", "checks": ["server", "capabilities-api", "vet-server"]},
     {"prefix": "proto/", "evidence": "proto/jitllm/v1", "checks": ["proto", "server", "capabilities-api"]},
     {"prefix": "common/", "evidence": "README.md", "checks": ["common"]},
     {"prefix": "ui/", "evidence": "README.md", "checks": ["ui"]},
     {"prefix": "tui/", "evidence": "README.md", "checks": ["tui"]},
-    {"prefix": "dev/bench/", "evidence": "docs/perf/current.md", "checks": ["vet"], "manual": "perf floors: measured serially by the main session under RULE 1 and RULE 2, never by a parallel agent"},
-    {"prefix": "dev/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["dev-tools", "vet"]},
+    {"prefix": "dev/bench/", "evidence": ".notes/perf/current.md", "checks": ["vet"], "manual": "perf floors: measured serially by the main session under RULE 1 and RULE 2, never by a parallel agent"},
+    {"prefix": "dev/", "evidence": ".notes/engineering-history/scheduling-and-measurement.md", "checks": ["dev-tools", "vet"]},
     {"prefix": "scripts/checks/", "evidence": "docs/checks.md", "checks": ["checks-map"]},
     {"prefix": "scripts/rewind/", "evidence": "docs/checks.md", "checks": ["scripts"]},
     {"prefix": "scripts/genmodels/", "evidence": "docs/models.md", "checks": ["srcgate"]},
-    {"prefix": "scripts/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["scripts"], "manual": "a shell or Python harness has no Go test: run it once on the host it targets"},
+    {"prefix": "scripts/", "evidence": ".notes/engineering-history/scheduling-and-measurement.md", "checks": ["scripts"], "manual": "a shell or Python harness has no Go test: run it once on the host it targets"},
     {"prefix": "testdata/", "evidence": "docs/testing.md", "checks": ["model-correctness", "server"]},
     {"prefix": "docs/models.md", "evidence": "docs/models.md", "checks": ["srcgate"]},
     {"prefix": "docs/capabilities.json", "evidence": "docs/capabilities.md", "checks": ["capabilities"]},

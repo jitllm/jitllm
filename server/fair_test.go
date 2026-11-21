@@ -11,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -240,7 +241,7 @@ func TestFairVictims(t *testing.T) {
 func fairRequests(n, maxTokens int) []*v1.GenerateRequest {
 	var out []*v1.GenerateRequest
 	for i := range n {
-		out = append(out, &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts[i%len(hostPrompts)]),
+		out = append(out, &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts()[i%len(hostPrompts())]),
 			MaxTokens: int32(maxTokens), IgnoreEos: true})
 	}
 	return out
@@ -254,7 +255,7 @@ func fairRequests(n, maxTokens int) []*v1.GenerateRequest {
 // their alone runs.
 func TestTimeSlicedRowsAnswerAsAlone(t *testing.T) {
 	arms := []struct{ name, dev string }{{"host", ""}, {"cuda", "cuda:0"}}
-	if infos, err := backend.VulkanDevices(); err == nil {
+	if infos, err := backend.VulkanDevicesWith(backend.Opts{Admit: testdevices.Admit()}); err == nil {
 		for _, in := range infos {
 			if in.Compute && !in.Software && !in.Unified {
 				arms = append(arms, struct{ name, dev string }{"vulkan", "vulkan:" + strconv.Itoa(in.Index)})
@@ -294,7 +295,7 @@ func fairEngine(t *testing.T, dev string, cfg Config) (*Engine, *LoadedModel, cl
 	if cfg.DefaultMaxSeq == 0 {
 		cfg.DefaultMaxSeq = 512
 	}
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{dev}, Sessions: 8})
 	if err != nil {
@@ -315,7 +316,7 @@ func timeSliced(t *testing.T, dev string, violate bool) (parks int64, apart int)
 	got := concurrently(t, e, lm, c, reqs)
 	parks = lm.loop.stats.parks.Load()
 	if lm.gpu != nil {
-		home, freed := e.preempt.blocksHome.Load(), lm.loop.stats.parkFreed.Load()
+		home, freed := e.preempt.blocksToCPU.Load(), lm.loop.stats.parkFreed.Load()
 		// The room freed is logged, not demanded: KVRoom reads the card's
 		// machine-wide free memory, which another process moves.
 		t.Logf("%s: parking brought %d block(s) home and freed %d positions of the card's room", dev, home, freed)
@@ -331,7 +332,7 @@ func timeSliced(t *testing.T, dev string, violate bool) (parks int64, apart int)
 		if want.err != nil {
 			t.Fatal(want.err)
 		}
-		if parted(t, lm, hostPrompts[i%len(hostPrompts)], got[i].ids, want.ids) >= 0 {
+		if parted(t, lm, hostPrompts()[i%len(hostPrompts())], got[i].ids, want.ids) >= 0 {
 			apart++
 		}
 	}

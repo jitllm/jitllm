@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net"
 	"os"
 	"os/exec"
@@ -33,12 +34,7 @@ func freeAddr(t *testing.T) string {
 // startJitllmd builds and serves jitllmd at addr until the test ends.
 func startJitllmd(t *testing.T, addr string) (stop func()) {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "jitllmd"+exeSuffix())
-	build := exec.Command("go", "build", "-o", bin, "./cmd/jitllmd")
-	build.Dir = filepath.Join("..", "..", "server")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building jitllmd: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllmd", filepath.Join("..", "..", "server"), "./cmd/jitllmd")
 	cmd := exec.Command(bin, "serve", "-addr", addr, "-models", t.TempDir(), "-version", "3.2.1")
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -80,7 +76,7 @@ func TestTheWindowPicksTheServiceFirst(t *testing.T) {
 	addr := freeAddr(t)
 	stop := startJitllmd(t, addr)
 
-	sh := app.NewShell(nil, app.DefaultConfig())
+	sh := app.NewShell(nil, app.DefaultConfig(app.Env{}))
 	sh.Store.ServiceAddr.Set(addr)
 	e := Start(sh)
 	defer e.Close()
@@ -108,7 +104,7 @@ func TestTheWindowPicksTheServiceFirst(t *testing.T) {
 // With nothing answering, Auto runs the window's own engine, and the badge
 // says that.
 func TestTheWindowFallsBackToItsOwnEngine(t *testing.T) {
-	sh := app.NewShell(nil, app.DefaultConfig())
+	sh := app.NewShell(nil, app.DefaultConfig(app.Env{}))
 	sh.Store.ServiceAddr.Set(freeAddr(t))
 	e := Start(sh)
 	defer e.Close()
@@ -125,7 +121,7 @@ func TestTheWindowFallsBackToItsOwnEngine(t *testing.T) {
 func TestConnectSwitchesToTheService(t *testing.T) {
 	addr := freeAddr(t)
 	startJitllmd(t, addr)
-	sh := app.NewShell(nil, app.DefaultConfig())
+	sh := app.NewShell(nil, app.DefaultConfig(app.Env{}))
 	sh.Store.EngineMode.Set(core.ModeEmbedded)
 	e := Start(sh)
 	defer e.Close()

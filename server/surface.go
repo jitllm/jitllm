@@ -9,7 +9,7 @@ import (
 
 // Backend is everything the two HTTP compatibility shims are allowed to use.
 // Keeping it this narrow keeps them adapters (they cannot reach a
-// model.State), and lets tests script a token stream to gate SSE framing,
+// engine.Instance), and lets tests script a token stream to gate SSE framing,
 // stop strings and flushing without loading a model.
 type Backend interface {
 	// Generate is the one generate path. Both shims call this and nothing else
@@ -92,8 +92,6 @@ func (e *Engine) CancelSession(id string) (bool, error) {
 	return s.cancelGeneration(), nil
 }
 
-var _ Backend = (*Engine)(nil)
-
 // CompatHandler mounts the two compatibility APIs on their own mux. It takes
 // a Backend so tests can drive it with a scripted token stream.
 func CompatHandler(b Backend) http.Handler {
@@ -108,7 +106,7 @@ func CompatHandlerWith(b Backend, p ImagePolicy) http.Handler {
 	c.mux = mux
 	// compatRoutes (capabilities.go) is the list: the capability manifest
 	// reads the same table, so a route cannot be served and not described.
-	for _, r := range compatRoutes {
+	for _, r := range compatRoutes() {
 		h := r.handle
 		mux.HandleFunc(r.path, func(w http.ResponseWriter, q *http.Request) { h(c, w, q) })
 	}

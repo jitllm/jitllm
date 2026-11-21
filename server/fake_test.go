@@ -24,16 +24,18 @@ type fakeBackend struct {
 	failWith error
 
 	// decide answers /v1/systemone; nil refuses it.
-	decide func(DecideOptions) (*DecideResult, error)
 
 	mu   sync.Mutex
 	last GenerateOptions
-	ids  int
+	// all is every generate's options, in the order they came.
+	all []GenerateOptions
+	ids int
 }
 
 func (f *fakeBackend) Generate(ctx context.Context, o GenerateOptions, emit func(Event) error) error {
 	f.mu.Lock()
 	f.last = o
+	f.all = append(f.all, o)
 	f.mu.Unlock()
 
 	if f.failWith != nil {
@@ -51,7 +53,17 @@ func (f *fakeBackend) Generate(ctx context.Context, o GenerateOptions, emit func
 	return nil
 }
 
-func (f *fakeBackend) choice(ctx context.Context, o GenerateOptions, _ int, emit func(Event) error) error {
+func (f *fakeBackend) choice(ctx context.Context, o GenerateOptions, ch int, emit func(Event) error) error {
+	// A prompt asked for its progress runs once, before its first choice: two
+	// of its seven positions restored, then a chunk of three, then the rest.
+	if o.Progress && ch == 0 {
+		for _, done := range []int{2, 5, 7} {
+			if err := emit(Event{Kind: EventProgress, Progress: &Progress{Total: 7, Cached: 2, Done: done,
+				Elapsed: time.Duration(done) * time.Millisecond}}); err != nil {
+				return err
+			}
+		}
+	}
 	if err := emit(Event{Kind: EventStarted, Started: &Started{
 		SessionID:    "sess-fake",
 		ModelID:      o.ModelID,
@@ -59,7 +71,7 @@ func (f *fakeBackend) choice(ctx context.Context, o GenerateOptions, _ int, emit
 		QueuedFor:    1500 * time.Millisecond,
 		QueueDepth:   2,
 		DeviceBlocks: 22,
-		HostBlocks:   10,
+		CPUBlocks:    10,
 		DeviceIDs:    []string{"cuda:0"},
 		Prefill:      40 * time.Millisecond,
 	}}); err != nil {
@@ -128,10 +140,16 @@ func (f *fakeBackend) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, 
 }
 
 func (f *fakeBackend) Decide(ctx context.Context, o DecideOptions) (*DecideResult, error) {
-	if f.decide == nil {
-		return nil, fmt.Errorf("%w: the scripted backend decides nothing", ErrInvalid)
-	}
-	return f.decide(o)
+	return nil, fmt.Errorf("%w: the scripted backend decides nothing", ErrInvalid)
+}
+
+// took is every generate's options since the last call, in order.
+func (f *fakeBackend) took() []GenerateOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	all := f.all
+	f.all = nil
+	return all
 }
 
 func (f *fakeBackend) opts() GenerateOptions {
@@ -139,5 +157,3 @@ func (f *fakeBackend) opts() GenerateOptions {
 	defer f.mu.Unlock()
 	return f.last
 }
-
-var _ Backend = (*fakeBackend)(nil)

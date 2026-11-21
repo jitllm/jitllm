@@ -1,139 +1,124 @@
-// Command genunicode generates tok/unicodedata.go from llama.cpp's checked-in
-// Unicode tables.
+// Command genunicode generates tok/unicodedata.go from the Unicode Character
+// Database of the version it is given: the general category, the simple case
+// mappings and the canonical decompositions of UnicodeData.txt, White_Space
+// from PropList.txt and the Han script from Scripts.txt.
 //
 // It generates rather than calling unicode.IsLetter because Go's Unicode tables
 // ship with the toolchain, which would make token ids depend on the compiler
-// (thousands of codepoints disagree on IsLetter).
+// (thousands of codepoints disagree on IsLetter). The version is the
+// directory's, declared as tok.UnicodeVersion.
 //
-// It takes llama.cpp's copy rather than the UCD because that file is a
-// versioned artefact, verified to be exactly Unicode 15.1 across all
-// codepoints, while llama.cpp's own generator downloads UCD/latest unpinned. It
-// is not the specification (AGENTS.md RULE 7m); jitllm declares the version it
-// carries.
+// Usage: genunicode <ucd dir> <out.go>, the directory holding the version's
+// UnicodeData.txt, PropList.txt and Scripts.txt (unicode.org/Public/<version>/ucd).
 package main
 
 import (
 	"bufio"
 	"fmt"
 	"os"
-	"regexp"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
 
+const version = "15.1.0"
+
+const maxRune = 0x10FFFF
+
+// The flag bits, in tok's order (ucFlagUndefined first).
+const (
+	flagUndefined = 1 << iota
+	flagNumber
+	flagLetter
+	flagSeparator
+	flagAccentMark
+	flagPunctuation
+	flagSymbol
+	flagControl
+)
+
+// flagOf is a general category's flag: Cn is undefined, and each other major
+// class is one bit.
+func flagOf(gc string) uint16 {
+	switch gc[0] {
+	case 'N':
+		return flagNumber
+	case 'L':
+		return flagLetter
+	case 'Z':
+		return flagSeparator
+	case 'M':
+		return flagAccentMark
+	case 'P':
+		return flagPunctuation
+	case 'S':
+		return flagSymbol
+	}
+	if gc == "Cn" {
+		return flagUndefined
+	}
+	return flagControl
+}
+
+type record struct {
+	gc           string
+	decomp       []uint32 // canonical only; a compatibility decomposition is left out
+	upper, lower uint32
+}
+
 func main() {
-	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: genunicode <unicode-data.cpp> <Scripts.txt> <out.go>")
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: genunicode <ucd dir> <out.go>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
-	must(err)
-	defer f.Close()
+	dir := os.Args[1]
+	cps := unicodeData(filepath.Join(dir, "UnicodeData.txt"))
 
-	pair := regexp.MustCompile(`\{0x([0-9A-Fa-f]+),\s*0x([0-9A-Fa-f]+)\}`)
-	hex := regexp.MustCompile(`0x([0-9A-Fa-f]+)`)
+	var flags [maxRune + 1]uint16
+	for r := range flags {
+		flags[r] = flagUndefined
+		if c, ok := cps[uint32(r)]; ok {
+			flags[r] = flagOf(c.gc)
+		}
+	}
 	type rng struct {
 		start uint32
 		flags uint16
 	}
 	var ranges []rng
-	var white []uint32
-	lower := map[uint32]uint32{}
-	upper := map[uint32]uint32{}
-	triple := regexp.MustCompile(`\{0x([0-9A-Fa-f]+),\s*0x([0-9A-Fa-f]+),\s*0x([0-9A-Fa-f]+)\}`)
-	var nfd [][3]uint32
-
-	sec := ""
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case strings.Contains(line, "unicode_ranges_flags"):
-			sec = "flags"
-			continue
-		case strings.Contains(line, "unicode_set_whitespace"):
-			sec = "ws"
-			continue
-		case strings.Contains(line, "unicode_map_lowercase"):
-			sec = "lower"
-			continue
-		case strings.Contains(line, "unicode_map_uppercase"):
-			sec = "upper"
-			continue
-		case strings.Contains(line, "unicode_ranges_nfd"):
-			sec = "nfd"
-			continue
-		}
-		switch sec {
-		case "flags":
-			for _, m := range pair.FindAllStringSubmatch(line, -1) {
-				s, _ := strconv.ParseUint(m[1], 16, 32)
-				fl, _ := strconv.ParseUint(m[2], 16, 16)
-				ranges = append(ranges, rng{uint32(s), uint16(fl)})
-			}
-		case "ws":
-			for _, m := range hex.FindAllStringSubmatch(line, -1) {
-				v, _ := strconv.ParseUint(m[1], 16, 32)
-				white = append(white, uint32(v))
-			}
-		case "lower":
-			for _, m := range pair.FindAllStringSubmatch(line, -1) {
-				a, _ := strconv.ParseUint(m[1], 16, 32)
-				b, _ := strconv.ParseUint(m[2], 16, 32)
-				lower[uint32(a)] = uint32(b)
-			}
-		case "upper":
-			for _, m := range pair.FindAllStringSubmatch(line, -1) {
-				a, _ := strconv.ParseUint(m[1], 16, 32)
-				b, _ := strconv.ParseUint(m[2], 16, 32)
-				upper[uint32(a)] = uint32(b)
-			}
-		case "nfd":
-			for _, m := range triple.FindAllStringSubmatch(line, -1) {
-				a, _ := strconv.ParseUint(m[1], 16, 32)
-				z, _ := strconv.ParseUint(m[2], 16, 32)
-				d, _ := strconv.ParseUint(m[3], 16, 32)
-				if a == 0 && z == 0 && d == 0 {
-					continue // the table's sentinel, not a mapping
-				}
-				nfd = append(nfd, [3]uint32{uint32(a), uint32(z), uint32(d)})
-			}
+	for r := 0; r <= maxRune; r++ {
+		if r == 0 || flags[r] != flags[r-1] {
+			ranges = append(ranges, rng{uint32(r), flags[r]})
 		}
 	}
-	must(sc.Err())
-	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
-	sort.Slice(white, func(i, j int) bool { return white[i] < white[j] })
-	keys := make([]uint32, 0, len(lower))
-	for k := range lower {
-		keys = append(keys, k)
-	}
-	ukeys := make([]uint32, 0, len(upper))
-	for k := range upper {
-		ukeys = append(ukeys, k)
-	}
-	sort.Slice(ukeys, func(i, j int) bool { return ukeys[i] < ukeys[j] })
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	// A record at U+110000 with no flags ends the last range: past it is no
+	// codepoint.
+	ranges = append(ranges, rng{maxRune + 1, 0})
 
-	// Han comes from the UCD, not llama.cpp: unicode-data.cpp carries no
-	// scripts, and Scripts.txt under unicode.org/Public/15.1.0/ is pinned by
-	// its URL, which is the same argument as above. llama.cpp's
-	// unicode_cpt_is_han is a hand-written subset (CJK Ext A-F only, no
-	// radicals, no U+3005, no compatibility ideographs) that would tokenize
-	// Kimi differently from Moonshot's own tokenizer.
-	han := hanRanges(os.Args[2])
+	white := propList(filepath.Join(dir, "PropList.txt"), "White_Space")
+	lower, upper := map[uint32]uint32{}, map[uint32]uint32{}
+	for r, c := range cps {
+		if c.lower != 0 {
+			lower[r] = c.lower
+		}
+		if c.upper != 0 {
+			upper[r] = c.upper
+		}
+	}
+	keys, ukeys := sortedKeys(lower), sortedKeys(upper)
+	nfd := nfdBases(cps)
+	han := hanRanges(filepath.Join(dir, "Scripts.txt"))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `// Code generated by scripts/genunicode. DO NOT EDIT.
 //
-// Source: llama.cpp src/unicode-data.cpp, verified to be exactly Unicode %s
-// across all 1,114,112 codepoints (general category, simple lowercase, simple
-// uppercase and White_Space).
+// Source: the Unicode Character Database %s -- UnicodeData.txt (general
+// category, simple lowercase and uppercase, canonical decompositions),
+// PropList.txt (White_Space) and Scripts.txt (Han).
 //
 // These tables exist so token ids do not depend on the Go toolchain. See
-// scripts/genunicode for the argument; RULE 7m for why llama.cpp is the
-// compatibility target and not the specification.
+// scripts/genunicode.
 
 package tok
 
@@ -152,92 +137,141 @@ const (
 	ucFlagControl
 )
 
-// ucRanges is (start, flags); a codepoint takes the flags of the last range
-// whose start is <= it. %d entries.
-var ucRanges = [...]struct {
-	start uint32
-	flags uint16
-}{
-`, "15.1.0", "15.1.0", len(ranges))
+// ucRanges is %d records of four bytes: a range's start as three
+// little-endian bytes, then its flags. A codepoint takes the flags of the
+// last range whose start is <= it.
+const ucRanges = "" +`, version, version, len(ranges))
+	b.WriteString("\n")
 	for _, r := range ranges {
-		fmt.Fprintf(&b, "\t{0x%06X, 0x%04X},\n", r.start, r.flags)
+		packedRange(&b, r.start, r.flags)
 	}
-	fmt.Fprintf(&b, "}\n\n// ucWhitespace is llama.cpp's White_Space set, %d codepoints.\nvar ucWhitespace = [...]uint32{\n", len(white))
+	endPacked(&b)
+	fmt.Fprintf(&b, "\n// ucWhitespace is Unicode's White_Space set: %d codepoints, three bytes each.\nconst ucWhitespace = \"\" +\n", len(white))
 	for _, w := range white {
-		fmt.Fprintf(&b, "\t0x%06X,\n", w)
+		packed(&b, fmt.Sprintf("U+%06X", w), w)
 	}
-	fmt.Fprintf(&b, "}\n\n// ucLower is the simple lowercase mapping, %d entries.\nvar ucLower = map[rune]rune{\n", len(keys))
+	endPacked(&b)
+	fmt.Fprintf(&b, "\n// ucLower is the simple lowercase mapping: %d records, each the codepoint\n// and its mapping in three bytes apiece.\nconst ucLower = \"\" +\n", len(keys))
 	for _, k := range keys {
-		fmt.Fprintf(&b, "\t0x%06X: 0x%06X,\n", k, lower[k])
+		packed(&b, fmt.Sprintf("U+%06X", k), k, lower[k])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	// The uppercase map is not for uppercasing: the flag table has one letter
 	// bit, and o200k splits letter runs by case, so the two mappings separate
-	// the classes (see ucUpperClass/ucLowerClass in unicodefn.go).
-	fmt.Fprintf(&b, "\n// ucUpper is the simple uppercase mapping, %d entries. It exists to\n// separate Ll from Lm/Lo, not to uppercase anything -- see genunicode.\nvar ucUpper = map[rune]rune{\n", len(ukeys))
+	// the classes (see ucUpperClass/ucLowerClass in tok/splitters_test.go).
+	fmt.Fprintf(&b, "\n// ucUpper is the simple uppercase mapping, %d records laid out as ucLower. It\n// exists to separate Ll from Lm/Lo, not to uppercase anything -- see genunicode.\nconst ucUpper = \"\" +\n", len(ukeys))
 	for _, k := range ukeys {
-		fmt.Fprintf(&b, "\t0x%06X: 0x%06X,\n", k, upper[k])
+		packed(&b, fmt.Sprintf("U+%06X", k), k, upper[k])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	var nHan int
 	for _, r := range han {
 		nHan += int(r[1]-r[0]) + 1
 	}
 	fmt.Fprintf(&b, "\n// ucHan is the Han SCRIPT, %d merged ranges over %d codepoints, from\n"+
-		"// UCD %s Scripts.txt. It is a script rather than a category, which is why\n"+
-		"// it is not in the flag table: kimi-k2 is the only pre-tokenizer that asks.\nvar ucHan = [...][2]uint32{\n", len(han), nHan, "15.1.0")
+		"// UCD %s Scripts.txt, as (first, last) in three bytes apiece. It is a script\n"+
+		"// rather than a category, which is why it is not in the flag table: kimi-k2\n"+
+		"// is the only pre-tokenizer that asks.\nconst ucHan = \"\" +\n", len(han), nHan, version)
 	for _, r := range han {
-		fmt.Fprintf(&b, "\t{0x%06X, 0x%06X},\n", r[0], r[1])
+		packed(&b, fmt.Sprintf("U+%06X..U+%06X", r[0], r[1]), r[0], r[1])
 	}
-	b.WriteString("}\n")
+	endPacked(&b)
 	// The NFD table is a base-character map, not a decomposition: each range
 	// maps a precomposed codepoint to the first codepoint of its canonical
 	// decomposition, which is all BERT's strip_accents needs.
-	sort.Slice(nfd, func(i, j int) bool { return nfd[i][0] < nfd[j][0] })
 	fmt.Fprintf(&b, "\n// ucNFD maps a precomposed codepoint to the base of its canonical\n"+
-		"// decomposition: (first, last, base), %d ranges. See genunicode.\nvar ucNFD = [...][3]uint32{\n", len(nfd))
+		"// decomposition: %d records of (first, last, base), three bytes apiece. See\n// genunicode.\nconst ucNFD = \"\" +\n", len(nfd))
 	for _, r := range nfd {
-		fmt.Fprintf(&b, "\t{0x%06X, 0x%06X, 0x%06X},\n", r[0], r[1], r[2])
+		packed(&b, fmt.Sprintf("U+%06X..U+%06X", r[0], r[1]), r[0], r[1], r[2])
 	}
-	b.WriteString("}\n")
-	must(os.WriteFile(os.Args[3], []byte(b.String()), 0o644))
+	endPacked(&b)
+	must(os.WriteFile(os.Args[2], []byte(b.String()), 0o644))
 	fmt.Printf("wrote %s: %d ranges, %d whitespace, %d lowercase, %d uppercase, %d Han ranges (%d codepoints), %d NFD ranges\n",
-		os.Args[3], len(ranges), len(white), len(keys), len(ukeys), len(han), nHan, len(nfd))
+		os.Args[2], len(ranges), len(white), len(keys), len(ukeys), len(han), nHan, len(nfd))
 }
 
-func must(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-// hanRanges reads the Han script's ranges out of a UCD Scripts.txt, merged and
-// sorted. A line is "start[..end] ; Script # comment".
-func hanRanges(path string) [][2]uint32 {
+// unicodeData reads UnicodeData.txt: each assigned codepoint's record, a
+// "<..., First>" and "<..., Last>" pair standing for every codepoint between.
+func unicodeData(path string) map[uint32]record {
 	f, err := os.Open(path)
 	must(err)
 	defer f.Close()
-	var out [][2]uint32
+	out := map[uint32]record{}
+	first := uint32(0)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
-		line, _, _ := strings.Cut(sc.Text(), "#")
-		cps, script, ok := strings.Cut(line, ";")
-		if !ok || strings.TrimSpace(script) != "Han" {
+		fs := strings.Split(sc.Text(), ";")
+		if len(fs) < 15 {
 			continue
 		}
-		cps = strings.TrimSpace(cps)
-		lo, hi, ranged := strings.Cut(cps, "..")
-		a, err := strconv.ParseUint(lo, 16, 32)
-		must(err)
-		b := a
-		if ranged {
-			b, err = strconv.ParseUint(hi, 16, 32)
-			must(err)
+		cp := hex(fs[0])
+		c := record{gc: fs[2], upper: optHex(fs[12]), lower: optHex(fs[13])}
+		if d := fs[5]; d != "" && !strings.HasPrefix(d, "<") {
+			for _, x := range strings.Fields(d) {
+				c.decomp = append(c.decomp, hex(x))
+			}
 		}
-		out = append(out, [2]uint32{uint32(a), uint32(b)})
+		switch {
+		case strings.HasSuffix(fs[1], ", First>"):
+			first = cp
+		case strings.HasSuffix(fs[1], ", Last>"):
+			for r := first; r <= cp; r++ {
+				out[r] = record{gc: c.gc}
+			}
+		default:
+			out[cp] = c
+		}
 	}
 	must(sc.Err())
+	return out
+}
+
+// nfdBases is every codepoint whose canonical decomposition differs from it,
+// mapped to that decomposition's first codepoint -- followed down to one that
+// does not decompose, and a Hangul syllable's being its leading jamo -- merged
+// into ranges of consecutive codepoints sharing a base.
+func nfdBases(cps map[uint32]record) [][3]uint32 {
+	var base func(r uint32) uint32
+	base = func(r uint32) uint32 {
+		if r >= 0xAC00 && r <= 0xD7A3 {
+			return 0x1100 + (r-0xAC00)/588
+		}
+		if d := cps[r].decomp; len(d) > 0 {
+			return base(d[0])
+		}
+		return r
+	}
+	var out [][3]uint32
+	for r := uint32(0); r <= maxRune; r++ {
+		b := base(r)
+		if b == r {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1][1] == r-1 && out[n-1][2] == b {
+			out[n-1][1] = r
+			continue
+		}
+		out = append(out, [3]uint32{r, r, b})
+	}
+	return out
+}
+
+// propList is the codepoints PropList.txt gives property name, sorted.
+func propList(path, name string) []uint32 {
+	var out []uint32
+	for _, r := range fileRanges(path, name) {
+		for c := r[0]; c <= r[1]; c++ {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// hanRanges is the Han script's ranges out of Scripts.txt, merged and sorted.
+func hanRanges(path string) [][2]uint32 {
+	out := fileRanges(path, "Han")
 	if len(out) == 0 {
 		fmt.Fprintln(os.Stderr, "genunicode: no Han ranges in "+path)
 		os.Exit(1)
@@ -249,12 +283,84 @@ func hanRanges(path string) [][2]uint32 {
 	for _, r := range out[1:] {
 		last := &merged[len(merged)-1]
 		if r[0] <= last[1]+1 {
-			if r[1] > last[1] {
-				last[1] = r[1]
-			}
+			last[1] = max(last[1], r[1])
 			continue
 		}
 		merged = append(merged, r)
 	}
 	return merged
 }
+
+// fileRanges is the ranges a UCD property file gives value, a line being
+// "start[..end] ; value # comment".
+func fileRanges(path, value string) [][2]uint32 {
+	f, err := os.Open(path)
+	must(err)
+	defer f.Close()
+	var out [][2]uint32
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		line, _, _ := strings.Cut(sc.Text(), "#")
+		cps, v, ok := strings.Cut(line, ";")
+		if !ok || strings.TrimSpace(v) != value {
+			continue
+		}
+		lo, hi, ranged := strings.Cut(strings.TrimSpace(cps), "..")
+		a := hex(lo)
+		b := a
+		if ranged {
+			b = hex(hi)
+		}
+		out = append(out, [2]uint32{a, b})
+	}
+	must(sc.Err())
+	return out
+}
+
+func sortedKeys(m map[uint32]uint32) []uint32 {
+	keys := make([]uint32, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func hex(s string) uint32 {
+	v, err := strconv.ParseUint(strings.TrimSpace(s), 16, 32)
+	must(err)
+	return uint32(v)
+}
+
+func optHex(s string) uint32 {
+	if strings.TrimSpace(s) == "" {
+		return 0
+	}
+	return hex(s)
+}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+// packed writes one record of a packed table, one per line, each value as
+// three little-endian bytes; the label is the record in the source's terms.
+func packed(b *strings.Builder, label string, vals ...uint32) {
+	b.WriteString("\t\"")
+	for _, v := range vals {
+		fmt.Fprintf(b, "\\x%02x\\x%02x\\x%02x", v&0xff, v>>8&0xff, v>>16&0xff)
+	}
+	fmt.Fprintf(b, "\" + // %s\n", label)
+}
+
+// packedRange writes one record of ucRanges: the start in three bytes and the
+// flags in a fourth.
+func packedRange(b *strings.Builder, start uint32, flags uint16) {
+	fmt.Fprintf(b, "\t\"\\x%02x\\x%02x\\x%02x\\x%02x\" + // U+%06X\n", start&0xff, start>>8&0xff, start>>16&0xff, flags, start)
+}
+
+// endPacked closes a table's last record.
+func endPacked(b *strings.Builder) { b.WriteString("\t\"\"\n") }

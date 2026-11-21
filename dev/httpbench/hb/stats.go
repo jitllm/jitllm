@@ -6,9 +6,9 @@ import (
 )
 
 // Percentile is the p-th percentile (0..100) of xs by linear interpolation
-// between closest ranks, numpy's default, which is what vLLM's and SGLang's
-// benchmark scripts report. xs need not be sorted. An empty xs is NaN, never
-// zero: a level with no samples must not print a latency of 0.
+// between closest ranks, numpy.percentile's default. xs need not be sorted. An
+// empty xs is NaN, never zero: a level with no samples must not print a latency
+// of 0.
 func Percentile(xs []float64, p float64) float64 {
 	if len(xs) == 0 {
 		return math.NaN()

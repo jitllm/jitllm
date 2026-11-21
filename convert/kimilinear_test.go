@@ -25,7 +25,7 @@ func kimiSource(t testing.TB) (*jlm.Source, *safetensors.File) {
 	dir := testmodels.Path(klDir)
 	p := filepath.Join(dir, "model.safetensors")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing (RULE 10). "+
+		testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing (RULE 10). "+
 			"Make it: $JITLLM_HF_PY scripts/hfgold.py %s", p, err, klDir)
 	}
 	f, err := safetensors.Open(p)
@@ -72,9 +72,6 @@ func klRaw(t testing.TB, f *safetensors.File, name string) []byte {
 func TestKimiLinearConverts(t *testing.T) {
 	s, _ := kimiSource(t)
 	c := s.Config
-	if c.Arch != jlm.ArchKimiLinear {
-		t.Errorf("arch %v", c.Arch)
-	}
 	// The kind map, and it is interleaved: a prefix reader passes the length
 	// check and fails here.
 	want := []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerFullAttn, jlm.LayerLinearAttn}
@@ -243,7 +240,7 @@ func TestKimiDenseBlockTakesTheCheckpointsSpelling(t *testing.T) {
 		h = append(h, ' ')
 	}
 	dir := t.TempDir()
-	for _, e := range []string{"config.json", "tokenizer.json", "tokenizer_config.json"} {
+	for _, e := range []string{"config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json"} {
 		if b, err := os.ReadFile(filepath.Join(src, e)); err == nil {
 			os.WriteFile(filepath.Join(dir, e), b, 0o644)
 		}
@@ -349,4 +346,14 @@ func TestKimiReadsMoonshotsConfigForm(t *testing.T) {
 		t.Fatalf("Moonshot's form does not convert: %v", err)
 	}
 	klSameTensors(t, a, s)
+}
+
+// TestKimiLinearSafetensorsMatchesItsGGUF converts synth-kimilinear from its
+// HuggingFace directory and from the F32 GGUF llama.cpp's converter wrote from
+// the same weights (scripts/kimilineargguf.py), and demands the same container
+// (kimiSameContainer): the kimi-linear statement in
+// convert/models/latent_delta.json reads the GGUF's tensors and keys into what
+// KimiLinearForCausalLM's statement reads the checkpoint into.
+func TestKimiLinearSafetensorsMatchesItsGGUF(t *testing.T) {
+	kimiSameContainer(t, testmodels.Path(klDir), testmodels.Path(klDir+"-f32.gguf"))
 }

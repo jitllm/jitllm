@@ -13,7 +13,6 @@ import (
 	"github.com/gogpu/ui/widget"
 
 	"github.com/jitllm/jitllm/common/catalog"
-	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/discover"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/ui/app"
@@ -56,9 +55,9 @@ type modelsScreen struct {
 	store *app.Store
 
 	// Derived, so the detail pane repaints when the selection moves.
-	dPath, dStatus, dArch, dGeom, dMixture  state.ReadonlySignal[string]
-	dVision, dChat, dPages, dChunk, dStream state.ReadonlySignal[string]
-	dDense, dWriter, dQuant                 state.ReadonlySignal[string]
+	dPath, dStatus, dLayers, dGeom, dMixture state.ReadonlySignal[string]
+	dVision, dChat, dPages, dChunk, dStream  state.ReadonlySignal[string]
+	dDense, dWriter, dQuant                  state.ReadonlySignal[string]
 	// dHint says in one sentence why a row cannot be loaded; empty when it can.
 	dHint                           state.ReadonlySignal[string]
 	loadDisabled, reconvertDisabled state.ReadonlySignal[bool]
@@ -68,22 +67,11 @@ type modelsScreen struct {
 	scanRunning bool
 }
 
-var (
-	modelsMu      sync.Mutex
-	modelsScreens = map[*app.Shell]*modelsScreen{}
-)
-
 // modelsFor returns this shell's screen state, creating it -- and kicking off
 // the first scan -- exactly once.
 func modelsFor(sh *app.Shell) *modelsScreen {
-	modelsMu.Lock()
-	m, ok := modelsScreens[sh]
-	if !ok {
-		m = newModelsScreen(sh)
-		modelsScreens[sh] = m
-	}
-	modelsMu.Unlock()
-	if !ok {
+	m, created := app.Local(sh, func() *modelsScreen { return newModelsScreen(sh) })
+	if created {
 		m.rescan()
 		// Folders added or removed anywhere -- this tab, a drop, Settings --
 		// change what is on disk to show. Set on the UI goroutine, so this runs
@@ -111,7 +99,7 @@ func newModelsScreen(sh *app.Shell) *modelsScreen {
 		}
 		return entryStatus(e)
 	}, m.store.Catalog.AsReadonly(), m.store.CatalogSel.AsReadonly(), m.store.Models.AsReadonly())
-	m.dArch = m.field(entryArch)
+	m.dLayers = m.field(entryLayers)
 	m.dGeom = m.field(entryGeometry)
 	m.dMixture = m.field(entryMixture)
 	m.dVision = m.field(entryVision)
@@ -221,7 +209,7 @@ func (m *modelsScreen) rescan() {
 	dirs := append([]string(nil), m.sh.Cfg.ModelDirs...)
 
 	go func() {
-		defer crash.Recover("model scan")
+		defer m.sh.Crashes().Recover("model scan")
 		defer func() {
 			m.mu.Lock()
 			m.scanRunning = false
@@ -369,10 +357,12 @@ func (m *modelsScreen) reconvert() {
 
 // --- the list ---------------------------------------------------------------
 
-// modelFilters is what the convert form's Browse offers.
-var modelFilters = []gogpu.FileTypeFilter{
-	{Name: "Model weights", Extensions: []string{"gguf", "safetensors"}},
-	{Name: "jitllm container", Extensions: []string{"jlm"}},
+// modelFilters() is what the convert form's Browse offers.
+func modelFilters() []gogpu.FileTypeFilter {
+	return []gogpu.FileTypeFilter{
+		{Name: "Model weights", Extensions: []string{"gguf", "safetensors"}},
+		{Name: "jitllm container", Extensions: []string{"jlm"}},
+	}
 }
 
 // list is one row per container: what it is, and what it is doing here. The
@@ -451,9 +441,6 @@ func entryFacts(e catalog.Entry) string {
 		return "reading\u2026"
 	}
 	var parts []string
-	if e.Arch != "" {
-		parts = append(parts, e.Arch)
-	}
 	if e.NLayer > 0 {
 		parts = append(parts, fmt.Sprintf("%d layers", e.NLayer))
 	}
@@ -481,7 +468,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		return primitives.HBox(
 			primitives.Box(p.Role(primitives.Text(label).Color(p.Muted()), p.Type.BodySmall)).Width(104),
 			primitives.Expanded(widgets.NewParagraph("").ContentSignal(sig).FontSize(p.Type.BodySmall.FontSize).
-				Color(p.Text()).Font(app.Prose)),
+				Color(p.Text()).Font(p.Prose())),
 		).Gap(p.Space.S)
 	}
 
@@ -489,7 +476,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		p.Role(primitives.Text("").ContentSignal(name).Color(p.Text()), p.Type.TitleLarge).Bold(),
 		primitives.Box().Height(p.Space.XS),
 		pair(m.sh, metric(m.sh, "Size", size), metric(m.sh, "Quant", m.dQuant)),
-		pair(m.sh, metric(m.sh, "Architecture", m.dArch), metric(m.sh, "Runs", state.NewComputed(func() string {
+		pair(m.sh, metric(m.sh, "Layers", m.dLayers), metric(m.sh, "Runs", state.NewComputed(func() string {
 			e, ok := m.selected()
 			if !ok {
 				return "--"
@@ -503,7 +490,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 			if e.HasChat {
 				return "Chat and completion"
 			}
-			if e.Probed && e.Arch != "" {
+			if entryRead(e) {
 				return "Completion only"
 			}
 			return "--"
@@ -511,7 +498,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 			if e.HasVision {
 				return "Sees images"
 			}
-			if e.Probed && e.Arch != "" {
+			if entryRead(e) {
 				return "Text only"
 			}
 			return "--"
@@ -527,7 +514,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		}, st.Catalog.AsReadonly(), st.CatalogSel.AsReadonly(), st.Machine.AsReadonly())),
 	).Gap(p.Space.S).CrossAlign(primitives.CrossAxisStretch))
 	empty := widgets.Hide(none, widgets.NewParagraph("Pick a model to see what it is and load it.").
-		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose))
+		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(p.Prose()))
 
 	load := button.New(
 		button.TextReadonlySignal(m.loadLabel),
@@ -558,7 +545,7 @@ func (m *modelsScreen) detailSide() widget.Widget {
 		kv("Dense region", m.dDense),
 		kv("Written by", m.dWriter),
 		widgets.NewParagraph("").ContentSignal(m.dPath).FontSize(p.Type.LabelSmall.FontSize).
-			Color(p.Muted()).Font(app.Mono),
+			Color(p.Muted()).Font(p.Mono()),
 	).Gap(2).CrossAlign(primitives.CrossAxisStretch))
 
 	return panel(m.sh,
@@ -604,7 +591,7 @@ func ModelReconvertible(e catalog.Entry, ok bool) bool {
 // entryTowerOnly reports a container that holds only a vision tower -- an
 // mmproj converted by itself.
 func entryTowerOnly(e catalog.Entry) bool {
-	return e.Kind == catalog.KindContainer && e.Arch == "clip"
+	return e.Kind == catalog.KindContainer && e.HasVision && e.NVocab == 0
 }
 
 // SortModels orders the table. An unknown or empty column leaves the scan's
@@ -624,8 +611,6 @@ func SortModels(out []catalog.Entry, col string, asc bool) {
 		less = func(i, j int) bool { return out[i].Size < out[j].Size } // fitting is a size question
 	case "size":
 		less = func(i, j int) bool { return out[i].Size < out[j].Size }
-	case "arch":
-		less = func(i, j int) bool { return out[i].Arch < out[j].Arch }
 	case "status":
 		less = func(i, j int) bool { return entryShortStatus(out[i]) < entryShortStatus(out[j]) }
 	default:
@@ -694,11 +679,14 @@ func entryStatus(e catalog.Entry) string {
 	return "ready to load"
 }
 
-func entryArch(e catalog.Entry) string {
-	if e.Arch == "" {
+// entryRead reports a container whose probe read a model's config.
+func entryRead(e catalog.Entry) bool { return e.Probed && e.NLayer > 0 }
+
+func entryLayers(e catalog.Entry) string {
+	if e.NLayer == 0 {
 		return "--"
 	}
-	return e.Arch
+	return fmt.Sprintf("%d", e.NLayer)
 }
 
 func entryGeometry(e catalog.Entry) string {
@@ -710,7 +698,7 @@ func entryGeometry(e catalog.Entry) string {
 
 func entryMixture(e catalog.Entry) string {
 	if !e.MoE() {
-		if e.Probed && e.Arch != "" {
+		if entryRead(e) {
 			return "dense"
 		}
 		return "--"
@@ -720,7 +708,7 @@ func entryMixture(e catalog.Entry) string {
 
 func entryVision(e catalog.Entry) string {
 	if !e.HasVision {
-		if e.Probed && e.Arch != "" {
+		if entryRead(e) {
 			return "none"
 		}
 		return "--"
@@ -729,7 +717,7 @@ func entryVision(e catalog.Entry) string {
 }
 
 func entryChat(e catalog.Entry) string {
-	if !e.Probed || e.Arch == "" {
+	if !entryRead(e) {
 		return "--"
 	}
 	if e.HasChat {
@@ -759,7 +747,7 @@ func entryChunk(e catalog.Entry) string {
 }
 
 func entryStream(e catalog.Entry) string {
-	if !e.Probed || e.Arch == "" {
+	if !entryRead(e) {
 		return "--"
 	}
 	if e.StreamGroups == 0 {

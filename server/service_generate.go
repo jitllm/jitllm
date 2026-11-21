@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/grammar"
+	"github.com/jitllm/jitllm/model"
 
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -50,6 +50,7 @@ func samplingOf(p *v1.SamplingParams) samplingFields {
 		Temperature:      f64(p.Temperature),
 		TopP:             f64(p.TopP),
 		MinP:             f64(p.MinP),
+		TypicalP:         f64(p.TypicalP),
 		PresencePenalty:  f64(p.PresencePenalty),
 		FrequencyPenalty: f64(p.FrequencyPenalty),
 	}
@@ -199,9 +200,6 @@ func generateOptionsWith(ctx context.Context, m *v1.GenerateRequest, p ImagePoli
 	if err != nil {
 		return o, errInvalid(err)
 	}
-	if lpr.on && m.EchoPrompt {
-		return o, invalid("%s", errLogprobsWithEcho)
-	}
 	lpr.apply(&o)
 
 	rfJSON, err := pbResponseFormatJSON(m.ResponseFormat)
@@ -213,10 +211,8 @@ func generateOptionsWith(ctx context.Context, m *v1.GenerateRequest, p ImagePoli
 		return o, connectErr(err)
 	}
 	switch {
-	case m.Grammar != "" && m.JsonSchema != "":
-		return o, invalid("generate: grammar and json_schema are one constraint each; give one")
-	case rf != "" && (m.Grammar != "" || m.JsonSchema != ""):
-		return o, invalid("generate: response_format, grammar and json_schema are one constraint each; give one")
+	case rf != "" && m.JsonSchema != "":
+		return o, invalid("generate: response_format and json_schema are one constraint each; give one")
 	case rf != "":
 		o.Grammar = rf
 	case m.JsonSchema != "":
@@ -225,8 +221,6 @@ func generateOptionsWith(ctx context.Context, m *v1.GenerateRequest, p ImagePoli
 			return o, invalid("generate: json_schema: %v", err)
 		}
 		o.Grammar = g
-	default:
-		o.Grammar = m.Grammar
 	}
 	switch in := m.Prompt.GetInput().(type) {
 	case *v1.PromptInput_Text:
@@ -278,7 +272,7 @@ func chatInput(ctx context.Context, in *v1.ChatPrompt, p ImagePolicy) (*ChatInpu
 					var ok bool
 					if mt, ok = imageMediaType(img.GetMediaType()); !ok {
 						return nil, fmt.Errorf("has media_type %q; the pictures accepted are image/png, "+
-							"image/jpeg, image/webp and image/gif", img.GetMediaType())
+							"image/jpeg, image/webp, image/gif, image/bmp and image/tiff", img.GetMediaType())
 					}
 				}
 				return pics.p.decodeImage(img.GetData(), mt)

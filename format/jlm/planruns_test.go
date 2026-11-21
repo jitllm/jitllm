@@ -24,7 +24,7 @@ func TestPlanRunsMatchesTheWindowSweep(t *testing.T) {
 		f := newFake(blocks, page, 0, Align)
 		f.chunk = chunk
 		b := rng.Intn(blocks)
-		base, _ := f.pageAt(b)
+		base, _ := f.file.pageAt(b)
 		nc := int(page / chunk)
 
 		// A partially filled page, which is the state a warm mixture is in.
@@ -89,7 +89,7 @@ func min64(a, b uint64) uint64 {
 
 // windowSweep is planRuns' body as it stood before the sort, kept here as the
 // oracle and nowhere else.
-func windowSweep(f *File, b int, base, psize uint64, nc int, have []bool, rs []Range) []run {
+func windowSweep(f *Frames, b int, base, psize uint64, nc int, have []bool, rs []Range) []run {
 	lo0, hi0 := nc, 0
 	for _, r := range rs {
 		if r.N == 0 {
@@ -148,7 +148,7 @@ func TestPlanRunsCostsWhatWasAskedForAndNotThePage(t *testing.T) {
 		nc := int(page / chunk)
 		f.pages[0] = make([]byte, page)
 		f.filled = [][]bool{make([]bool, nc)}
-		base, _ := f.pageAt(0)
+		base, _ := f.file.pageAt(0)
 		// Two spans at opposite ends: the shape a routed selection has, and the
 		// one that defeats a window bound.
 		rs := []Range{{Off: base, N: chunk}, {Off: base + uint64(nc-1)*chunk, N: chunk}}

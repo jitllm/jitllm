@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -36,7 +37,7 @@ func TestTheAPIDefaultsToLoopback4242(t *testing.T) {
 // TestTheAPIIsGuarded: the window's and the terminal's API refuses what
 // jitllmd refuses: a missing key, a rebound Host, a foreign origin.
 func TestTheAPIIsGuarded(t *testing.T) {
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	s, err := Start("127.0.0.1:0", e, WithKey("kk"))
 	if err != nil {
@@ -73,14 +74,14 @@ func TestTheAPIIsGuarded(t *testing.T) {
 // TestToggleRefusesAKeyedService: a jitllmd that wants a key is still a
 // jitllmd holding the address.
 func TestToggleRefusesAKeyedService(t *testing.T) {
-	svc := server.New(server.Config{ModelDir: t.TempDir(), Version: "9.9.9"})
+	svc := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "9.9.9"})
 	defer svc.Close()
 	held, err := Start("127.0.0.1:0", svc, WithKey("kk"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	e := server.New(server.Config{ModelDir: t.TempDir()})
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir()})
 	defer e.Close()
 	s, msg, in := Toggle(nil, true, held.Addr(), e)
 	if s != nil || in.Addr == "" || msg == "" {

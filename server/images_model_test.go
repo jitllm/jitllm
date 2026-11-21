@@ -7,47 +7,48 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 )
 
 // visionModel is the smallest container with a vision tower in the test
-// models: SmolVLM-256M, its idefics3 tower converted in.
+// models: SmolVLM-256M, its idefics3 tower converted in and stated.
 const visionModel = "SmolVLM-256M-Instruct-Q8_0-vlm.jlm"
 
 const askPicture = "What is in this picture? Answer in one sentence."
 
-// engineRun is the engine's own image run, built without either shim: the
-// picture preprocessed on a State of the model, the prompt laid out by the
-// model's ChatSpansImages, and a greedy generate of those spans.
+// engineRun is the engine's own picture run, built without either shim: the
+// prompt laid out by the model's ChatSpans with each picture a span the
+// prefill encodes, and a greedy generate of those spans.
 func engineRun(t *testing.T, e *Engine, lm *LoadedModel, pics ...[]byte) (string, []model.Span) {
 	t.Helper()
-	st := lm.m.NewState(64)
-	defer st.Close()
-	var imgs []model.Image
+	var sp []model.Span
 	for _, pic := range pics {
 		img, _, err := image.Decode(bytes.NewReader(pic))
 		if err != nil {
 			t.Fatal(err)
 		}
-		pc, err := st.Picture(img)
+		p, err := lm.m.PictureSpan(img)
 		if err != nil {
 			t.Fatal(err)
 		}
-		imgs = append(imgs, model.Image{Picture: pc})
+		sp = append(sp, p)
 	}
-	spans, err := lm.m.ChatSpansImages([]model.ChatMessage{{Role: "user", Content: askPicture, Images: len(pics)}},
-		imgs, true)
+	spans, err := lm.m.ChatSpans([]model.ChatMessage{{Role: "user", Content: askPicture, Images: len(pics)}}, sp, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
 	err = e.Generate(context.Background(), GenerateOptions{ModelID: lm.id, MaxTokens: 12,
-		Prompt: Prompt{Kind: PromptSpans, Spans: spans}, Sampling: &model.Sampler{}},
+		Prompt: Prompt{Kind: PromptSpans, Spans: spans}, Sampling: &engine.Sampler{}},
 		func(ev Event) error {
 			if ev.Kind == EventToken {
 				out.WriteString(ev.Token.Text)
@@ -60,15 +61,16 @@ func engineRun(t *testing.T, e *Engine, lm *LoadedModel, pics ...[]byte) (string
 	return out.String(), spans
 }
 
-func pictureKey(t *testing.T, spans []model.Span) model.ImageKey {
+// pictureKey is the key naming the first picture of spans.
+func pictureKey(t *testing.T, spans []model.Span) model.RowsKey {
 	t.Helper()
 	for _, sp := range spans {
-		if sp.Picture != nil {
-			return sp.Picture.Key
+		if sp.Picture != nil && sp.Key != nil {
+			return *sp.Key
 		}
 	}
-	t.Fatal("the spans carry no picture")
-	return model.ImageKey{}
+	t.Fatal("the spans carry no named picture")
+	return model.RowsKey{}
 }
 
 // oaImageBody and anImageBody are one user turn of askPicture and pic.
@@ -146,33 +148,47 @@ func replyText(t *testing.T, url, path, body string) string {
 }
 
 // TestImageRequestsMatchTheEngine: a picture sent through either shim,
-// streamed or not, gives the tokens the engine's own image run gives for it;
-// and a different picture with the same text is a different prompt and a
+// streamed or not, gives the tokens the engine's own picture run gives for
+// it; and a different picture with the same text is a different prompt and a
 // different answer, so the picture reached the model.
 func TestImageRequestsMatchTheEngine(t *testing.T) {
 	e, lm, c := loadedEngine(t, visionModel, "vlm", LoadOptions{})
-	if lm.m.Tower() == nil {
+	if !lm.m.SeesPictures() {
 		t.Fatalf("%s carries no vision tower", visionModel)
 	}
 	quad := readTestdata(t, "quad-and-disc.png")
 	pink := readTestdata(t, "blue-purple-pink.lossy.webp")
+	red := testPNG(t, 384, 384, color.NRGBA{R: 200, G: 30, B: 30, A: 255})
+	img, _, err := image.Decode(bytes.NewReader(quad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jb bytes.Buffer
+	if err := jpeg.Encode(&jb, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
+	jpg := jb.Bytes()
 
 	wantQuad, spQuad := engineRun(t, e, lm, quad)
-	wantPink, spPink := engineRun(t, e, lm, pink)
+	wantRed, spRed := engineRun(t, e, lm, red)
+	wantPink, _ := engineRun(t, e, lm, pink)
+	wantJPEG, _ := engineRun(t, e, lm, jpg)
 	t.Logf("quad-and-disc: %q", wantQuad)
-	t.Logf("blue-purple-pink: %q", wantPink)
-	if pictureKey(t, spQuad) == pictureKey(t, spPink) {
+	t.Logf("red: %q", wantRed)
+	t.Logf("blue-purple-pink (WebP): %q", wantPink)
+	t.Logf("quad-and-disc as a JPEG: %q", wantJPEG)
+	if pictureKey(t, spQuad) == pictureKey(t, spRed) {
 		t.Fatal("two different pictures were named alike: the prefix cache would take one for the other")
 	}
-	if wantQuad == wantPink {
+	if wantQuad == wantRed || wantQuad == wantPink {
 		t.Fatalf("two different pictures gave the same answer %q: the picture does not reach the model", wantQuad)
 	}
 	for _, x := range []struct {
-		name string
-		pic  []byte
-		mt   string
-		want string
-	}{{"png", quad, "image/png", wantQuad}, {"webp", pink, "image/webp", wantPink}} {
+		name, mt string
+		pic      []byte
+		want     string
+	}{{"quad", "image/png", quad, wantQuad}, {"red", "image/png", red, wantRed},
+		{"webp", "image/webp", pink, wantPink}, {"jpeg", "image/jpeg", jpg, wantJPEG}} {
 		for _, stream := range []bool{false, true} {
 			if got := replyText(t, c.url, "/v1/chat/completions", oaImageBody(x.pic, x.mt, stream)); got != x.want {
 				t.Errorf("OpenAI %s stream=%v: %q, want the engine's %q", x.name, stream, got, x.want)
@@ -188,20 +204,20 @@ func TestImageRequestsMatchTheEngine(t *testing.T) {
 	both := func(a, b []byte) string {
 		return fmt.Sprintf(`{"model":"vlm","temperature":0,"max_tokens":12,"messages":[{"role":"user","content":[
 			{"type":"image_url","image_url":{"url":"data:image/png;base64,%s"}},
-			{"type":"image_url","image_url":{"url":"data:image/webp;base64,%s"}},{"type":"text","text":%q}]}]}`,
+			{"type":"image_url","image_url":{"url":"data:image/png;base64,%s"}},{"type":"text","text":%q}]}]}`,
 			base64.StdEncoding.EncodeToString(a), base64.StdEncoding.EncodeToString(b), askPicture)
 	}
-	wantBoth, _ := engineRun(t, e, lm, quad, pink)
-	wantSwapped, _ := engineRun(t, e, lm, pink, quad)
-	t.Logf("quad then pink: %q; pink then quad: %q", wantBoth, wantSwapped)
+	wantBoth, _ := engineRun(t, e, lm, quad, red)
+	wantSwapped, _ := engineRun(t, e, lm, red, quad)
+	t.Logf("quad then red: %q; red then quad: %q", wantBoth, wantSwapped)
 	if wantBoth == wantSwapped {
 		t.Fatal("two pictures in either order gave the same answer: the order is not a property of the prompt")
 	}
-	if got := replyText(t, c.url, "/v1/chat/completions", both(quad, pink)); got != wantBoth {
+	if got := replyText(t, c.url, "/v1/chat/completions", both(quad, red)); got != wantBoth {
 		t.Errorf("two pictures: %q, want the engine's %q", got, wantBoth)
 	}
-	// A text request on the same model still answers, and through the step
-	// loop's path: nothing about a picture prompt sticks to the model.
+	// A text request on the same model still answers: nothing about a
+	// picture prompt sticks to the model.
 	if got := replyText(t, c.url, "/v1/chat/completions",
 		`{"model":"vlm","temperature":0,"max_tokens":4,"messages":[{"role":"user","content":"Hello"}]}`); got == "" {
 		t.Fatal("a text request after the picture requests produced nothing")

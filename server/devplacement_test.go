@@ -29,7 +29,7 @@ func TestLoadPlacementPutsBlocksOnTheNamedDevices(t *testing.T) {
 	ctx := context.Background()
 	placed := func(t *testing.T, place string) map[int32]string {
 		t.Helper()
-		e := New(Config{Version: "test", NoMemCache: true})
+		e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 		t.Cleanup(e.Close)
 		if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m", DeviceIDs: devs, Placement: place, PlacementStrict: true}); err != nil {
 			t.Skipf("NO DEVICE: loading onto -devices %s with %q failed (%v) -- this gate proved nothing",
@@ -73,7 +73,7 @@ func TestLoadPlacementPutsBlocksOnTheNamedDevices(t *testing.T) {
 	}
 
 	t.Run("a device the load did not open is refused", func(t *testing.T) {
-		e := New(Config{Version: "test", NoMemCache: true})
+		e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 		t.Cleanup(e.Close)
 		_, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m", DeviceIDs: devs[:1], Placement: "0-5=" + devs[1], PlacementStrict: true})
 		var de *DeviceError
@@ -82,7 +82,7 @@ func TestLoadPlacementPutsBlocksOnTheNamedDevices(t *testing.T) {
 		}
 	})
 	t.Run("a malformed map is refused", func(t *testing.T) {
-		e := New(Config{Version: "test", NoMemCache: true})
+		e := New(admitConfig(Config{Version: "test", NoMemCache: true}))
 		t.Cleanup(e.Close)
 		_, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m", DeviceIDs: devs, Placement: "0-5"})
 		var de *DeviceError

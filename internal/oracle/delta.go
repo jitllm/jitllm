@@ -4,7 +4,7 @@ import "math"
 
 // The hybrid's three recurrent ops, in float64: the reference the generated
 // gated delta rule, causal convolution and gates are gated against on every
-// tier. The kernels are jit/cpu's EmitGatedDelta, EmitConv1d and EmitDeltaGate
+// tier. The kernels are engine/device/cpu's EmitGatedDelta, EmitConv1d and EmitDeltaGate
 // and their SSE twins; the Args layout they take is documented there.
 
 // GatedDelta applies one token of the gated delta rule to one head, n = len(o)
@@ -55,23 +55,6 @@ func Conv1d(out, state, w, x []float64, taps, chans int) {
 	}
 }
 
-// DeltaGate computes a linear block's two gates over len(decay) heads:
-//
-//	decay[i] = exp(A[i] * softplus(alpha[i] + dt[i]))
-//	beta[i]  = sigmoid(b[i])
-//
-// softplus is written max(z,0) + log1p(exp(-|z|)), which is exact in float64
-// for every finite z -- the textbook log1p(exp(z)) overflows above ~709 and
-// needs the branch this form removes.
-func DeltaGate(decay, beta, alpha, dt, b, a []float64) {
-	for i := range decay {
-		z := alpha[i] + dt[i]
-		sp := math.Max(z, 0) + math.Log1p(math.Exp(-math.Abs(z)))
-		decay[i] = math.Exp(a[i] * sp)
-		beta[i] = 1 / (1 + math.Exp(-b[i]))
-	}
-}
-
 // GatedDeltaChan is GatedDelta with a per-channel decay: the state decays at a
 // rate that varies along the row instead of one rate for the whole head. It is
 // Kimi-Linear's delta rule (KDA); qwen3next's is the scalar form above.
@@ -101,7 +84,7 @@ func GatedDeltaChan(o, state, k, q, v, decay []float64, gate float64) {
 
 // GatedSSD applies one token of Mamba-2's selective state update to one head:
 // len(o) rows of len(k), in place on state (row-major), and writes the head's
-// output. Per row j, in llama.cpp's ssm_scan order:
+// output. Per row j, in this order:
 //
 //	S[j] = S[j]*decay + (v[j]*dt)*k
 //	o[j] = dot(S[j], q) + d*v[j]
@@ -122,23 +105,9 @@ func GatedSSD(o, state, k, q, v []float64, decay, dt, d float64) {
 	}
 }
 
-// SSDGate computes Mamba-2's two per-head scalars over len(decay) heads:
-//
-//	dt[i]    = softplus(alpha[i] + bias[i])
-//	decay[i] = exp(A[i] * dt[i])
-//
-// softplus in DeltaGate's form, exact for every finite argument.
-func SSDGate(decay, dt, alpha, bias, a []float64) {
-	for i := range decay {
-		z := alpha[i] + bias[i]
-		dt[i] = math.Max(z, 0) + math.Log1p(math.Exp(-math.Abs(z)))
-		decay[i] = math.Exp(a[i] * dt[i])
-	}
-}
-
 // SelScan applies one token of Mamba-1's selective scan to len(o) channels,
 // in place on state (row-major, len(b) per channel). Per channel j, in
-// llama.cpp's ssm_scan order:
+// this order:
 //
 //	S[j][s] = S[j][s]*exp(dt[j]*A[j][s]) + (x[j]*dt[j])*B[s]
 //	o[j]    = dot(S[j], C) + d[j]*x[j]

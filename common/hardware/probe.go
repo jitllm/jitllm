@@ -2,7 +2,7 @@
 // do with it" -- the desktop equivalent of `jitllm hardware`.
 //
 // It reports rather than probing on its own account: every field is read from
-// where the engine reads it (sched, jit/cpu, backend.Open, tier), so the answer
+// where the engine reads it (sched, engine/device/cpu, backend.Open, tier), so the answer
 // cannot disagree with what a decode would do. Nothing is timed; the memory
 // wall is a separate, explicit button.
 //
@@ -12,7 +12,6 @@ package hardware
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/dev/bench"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,46 +19,17 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/dev/bench"
+
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/nn"
+	"github.com/jitllm/jitllm/sched"
 
 	"github.com/jitllm/jitllm/common/session"
 )
-
-// Formats is the list of quantization types the emitter has kernels for.
-//
-// It is a list, not a promise of coverage, which is why every row asks the
-// emitter rather than printing this slice.
-var Formats = quant.PackedTypes
-
-// FormatNames is [Formats] as strings, in the same order, so a caller that only
-// wants to label a table needs no quant import.
-func FormatNames() []string {
-	out := make([]string, 0, len(Formats))
-	for _, t := range Formats {
-		out = append(out, t.String())
-	}
-	return out
-}
-
-// Kernel is what the emitter will do for one quantization type, in both
-// families. Native is the GGUF row-major emitter, which a container never
-// decodes through; on a pre-VNNI host it reads "none" while the packed family
-// runs everything, so both columns are reported.
-type Kernel struct {
-	Format string
-	// Native is the GGUF row-major family: gone from the container path.
-	Native     bool
-	NativeNote string
-	// Packed is the container path. This is the column that matters.
-	Packed     bool
-	PackedNote string
-}
 
 // GPU is one device backend.Open actually opened.
 type GPU struct {
@@ -119,37 +89,22 @@ type Report struct {
 	// Decode reads every active weight once a token, so it bounds the rate.
 	MemWall float64
 
-	Arch    string
-	ISA     string
-	DotKind string
-	Kernels []Kernel
+	// Arch is the host's architecture, ISA the instruction sets it executes,
+	// and Form how the composer forms its CPU device's kernels from them
+	// (engine.CPUForm).
+	Arch, ISA, Form string
 
 	GPUs   []GPU
 	Vulkan []VulkanDev
 }
 
-var (
-	mu     sync.Mutex
-	cached Report
-)
-
-// Cached returns the last [Probe] and whether there has been one.
-func Cached() (Report, bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	return cached, cached.Probed
-}
-
-// Probe reads the machine and caches the result.
+// Probe reads the machine.
 //
 // Call it from a worker, once, and not while a model is loaded: backend.Open
-// opens and closes every backend, which contends with a live tier.GPU. Calls
-// are serialised here.
-func Probe() Report {
-	mu.Lock()
-	defer mu.Unlock()
-
-	r := Report{
+// opens and closes every backend, which contends with a live gpu.GPU. Callers
+// serialise their own calls; [Host] does.
+func Probe() (r Report) {
+	r = Report{
 		Probed:    true,
 		GOOS:      runtime.GOOS,
 		GOARCH:    runtime.GOARCH,
@@ -165,7 +120,6 @@ func Probe() Report {
 		if v := recover(); v != nil {
 			r.Err = fmt.Sprintf("probe panicked: %v", v)
 		}
-		cached = r
 	}()
 
 	r.PCores, r.ECores, r.SMT = sched.PCores(), sched.ECores(), sched.SMTSiblings()
@@ -178,12 +132,8 @@ func Probe() Report {
 	r.MemBudget, r.MemLimit = sched.MemBudget(), sched.MemLimit()
 	r.GCBudgetCap, r.GCUsable = sched.GCBudgetCap(), sched.GCUsable()
 
-	r.Arch, r.ISA, r.DotKind = cpu.NativeArch(), isa(), cpu.HostDotLabel()
-	r.Kernels = kernels()
+	r.Arch, r.ISA, r.Form = runtime.GOARCH, cpu.Probe().ISA().String(), engine.CPUForm()
 
-	// backend.Open is reached without a tier here, so verbosity has to be
-	// handed to it directly: the package reads no environment.
-	backend.SetVerbose(false)
 	devs := backend.Open()
 	for _, d := range devs {
 		r.GPUs = append(r.GPUs, describe(d))
@@ -209,34 +159,6 @@ func Probe() Report {
 	return r
 }
 
-// kernels asks the emitter, per format, in both families.
-func kernels() []Kernel {
-	out := make([]Kernel, 0, len(Formats))
-	for _, t := range Formats {
-		k := Kernel{Format: t.String()}
-
-		k.Native = cpu.SupportedNative(t)
-		if k.Native {
-			k.NativeNote = fmt.Sprintf("pack%d accs%d", cpu.BestPackNative(t), cpu.BestAccs(t))
-		} else {
-			k.NativeNote = "none"
-		}
-
-		switch {
-		case !cpu.PackedSupported(t):
-			k.PackedNote = "none"
-		case !cpu.SupportedPackedNative(t):
-			// Generated, and declined on this host: a real capability gap, and
-			// a different fact from having no kernel at all.
-			k.PackedNote = "declined"
-		default:
-			k.Packed, k.PackedNote = true, cpu.HostDotLabel()
-		}
-		out = append(out, k)
-	}
-	return out
-}
-
 // describe asks a device what it has, through the optional interfaces the
 // backend exposes -- a driver that cannot say reports its refusal rather than a
 // zero.
@@ -260,34 +182,6 @@ func describe(d backend.Device) GPU {
 	return g
 }
 
-// isa names what the native emitter emits, and whether this CPU can run it.
-//
-// jit/cpu probes the feature (CPUID leaf 7.1, AT_HWCAP or sysctl) and declines
-// the quantized row-major kernels when it is absent, so this is a measured
-// capability.
-func isa() string {
-	switch cpu.NativeArch() {
-	case "amd64":
-		// Off the AVX2 tier the VNNI line describes kernels this host cannot
-		// run; the tier report says what a run does here instead.
-		if cpu.HostTier() != cpu.TierAVX2 {
-			return cpu.TierReport()
-		}
-		s := "AVX2 + AVX-VNNI, VEX-encoded VPDPBUSD"
-		if cpu.SupportedNative(quant.Q4_0) {
-			return s + " (probed: present)"
-		}
-		return s + " (probed: ABSENT -- the GGUF row-major kernels decline; the packed column is what a container runs)"
-	case "arm64":
-		s := "NEON + FEAT_DotProd SDOT"
-		if cpu.HasDotProd() {
-			return s + " (probed: present)"
-		}
-		return s + " (probed: ABSENT -- SDOT widened to SMULL/SMLAL/ADDP/SADALP)"
-	}
-	return "unknown"
-}
-
 // Machine is the shell's view of this report.
 //
 // The conversion lives here and nowhere else, so there is one mapping to the
@@ -306,10 +200,6 @@ func (r Report) Machine() session.MachineReport {
 		MemLimit:    r.MemLimit,
 		GCBudgetCap: r.GCBudgetCap,
 	}
-	for _, k := range r.Kernels {
-		// The two columns stay two columns; see Kernel.
-		m.Kernels = append(m.Kernels, session.KernelRow{Format: k.Format, RowMajor: k.Native, Packed: k.Packed})
-	}
 	for _, g := range r.GPUs {
 		m.GPUs = append(m.GPUs, session.GPUInfo{
 			Name: g.Name, API: g.API, Slots: g.Slots, Mem: g.Total, Unified: g.Unified,
@@ -320,10 +210,10 @@ func (r Report) Machine() session.MachineReport {
 
 // ValidateSpec parses a device spec and says what it asks for.
 //
-// It is tier.ParseDevices, not a parser of this app's own, so the picker
+// It is gpu.ParseDevices, not a parser of this app's own, so the picker
 // cannot accept a spec the engine then refuses.
 func ValidateSpec(spec string) (string, error) {
-	es, err := tier.ParseDevices(spec)
+	es, err := gpu.ParseDevices(spec)
 	if err != nil {
 		return "", err
 	}
@@ -351,31 +241,32 @@ func ValidateSpec(spec string) (string, error) {
 // that every device it names is one the device spec opens, so the picker cannot
 // accept a map the load then refuses. Empty is valid: the engine places.
 //
-// It is model.ParsePlacement, not a grammar of this app's own.
+// It is engine.ParsePlacement, not a grammar of this app's own.
 func ValidatePlacement(placement, spec string) error {
 	if strings.TrimSpace(placement) == "" {
 		return nil
 	}
-	pl, err := model.ParsePlacement(placement, true)
+	pl, err := engine.ParsePlacement(placement, true)
 	if err != nil {
 		return err
 	}
-	es, err := tier.ParseDevices(spec)
+	es, err := gpu.ParseDevices(spec)
 	if err != nil {
 		return err
 	}
-	opened := map[string]bool{"host": true}
+	// The CPU is a device every spec opens.
+	opened := map[string]bool{nn.CPU: true}
 	for _, e := range es {
 		if !e.Device() || !e.HasSel {
 			continue
 		}
 		opened[nn.DeviceName(e.API+":"+e.Sel)] = true
 	}
-	named := []model.Place{}
+	named := []engine.Place{}
 	for _, b := range pl.Blocks {
 		named = append(named, b)
 	}
-	for _, x := range []*model.Place{pl.Rest, pl.Head} {
+	for _, x := range []*engine.Place{pl.Rest, pl.Head} {
 		if x != nil {
 			named = append(named, *x)
 		}
@@ -396,12 +287,12 @@ func ValidatePlacement(placement, spec string) error {
 //
 // It also warns about the collector: page frames are permanently live, so a
 // budget above gcCap (sched.GCBudgetCap) leaves the Go collector running back
-// to back. See docs/engineering-history/scheduling-and-measurement.md.
+// to back. See .notes/engineering-history/scheduling-and-measurement.md.
 func ValidateBudget(text string, fallback, gcCap uint64) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "default: " + session.Bytes(fallback), nil
 	}
-	n, err := tier.ParseBytes(text)
+	n, err := gpu.ParseBytes(text)
 	if err != nil {
 		return "", err
 	}
@@ -468,11 +359,24 @@ func sysctl(key string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Host is this machine, as screen.Machine reads it.
-type Host struct{}
+// Host is this machine, as screen.Machine reads it: it remembers the last
+// probe and serialises them.
+type Host struct {
+	mu     sync.Mutex
+	cached Report
+}
 
-// Probe is [Probe].
-func (Host) Probe() Report { return Probe() }
+// Probe reads the machine and caches the result.
+func (h *Host) Probe() Report {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cached = Probe()
+	return h.cached
+}
 
-// Cached is [Cached].
-func (Host) Cached() (Report, bool) { return Cached() }
+// Cached returns the last [Host.Probe] and whether there has been one.
+func (h *Host) Cached() (Report, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cached, h.cached.Probed
+}

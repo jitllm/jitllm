@@ -71,7 +71,7 @@ JITLLM_PATH="${JITLLM_PATH:-${MODEL%.gguf}.jlm}"
 # ★ mtime IS A PROXY FOR "STALE" AND IT IS WRONG WHENEVER ANOTHER BINARY WROTE
 # THE CONTAINER. A container written by an OLDER tree has a NEWER mtime, so
 # `-ot "$JLMBIN"` says fresh and the run then dies on "container is version 6
-# and this build reads 15". It happened here: a `go test ./engine/model -run
+# and this build reads 15". It happened here: a `go test ./engine -run
 # TestFusionCeiling` in a v6 worktree converts into the shared models directory
 # and clobbers the v15 container with a v6 one. The failure was SILENT because
 # jitllm_run discards the engine's stdout and lcpp_run discards stderr, so
@@ -334,7 +334,7 @@ jitllm_pp_warm() { ${PIN[@]+"${PIN[@]}"} "$JITLLM" speed -devices "$JITLLM_DEV" 
 # loads a second, and prompt tokens a second of the ttft span. The file is in
 # the page cache after the token-count probe, which serves llama.cpp's mmap;
 # jitllm reads the container with O_DIRECT and gets no help from it. jitllm's
-# tuning cache is whatever this host holds (tier.WithTuneCache); the header
+# tuning cache is whatever this host holds (gpu.WithTuneCache); the header
 # says how many tuner trials the probe run timed.
 lcpp_comp() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-completion" -m "$MODEL" "${LCPP_ARGS[@]}" -n 1 -no-cnv --no-warmup --log-timestamps --log-prefix -p "$PP" </dev/null 2>&1; }
 # lcpp_stamp PATTERN: seconds of the first log line matching PATTERN; llama.cpp

@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // orchFixture loads two models on one card whose shared pool cannot hold
-// both, and the same two on the host alone as the controls.
+// both, and the same two on the CPU alone as the controls.
 type orchFixture struct {
 	e   *Engine
 	c   clients
@@ -20,15 +21,16 @@ type orchFixture struct {
 func newOrchFixture(t *testing.T, cfg Config) *orchFixture {
 	devs := testdevices.Take(t, 1, "cuda:0")
 	cfg.Version, cfg.NoMemCache = "test", true
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	// 1200 MiB of one card: the first model fits, the second does not beside it.
+	// The CPU is listed: it is where the orchestrator moves a victim's blocks.
 	spec := devs[0] + "=1200M"
 	for _, m := range []struct{ id, file string }{
 		{"a", "Qwen3-0.6B-Q8_0.jlm"},
 		{"b", "Llama-3.2-1B-Instruct-Q4_K_M.jlm"},
 	} {
-		if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, m.file), ModelID: m.id, DeviceIDs: []string{spec}}); err != nil {
+		if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, m.file), ModelID: m.id, DeviceIDs: []string{spec, nn.CPU}}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, m.file), ModelID: m.id + "-host", DeviceIDs: []string{"cpu"}}); err != nil {
@@ -63,7 +65,9 @@ func (f *orchFixture) dev(id string) int {
 	return int(pl.Msg.GetPlacement().GetDeviceBlockCount())
 }
 
-var orchTurns = []string{story, " and then", " until"}
+func orchTurns() []string {
+	return []string{story, " and then", " until"}
+}
 
 // TestTheTalkingModelGetsTheCard: two models on a card that holds one. Each
 // turn, the model generating is promoted onto the card and the idle one is
@@ -72,7 +76,7 @@ var orchTurns = []string{story, " and then", " until"}
 // each turn's first token: the history travels, nothing is recomputed or
 // refused.
 //
-// VIOLATION SIGNATURE. Without the shared pool (tier.WithPoolRegistry) the
+// VIOLATION SIGNATURE. Without the shared pool (gpu.WithPoolRegistry) the
 // second model never gets a block; without promote, a session demoted once
 // stays home ("b holds 0 blocks after its turn"); a history dropped on a
 // move parts a reply from its control.
@@ -81,7 +85,7 @@ func TestTheTalkingModelGetsTheCard(t *testing.T) {
 	f.open("a-host", "ah")
 	f.open("b-host", "bh")
 	var ctlA, ctlB [][]int32
-	for _, p := range orchTurns {
+	for _, p := range orchTurns() {
 		ctlA = append(ctlA, f.turn("ah", p))
 		ctlB = append(ctlB, f.turn("bh", p))
 	}
@@ -103,7 +107,7 @@ func TestTheTalkingModelGetsTheCard(t *testing.T) {
 		}
 		return false
 	}
-	for i, p := range orchTurns {
+	for i, p := range orchTurns() {
 		if got := f.turn("a", p); !same(got, ctlA[i], devA[i]) {
 			t.Fatalf("turn %d: a's reply %v parts from the host's %v and the card's %v", i, got, ctlA[i], devA[i])
 		}
@@ -197,17 +201,17 @@ func (f *orchFixture) declines(id string) []any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []any
-	for _, d := range s.st.DeviceDeclines() {
+	for _, d := range s.in().DeviceDeclines() {
 		out = append(out, d)
 	}
 	return out
 }
 
-// deviceControls is each model's replies to orchTurns from a session that
+// deviceControls is each model's replies to orchTurns() from a session that
 // holds every block on the card from its first token to its last.
 func deviceControls(t *testing.T) (a, b [][]int32) {
 	devs := testdevices.Take(t, 1, "cuda:0")
-	e := New(Config{Version: "test", NoMemCache: true, NoOrchestrate: true})
+	e := New(admitConfig(Config{Version: "test", NoMemCache: true, NoOrchestrate: true}))
 	defer e.Close()
 	f := &orchFixture{e: e, c: serveEngine(t, e), ctx: context.Background(), t: t}
 	for _, m := range []struct {
@@ -218,7 +222,7 @@ func deviceControls(t *testing.T) (a, b [][]int32) {
 			t.Fatal(err)
 		}
 		f.open(m.id, m.id)
-		for _, p := range orchTurns {
+		for _, p := range orchTurns() {
 			*m.out = append(*m.out, f.turn(m.id, p))
 		}
 		if n, all := f.dev(m.id), int(e.mustModel(t, m.id).m.Cfg.NLayer); n != all {

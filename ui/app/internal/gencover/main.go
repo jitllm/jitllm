@@ -1,6 +1,6 @@
 // Command gencover writes app/intercover.go: the runes the toolkit's embedded
-// Inter has a glyph for, as ranges, and its mean advance. The app cannot ask Inter directly -- the
-// toolkit embeds it in an internal package -- and FamilyFor needs to know when
+// Inter has a glyph for, as a search over ranges, and its mean advance. The app cannot ask Inter directly -- the
+// toolkit embeds it in an internal package -- and Fonts.FamilyFor needs to know when
 // the default face can draw a rune before it reaches for a fallback.
 //
 //	go run ./app/internal/gencover > app/intercover.go
@@ -29,8 +29,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("package app")
 	fmt.Println()
-	fmt.Println("// interCover is every rune the embedded Inter draws, as inclusive ranges.")
-	fmt.Println("var interCover = [][2]rune{")
+	var ranges [][2]rune
 	lo := rune(-1)
 	for r := rune(0); r <= 0x2FFFF+1; r++ {
 		// Controls map to .null, which draws nothing a person reads.
@@ -39,10 +38,14 @@ func main() {
 		case has && lo < 0:
 			lo = r
 		case !has && lo >= 0:
-			fmt.Printf("\t{0x%04X, 0x%04X},\n", lo, r-1)
+			ranges = append(ranges, [2]rune{lo, r - 1})
 			lo = -1
 		}
 	}
+	fmt.Println("// interCovers reports whether the embedded Inter has a glyph for r: a search")
+	fmt.Println("// down the inclusive ranges of the runes it draws.")
+	fmt.Println("func interCovers(r rune) bool {")
+	search(ranges, 1)
 	fmt.Println("}")
 	fmt.Println()
 	fmt.Println("// interAdvance is Inter's mean advance per rune, in ems, over running")
@@ -53,6 +56,21 @@ func main() {
 	fmt.Println("// interBoldAdvance is the same for Inter Bold, which is wider: bold text")
 	fmt.Println("// wrapped by the regular advance runs past its box.")
 	fmt.Printf("const interBoldAdvance = %.4f\n", advance(bold))
+}
+
+// search writes the code that decides whether r is in one of ranges, halving
+// them at each comparison.
+func search(ranges [][2]rune, depth int) {
+	tab := strings.Repeat("\t", depth)
+	if len(ranges) == 1 {
+		fmt.Printf("%sreturn r >= 0x%04X && r <= 0x%04X\n", tab, ranges[0][0], ranges[0][1])
+		return
+	}
+	mid := len(ranges) / 2
+	fmt.Printf("%sif r < 0x%04X {\n", tab, ranges[mid][0])
+	search(ranges[:mid], depth+1)
+	fmt.Printf("%s}\n", tab)
+	search(ranges[mid:], depth)
 }
 
 // advance is a face's mean advance per rune over the probe, in ems.

@@ -14,7 +14,7 @@ import (
 
 // TestStopSetRoundTrips: the ids a model's file states end a generation reach
 // the container from either input. HunyuanVL closes a turn with
-// <｜hy_Assistant｜> (120007): llama.cpp's converter writes it to a GGUF as
+// <｜hy_Assistant｜> (120007): a GGUF holds it as
 // tokenizer.ggml.eot_token_id beside an eos of its own, and transformers keeps
 // it in generation_config.json's eos_token_id list. Dropped at conversion, a
 // reply ran on past its turn. Both fixtures are converted, written, reopened
@@ -42,7 +42,7 @@ func TestStopSetRoundTrips(t *testing.T) {
 		{"gguf", "synth-hunyuanvl.gguf", true, []int32{3, assistant}},
 		// HunYuanVL's class does not convert from safetensors; Apertus's
 		// generation_config lists </s> and <|tools_suffix|> beside its
-		// tokenizer's <|assistant_end|>, and no name llama.cpp matches covers
+		// tokenizer's <|assistant_end|>, and no end-of-generation name covers
 		// the last.
 		{"safetensors", "synth-apertus-hf", false, []int32{2, 68, 72}},
 	} {

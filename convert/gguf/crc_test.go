@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"hash/crc32"
 	"io"
 	"math"
@@ -42,14 +43,14 @@ func TestWholeTensorCRC(t *testing.T) {
 	if err := json.Unmarshal(raw, &want); err != nil {
 		t.Fatal(err)
 	}
-	// The goldens name a model by its content ("sha256:<hex>", the Ollama blob
-	// it was taken from), so each candidate is identified by its bytes: a
+	// The goldens name a model by its content ("sha256:<hex>", the content-addressed
+	// blob it was taken from), so each candidate is identified by its bytes: a
 	// symlink into the blob store by the blob's own name, a plain download by
 	// hashing it. Keying on the file NAME matched nothing on any host, and
 	// every subtest skipped while the gate read green.
 	byID := map[string]string{}
 	present := 0
-	for _, p := range []string{tinyllama, gemma} {
+	for _, p := range []string{tinyllama(), gemma()} {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
@@ -61,7 +62,7 @@ func TestWholeTensorCRC(t *testing.T) {
 		byID[id] = p
 	}
 	if present == 0 {
-		t.Skip("MODEL MISSING: neither tinyllama-1.1b-q3_K_M.gguf nor gemma-2b.gguf (set JITLLM_MODELS) -- this gate proved nothing")
+		testmodels.Missing(t, "MODEL MISSING: neither tinyllama-1.1b-q3_K_M.gguf nor gemma-2b.gguf (set JITLLM_MODELS) -- this gate proved nothing")
 	}
 
 	var total uint64
@@ -111,7 +112,7 @@ func TestWholeTensorCRC(t *testing.T) {
 			t.Logf("%-22s %10d elems  crc %08x  %v", w.Tensor, w.Elems, w.CRC32, time.Since(start).Round(time.Millisecond))
 		})
 	}
-	t.Logf("total %d elements verified bit-exact against libggml", total)
+	t.Logf("total %d elements verified bit-exact against the reference dequantizer", total)
 }
 
 // contentID is "sha256:<hex>" of the file p names: read off the target's name

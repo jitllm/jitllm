@@ -4,13 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"maps"
+	"math"
 	"math/rand/v2"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
-	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/grammar"
+	"github.com/jitllm/jitllm/model"
 )
 
 // llama.cpp's native HTTP API (tools/server): /completion, /infill,
@@ -105,72 +112,159 @@ func emptyJSON(r json.RawMessage) bool {
 func anyValue(json.RawMessage) bool { return true }
 
 // samplerSubset is the samplers this engine's sampler chain has.
-func samplerSubset(r json.RawMessage) bool {
+// llamaChain is llama-server's default sampler chain, which is the order the
+// draw runs its stages in.
+func llamaChain() []string {
+	return []string{"penalties", "dry", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"}
+}
+
+// llamaSamplers reads samplers as llama-server reads it: an array of names,
+// each canonical, kebab-case, without its underscore or one of nucleus, temp
+// and typ, in any case; or a string of their letters; in any order and any
+// number of times, as llama-server chains them (llamaStages). A name it does
+// not know is refused.
+func llamaSamplers(raw json.RawMessage) ([]string, error) {
 	var names []string
-	if json.Unmarshal(r, &names) != nil {
-		return false
-	}
-	for _, n := range names {
-		switch n {
-		case "penalties", "top_k", "top_p", "min_p", "temperature":
-		default:
-			return false
+	if json.Unmarshal(raw, &names) != nil {
+		var chars string
+		if json.Unmarshal(raw, &chars) != nil {
+			return nil, fmt.Errorf("%w: samplers must be an array of names or a string of their letters", ErrInvalid)
+		}
+		letters := map[rune]string{'e': "penalties", 'd': "dry", 's': "top_n_sigma", 'k': "top_k", 'y': "typ_p",
+			'p': "top_p", 'm': "min_p", 'x': "xtc", 't': "temperature", 'i': "infill", 'a': "adaptive_p"}
+		for _, c := range chars {
+			n, ok := letters[c]
+			if !ok {
+				return nil, fmt.Errorf("%w: samplers: %q is no sampler's letter", ErrInvalid, c)
+			}
+			names = append(names, n)
 		}
 	}
-	return true
+	alias := map[string]string{"nucleus": "top_p", "temp": "temperature", "typ": "typ_p"}
+	for _, n := range append(llamaChain(), "infill", "adaptive_p") {
+		alias[n] = n
+		alias[strings.ReplaceAll(n, "_", "-")] = n
+		alias[strings.ReplaceAll(n, "_", "")] = n
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		c, ok := alias[strings.ToLower(n)]
+		if !ok {
+			return nil, fmt.Errorf("%w: samplers: %q is not a sampler", ErrInvalid, n)
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// llamaStages is samplers as the draw's stages where their order is not
+// llamaChain's (engine.Sampler.Stages): nil where they are in its order,
+// which the fused draw runs with the temperature last
+// (engine.Sampler.TempLast); infill and adaptive_p draw in place of the
+// last draw.
+func llamaStages(samplers []string) []engine.Stage {
+	kinds := map[string]engine.Stage{"penalties": engine.StagePenalties, "dry": engine.StageDRY, "top_n_sigma": engine.StageTopNSigma,
+		"top_k": engine.StageTopK, "typ_p": engine.StageTypical, "top_p": engine.StageTopP, "min_p": engine.StageMinP,
+		"xtc": engine.StageXTC, "temperature": engine.StageTemperature}
+	chain := llamaChain()
+	var out []engine.Stage
+	at, fused := 0, true
+	for _, n := range samplers {
+		k, ok := kinds[n]
+		if !ok {
+			continue
+		}
+		out = append(out, k)
+		if i := slices.Index(chain[at:], n); i < 0 {
+			fused = false
+		} else {
+			at += i + 1
+		}
+	}
+	if fused {
+		return nil
+	}
+	return out
+}
+
+// stages is s as its draw runs: each stage samplers leaves out off, as
+// llama-server's chain leaves it out -- with no temperature the draw is the
+// softmax at 1.
+func (s llamaSettings) stages() llamaSettings {
+	on := func(n string) bool { return slices.Contains(s.Samplers, n) }
+	if !on("penalties") {
+		s.RepeatPenalty, s.PresencePenalty, s.FrequencyPenalty = 1, 0, 0
+	}
+	if !on("top_n_sigma") {
+		s.TopNSigma = -1
+	}
+	if !on("top_k") {
+		s.TopK = 0
+	}
+	if !on("typ_p") {
+		s.TypicalP = 1
+	}
+	if !on("top_p") {
+		s.TopP = 1
+	}
+	if !on("min_p") {
+		s.MinP = 0
+	}
+	if !on("xtc") {
+		s.XTCProbability = 0
+	}
+	if !on("dry") {
+		s.DryMultiplier = 0
+	}
+	if !on("temperature") {
+		s.Temperature, s.DynatempRange = 1, 0
+	}
+	return s
 }
 
 // llamaFields is every /completion field (llama.cpp's server README) that is
 // not read: each is accepted at its neutral value and refused at any other.
 // A field in neither this table nor llamaRead is refused as unknown.
-var llamaFields = map[string]llamaField{
-	"dynatemp_range":        {numIs(0), "dynamic temperature is not built"},
-	"dynatemp_exponent":     {anyValue, ""},
-	"typical_p":             {numIs(1), "locally typical sampling is not built"},
-	"presence_penalty":      {numIs(0), "the sampler has no presence penalty; repeat_penalty is built"},
-	"frequency_penalty":     {numIs(0), "the sampler has no frequency penalty; repeat_penalty is built"},
-	"dry_multiplier":        {numIs(0), "DRY sampling is not built"},
-	"dry_base":              {anyValue, ""},
-	"dry_allowed_length":    {anyValue, ""},
-	"dry_penalty_last_n":    {anyValue, ""},
-	"dry_sequence_breakers": {anyValue, ""},
-	"xtc_probability":       {numIs(0), "XTC sampling is not built"},
-	"xtc_threshold":         {anyValue, ""},
-	"mirostat":              {numIs(0), "Mirostat is not built"},
-	"mirostat_tau":          {anyValue, ""},
-	"mirostat_eta":          {anyValue, ""},
-	"top_n_sigma":           {numLE(-1), "top-n-sigma sampling is not built"},
-	"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
-	"adaptive_decay":        {anyValue, ""},
-	"min_keep":              {numIs(0), "min_keep is not built"},
-	"logit_bias":            {emptyJSON, "logit bias is not built"},
-	"samplers":              {samplerSubset, "only the samplers penalties, top_k, top_p, min_p and temperature exist"},
-	"n_indent":              {numIs(0), "n_indent is not built"},
-	"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
-	"n_discard":             {numIs(0), "there is no context shift"},
-	"n_cmpl":                {numIs(1), "send one request per completion"},
-	"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-	"t_max_predict_ms":      {numIs(0), "a prediction time limit is not built; use n_predict"},
-	"t_max_prompt_ms":       {numIs(0), "a prompt time limit is not built"},
-	"timings_per_token":     {boolIs(false), "per-token timings are not built; the final object carries timings"},
-	"return_progress":       {boolIs(false), "prompt progress is not built"},
-	"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
-	"response_fields":       {emptyJSON, "response_fields is not built"},
-	"lora":                  {emptyJSON, "LoRA adapters are not built"},
-	"sse_ping_interval":     {numIs(0), "SSE pings are not built"},
-	"multimodal_data":       {emptyJSON, "send pictures through /v1/chat/completions"},
-	"image_data":            {emptyJSON, "send pictures through /v1/chat/completions"},
+func llamaFields() map[string]llamaField {
+	return map[string]llamaField{
+		// n_keep and n_discard act only in a context shift, which
+		// llama-server runs only under --context-shift, off by default:
+		// without one a reply stops at the context's end (stop_type limit,
+		// truncated), as here. n_cache_reuse asks llama-server to shift a
+		// cached chunk into a new prompt's place where its cache can shift
+		// and is ignored where it cannot; here the prefix cache restores a
+		// shared prefix and the rest is computed.
+		"n_keep":          {anyValue, ""},
+		"n_discard":       {anyValue, ""},
+		"n_cache_reuse":   {anyValue, ""},
+		"lora":            {emptyJSON, "LoRA adapters are not built"},
+		"multimodal_data": {emptyJSON, "pictures go in prompt.multimodal_data"},
+		"image_data":      {emptyJSON, "pictures go in prompt.multimodal_data"},
+	}
 }
 
 // llamaRead are the fields the handler reads.
-var llamaRead = map[string]bool{
-	"prompt": true, "temperature": true, "top_k": true, "top_p": true, "min_p": true,
-	"n_predict": true, "max_tokens": true, "stop": true, "seed": true, "stream": true,
-	"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
-	"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
-	"repeat_last_n": true, "model": true,
-	// /infill's own.
-	"input_prefix": true, "input_suffix": true, "input_extra": true,
+func llamaRead() map[string]bool {
+	return map[string]bool{
+		"prompt": true, "temperature": true, "top_k": true, "top_p": true, "min_p": true,
+		"n_predict": true, "max_tokens": true, "stop": true, "seed": true, "stream": true,
+		"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
+		"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
+		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
+		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
+		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
+		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
+		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
+		"n_indent": true, "return_progress": true, "post_sampling_probs": true, "min_keep": true,
+		"adaptive_target": true, "adaptive_decay": true,
+		"dry_multiplier": true, "dry_base": true, "dry_allowed_length": true, "dry_penalty_last_n": true,
+		"dry_sequence_breakers": true,
+		// llama-server leaves t_max_prompt_ms unimplemented and takes it to
+		// no effect; so does this server.
+		"t_max_prompt_ms": true,
+		// /infill's own.
+		"input_prefix": true, "input_suffix": true, "input_extra": true,
+	}
 }
 
 // llamaCheck refuses a field the handler does not honour, naming it. Fields
@@ -181,14 +275,15 @@ func llamaCheck(body map[string]json.RawMessage, infill bool) error {
 		names = append(names, k)
 	}
 	sortStrings(names)
+	read, fields := llamaRead(), llamaFields()
 	for _, k := range names {
-		if llamaRead[k] {
+		if read[k] {
 			if !infill && strings.HasPrefix(k, "input_") {
 				return fmt.Errorf("%w: %s belongs to /infill", ErrInvalid, k)
 			}
 			continue
 		}
-		f, ok := llamaFields[k]
+		f, ok := fields[k]
 		if !ok {
 			return fmt.Errorf("%w: %s is not a field this server reads", ErrInvalid, k)
 		}
@@ -407,8 +502,8 @@ func (c *compat) llamaApplyTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	var cms []model.ChatMessage
 	for i, m := range msgs {
-		text, imgs, err := oaContent(m.Content)
-		if err != nil || len(imgs) > 0 {
+		text, imgs, vids, err := oaContent(m.Content, c.storedFile)
+		if err != nil || len(imgs)+len(vids) > 0 {
 			llFail(w, http.StatusBadRequest, fmt.Sprintf("messages[%d]: content must be text", i), "invalid_request_error")
 			return
 		}
@@ -438,12 +533,13 @@ func (c *compat) llamaEmbedding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var norm *int
 	for k, raw := range body {
 		switch k {
 		case "content", "model":
 		case "embd_normalize":
-			if !numIs(2)(raw) {
-				llFailErr(w, fmt.Errorf("%w: embd_normalize=%s is not supported: vectors are L2-normalised (2)", ErrInvalid, raw))
+			if err := json.Unmarshal(raw, &norm); err != nil || norm == nil {
+				llFailErr(w, fmt.Errorf("%w: embd_normalize=%s is not an integer", ErrInvalid, raw))
 				return
 			}
 		default:
@@ -456,7 +552,7 @@ func (c *compat) llamaEmbedding(w http.ResponseWriter, r *http.Request) {
 		llFail(w, http.StatusBadRequest, "content: "+err.Error(), "invalid_request_error")
 		return
 	}
-	res, err := c.b.Embed(r.Context(), EmbedOptions{Model: info.ID, Inputs: inputs})
+	res, err := c.b.Embed(r.Context(), EmbedOptions{Model: info.ID, Inputs: inputs, Normalize: norm})
 	if err != nil {
 		llFailErr(w, err)
 		return
@@ -542,27 +638,50 @@ func serveLlamaHealth(_ *Engine, w http.ResponseWriter, _ *http.Request) {
 // llamaSettings is a request's resolved generation settings, as
 // generation_settings reports them.
 type llamaSettings struct {
-	Temperature, TopP, MinP, RepeatPenalty float64
-	TopK, RepeatLastN, NPredict, NProbs    int
-	Seed                                   int64
-	Stop                                   []string
-	IgnoreEOS, Stream                      bool
-	Grammar, JSONSchema                    string
+	Temperature, TopP, MinP, RepeatPenalty     float64
+	TypicalP, XTCProbability, XTCThreshold     float64
+	TopNSigma, DynatempRange, DynatempExponent float64
+	Mirostat                                   int
+	MirostatTau, MirostatEta                   float64
+	AdaptiveTarget, AdaptiveDecay              float64
+	DryMultiplier, DryBase                     float64
+	DryAllowedLength, DryPenaltyLastN          int
+	DrySequenceBreakers                        []string
+	PresencePenalty, FrequencyPenalty          float64
+	TopK, RepeatLastN, NPredict, NProbs        int
+	MinKeep                                    int
+	Seed                                       int64
+	Stop                                       []string
+	IgnoreEOS, Stream, TimingsPerToken         bool
+	// PostSamplingProbs reports n_probs after every sampler: each token's
+	// probability under the distribution its draw drew from.
+	PostSamplingProbs   bool
+	Grammar, JSONSchema string
+	// Samplers is the chain's stages in order (llamaSamplers).
+	Samplers []string
 }
 
 // llamaDefaults are llama-server's defaults for an absent field.
 func llamaDefaults() llamaSettings {
-	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1,
-		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}}
+	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1, MirostatTau: 5, MirostatEta: 0.1, AdaptiveTarget: -1, AdaptiveDecay: 0.9,
+		DryBase: 1.75, DryAllowedLength: 2, DryPenaltyLastN: -1, DrySequenceBreakers: []string{"\n", ":", "\"", "*"},
+		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}, Samplers: llamaChain()}
 }
 
 func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 	return map[string]any{
 		"n_predict": s.NPredict, "max_tokens": s.NPredict, "seed": s.Seed, "temperature": s.Temperature,
-		"top_k": s.TopK, "top_p": s.TopP, "min_p": s.MinP, "repeat_last_n": s.RepeatLastN,
-		"repeat_penalty": s.RepeatPenalty, "stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream,
-		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
-		"samplers": []string{"penalties", "top_k", "top_p", "min_p", "temperature"},
+		"top_k": s.TopK, "top_p": s.TopP, "min_p": s.MinP, "typical_p": s.TypicalP, "repeat_last_n": s.RepeatLastN,
+		"xtc_probability": s.XTCProbability, "xtc_threshold": s.XTCThreshold, "top_n_sigma": s.TopNSigma,
+		"dynatemp_range": s.DynatempRange, "dynatemp_exponent": s.DynatempExponent,
+		"mirostat": s.Mirostat, "mirostat_tau": s.MirostatTau, "mirostat_eta": s.MirostatEta,
+		"adaptive_target": s.AdaptiveTarget, "adaptive_decay": s.AdaptiveDecay,
+		"dry_multiplier": s.DryMultiplier, "dry_base": s.DryBase, "dry_allowed_length": s.DryAllowedLength,
+		"dry_penalty_last_n": s.DryPenaltyLastN, "dry_sequence_breakers": s.DrySequenceBreakers,
+		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
+		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
+		"n_probs": s.NProbs, "min_keep": s.MinKeep, "post_sampling_probs": s.PostSamplingProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
+		"samplers": s.Samplers,
 	}
 }
 
@@ -577,54 +696,120 @@ func decodeField[T any](body map[string]json.RawMessage, name string, dst *T) er
 	return nil
 }
 
-// llamaPrompt reads `prompt`: a string, token ids, or strings and ids mixed,
-// as one token sequence. Strings are tokenized with special tokens parsed, and
-// only a leading string gets the BOS, as llama-server does.
-func llamaPrompt(lb LlamaBackend, modelID string, raw json.RawMessage) (ids []int32, text string, err error) {
+// llamaInput is one prompt of a request: its ids and the text they were read
+// from, or its text and the pictures that stand where it holds llamaMarker.
+type llamaInput struct {
+	ids  []int32
+	text string
+	imgs []image.Image
+}
+
+// llamaMarker is where a prompt's picture stands in its text, llama-server's
+// (mtmd's default marker).
+const llamaMarker = "<__media__>"
+
+func isTokenID(raw json.RawMessage) bool {
+	var n int32
+	return json.Unmarshal(raw, &n) == nil
+}
+
+// llamaPrompts reads `prompt` as llama-server does: an array holding no token
+// id is a list of prompts, each answered on its own; anything else is one.
+func llamaPrompts(lb LlamaBackend, modelID string, raw json.RawMessage, pics *pictures) ([]llamaInput, error) {
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil || slices.ContainsFunc(parts, isTokenID) {
+		in, err := llamaPrompt(lb, modelID, raw, pics)
+		if err != nil {
+			return nil, err
+		}
+		return []llamaInput{in}, nil
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("%w: prompt is empty", ErrInvalid)
+	}
+	ins := make([]llamaInput, len(parts))
+	for i, p := range parts {
+		in, err := llamaPrompt(lb, modelID, p, pics)
+		if err != nil {
+			return nil, err
+		}
+		ins[i] = in
+	}
+	return ins, nil
+}
+
+// llamaPrompt reads one prompt: a string, token ids, strings and ids mixed,
+// or {"prompt_string": ..., "multimodal_data": [...]}, as one token sequence
+// or, with pictures, as the text and the pictures. Strings are tokenized with
+// special tokens parsed, and only a leading string gets the BOS, as
+// llama-server does. Strings alone in an array are a list of prompts, which
+// does not nest.
+func llamaPrompt(lb LlamaBackend, modelID string, raw json.RawMessage, pics *pictures) (llamaInput, error) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		ids, err = lb.Tokenize(modelID, s, true, true)
-		return ids, s, err
+		ids, err := lb.Tokenize(modelID, s, true, true)
+		return llamaInput{ids: ids, text: s}, err
 	}
 	var parts []json.RawMessage
 	if json.Unmarshal(raw, &parts) != nil {
 		var obj struct {
-			PromptString string          `json:"prompt_string"`
-			Multimodal   json.RawMessage `json:"multimodal_data"`
+			PromptString string   `json:"prompt_string"`
+			Multimodal   []string `json:"multimodal_data"`
 		}
-		if json.Unmarshal(raw, &obj) == nil && obj.PromptString != "" {
-			if !emptyJSON(obj.Multimodal) && len(obj.Multimodal) > 0 {
-				return nil, "", fmt.Errorf("%w: prompt.multimodal_data is not supported: send pictures through /v1/chat/completions", ErrInvalid)
-			}
-			ids, err = lb.Tokenize(modelID, obj.PromptString, true, true)
-			return ids, obj.PromptString, err
+		if json.Unmarshal(raw, &obj) != nil || obj.PromptString == "" {
+			return llamaInput{}, fmt.Errorf("%w: prompt must be a string, token ids, strings and ids mixed, or {\"prompt_string\": ..., \"multimodal_data\": [...]}", ErrInvalid)
 		}
-		return nil, "", fmt.Errorf("%w: prompt must be a string, token ids, or strings and ids mixed", ErrInvalid)
+		if len(obj.Multimodal) == 0 {
+			ids, err := lb.Tokenize(modelID, obj.PromptString, true, true)
+			return llamaInput{ids: ids, text: obj.PromptString}, err
+		}
+		return llamaPictures(obj.PromptString, obj.Multimodal, pics)
 	}
+	if !slices.ContainsFunc(parts, isTokenID) {
+		return llamaInput{}, fmt.Errorf("%w: a prompt in a list is a string, token ids, strings and ids mixed, or {\"prompt_string\": ...}", ErrInvalid)
+	}
+	var ids []int32
+	var text string
 	for i, p := range parts {
 		var n int32
 		var str string
-		var many []json.RawMessage
 		switch {
 		case json.Unmarshal(p, &n) == nil:
 			ids = append(ids, n)
 		case json.Unmarshal(p, &str) == nil:
 			t, err := lb.Tokenize(modelID, str, i == 0, true)
 			if err != nil {
-				return nil, "", err
+				return llamaInput{}, err
 			}
 			ids = append(ids, t...)
 			text += str
-		case json.Unmarshal(p, &many) == nil:
-			return nil, "", fmt.Errorf("%w: a list of prompts is not supported: send one request per prompt", ErrInvalid)
 		default:
-			return nil, "", fmt.Errorf("%w: prompt[%d] is neither a token id nor a string", ErrInvalid, i)
+			return llamaInput{}, fmt.Errorf("%w: prompt[%d] is neither a token id nor a string", ErrInvalid, i)
 		}
 	}
 	if len(ids) == 0 {
-		return nil, "", fmt.Errorf("%w: prompt is empty", ErrInvalid)
+		return llamaInput{}, fmt.Errorf("%w: prompt is empty", ErrInvalid)
 	}
-	return ids, text, nil
+	return llamaInput{ids: ids, text: text}, nil
+}
+
+// llamaPictures is a prompt of text whose llamaMarker each stand for one of
+// files, base64 pictures, in order; their counts differ, it is refused as
+// mtmd refuses it.
+func llamaPictures(text string, files []string, pics *pictures) (llamaInput, error) {
+	if n := strings.Count(text, llamaMarker); n != len(files) {
+		return llamaInput{}, fmt.Errorf("%w: number of media markers %s in prompt_string (%d) does not match number of multimodal_data entries (%d)",
+			ErrInvalid, llamaMarker, n, len(files))
+	}
+	at := len(pics.imgs)
+	for i, data := range files {
+		if err := pics.add(fmt.Sprintf("prompt.multimodal_data[%d]", i), func() (image.Image, error) {
+			return pics.p.decodeBase64Image(data, "")
+		}); err != nil {
+			return llamaInput{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+	}
+	return llamaInput{text: text, imgs: slices.Clip(pics.imgs[at:])}, nil
 }
 
 func (c *compat) llamaCompletion(w http.ResponseWriter, r *http.Request) {
@@ -649,12 +834,17 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	set := llamaDefaults()
-	var temp, topP, minP, repeat *float64
-	var topK, lastN, nPredict, maxTokens, nProbs, slot *int
+	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency, adT, adD *float64
+	var miro *int
+	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping, indent, minKeep *int
 	var seed *int64
+	var dryM, dryB *float64
+	var dryA, dryN *int
+	var dryS *[]string
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
-	var ignore, stream, returnTokens bool
+	var ignore, stream, returnTokens, perToken, progress, postProbs bool
+	var fields []string
 	var firstErr error
 	rd := func(err error) {
 		if firstErr == nil {
@@ -664,21 +854,56 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "temperature", &temp))
 	rd(decodeField(body, "top_p", &topP))
 	rd(decodeField(body, "min_p", &minP))
+	rd(decodeField(body, "typical_p", &typP))
+	rd(decodeField(body, "xtc_probability", &xtcP))
+	rd(decodeField(body, "xtc_threshold", &xtcT))
+	rd(decodeField(body, "top_n_sigma", &nSigma))
+	rd(decodeField(body, "dynatemp_range", &dynR))
+	rd(decodeField(body, "dynatemp_exponent", &dynE))
+	rd(decodeField(body, "mirostat", &miro))
+	rd(decodeField(body, "mirostat_tau", &mTau))
+	rd(decodeField(body, "mirostat_eta", &mEta))
+	rd(decodeField(body, "adaptive_target", &adT))
+	rd(decodeField(body, "adaptive_decay", &adD))
 	rd(decodeField(body, "repeat_penalty", &repeat))
+	rd(decodeField(body, "presence_penalty", &presence))
+	rd(decodeField(body, "frequency_penalty", &frequency))
 	rd(decodeField(body, "top_k", &topK))
 	rd(decodeField(body, "repeat_last_n", &lastN))
 	rd(decodeField(body, "n_predict", &nPredict))
 	rd(decodeField(body, "max_tokens", &maxTokens))
 	rd(decodeField(body, "n_probs", &nProbs))
+	rd(decodeField(body, "min_keep", &minKeep))
 	rd(decodeField(body, "id_slot", &slot))
+	rd(decodeField(body, "n_cmpl", &nCmpl))
+	rd(decodeField(body, "n", &nAlias))
+	rd(decodeField(body, "sse_ping_interval", &ping))
+	rd(decodeField(body, "t_max_predict_ms", &predictMS))
+	rd(decodeField(body, "n_indent", &indent))
 	rd(decodeField(body, "seed", &seed))
 	rd(decodeField(body, "ignore_eos", &ignore))
 	rd(decodeField(body, "stream", &stream))
 	rd(decodeField(body, "return_tokens", &returnTokens))
+	rd(decodeField(body, "timings_per_token", &perToken))
+	rd(decodeField(body, "return_progress", &progress))
+	rd(decodeField(body, "post_sampling_probs", &postProbs))
+	rd(decodeField(body, "dry_multiplier", &dryM))
+	rd(decodeField(body, "dry_base", &dryB))
+	rd(decodeField(body, "dry_allowed_length", &dryA))
+	rd(decodeField(body, "dry_penalty_last_n", &dryN))
+	rd(decodeField(body, "dry_sequence_breakers", &dryS))
+	rd(decodeField(body, "response_fields", &fields))
 	stop, grammarSrc, schema = body["stop"], body["grammar"], body["json_schema"]
 	if firstErr != nil {
 		llFailErr(w, firstErr)
 		return
+	}
+	if raw := body["samplers"]; len(raw) > 0 && string(raw) != "null" {
+		var err error
+		if set.Samplers, err = llamaSamplers(raw); err != nil {
+			llFailErr(w, err)
+			return
+		}
 	}
 	if temp != nil {
 		set.Temperature = *temp
@@ -689,8 +914,51 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	if minP != nil {
 		set.MinP = *minP
 	}
+	if typP != nil {
+		set.TypicalP = *typP
+	}
+	if xtcP != nil {
+		set.XTCProbability = *xtcP
+	}
+	if xtcT != nil {
+		set.XTCThreshold = *xtcT
+	}
+	if nSigma != nil {
+		set.TopNSigma = *nSigma
+	}
+	if dynR != nil {
+		set.DynatempRange = *dynR
+	}
+	if dynE != nil {
+		set.DynatempExponent = *dynE
+	}
+	if miro != nil {
+		if *miro < 0 || *miro > 2 {
+			llFailErr(w, fmt.Errorf("%w: mirostat=%d: 0, 1 or 2", ErrInvalid, *miro))
+			return
+		}
+		set.Mirostat = *miro
+	}
+	if mTau != nil {
+		set.MirostatTau = *mTau
+	}
+	if mEta != nil {
+		set.MirostatEta = *mEta
+	}
+	if adT != nil {
+		set.AdaptiveTarget = *adT
+	}
+	if adD != nil {
+		set.AdaptiveDecay = *adD
+	}
 	if repeat != nil {
 		set.RepeatPenalty = *repeat
+	}
+	if presence != nil {
+		set.PresencePenalty = *presence
+	}
+	if frequency != nil {
+		set.FrequencyPenalty = *frequency
 	}
 	if topK != nil {
 		set.TopK = *topK
@@ -698,10 +966,29 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	if lastN != nil {
 		set.RepeatLastN = *lastN
 	}
+	if dryM != nil {
+		set.DryMultiplier = *dryM
+	}
+	if dryB != nil && *dryB >= 1 {
+		set.DryBase = *dryB
+	}
+	if dryA != nil {
+		set.DryAllowedLength = *dryA
+	}
+	if dryN != nil {
+		set.DryPenaltyLastN = *dryN
+	}
+	if dryS != nil {
+		if len(*dryS) == 0 {
+			llFailErr(w, fmt.Errorf("%w: dry_sequence_breakers must be a non-empty array of strings", ErrInvalid))
+			return
+		}
+		set.DrySequenceBreakers = *dryS
+	}
 	if seed != nil {
 		set.Seed = *seed
 	}
-	set.IgnoreEOS, set.Stream = ignore, stream
+	set.IgnoreEOS, set.Stream, set.TimingsPerToken, set.PostSamplingProbs = ignore, stream, perToken, postProbs
 	// n_predict wins over the max_tokens alias; -1 and -2 are "until done".
 	switch {
 	case nPredict != nil:
@@ -709,24 +996,40 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	case maxTokens != nil:
 		set.NPredict = *maxTokens
 	}
-	if set.NPredict == 0 {
-		llFailErr(w, fmt.Errorf("%w: n_predict=0 is not supported: it asks for no tokens", ErrInvalid))
+	if slot != nil && *slot < -1 {
+		llFailErr(w, fmt.Errorf("%w: id_slot=%d is below -1 (any slot)", ErrInvalid, *slot))
 		return
 	}
-	if slot != nil && *slot != -1 && *slot != 0 {
-		llFailErr(w, fmt.Errorf("%w: id_slot=%d is not supported: there is one slot, 0", ErrInvalid, *slot))
-		return
+	if minKeep != nil {
+		if *minKeep < 0 {
+			llFailErr(w, fmt.Errorf("%w: min_keep=%d is below 0", ErrInvalid, *minKeep))
+			return
+		}
+		set.MinKeep = *minKeep
 	}
 	if nProbs != nil {
 		set.NProbs = *nProbs
 	}
-	if set.NProbs < 0 || set.NProbs > model.MaxTopLogprobs {
-		llFailErr(w, fmt.Errorf("%w: n_probs=%d is outside [0, %d]", ErrInvalid, set.NProbs, model.MaxTopLogprobs))
+	// n_cmpl completions of each prompt, n its alias; with a seed, completion
+	// i samples with seed+i, as llama-server seeds its child tasks.
+	if nCmpl == nil {
+		nCmpl = nAlias
+	}
+	var cmplSeed *int64
+	if set.Seed >= 0 {
+		cmplSeed = &set.Seed
+	}
+	seeds, err := oaChoiceSeeds(nCmpl, cmplSeed)
+	if err != nil {
+		llFailErr(w, fmt.Errorf("%w: n_cmpl: %v", ErrInvalid, err))
 		return
 	}
-	if set.RepeatLastN != 64 && set.RepeatLastN != 0 {
-		llFailErr(w, fmt.Errorf("%w: repeat_last_n=%d is not supported: the repeat penalty looks back 64 tokens (0 disables it)",
-			ErrInvalid, set.RepeatLastN))
+	if set.RepeatLastN < -1 {
+		llFailErr(w, fmt.Errorf("%w: repeat_last_n=%d is below -1 (the context)", ErrInvalid, set.RepeatLastN))
+		return
+	}
+	if set.DryPenaltyLastN < -1 {
+		llFailErr(w, fmt.Errorf("%w: dry_penalty_last_n=%d is below -1 (the context)", ErrInvalid, set.DryPenaltyLastN))
 		return
 	}
 	if len(stop) > 0 && string(stop) != "null" {
@@ -742,44 +1045,47 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 			return
 		}
 	}
-	fs := samplingFields{Temperature: &set.Temperature, TopP: &set.TopP, MinP: &set.MinP,
-		RepetitionPenalty: &set.RepeatPenalty, TopK: &set.TopK}
-	if set.TopK == 0 {
-		fs.TopK = nil // llama.cpp's 0 is "disabled"
-	}
-	if err := fs.validate(); err != nil {
-		llFailErr(w, fmt.Errorf("%w: %v", ErrInvalid, err))
-		return
-	}
-
-	// The prompt.
-	var ids []int32
-	var promptText string
-	var err error
+	// The prompts.
+	var prompts []llamaInput
 	if infill {
-		ids, promptText, err = llamaInfillIDs(lb, info, body)
+		ids, text, err := llamaInfillIDs(lb, info, body)
+		if err != nil {
+			llFailErr(w, err)
+			return
+		}
+		prompts = []llamaInput{{ids: ids, text: text}}
 	} else {
 		if _, has := body["prompt"]; !has {
 			llFail(w, http.StatusBadRequest, "prompt is required", "invalid_request_error")
 			return
 		}
-		ids, promptText, err = llamaPrompt(lb, info.ID, body["prompt"])
-	}
-	if err != nil {
-		llFailErr(w, err)
-		return
+		if prompts, err = llamaPrompts(lb, info.ID, body["prompt"], newPictures(c.img)); err != nil {
+			llFailErr(w, err)
+			return
+		}
 	}
 
 	o := GenerateOptions{
-		Prompt:    Prompt{Kind: PromptIDs, IDs: ids},
+		Seeds:     seeds,
 		Stop:      set.Stop,
 		IgnoreEOS: set.IgnoreEOS,
-		Sampling:  llamaSampler(set),
+		Sampling:  llamaSampler(set.stages(), info.NCtx),
 		Logprobs:  set.NProbs > 0,
 	}
-	o.TopLogprobs = set.NProbs
-	if set.NPredict > 0 {
-		o.MaxTokens = set.NPredict
+	o.TopLogprobs, o.PostSampling = set.NProbs, set.PostSamplingProbs
+	// return_progress streams the prompt's progress; llama-server sends it on
+	// a stream alone.
+	o.Progress = stream && progress
+	if predictMS != nil && *predictMS > 0 {
+		o.PredictTime = time.Duration(*predictMS) * time.Millisecond
+	}
+	if indent != nil && *indent > 0 {
+		o.MinIndent = *indent
+	}
+	// n_predict 0 answers one token, stop_type limit: llama-server samples
+	// one before it checks the budget, though its README says none.
+	if set.NPredict >= 0 {
+		o.MaxTokens = max(set.NPredict, 1)
 	}
 	if len(grammarSrc) > 0 && !emptyJSON(grammarSrc) {
 		if err := json.Unmarshal(grammarSrc, &set.Grammar); err != nil {
@@ -798,17 +1104,30 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 			return
 		}
 	}
-	o.Grammar = set.Grammar
-	if o.IgnoreEOS && o.Grammar != "" {
-		llFailErr(w, fmt.Errorf("%w: ignore_eos with a grammar", ErrInvalid))
+	if o.LogitBias, err = llamaLogitBias(body["logit_bias"]); err != nil {
+		llFailErr(w, err)
 		return
 	}
+	o.Grammar = set.Grammar
 	if err := c.b.BindTarget(&o, "", info.ID); err != nil {
 		llFailErr(w, err)
 		return
 	}
-	run := &llamaRun{c: c, w: w, r: r, o: o, info: info, set: set, promptText: promptText,
-		promptIDs: ids, returnTokens: returnTokens}
+	run := &llamaRun{c: c, w: w, r: r, o: o, info: info, set: set, prompts: prompts,
+		returnTokens: returnTokens, fields: fields, pingEvery: 30 * time.Second}
+	if ping != nil {
+		run.pingEvery = time.Duration(*ping) * time.Second
+	}
+	// Every slot reads the one prefix cache, so the slot asked for changes no
+	// answer; it is reported, wrapped as llama-server wraps it.
+	if slot != nil && *slot >= 0 {
+		run.slot = *slot % max(len(lb.Slots(info.ID)), 1)
+	}
+	for _, in := range prompts {
+		for range max(len(seeds), 1) {
+			run.res = append(run.res, &llamaResult{index: len(run.res), promptText: in.text})
+		}
+	}
 	if stream {
 		run.stream()
 		return
@@ -816,18 +1135,121 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	run.whole()
 }
 
-// llamaSampler is the engine's sampler for a request's settings. Temperature 0
-// is greedy, as in llama.cpp; an unset seed (-1) draws its own.
-func llamaSampler(s llamaSettings) *model.Sampler {
-	sm := &model.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TopK: max(s.TopK, 0),
-		RepeatPen: s.RepeatPenalty, Seed: s.Seed}
+// llamaLogitBias is llama-server's logit_bias: an array of [token, bias]
+// pairs, or an object from token to bias in key order, a token an id or a
+// text every token of which takes the bias, a bias a number or false (the
+// token banned). What llama-server would skip -- an entry that is not a
+// pair, a bias that is neither -- is refused here, as is an empty text.
+func llamaLogitBias(raw json.RawMessage) ([]TokenBias, error) {
+	if len(raw) == 0 || emptyJSON(raw) {
+		return nil, nil
+	}
+	bias := func(v json.RawMessage) (float32, error) {
+		var f float64
+		if json.Unmarshal(v, &f) == nil {
+			return float32(f), nil
+		}
+		var b bool
+		if json.Unmarshal(v, &b) == nil && !b {
+			return float32(math.Inf(-1)), nil
+		}
+		return 0, fmt.Errorf("%w: logit_bias %s is not a number or false", ErrInvalid, v)
+	}
+	entry := func(tok string, id int32, v json.RawMessage) (TokenBias, error) {
+		b, err := bias(v)
+		if err != nil {
+			return TokenBias{}, err
+		}
+		if n, err := strconv.ParseInt(tok, 10, 32); err == nil {
+			return TokenBias{ID: int32(n), Bias: b}, nil
+		}
+		if tok == "" {
+			return TokenBias{}, fmt.Errorf("%w: logit_bias names an empty text", ErrInvalid)
+		}
+		return TokenBias{ID: id, Text: tok, Bias: b}, nil
+	}
+	var out []TokenBias
+	var pairs [][]json.RawMessage
+	if json.Unmarshal(raw, &pairs) == nil {
+		for _, p := range pairs {
+			if len(p) != 2 {
+				return nil, fmt.Errorf("%w: logit_bias entry %d is not a [token, bias] pair", ErrInvalid, len(out))
+			}
+			var tok string
+			var id int32
+			if json.Unmarshal(p[0], &id) == nil {
+				tok = strconv.Itoa(int(id))
+			} else if json.Unmarshal(p[0], &tok) != nil {
+				return nil, fmt.Errorf("%w: logit_bias token %s is not an id or a text", ErrInvalid, p[0])
+			}
+			e, err := entry(tok, id, p[1])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, e)
+		}
+		return out, nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return nil, fmt.Errorf("%w: logit_bias is an array of [token, bias] pairs or an object from token to bias", ErrInvalid)
+	}
+	for _, k := range slices.Sorted(maps.Keys(obj)) {
+		e, err := entry(k, 0, obj[k])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// leastP is the least normal binary32: a top-p or typical-p cut at it keeps
+// one token, as llama.cpp's cut at 0 or below does (its min_keep).
+const leastP = 0x1p-126
+
+// llamaSampler is the engine's sampler for a request's settings over a
+// context of nctx tokens, every value read as llama.cpp reads it: a
+// temperature at or below 0 is greedy; a top-p or typical-p at or below 0
+// keeps one token (leastP); a min-p past 1 keeps the best, as 1 does; a
+// top-k below 0 is off; the penalties apply as given. An unset seed (-1)
+// draws its own; repeat_last_n 0 turns the penalty off and -1 is the
+// context, as dry_penalty_last_n -1 is.
+func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
+	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TypicalP: s.TypicalP,
+		XTCProbability: s.XTCProbability, XTCThreshold: s.XTCThreshold, TopNSigma: s.TopNSigma,
+		DynatempRange: s.DynatempRange, DynatempExponent: s.DynatempExponent, Mirostat: s.Mirostat,
+		MirostatTau: s.MirostatTau, MirostatEta: s.MirostatEta, TopK: max(s.TopK, 0),
+		RepeatPen: s.RepeatPenalty, RepeatLastN: llamaWindow(s.RepeatLastN, nctx), PresencePen: s.PresencePenalty,
+		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
+		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
+		Stages: llamaStages(s.Samplers), TempLast: true, DryMultiplier: s.DryMultiplier, DryBase: s.DryBase,
+		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: llamaWindow(s.DryPenaltyLastN, nctx), DryBreakers: s.DrySequenceBreakers,
+		MinKeep: s.MinKeep}
+	sm.Temp, sm.MinP = max(sm.Temp, 0), min(max(sm.MinP, 0), 1)
+	if sm.TopP <= 0 {
+		sm.TopP = leastP
+	}
+	if sm.TypicalP <= 0 {
+		sm.TypicalP = leastP
+	}
 	if s.RepeatLastN == 0 {
-		sm.RepeatPen = 1
+		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0
 	}
 	if s.Seed < 0 {
 		sm.Seed = rand.Int64()
 	}
 	return sm
+}
+
+// llamaWindow is a penalty window as llama.cpp reads it over a context of
+// nctx tokens: -1 is the context, and a window past the context sees no more
+// tokens than the context holds.
+func llamaWindow(n, nctx int) int {
+	if n == -1 {
+		return nctx
+	}
+	return penaltyWindow(n, nctx)
 }
 
 // llamaInfillIDs builds /infill's prompt from the model's fill-in-the-middle
@@ -907,7 +1329,9 @@ func llamaInfillIDs(lb LlamaBackend, info LlamaModelInfo, body map[string]json.R
 	return ids, text.String(), nil
 }
 
-// llamaRun is one /completion or /infill response being built.
+// llamaRun is one /completion or /infill response being built: a result for
+// each completion (n_cmpl) of each prompt, indexed prompt by prompt as
+// llama-server indexes them.
 type llamaRun struct {
 	c            *compat
 	w            http.ResponseWriter
@@ -915,37 +1339,64 @@ type llamaRun struct {
 	o            GenerateOptions
 	info         LlamaModelInfo
 	set          llamaSettings
-	promptText   string
-	promptIDs    []int32
+	prompts      []llamaInput
 	returnTokens bool
-
-	started *Started
-	fin     *Finished
-	text    strings.Builder
-	ids     []int32
-	probs   []any
-	n       int
+	// fields is response_fields: the paths the finished object keeps, none
+	// for all of it.
+	fields []string
+	// pingEvery is sse_ping_interval: a stream silent this long is pinged,
+	// none when it is not positive.
+	pingEvery time.Duration
+	// slot is the id_slot reported.
+	slot int
+	res  []*llamaResult
 }
 
-func (g *llamaRun) take(t *Token) {
+// llamaResult is one completion being built.
+type llamaResult struct {
+	index      int
+	promptText string
+	started    *Started
+	fin        *Finished
+	text       strings.Builder
+	ids        []int32
+	probs      []any
+	n          int
+	// first is when the first token came, the start of predicted_ms.
+	first time.Time
+	// What a stream has not sent yet.
+	pendIDs   []int32
+	pendProbs []any
+}
+
+func (res *llamaResult) take(t *Token) {
 	if t.ID >= 0 {
-		g.n++
-		g.ids = append(g.ids, t.ID)
+		if res.n == 0 {
+			res.first = time.Now()
+		}
+		res.n++
+		res.ids = append(res.ids, t.ID)
 		if t.Logprob != nil {
-			g.probs = append(g.probs, llamaProb(t))
+			res.probs = append(res.probs, llamaProb(t))
 		}
 	}
-	g.text.WriteString(t.Text)
+	res.text.WriteString(t.Text)
 }
 
+// llamaProb is a token's completion_probabilities entry: its log-probability
+// and the likeliest alternatives', or with post_sampling_probs their
+// probabilities after every sampler, under llama-server's names for each.
 func llamaProb(t *Token) map[string]any {
 	lp := t.Logprob
+	key, topKey := "logprob", "top_logprobs"
+	if lp.Sampled {
+		key, topKey = "prob", "top_probs"
+	}
 	top := make([]any, len(lp.Top))
 	for i, a := range lp.Top {
-		top[i] = map[string]any{"id": a.ID, "token": a.Text, "logprob": a.Logprob, "bytes": oaBytes(a.Text)}
+		top[i] = map[string]any{"id": a.ID, "token": a.Text, key: a.Logprob, "bytes": oaBytes(a.Text)}
 	}
-	return map[string]any{"id": t.ID, "token": lp.Text, "logprob": lp.Logprob, "bytes": oaBytes(lp.Text),
-		"top_logprobs": top}
+	return map[string]any{"id": t.ID, "token": lp.Text, key: lp.Logprob, "bytes": oaBytes(lp.Text), topKey: top}
 }
 
 func llamaStopType(r FinishReason) string {
@@ -962,12 +1413,48 @@ func llamaStopType(r FinishReason) string {
 
 // final is the object a finished completion ends with, whole or as the last
 // stream frame (whose content and tokens are only what has not been sent).
-func (g *llamaRun) final(content string, ids []int32, probs []any) map[string]any {
-	f := g.fin
-	cache := f.Restored
-	var pms, dms float64
-	pms = float64(f.Prefill.Microseconds()) / 1000
-	dms = float64(f.Decode.Microseconds()) / 1000
+func (g *llamaRun) final(res *llamaResult, content string, ids []int32, probs []any) map[string]any {
+	f := res.fin
+	out := map[string]any{
+		"index": res.index, "content": content, "tokens": ids, "id_slot": g.slot, "stop": true,
+		"model": g.info.Name, "tokens_predicted": f.CompletionTokens, "tokens_evaluated": f.PromptTokens,
+		"generation_settings": g.settings(),
+		"prompt":              res.promptText, "has_new_line": strings.Contains(res.text.String(), "\n"),
+		"truncated": f.Truncated, "stop_type": llamaStopType(f.Reason), "stopping_word": f.StopMatched,
+		"tokens_cached": f.Restored,
+		"timings":       llamaTimings(f.PromptTokens, f.Restored, f.Prefill, f.CompletionTokens, f.Decode),
+	}
+	if len(probs) > 0 {
+		out["completion_probabilities"] = probs
+	}
+	return out
+}
+
+// cutShortLine is text as n_indent leaves it: when its last line, past a
+// newline, starts with fewer than min spaces or tabs before a character, that
+// character and what follows it are cut, as llama-server cuts the line its
+// indentation ended the reply on.
+func cutShortLine(text string, min int) string {
+	nl := strings.LastIndexByte(text, '\n')
+	if min <= 0 || nl < 0 {
+		return text
+	}
+	i := nl + 1
+	for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
+		i++
+	}
+	if i < len(text) && i-nl-1 < min {
+		return text[:i]
+	}
+	return text
+}
+
+// llamaTimings is llama-server's timings object: a prompt of prompt
+// positions, cached of them restored and the rest prefilled in pre, and
+// predicted tokens decoded in dec.
+func llamaTimings(prompt, cached int, pre time.Duration, predicted int, dec time.Duration) map[string]any {
+	pms := float64(pre.Microseconds()) / 1000
+	dms := float64(dec.Microseconds()) / 1000
 	perTok := func(ms float64, n int) float64 {
 		if n == 0 {
 			return 0
@@ -980,25 +1467,41 @@ func (g *llamaRun) final(content string, ids []int32, probs []any) map[string]an
 		}
 		return float64(n) / ms * 1000
 	}
-	promptN := max(f.PromptTokens-cache, 0)
-	out := map[string]any{
-		"index": 0, "content": content, "tokens": ids, "id_slot": 0, "stop": true,
-		"model": g.info.Name, "tokens_predicted": f.CompletionTokens, "tokens_evaluated": f.PromptTokens,
-		"generation_settings": g.settings(),
-		"prompt":              g.promptText, "has_new_line": strings.Contains(g.text.String(), "\n"),
-		"truncated": false, "stop_type": llamaStopType(f.Reason), "stopping_word": f.StopMatched,
-		"tokens_cached": f.Restored,
-		"timings": map[string]any{
-			"cache_n": cache, "prompt_n": promptN, "prompt_ms": pms,
-			"prompt_per_token_ms": perTok(pms, promptN), "prompt_per_second": perSec(pms, promptN),
-			"predicted_n": f.CompletionTokens, "predicted_ms": dms,
-			"predicted_per_token_ms": perTok(dms, f.CompletionTokens), "predicted_per_second": perSec(dms, f.CompletionTokens),
-		},
+	promptN := max(prompt-cached, 0)
+	return map[string]any{
+		"cache_n": cached, "prompt_n": promptN, "prompt_ms": pms,
+		"prompt_per_token_ms": perTok(pms, promptN), "prompt_per_second": perSec(pms, promptN),
+		"predicted_n": predicted, "predicted_ms": dms,
+		"predicted_per_token_ms": perTok(dms, predicted), "predicted_per_second": perSec(dms, predicted),
 	}
-	if len(probs) > 0 {
-		out["completion_probabilities"] = probs
+}
+
+// picked is out as response_fields asks: each path's value, a path's keys
+// read down through nested objects, under the path itself; a path that names
+// nothing is left out, as llama-server leaves it. No fields keeps out whole.
+func (g *llamaRun) picked(out map[string]any) map[string]any {
+	if len(g.fields) == 0 {
+		return out
 	}
-	return out
+	kept := map[string]any{}
+	for _, path := range g.fields {
+		var v any = out
+		found := true
+		for _, k := range strings.Split(path, "/") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				found = false
+				break
+			}
+			if v, found = m[k]; !found {
+				break
+			}
+		}
+		if found {
+			kept[path] = v
+		}
+	}
+	return kept
 }
 
 func (g *llamaRun) settings() map[string]any {
@@ -1007,22 +1510,44 @@ func (g *llamaRun) settings() map[string]any {
 	return p
 }
 
-func (g *llamaRun) events(stream func(ev Event) error) error {
-	return g.c.b.Generate(g.r.Context(), g.o, func(ev Event) error {
-		switch ev.Kind {
-		case EventStarted:
-			g.started = ev.Started
-		case EventFinished:
-			g.fin = ev.Finished
-		}
-		return stream(ev)
-	})
+// options is the generate of one prompt, its completions its choices.
+func (g *llamaRun) options(in llamaInput) GenerateOptions {
+	o := g.o
+	o.Prompt = Prompt{Kind: PromptIDs, IDs: in.ids}
+	if len(in.imgs) > 0 {
+		o.Prompt = Prompt{Kind: PromptText, Text: in.text, Images: in.imgs, Marker: llamaMarker}
+	}
+	return o
 }
 
+// events runs the prompts one after another, handing each event to the
+// result it belongs to.
+func (g *llamaRun) events(stream func(res *llamaResult, ev Event) error) error {
+	per := max(len(g.o.Seeds), 1)
+	for p, in := range g.prompts {
+		err := g.c.b.Generate(g.r.Context(), g.options(in), func(ev Event) error {
+			res := g.res[p*per+ev.Choice]
+			switch ev.Kind {
+			case EventStarted:
+				res.started = ev.Started
+			case EventFinished:
+				res.fin = ev.Finished
+			}
+			return stream(res, ev)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// whole answers every result at once: the object of the one result, or the
+// array of several in their order.
 func (g *llamaRun) whole() {
-	err := g.events(func(ev Event) error {
+	err := g.events(func(res *llamaResult, ev Event) error {
 		if ev.Kind == EventToken {
-			g.take(ev.Token)
+			res.take(ev.Token)
 		}
 		return nil
 	})
@@ -1030,58 +1555,86 @@ func (g *llamaRun) whole() {
 		llFailErr(g.w, err)
 		return
 	}
-	if g.fin == nil {
-		llFail(g.w, http.StatusInternalServerError, "the generate finished without a finished event", "server_error")
+	outs := make([]map[string]any, len(g.res))
+	for i, res := range g.res {
+		if res.fin == nil {
+			llFail(g.w, http.StatusInternalServerError, "the generate finished without a finished event", "server_error")
+			return
+		}
+		ids := []int32{}
+		if g.returnTokens {
+			ids = res.ids
+		}
+		outs[i] = g.picked(g.final(res, cutShortLine(res.text.String(), g.o.MinIndent), ids, res.probs))
+	}
+	if len(outs) == 1 {
+		writeJSON(g.w, http.StatusOK, outs[0])
 		return
 	}
-	ids := []int32{}
-	if g.returnTokens {
-		ids = g.ids
-	}
-	writeJSON(g.w, http.StatusOK, g.final(g.text.String(), ids, g.probs))
+	writeJSON(g.w, http.StatusOK, outs)
 }
 
 // stream sends the text as `data: {json}` frames with no terminator, as
-// llama-server does: each carries content, tokens and stop:false, and the last
-// carries everything with stop:true.
+// llama-server does: each carries its result's index, content, tokens and
+// stop:false, and each result's last carries everything with stop:true.
 func (g *llamaRun) stream() {
-	if err := admits(g.c.b, g.o); err != nil {
-		llFailErr(g.w, err)
-		return
+	for _, in := range g.prompts {
+		if err := admits(g.c.b, g.options(in)); err != nil {
+			llFailErr(g.w, err)
+			return
+		}
 	}
 	sse, err := newSSE(g.w)
 	if err != nil {
 		llFail(g.w, http.StatusInternalServerError, err.Error(), "server_error")
 		return
 	}
-	var pendIDs []int32
-	var pendProbs []any
-	gerr := g.events(func(ev Event) error {
+	if g.pingEvery > 0 {
+		defer sse.pings(g.pingEvery)()
+	}
+	gerr := g.events(func(res *llamaResult, ev Event) error {
 		switch ev.Kind {
 		case EventToken:
-			before := len(g.probs)
-			g.take(ev.Token)
+			before := len(res.probs)
+			res.take(ev.Token)
 			if ev.Token.ID >= 0 {
-				pendIDs = append(pendIDs, ev.Token.ID)
+				res.pendIDs = append(res.pendIDs, ev.Token.ID)
 			}
-			pendProbs = append(pendProbs, g.probs[before:]...)
+			res.pendProbs = append(res.pendProbs, res.probs[before:]...)
 			// A token whose text is held back (a partial rune, a possible
 			// stop string) sends with the next one that has text.
 			if ev.Token.Text == "" {
 				return nil
 			}
-			frame := map[string]any{"index": 0, "content": ev.Token.Text, "tokens": pendIDs, "stop": false,
-				"id_slot": 0, "tokens_predicted": g.n}
-			if g.started != nil {
-				frame["tokens_evaluated"] = g.started.PromptTokens
+			frame := map[string]any{"index": res.index, "content": ev.Token.Text, "tokens": res.pendIDs, "stop": false,
+				"id_slot": g.slot, "tokens_predicted": res.n}
+			if st := res.started; st != nil {
+				frame["tokens_evaluated"] = st.PromptTokens
+				// timings_per_token: the timings so far, the decode
+				// measured from the first token as llama-server measures it.
+				if g.set.TimingsPerToken {
+					frame["timings"] = llamaTimings(st.PromptTokens, st.Restored, st.Prefill, res.n, time.Since(res.first))
+				}
 			}
-			if len(pendProbs) > 0 {
-				frame["completion_probabilities"] = pendProbs
+			if len(res.pendProbs) > 0 {
+				frame["completion_probabilities"] = res.pendProbs
 			}
-			pendIDs, pendProbs = nil, nil
+			res.pendIDs, res.pendProbs = nil, nil
+			return sse.send(frame)
+		case EventProgress:
+			// A frame of its own, as llama-server sends it: no text, and no
+			// token where llama-server's carries a 0 no step sampled.
+			pr := ev.Progress
+			frame := map[string]any{"index": res.index, "content": "", "tokens": []int32{}, "stop": false,
+				"id_slot": g.slot, "tokens_predicted": 0, "tokens_evaluated": pr.Total,
+				"prompt_progress": map[string]any{"total": pr.Total, "cache": pr.Cached, "processed": pr.Done,
+					"time_ms": pr.Elapsed.Milliseconds()}}
+			if g.set.TimingsPerToken {
+				frame["timings"] = llamaTimings(pr.Done, pr.Cached, pr.Elapsed, 0, 0)
+			}
 			return sse.send(frame)
 		case EventFinished:
-			return sse.send(g.final("", append([]int32{}, pendIDs...), pendProbs))
+			return sse.send(g.picked(g.final(res, "", append([]int32{}, res.pendIDs...), res.pendProbs)))
 		}
 		return nil
 	})
@@ -1091,7 +1644,6 @@ func (g *llamaRun) stream() {
 			status, typ = http.StatusBadRequest, "invalid_request_error"
 		}
 		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": status, "message": gerr.Error(), "type": typ}})
-		sse.w.Write(append(append([]byte("error: "), b...), '\n', '\n'))
-		sse.rc.Flush()
+		sse.raw(append(append([]byte("error: "), b...), '\n', '\n'))
 	}
 }

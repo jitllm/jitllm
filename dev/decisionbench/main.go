@@ -1,7 +1,7 @@
 // Command decisionbench reproduces the user's decision-model table against any
-// server speaking TypeSafe's POST /v1/systemone -- jitllm's, llama-server's,
-// `lev serve` -- so every engine in the table is measured by one harness
-// (docs/design/decision-models.md, section 5).
+// server speaking TypeSafe's POST /v1/systemone -- jitllm's, `lev serve`
+// or any other -- so every engine in the table is measured by one harness
+// (.notes/design/decision-models.md, section 5).
 //
 // The workload is a stream of words, one request each: the state is the word
 // and the question asks whether it is a positive (a noul, by default "Is this

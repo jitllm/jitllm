@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // Two models loaded into one engine divide its host budget: neither may
@@ -54,7 +54,7 @@ func TestLoadedModelsDivideTheHostBudget(t *testing.T) {
 // generate of the same prompt restores its prefix instead of prefilling it.
 func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 	e, _, _ := loadedEngine(t, smallModel, "small", LoadOptions{})
-	s, err := e.CreateSession(SessionOptions{ModelID: "small", KVStore: model.NewMemStore(), CacheKey: "test"})
+	s, err := e.CreateSession(SessionOptions{ModelID: "small", KVStore: engine.NewMemStore(), CacheKey: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 		var n int
-		s.Inspect(func(st *model.State) { n = st.KVRestored() })
+		s.Inspect(func(st *engine.Instance) { n = st.KVRestored() })
 		return n
 	}
 	if n := run(); n != 0 {
@@ -84,23 +84,23 @@ func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 func TestASessionDoesNotStarveThePager(t *testing.T) {
 	const pin = 3 << 30
 	e, lm, _ := loadedEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", "m", LoadOptions{PageBudgetBytes: pin})
-	if !lm.m.PagesFit() {
-		t.Fatalf("the model does not fit %d bytes before any session: budget %d", pin, lm.m.PageBudget())
+	if !lm.m.PagesFit(lm.frames()) {
+		t.Fatalf("the model does not fit %d bytes before any session: budget %d", pin, lm.m.PageBudget(lm.frames()))
 	}
 	s, err := e.CreateSession(SessionOptions{ModelID: "m"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lm.m.PagesFit() {
+	if !lm.m.PagesFit(lm.frames()) {
 		t.Fatalf("creating one session of %d positions left the pager %d bytes: the budget was charged "+
-			"for the whole context's history up front", s.st.MaxSeq(), lm.m.PageBudget())
+			"for the whole context's history up front", s.ms.Limit(), lm.m.PageBudget(lm.frames()))
 	}
 	o := GenerateOptions{SessionID: s.ID(), Prompt: Prompt{Kind: PromptText, Text: "Once upon a time"}, MaxTokens: 4}
 	if err := e.Generate(context.Background(), o, func(Event) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !lm.m.PagesFit() {
-		t.Fatalf("after a generate the pager holds %d bytes and the weights do not fit", lm.m.PageBudget())
+	if !lm.m.PagesFit(lm.frames()) {
+		t.Fatalf("after a generate the pager holds %d bytes and the weights do not fit", lm.m.PageBudget(lm.frames()))
 	}
 }
 
@@ -116,7 +116,7 @@ func TestASessionDoesNotStarveThePager(t *testing.T) {
 func TestEveryLoadRederivesTheOffHeapBudget(t *testing.T) {
 	e, a, _ := loadedEngine(t, smallModel, "a", LoadOptions{})
 	var told []uint64
-	e.cfg.OffHeap = func(b uint64) { told = append(told, b) }
+	e.cfg.OffHeap = func(b, _ uint64) { told = append(told, b) }
 	// Every load re-reads the host (rereadHostLocked); held still here, so
 	// the sum is the division's and not the moment's free memory.
 	e.hostAvail = func() uint64 { return 6 << 30 }

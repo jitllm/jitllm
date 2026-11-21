@@ -14,7 +14,7 @@
 // both.
 //
 // It is one worker rather than a goroutine per job because the objects are not
-// safe to share: model.State holds a sequence and a conversion beside a decode
+// safe to share: engine.Instance holds a sequence and a conversion beside a decode
 // would contend for the same pool and pager. A single command channel makes "a
 // long job cannot overlap a decode" true by construction.
 package engine
@@ -33,10 +33,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -77,26 +79,15 @@ type Engine struct {
 	m *model.Model
 	// sess is the chat's session on the active model.
 	sess *server.Session
-	// gpu is the active model's tier, nil on the host: only *tier.GPU can
+	// gpu is the active model's tier, nil on the CPU: only *gpu.GPU can
 	// answer "how much of each card is this model using".
-	gpu  *tier.GPU
+	gpu  *gpu.GPU
 	path string
 	// sessMax is the window this session was built for, so the decode loop can
 	// tell a context that filled from a cap that was reached.
 	sessMax int
 	// lastPromptTok is the last prompt's length, read by the reuse probe.
 	lastPromptTok int
-	// pictures is each picture file's preprocessed pixels and name, by the
-	// file's identity, so a picture in every turn's history is decoded once.
-	// The rows are the model's image cache's; dropped with the model.
-	pictures map[fileID]*model.Picture
-}
-
-// fileID is a picture file's identity: its path, size and modification time.
-type fileID struct {
-	path  string
-	size  int64
-	mtime int64
 }
 
 // queueDepth is small on purpose: the commands are user actions, and a queue
@@ -135,7 +126,7 @@ func (e *Engine) run() {
 func (e *Engine) do(fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			crash.Handle("engine worker", r, debug.Stack())
+			e.sh.Crashes().Handle("engine worker", r, debug.Stack())
 			e.afterPanic()
 		}
 	}()
@@ -147,7 +138,7 @@ func (e *Engine) do(fn func()) {
 func (e *Engine) afterPanic() {
 	defer func() {
 		if r := recover(); r != nil {
-			crash.Handle("engine worker, closing the session after a panic", r, debug.Stack())
+			e.sh.Crashes().Handle("engine worker, closing the session after a panic", r, debug.Stack())
 			e.sess, e.active = nil, nil
 			e.gpu, e.m, e.path, e.sessMax = nil, nil, "", 0
 		}
@@ -229,7 +220,7 @@ func (e *Engine) releaseSession() {
 }
 
 // inspect runs f on the chat session's State between turns.
-func (e *Engine) inspect(f func(st *model.State)) {
+func (e *Engine) inspect(f func(st *engine.Instance)) {
 	if e.sess != nil {
 		e.sess.Inspect(f)
 	}
@@ -254,7 +245,7 @@ func (e *Engine) report(stage, path string, err error) {
 		p.Action, p.Do = "Convert\u2026", func() { e.sh.OfferConvert(path) }
 	case fixReconvert:
 		p.Action, p.Do = "Reconvert", func() { e.sh.OfferReconvert(path) }
-	case fixDevices:
+	case fixDevices, fixSystem:
 		p.Action, p.Do = "Open Settings", e.sh.GoSettings
 	}
 	e.sh.Report(p)
@@ -373,12 +364,12 @@ func (e *Engine) activate(en *entry) error {
 	m, path := en.m, en.path
 
 	window := maxSeq(m, e.st.MaxSeq.Get())
-	// A context that outgrows the card hands blocks to the host one at a time
-	// -- only where the device choice lets the host run them, as the CLI's
-	// -relocate does. A choice of devices alone keeps the model off the CPU, so
-	// there the token takes the device's refusal instead.
-	relocate, _ := tier.AdmitsHost(en.spec)
-	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
+	// A context that outgrows the card moves blocks to the CPU one at a time
+	// -- only where the device choice lists the CPU, as the CLI's -relocate
+	// does. A choice of cards alone keeps the model off the CPU, so there the
+	// token takes the cards' refusal instead (engine.WithDevices).
+	relocate, _ := gpu.ListsCPU(en.spec)
+	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffCpu: !relocate}
 	cacheOff := "turned off in Settings"
 	if e.st.KVCache.Get() {
 		o.KVStore, o.CacheKey, cacheOff = kvCache(path)
@@ -410,16 +401,17 @@ func (e *Engine) activate(en *entry) error {
 	// is switched off at load rather than failing every turn.
 	summary := e.headerNow().String()
 	chatOK := m.ChatCapable()
-	vision := m.Tower() != nil
-	// A different model is a different preprocessor: every picture is stale.
-	e.pictures = nil
+	vision := m.SeesPictures()
+	own := ownSampling(m.Cfg.Generation, e.sessMax)
 	var blocks []byte
 	var alloc session.Allocation
-	e.inspect(func(st *model.State) {
+	var fr *jlm.Frames
+	e.inspect(func(st *engine.Instance) {
 		blocks = placementOf(m, st, e.gpu)
 		alloc = allocStat(m, st, e.gpu, m.Cfg.NLayer)
+		fr = st.FramesOn(nn.CPU)
 	})
-	pager := pagerStat(m)
+	pager := pagerStat(m, fr)
 
 	e.sh.Post(func() {
 		if !chatOK {
@@ -427,6 +419,7 @@ func (e *Engine) activate(en *entry) error {
 		}
 		e.st.ChatCapable.Set(chatOK)
 		e.st.Vision.Set(vision)
+		e.st.Own.Set(own)
 		e.st.ModelPath.Set(path)
 		e.st.ModelSummary.Set(summary)
 		e.st.Loaded.Set(true)
@@ -454,6 +447,7 @@ func (e *Engine) unpublish() {
 		e.st.ModelPath.Set("")
 		e.st.ModelSummary.Set("")
 		e.st.Vision.Set(false)
+		e.st.Own.Set(session.Sampling{})
 		e.st.BlockMap.Set(nil)
 		e.st.Alloc.Set(session.Allocation{})
 	})
@@ -485,21 +479,45 @@ func maxSeqFor(modelCtx, want int) int {
 // 32k still opens at 4k unless asked, because the cache is allocated up front.
 const defaultMaxSeq = 4096
 
-// samplerFor turns the app's settings into the engine's sampler.
+// samplerFor turns the app's settings into the engine's sampler: the draw
+// the model's container states (g, over nctx tokens) where they are the
+// model's own, else theirs. Settings that are the model's own, of a model
+// whose container states no draw (g nil), are refused naming it.
 //
-// Temp == 0 is greedy and is passed straight through: model.Sampler
+// Temp == 0 is greedy and is passed straight through: engine.Sampler
 // short-circuits to argmax, and every correctness comparison in the engine
-// (llama.cpp goldens, CPU vs device, verify) is a comparison of argmax.
-func samplerFor(s session.Sampling) *model.Sampler {
-	return &model.Sampler{
+// (goldens, CPU vs device, verify) is a comparison of argmax.
+func samplerFor(s session.Sampling, g *jlm.Generation, nctx int, name string) (*engine.Sampler, error) {
+	if s.Stated {
+		if g == nil {
+			return nil, &model.NoStatedDrawError{Name: name}
+		}
+		sm := engine.StatedSampler(*g, nctx)
+		sm.Seed = s.Seed
+		return sm, nil
+	}
+	return &engine.Sampler{
 		Temp:        float64(s.Temp),
 		TopK:        s.TopK,
 		TopP:        float64(s.TopP),
 		MinP:        float64(s.MinP),
+		TypicalP:    float64(s.TypicalP),
 		RepeatPen:   float64(s.RepeatPen),
 		RepeatLastN: s.RepeatLastN,
 		Seed:        s.Seed,
+	}, nil
+}
+
+// ownSampling is the draw the model's container states (g, over nctx
+// tokens) as the app's settings, Own set; none (Own false) where it states
+// no draw.
+func ownSampling(g *jlm.Generation, nctx int) session.Sampling {
+	if g == nil {
+		return session.Sampling{}
 	}
+	sm := engine.StatedSampler(*g, nctx)
+	return session.Sampling{Temp: float32(sm.Temp), TopK: sm.TopK, TopP: float32(sm.TopP), MinP: float32(sm.MinP),
+		TypicalP: float32(sm.TypicalP), RepeatPen: float32(sm.RepeatPen), RepeatLastN: sm.RepeatLastN, Own: true}
 }
 
 func short(p string) string {
@@ -535,7 +553,7 @@ func blockMap(nLayer int, runs [][2]int, devOf func(li int) int, resident func(l
 
 // placementOf is blockMap for a live session. A block the tier cannot name a
 // device for is drawn on device 0 rather than dropped from the device count.
-func placementOf(m *model.Model, st *model.State, g *tier.GPU) []byte {
+func placementOf(m *model.Model, st *engine.Instance, g *gpu.GPU) []byte {
 	ord := map[string]int{}
 	if g != nil {
 		for i, b := range g.Budgets() {
@@ -561,7 +579,8 @@ func placementOf(m *model.Model, st *model.State, g *tier.GPU) []byte {
 			}
 		}
 	}
-	return blockMap(m.Blocks(), runs, devOf, m.BlockResident)
+	fr := st.FramesOn(nn.CPU)
+	return blockMap(m.Blocks(), runs, devOf, func(li int) bool { return m.BlockResident(fr, li) })
 }
 
 // allocStat is where the model is: bytes per device and bytes on the host.
@@ -573,22 +592,23 @@ func placementOf(m *model.Model, st *model.State, g *tier.GPU) []byte {
 //
 // Budgets(), DevStats() and Placed() are parallel arrays indexed by device
 // ordinal, fastest first.
-func allocStat(m *model.Model, st *model.State, g *tier.GPU, nBlocks int) session.Allocation {
+func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) session.Allocation {
+	fr := st.FramesOn(nn.CPU)
 	a := session.Allocation{
-		HostUsed:   m.HostBytes(),
-		HostBudget: m.PageBudget(),
+		HostUsed:   m.HostBytes(fr),
+		HostBudget: m.PageBudget(fr),
 		Dense:      m.DenseBytes(),
 		NBlocks:    nBlocks,
 		PageBytes:  m.PageSize(),
 	}
 	if st != nil {
 		a.DeviceBlocks = st.GPULayers()
-		a.HostBlocks = a.NBlocks - a.DeviceBlocks
-		a.HostKV = st.KVBytes()
+		a.CPUBlocks = a.NBlocks - a.DeviceBlocks
+		a.CPUKV = st.KVBytes()
 		a.Pos, a.MaxSeq = st.Pos(), st.MaxSeq()
 	}
 	if g == nil {
-		a.HostBlocks = a.NBlocks
+		a.CPUBlocks = a.NBlocks
 		return a
 	}
 
@@ -620,22 +640,32 @@ func allocStat(m *model.Model, st *model.State, g *tier.GPU, nBlocks int) sessio
 	return a
 }
 
-func pagerStat(m *model.Model) session.PagerStat {
-	fr, in, out := m.PageStats()
+// pagerStat is the CPU device's paging of m into fr; BytesRead is every
+// device's reads of the container.
+func pagerStat(m *model.Model, fr *jlm.Frames) session.PagerStat {
+	n, in, out := m.PageStats(fr)
 	// Resident is the resident bytes: Frames is what jlm holds, Resident is
 	// what that costs.
 	return session.PagerStat{
-		Frames: fr, PageIns: in, PageOuts: out,
-		Resident:  m.HostBytes(),
-		BytesRead: m.BytesRead(), Reads: m.PagerReads(),
-		ChunkBytes: m.ChunkBytes(),
+		Frames: n, PageIns: in, PageOuts: out,
+		Resident:  m.HostBytes(fr),
+		BytesRead: m.PagedBytes(), Reads: m.PagerReads(),
+		ChunkBytes: m.ChunkBytes(fr),
 	}
+}
+
+// frames is the CPU device's frames the session's instance pages into, nil
+// with no session.
+func (e *Engine) frames() *jlm.Frames {
+	var fr *jlm.Frames
+	e.inspect(func(st *engine.Instance) { fr = st.FramesOn(nn.CPU) })
+	return fr
 }
 
 // Relocate moves the seam: it asks the device to hold n blocks and publishes
 // what it actually took.
 //
-// It is queued, not called: model.State has no mutex and nothing may overlap a
+// It is queued, not called: engine.Instance has no mutex and nothing may overlap a
 // decode, so the command channel puts this between turns. It must not copy
 // Stop's shortcut, which bypasses the queue on purpose.
 //
@@ -649,16 +679,16 @@ func (e *Engine) Relocate(n int) {
 			return
 		}
 		if e.gpu == nil {
-			e.status("this model is on the host: load it with a device to move blocks")
+			e.status("this model is on the CPU: load it with a card to move blocks")
 			return
 		}
 		var was int
-		e.inspect(func(st *model.State) { was = st.GPULayers() })
+		e.inspect(func(st *engine.Instance) { was = st.GPULayers() })
 		got := e.srv.SetDeviceBlocks(e.sess, n)
 		nb := e.m.Cfg.NLayer
 		var blocks []byte
 		var alloc session.Allocation
-		e.inspect(func(st *model.State) {
+		e.inspect(func(st *engine.Instance) {
 			blocks = placementOf(e.m, st, e.gpu)
 			alloc = allocStat(e.m, st, e.gpu, nb)
 		})
@@ -735,11 +765,11 @@ func (e *Engine) generate(r session.ChatRequest) {
 		return
 	}
 
-	ph := e.m.NewPhaseMeter()
+	ph := engine.NewPhaseMeter(e.m)
 	ph.Mark("load")
 	var moved0 int
-	e.inspect(func(st *model.State) { moved0 = st.Relocations() })
-	_, _, outs0 := e.m.PageStats()
+	e.inspect(func(st *engine.Instance) { moved0 = st.Relocations() })
+	_, _, outs0 := e.m.PageStats(e.frames())
 
 	// The session resets before every turn (server.Engine.Generate): a chat
 	// prompt is the whole history re-rendered, so prefilling onto a session
@@ -754,7 +784,11 @@ func (e *Engine) generate(r session.ChatRequest) {
 	if max <= 0 {
 		max = session.DefaultMaxTokens
 	}
-	sm := samplerFor(r.Sampling)
+	sm, err := samplerFor(r.Sampling, e.m.Cfg.Generation, e.sessMax, short(e.path))
+	if err != nil {
+		e.report(stagePrompt, e.path, err)
+		return
+	}
 	out := make([]int32, 0, max)
 	var t1 time.Time
 	var fin *server.Finished
@@ -842,7 +876,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	var reused, prompted int
 	var fails int64
 	var moved int
-	e.inspect(func(st *model.State) {
+	e.inspect(func(st *engine.Instance) {
 		reused, fails, moved = st.KVRestored(), st.KVStoreFailures(), st.Relocations()-moved0
 	})
 	prompted = e.lastPromptTok
@@ -867,11 +901,11 @@ func (e *Engine) generate(r session.ChatRequest) {
 	}
 	perTok := float64(dec.PerToken(n))
 	gbs := dec.Rate() / (1 << 30)
-	pager := pagerStat(e.m)
+	pager := pagerStat(e.m, e.frames())
 	pager.TurnOuts = pager.PageOuts - outs0
 	var alloc session.Allocation
 	var blocks []byte
-	e.inspect(func(st *model.State) {
+	e.inspect(func(st *engine.Instance) {
 		alloc = allocStat(e.m, st, e.gpu, e.m.Cfg.NLayer)
 		blocks = placementOf(e.m, st, e.gpu)
 	})
@@ -918,7 +952,7 @@ func (e *Engine) promptIDs(r session.ChatRequest) ([]int32, error) {
 		return nil, fmt.Errorf("this container has no tokenizer: %v", e.m.TokErr)
 	}
 	if !r.Chat {
-		return e.m.Vocab.Encode(r.Prompt, true), nil
+		return e.m.Vocab.EncodeSpecial(r.Prompt, true), nil
 	}
 	return e.m.ChatIDs(chatMessages(r), true)
 }
@@ -942,42 +976,33 @@ func hasImages(r session.ChatRequest) bool {
 	return false
 }
 
-// imageSpans lays every picture of the request into the conversation as a
-// picture span, which the prefill encodes in the session's own vision segment
-// (model.Picture): its JIT and pool, its device, the model's image cache. A
-// picture is preprocessed once per file -- pictures maps a file's identity to
-// its pixels and name, never to rows.
+// imageSpans is a request carrying pictures as spans: each picture file
+// decoded and laid out where its turn's image part stands, which the prefill
+// encodes through the model's tower. Completion mode goes through the
+// template too, since a picture's place is the template's.
 func (e *Engine) imageSpans(r session.ChatRequest) ([]model.Span, error) {
-	if e.m.Tower() == nil {
-		return nil, fmt.Errorf("the loaded model has no vision tower, so it cannot take a picture")
+	if !e.m.SeesPictures() {
+		return nil, fmt.Errorf("the loaded model carries no vision tower, so it cannot take a picture")
 	}
-	if e.pictures == nil {
-		e.pictures = map[fileID]*model.Picture{}
-	}
-	var imgs []model.Image
+	var pics []model.Span
 	for _, m := range r.Messages {
 		for _, p := range m.Images {
-			fi, err := os.Stat(p)
+			img, err := decodePicture(p)
 			if err != nil {
 				return nil, err
 			}
-			k := fileID{p, fi.Size(), fi.ModTime().UnixNano()}
-			pc, ok := e.pictures[k]
-			if !ok {
-				if pc, err = e.picture(p); err != nil {
-					return nil, fmt.Errorf("%s: %w", filepath.Base(p), err)
-				}
-				e.pictures[k] = pc
+			sp, err := e.m.PictureSpan(img)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", p, err)
 			}
-			imgs = append(imgs, model.Image{Picture: pc})
+			pics = append(pics, sp)
 		}
 	}
-	return e.m.ChatSpansImages(chatMessages(r), imgs, true)
+	return e.m.ChatSpans(chatMessages(r), pics, true)
 }
 
-// picture decodes and preprocesses one picture on the session's vision
-// segment.
-func (e *Engine) picture(path string) (*model.Picture, error) {
+// decodePicture is the picture in the file at path.
+func decodePicture(path string) (image.Image, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -985,11 +1010,9 @@ func (e *Engine) picture(path string) (*model.Picture, error) {
 	defer f.Close()
 	img, _, err := image.Decode(f)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	var pc *model.Picture
-	e.inspect(func(st *model.State) { pc, err = st.Picture(img) })
-	return pc, err
+	return img, nil
 }
 
 // display is the decoded text made safe to put on screen.
@@ -1100,13 +1123,13 @@ const (
 // The namespace carries size and mtime, not just the basename: many containers
 // are named model.jlm, and the geometry hash cannot separate two fine-tunes of
 // one architecture.
-func kvCache(path string) (model.KVStore, string, string) {
+func kvCache(path string) (engine.KVStore, string, string) {
 	dir := session.KVCacheDir()
 	if dir == "" {
 		return nil, "", "this system has no cache folder"
 	}
 	// Bounded, because nothing in a KV cache expires.
-	store, err := model.NewFileStoreLimit(dir, kvCacheMax)
+	store, err := engine.NewFileStoreLimit(dir, kvCacheMax)
 	if err != nil {
 		return nil, "", err.Error()
 	}
@@ -1138,17 +1161,21 @@ func kvStatus(reused, prompted int, fails int64) string {
 // turn just finished. They read the session directly and so must be called
 // when no generation is in flight, which a test after pump() is.
 func (e *Engine) lastReused() (n int) {
-	e.inspect(func(st *model.State) { n = st.KVRestored() })
+	e.inspect(func(st *engine.Instance) { n = st.KVRestored() })
 	return n
 }
 
 func (e *Engine) lastFailures() (n int64) {
-	e.inspect(func(st *model.State) { n = st.KVStoreFailures() })
+	e.inspect(func(st *engine.Instance) { n = st.KVStoreFailures() })
 	return n
 }
 
 // errStopped ends a generate the person stopped.
-var errStopped = errors.New("stopped")
+const errStopped engineError = "stopped"
+
+type engineError string
+
+func (e engineError) Error() string { return string(e) }
 
 // lastPrompt is how many tokens the last prompt was, for the reuse probe.
 func (e *Engine) lastPrompt() int { return e.lastPromptTok }

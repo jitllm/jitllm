@@ -26,6 +26,8 @@ import (
 	"github.com/gogpu/ui/theme"
 	"github.com/gogpu/ui/theme/material3"
 	"github.com/gogpu/ui/widget"
+
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // Painters is one painter value per widget kind. The toolkit has no
@@ -71,11 +73,21 @@ type Painters struct {
 	// Space is the 2/4/8/16/24/32 spacing scale.
 	Space theme.SpacingScale
 	Dark  bool
+
+	// Fonts is the chain the faces below draw by.
+	Fonts *Fonts
 }
 
+// Prose is the face for running text; see [Fonts.Prose].
+func (p Painters) Prose() widgets.Face { return p.Fonts.Prose() }
+
+// Mono is the face for data; see [Fonts.Mono].
+func (p Painters) Mono() widgets.Face { return p.Fonts.Mono() }
+
 // NewPainters builds the set from a Material 3 theme.
-func NewPainters(m3 *material3.Theme) Painters {
+func NewPainters(m3 *material3.Theme, fonts *Fonts) Painters {
 	return Painters{
+		Fonts:       fonts,
 		Button:      material3.ButtonPainter{Theme: m3},
 		Checkbox:    material3.CheckboxPainter{Theme: m3},
 		Chip:        material3.ChipPainter{Theme: m3},

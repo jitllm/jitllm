@@ -37,7 +37,7 @@
 #
 #   *.jlm containers. Tests that name one (Llama-3.2-1B-Instruct-Q4_K_M.jlm,
 #     stories260K.jlm, qwen35/Qwen3.5-0.8B-Q4_K_M.jlm, ...) read the container
-#     of the GGUF with the same stem. The engine/model gates write it beside
+#     of the GGUF with the same stem. The engine gates write it beside
 #     the GGUF on first use; or convert it yourself:
 #         go run ./cmd/jitllm convert <dir>/<name>.gguf
 #     A VLM container takes its projector as the second argument:
@@ -61,6 +61,12 @@
 #         scripts/gptossgold.py  synth-gptoss
 #
 #   tiny-qwen3moe-f32.gguf -- scripts/tiny-moe-gguf.py, from tiny-qwen3moe-hf/.
+#
+#   synth-sampling.gguf -- scripts/samplinggold.py, llama.cpp's own converter
+#     (LCPP_SRC) on synth-qwen2/ with a generation_config.json stating a draw.
+#
+#   synth-kimilinear-f32.gguf -- scripts/kimilineargguf.py, llama.cpp's own
+#     converter (LCPP_SRC) on synth-kimilinear/ in Moonshot's checkpoint layout.
 #
 #   kimik3/Kimi-K3-0.40B-F32.gguf and kimik3/Kimi-K3-0.40B-Kazakh-CPT-59M-F16.gguf
 #     -- llama.cpp's own converter (a build with conversion/kimi_k3.py) on the
@@ -121,7 +127,7 @@ DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf          bartowski/DeepSeek-R1-Distill
 Mistral-7B-Instruct-v0.3-Q4_K_M.gguf               bartowski/Mistral-7B-Instruct-v0.3-GGUF                Mistral-7B-Instruct-v0.3-Q4_K_M.gguf                                            4372812000   default
 Mistral-7B-Instruct-v0.3/tokenizer_config.json     mistralai/Mistral-7B-Instruct-v0.3                     tokenizer_config.json                                                           140874       default
 olmoe-1b-7b-0924-instruct-Q4_K_M.gguf              allenai/OLMoE-1B-7B-0924-Instruct-GGUF                 olmoe-1b-7b-0924-instruct-q4_k_m.gguf                                           4213512672   default
-# the same file under the name format/jlm and jit/gpu/tier ask for (alias)
+# the same file under the name format/jlm and engine/device/gpu ask for (alias)
 olmoe-1b-7b-Q4_K_M.gguf                            allenai/OLMoE-1B-7B-0924-Instruct-GGUF                 olmoe-1b-7b-0924-instruct-q4_k_m.gguf                                           4213512672   default
 granite/granite-3.3-2b-instruct-Q4_K_M.gguf        ibm-granite/granite-3.3-2b-instruct-GGUF               granite-3.3-2b-instruct-Q4_K_M.gguf                                             1545303328   default
 granite/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf  bartowski/granite-3.1-1b-a400m-instruct-GGUF           granite-3.1-1b-a400m-instruct-Q4_K_M.gguf                                       821847360    default
@@ -133,9 +139,12 @@ newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf                LGAI-EXAONE/EXAONE-4.0-1.2B-G
 newarch/SmolLM3-3B-Q4_K_M.gguf                     unsloth/SmolLM3-3B-GGUF                                SmolLM3-3B-Q4_K_M.gguf                                                          1915306528   default
 newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf   mistralai/Ministral-3-3B-Instruct-2512-GGUF            Ministral-3-3B-Instruct-2512-Q4_K_M.gguf                                        2147023008   default
 newarch/AFM-4.5B-Q4_K_M.gguf                       arcee-ai/AFM-4.5B-GGUF                                 AFM-4.5B-Q4_K_M.gguf                                                            2916301824   default
+rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf         bartowski/EssentialAI_rnj-1-instruct-GGUF              EssentialAI_rnj-1-instruct-Q4_K_M.gguf                                          5113914656   default
 # --- vision: text model and projector ---
 SmolVLM-256M-Instruct-Q8_0.gguf                    ggml-org/SmolVLM-256M-Instruct-GGUF                    SmolVLM-256M-Instruct-Q8_0.gguf                                                 175054528    default
 mmproj-SmolVLM-256M-Instruct-Q8_0.gguf             ggml-org/SmolVLM-256M-Instruct-GGUF                    mmproj-SmolVLM-256M-Instruct-Q8_0.gguf                                          103769856    default
+SmolVLM-500M-Instruct-Q8_0.gguf                    ggml-org/SmolVLM-500M-Instruct-GGUF                    SmolVLM-500M-Instruct-Q8_0.gguf                                                 436806912    default
+mmproj-SmolVLM-500M-Instruct-Q8_0.gguf             ggml-org/SmolVLM-500M-Instruct-GGUF                    mmproj-SmolVLM-500M-Instruct-Q8_0.gguf                                          108783360    default
 Qwen2-VL-2B-Instruct-Q4_K_M.gguf                   ggml-org/Qwen2-VL-2B-Instruct-GGUF                     Qwen2-VL-2B-Instruct-Q4_K_M.gguf                                                986046944    default
 mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf              ggml-org/Qwen2-VL-2B-Instruct-GGUF                     mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf                                           709883360    default
 llava-phi-3-mini-int4.gguf                         xtuner/llava-phi-3-mini-gguf                           llava-phi-3-mini-int4.gguf                                                      2318919200   default
@@ -156,6 +165,15 @@ embed/embeddinggemma-300m.gguf                     ollama:library/embeddinggemma
 embed/embeddinggemma-300M-BF16-lcpp.gguf           unsloth/embeddinggemma-300m-GGUF                       embeddinggemma-300M-BF16.gguf                                                   612429792    default
 # convert/gguf's header test pins this file (it still reads it from a fixed path)
 embed/MiniLM-L6-v2.Q8_0.gguf                       leliuga/all-MiniLM-L6-v2-GGUF                          all-MiniLM-L6-v2.Q8_0.gguf                                                      25008064     default
+embed/modernbert-embed-base-Q8_0.gguf              keisuke-miyako/modernbert-embed-base-gguf-q8_0         modernbert-embed-base-Q8_0.gguf                                                 160208800    default
+# Pixtral-12B, its tower's [IMG_BREAK] row: the census and the llama-mtmd gate
+pixtral/pixtral-12b-Q4_K_M.gguf                    ggml-org/pixtral-12b-GGUF                              pixtral-12b-Q4_K_M.gguf                                                         7477204608   default
+pixtral/mmproj-pixtral-12b-Q8_0.gguf               ggml-org/pixtral-12b-GGUF                              mmproj-pixtral-12b-Q8_0.gguf                                                    463091616    default
+# moondream2, an MLP projector over its tower's post-norm, and its own tokenizer:
+# the census and the llama-mtmd gate
+moondream2/moondream2-text-model-f16_ct-vicuna.gguf ggml-org/moondream2-20250414-GGUF                     moondream2-text-model-f16_ct-vicuna.gguf                                        2839535072   default
+moondream2/moondream2-mmproj-f16-20250414.gguf     ggml-org/moondream2-20250414-GGUF                      moondream2-mmproj-f16-20250414.gguf                                             909777984    default
+moondream2/tokenizer.json                          vikhyatk/moondream2                                    tokenizer.json                                                                  2114924      default
 # --- HuggingFace directories: the safetensors converter's fixtures ---
 # (goldens: scripts/hfgold.py, testdata/golden/hf; the synth-* ones are built from these)
 SmolLM2-360M-Instruct/config.json                  HuggingFaceTB/SmolLM2-360M-Instruct                    config.json                                                                     846          default
@@ -263,6 +281,8 @@ Kimi-Linear-48B-A3B-Instruct/model.safetensors.index.json moonshotai/Kimi-Linear
 Kimi-Linear-48B-A3B-Instruct/special_tokens_map.json moonshotai/Kimi-Linear-48B-A3B-Instruct              special_tokens_map.json                                                         5583         default
 Kimi-Linear-48B-A3B-Instruct/tiktoken.model        moonshotai/Kimi-Linear-48B-A3B-Instruct                tiktoken.model                                                                  2795286      default
 Kimi-Linear-48B-A3B-Instruct/tokenization_kimi.py  moonshotai/Kimi-Linear-48B-A3B-Instruct                tokenization_kimi.py                                                            12534        default
+# MiniMax-M2's chat template, which the census converts synth-minimaxm2 with
+MiniMax-M2/chat_template.jinja                     MiniMaxAI/MiniMax-M2                                   chat_template.jinja                                                             6780         default
 Kimi-Linear-48B-A3B-Instruct/tokenizer_config.json moonshotai/Kimi-Linear-48B-A3B-Instruct                tokenizer_config.json                                                           3695         default
 # Kimi-K3-0.40B, a trained K3 test model, as published GGUFs: TestKimiK3RealMatchesReference
 kimik3/Kimi-K3-0.40B-F16.gguf                      murillo2000/Kimi-K3-0.40B-GGUF                         Kimi-K3-0.40B-F16.gguf                                                          784318432    default
