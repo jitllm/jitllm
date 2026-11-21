@@ -1,0 +1,356 @@
+package x86
+
+func (a *Buf) XORQ(dst, src Reg) {
+	a.rex(true, src, noIndex, dst)
+	a.u8(0x31)
+	a.modrmReg(src, dst)
+}
+
+func (a *Buf) DIVQ(src Reg) {
+	a.rex(true, Y0, noIndex, src)
+	a.u8(0xF7)
+	a.modrmReg(Reg(6), src)
+}
+
+func (a *Buf) MOVLLoad(dst Reg, m Mem) {
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.rex(false, dst, idx, m.Base)
+	a.u8(0x8B)
+	a.modrmMem(dst, m)
+}
+
+func (a *Buf) MOVLStore(m Mem, src Reg) {
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.rex(false, src, idx, m.Base)
+	a.u8(0x89)
+	a.modrmMem(src, m)
+}
+
+func (a *Buf) ANDQ(dst, src Reg) {
+	a.rex(true, src, noIndex, dst)
+	a.u8(0x21)
+	a.modrmReg(src, dst)
+}
+
+func (a *Buf) ORQ(dst, src Reg) {
+	a.rex(true, src, noIndex, dst)
+	a.u8(0x09)
+	a.modrmReg(src, dst)
+}
+
+// ANDimm32 is dst &= imm, the immediate sign-extended to 64 bits.
+func (a *Buf) ANDimm32(dst Reg, imm int32) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(4), dst)
+	a.u32(uint32(imm))
+}
+
+// IMULimm is dst = src * imm, the immediate sign-extended to 64 bits.
+func (a *Buf) IMULimm(dst, src Reg, imm int32) {
+	a.rex(true, dst, noIndex, src)
+	a.u8(0x69)
+	a.modrmReg(dst, src)
+	a.u32(uint32(imm))
+}
+
+// SHRX is dst = src >> cnt, logical, on 64 bits (BMI2).
+func (a *Buf) SHRX(dst, src, cnt Reg) {
+	a.useISA(ISABMI2, "shrx")
+	a.vex(dst, cnt, src, noIndex, false, pF2, m0F38, 1)
+	a.u8(0xF7)
+	a.modrmReg(dst, src)
+}
+
+// SARX is dst = src >> cnt, arithmetic, on 64 bits (BMI2).
+func (a *Buf) SARX(dst, src, cnt Reg) {
+	a.useISA(ISABMI2, "sarx")
+	a.vex(dst, cnt, src, noIndex, false, pF3, m0F38, 1)
+	a.u8(0xF7)
+	a.modrmReg(dst, src)
+}
+
+// IDIVQ divides rdx:rax by src, signed, on 64 bits: the quotient in rax and
+// the remainder in rdx.
+func (a *Buf) IDIVQ(src Reg) {
+	a.rex(true, Y0, noIndex, src)
+	a.u8(0xF7)
+	a.modrmReg(Reg(7), src)
+}
+
+// CQO is rdx:rax = rax sign-extended.
+func (a *Buf) CQO() {
+	a.u8(0x48)
+	a.u8(0x99)
+}
+
+// SHLX is dst = src << cnt on 64 bits (BMI2).
+func (a *Buf) SHLX(dst, src, cnt Reg) {
+	a.useISA(ISABMI2, "shlx")
+	a.vex(dst, cnt, src, noIndex, false, p66, m0F38, 1)
+	a.u8(0xF7)
+	a.modrmReg(dst, src)
+}
+
+// MOVL is dst = src's low 32 bits, zero-extended.
+func (a *Buf) MOVL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x89)
+	a.modrmReg(src, dst)
+}
+
+// MOVSXD is dst = src's low 32 bits, sign-extended.
+func (a *Buf) MOVSXD(dst, src Reg) {
+	a.rex(true, dst, noIndex, src)
+	a.u8(0x63)
+	a.modrmReg(dst, src)
+}
+
+// NOTQ is dst = ^dst on 64 bits.
+func (a *Buf) NOTQ(dst Reg) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xF7)
+	a.modrmReg(Reg(2), dst)
+}
+
+func (a *Buf) NEGQ(dst Reg) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xF7)
+	a.modrmReg(Reg(3), dst)
+}
+
+// XORimm32 is dst ^= imm, the immediate sign-extended to 64 bits.
+func (a *Buf) XORimm32(dst Reg, imm int32) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(6), dst)
+	a.u32(uint32(imm))
+}
+
+// ORimm32 is dst |= imm, the immediate sign-extended to 64 bits.
+func (a *Buf) ORimm32(dst Reg, imm int32) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(1), dst)
+	a.u32(uint32(imm))
+}
+
+// CMPL compares x and y as 32-bit values.
+func (a *Buf) CMPL(x, y Reg) {
+	a.rex(false, y, noIndex, x)
+	a.u8(0x39)
+	a.modrmReg(y, x)
+}
+
+// CMPLimm compares x with imm as 32-bit values.
+func (a *Buf) CMPLimm(x Reg, imm int32) {
+	a.rex(false, Y0, noIndex, x)
+	a.u8(0x81)
+	a.modrmReg(Reg(7), x)
+	a.u32(uint32(imm))
+}
+
+// JBE, JAE, JLE and JGE jump on unsigned below-or-equal, unsigned
+// above-or-equal, signed less-or-equal and signed greater-or-equal.
+func (a *Buf) JBE(l int) { a.jcc(0x76, 0x86, l) }
+func (a *Buf) JAE(l int) { a.jcc(0x73, 0x83, l) }
+func (a *Buf) JLE(l int) { a.jcc(0x7E, 0x8E, l) }
+func (a *Buf) JGE(l int) { a.jcc(0x7D, 0x8D, l) }
+
+// MOVLimm is dst = imm, zero-extended from 32 bits.
+func (a *Buf) MOVLimm(dst Reg, imm uint32) {
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0xB8 + dst.lo())
+	a.u32(imm)
+}
+
+// MOVMemImm is the 64-bit word at m = imm, sign-extended from 32 bits.
+func (a *Buf) MOVMemImm(m Mem, imm int32) {
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.rex(true, Y0, idx, m.Base)
+	a.u8(0xC7)
+	a.modrmMem(Y0, m)
+	a.u32(uint32(imm))
+}
+
+// ADDMemImm8 adds imm to the 64-bit word at m.
+func (a *Buf) ADDMemImm8(m Mem, imm int8) {
+	defer a.stored(a.heldOK, m, 8)
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.rex(true, Y0, idx, m.Base)
+	a.u8(0x83)
+	a.modrmMem(Y0, m)
+	a.u8(byte(imm))
+}
+
+// ADDMemImm32 adds imm to the 64-bit word at m.
+func (a *Buf) ADDMemImm32(m Mem, imm int32) {
+	defer a.stored(a.heldOK, m, 8)
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.rex(true, Y0, idx, m.Base)
+	a.u8(0x81)
+	a.modrmMem(Y0, m)
+	a.u32(uint32(imm))
+}
+
+// VMOVDToX is dst's low dword = gp's low 32 bits, the rest zeroed: the VEX
+// form, which leaves no upper-state penalty beside 256-bit code.
+func (a *Buf) VMOVDToX(dst, gp Reg) {
+	a.vex(dst, Y0, gp, noIndex, false, p66, m0F, 0)
+	a.u8(0x6E)
+	a.modrmReg(dst, gp)
+}
+
+// VMOVDFromX is gp = src's low dword, zero-extended.
+func (a *Buf) VMOVDFromX(gp, src Reg) {
+	a.vex(src, Y0, gp, noIndex, false, p66, m0F, 0)
+	a.u8(0x7E)
+	a.modrmReg(src, gp)
+}
+
+// VCVTTSS2SIL is gp = src's low float truncated to a signed 32-bit integer,
+// zero-extended, as VCVTTPS2DQ does each lane.
+func (a *Buf) VCVTTSS2SIL(gp, src Reg) {
+	a.vex(gp, Y0, src, noIndex, false, pF3, m0F, 0)
+	a.u8(0x2C)
+	a.modrmReg(gp, src)
+}
+
+// VCVTSS2SIL is VCVTTSS2SIL rounded as MXCSR rounds, as VCVTPS2DQ does.
+func (a *Buf) VCVTSS2SIL(gp, src Reg) {
+	a.vex(gp, Y0, src, noIndex, false, pF3, m0F, 0)
+	a.u8(0x2D)
+	a.modrmReg(gp, src)
+}
+
+// VCVTSI2SS is dst = src1 with its low float gp's signed 64-bit value.
+func (a *Buf) VCVTSI2SS(dst, src1, gp Reg) {
+	a.vex(dst, src1, gp, noIndex, false, pF3, m0F, 1)
+	a.u8(0x2A)
+	a.modrmReg(dst, gp)
+}
+
+// VPSHUFDx is dst's four dwords picked from src's by imm, the 128-bit VEX
+// form.
+func (a *Buf) VPSHUFDx(dst, src Reg, imm byte) {
+	a.vex(dst, Y0, src, noIndex, false, p66, m0F, 0)
+	a.u8(0x70)
+	a.modrmReg(dst, src)
+	a.u8(imm)
+}
+
+// ADDL is dst += src on 32 bits, zero-extended.
+func (a *Buf) ADDL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x01)
+	a.modrmReg(src, dst)
+}
+
+// SUBL is dst -= src on 32 bits, zero-extended.
+func (a *Buf) SUBL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x29)
+	a.modrmReg(src, dst)
+}
+
+// ANDL is dst &= src on 32 bits, zero-extended.
+func (a *Buf) ANDL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x21)
+	a.modrmReg(src, dst)
+}
+
+// ORL is dst |= src on 32 bits, zero-extended.
+func (a *Buf) ORL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x09)
+	a.modrmReg(src, dst)
+}
+
+// XORL is dst ^= src on 32 bits, zero-extended.
+func (a *Buf) XORL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, src, noIndex, dst)
+	a.u8(0x31)
+	a.modrmReg(src, dst)
+}
+
+// IMULL is dst *= src on 32 bits, the product's low half zero-extended.
+func (a *Buf) IMULL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, dst, noIndex, src)
+	a.u8(0x0F)
+	a.u8(0xAF)
+	a.modrmReg(dst, src)
+}
+
+// NEGL is dst = -dst on 32 bits, zero-extended.
+func (a *Buf) NEGL(dst Reg) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0xF7)
+	a.modrmReg(Reg(3), dst)
+}
+
+// ADDLimm is dst += imm on 32 bits, zero-extended.
+func (a *Buf) ADDLimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	if imm >= -128 && imm <= 127 {
+		a.u8(0x83)
+		a.modrmReg(Y0, dst)
+		a.u8(byte(imm))
+		return
+	}
+	a.u8(0x81)
+	a.modrmReg(Y0, dst)
+	a.u32(uint32(imm))
+}
+
+// XORLimm is dst ^= imm on 32 bits, zero-extended.
+func (a *Buf) XORLimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(6), dst)
+	a.u32(uint32(imm))
+}
+
+// ORLimm is dst |= imm on 32 bits, zero-extended.
+func (a *Buf) ORLimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, Y0, noIndex, dst)
+	a.u8(0x81)
+	a.modrmReg(Reg(1), dst)
+	a.u32(uint32(imm))
+}
+
+// IMULLimm is dst = src * imm on 32 bits, the product's low half
+// zero-extended.
+func (a *Buf) IMULLimm(dst, src Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
+	a.rex(false, dst, noIndex, src)
+	a.u8(0x69)
+	a.modrmReg(dst, src)
+	a.u32(uint32(imm))
+}

@@ -14,26 +14,26 @@ import (
 // TestHunyuanSplitsAsItsTokenizerDoes runs the hunyuan-dense pre-tokenizer
 // against HuggingFace tokenizers running Hunyuan's own tokenizer.json
 // (scripts/hunyuansplitgold.py). Its three Split stages are each a whole
-// pattern, not the alternation skeleton parseSplit reads; read that way, the
-// row was three llama3 splits and "12345" came out as five digits where the
-// model's tokenizer has "123" "45".
+// pattern, run as written; read as an alternation skeleton, the row was once
+// three llama3 splits and "12345" came out as five digits where the model's
+// tokenizer has "123" "45".
 //
 // The corpus carries what each stage is about: digit runs longer than three,
 // CJK and kana beside Latin and digits, an ASCII mark glued to the letters
 // after it, combining marks, and every kind of whitespace run.
 func TestHunyuanSplitsAsItsTokenizerDoes(t *testing.T) {
 	splitsAsItsTokenizerDoes(t, "hunyuan-dense", "hunyuan_dense_split.json",
-		pretok.OpDigitGroups, pretok.OpKanaHanRuns, pretok.OpHunyuanSplit, pretok.OpByteLevel)
+		pretok.OpPattern, pretok.OpPattern, pretok.OpPattern, pretok.OpByteLevel)
 }
 
 // TestSparkSplitsAsItsTokenizerDoes is the same for Spark-X2.5, whose third
-// Split is a variant (pretok.OpSparkSplit: no newline tail on a punctuation
+// Split is a variant (pretok.SparkWords: no newline tail on a punctuation
 // run, a newline a piece of its own) followed by individual digits. Read as
 // three llama3 splits it would be wrong; the corpus's newline cases are where
 // the variant parts from Hunyuan's.
 func TestSparkSplitsAsItsTokenizerDoes(t *testing.T) {
 	splitsAsItsTokenizerDoes(t, "spark2_5", "spark2_5_split.json",
-		pretok.OpDigitGroups, pretok.OpKanaHanRuns, pretok.OpSparkSplit, pretok.OpDigits, pretok.OpByteLevel)
+		pretok.OpPattern, pretok.OpPattern, pretok.OpPattern, pretok.OpDigits, pretok.OpByteLevel)
 }
 
 // splitsAsItsTokenizerDoes holds pre-tokenizer name's table row to the

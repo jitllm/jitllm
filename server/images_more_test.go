@@ -12,7 +12,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -48,18 +49,20 @@ func spanText(lm *LoadedModel, spans []model.Span) string {
 // the tool grammar, through the server.
 func TestImageWithToolsRendersAndForces(t *testing.T) {
 	_, lm, c := loadedEngine(t, toolVisionModel, "m", LoadOptions{})
-	if lm.m.Tower() == nil {
+	if !lm.m.SeesPictures() {
 		t.Fatalf("%s carries no vision tower", toolVisionModel)
 	}
 	quad := readTestdata(t, "quad-and-disc.png")
-	st := lm.m.NewState(64)
-	defer st.Close()
-	msgs := []model.ChatMessage{{Role: "user", Content: "Describe the picture.", Images: 1}}
-	with, err := st.ChatPictureSpans(msgs, []image.Image{decodePic(t, quad)}, []byte(forcedTools), model.ToolChoice{}, true)
+	pic, err := lm.m.PictureSpan(decodePic(t, quad))
 	if err != nil {
 		t.Fatal(err)
 	}
-	without, err := st.ChatPictureSpans(msgs, []image.Image{decodePic(t, quad)}, nil, model.ToolChoice{}, true)
+	msgs := []model.ChatMessage{{Role: "user", Content: "Describe the picture.", Images: 1}}
+	with, err := lm.m.ChatSpansMedia(msgs, []model.Span{pic}, nil, []byte(forcedTools), model.ToolChoice{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := lm.m.ChatSpansMedia(msgs, []model.Span{pic}, nil, nil, model.ToolChoice{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func TestImageContinuesASession(t *testing.T) {
 		t.Helper()
 		var out strings.Builder
 		err := e.Generate(context.Background(), GenerateOptions{SessionID: sid, Continue: cont, MaxTokens: 12,
-			Sampling: &model.Sampler{}, Logprobs: true,
+			Sampling: &engine.Sampler{}, Logprobs: true,
 			Prompt: Prompt{Kind: PromptChat, Chat: &ChatInput{AddGenerationPrompt: true,
 				Messages: []model.ChatMessage{{Role: "user", Content: text, Images: 1}},
 				Images:   []image.Image{decodePic(t, pic)}}}},
@@ -179,9 +182,9 @@ func TestImageContinuesASession(t *testing.T) {
 		}
 		defer e.CloseSession(s.id)
 		turn(s.id, false, first, askPicture)
-		p1 := s.st.Pos()
+		p1 := s.ms.Pos()
 		got := turn(s.id, true, next, second)
-		return got, p1, s.st.Pos()
+		return got, p1, s.ms.Pos()
 	}
 	fresh := func(pic []byte) string {
 		s, err := e.CreateSession(SessionOptions{ModelID: lm.id})

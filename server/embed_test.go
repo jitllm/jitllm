@@ -21,7 +21,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -31,25 +33,29 @@ import (
 // The embedding gates: a real embedding container on every path the server
 // has -- the Connect RPC, /v1/embeddings as floats and as base64, text and
 // token ids, one request against many, many requests at once -- and every
-// vector is held BIT FOR BIT to a model.Embedder run on the same container,
+// vector is held BIT FOR BIT to a engine.Embedder run on the same container,
 // which is what `jitllm embed` prints.
 //
 // The models are the engine's own embedding gate's, under
 // $JITLLM_MODELS/embed/: one per readout the engine has. A missing one skips
 // naming the file; the default set of internal/testmodels/fetch.sh carries
 // all four GGUFs and `jitllm convert` makes the containers.
-var embedGateModels = []string{
-	"MiniLM-L6-v2.Q8_0.jlm",    // BERT, mean pooling
-	"nomic-embed-text.jlm",     // the rotary encoder, no position table
-	"qwen3-embedding-0.6b.jlm", // a causal decoder pooled at its EOS
-	"embeddinggemma-300m.jlm",  // a bidirectional decoder with dense heads
+func embedGateModels() []string {
+	return []string{
+		"MiniLM-L6-v2.Q8_0.jlm",    // BERT, mean pooling
+		"nomic-embed-text.jlm",     // the rotary encoder, no position table
+		"qwen3-embedding-0.6b.jlm", // a causal decoder pooled at its EOS
+		"embeddinggemma-300m.jlm",  // a bidirectional decoder with dense heads
+	}
 }
 
-var embedTexts = []string{
-	"The capital of France is Paris.",
-	"search_query: what does a pager do",
-	"a",
-	"Embeddings are vectors; the server must return the ones the engine computes, in the order asked.",
+func embedTexts() []string {
+	return []string{
+		"The capital of France is Paris.",
+		"search_query: what does a pager do",
+		"a",
+		"Embeddings are vectors; the server must return the ones the engine computes, in the order asked.",
+	}
 }
 
 // embedServer loads one container into a fresh engine behind its full mux.
@@ -58,11 +64,11 @@ func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, 
 	path := testmodels.Path(filepath.Join("embed", name))
 	fresh.Must(t, path)
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory and convert "+
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory and convert "+
 			"embed/%s.gguf) -- this gate proved nothing", path, strings.TrimSuffix(name, ".jlm"))
 	}
 	cfg.ModelDir, cfg.Probe = filepath.Dir(path), noProbe
-	e := New(cfg)
+	e := New(admitConfig(cfg))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "emb"})
 	if err != nil {
@@ -73,11 +79,11 @@ func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, 
 	return e, lm, s.URL
 }
 
-// embedReference is what `jitllm embed` computes: a model.Embedder of its
+// embedReference is what `jitllm embed` computes: a engine.Embedder of its
 // own, one text at a time.
 func embedReference(t *testing.T, m *model.Model, texts []string) (vecs [][]float32, ids [][]int32, limit int) {
 	t.Helper()
-	emb, err := m.NewEmbedder()
+	emb, err := engine.NewEmbedder(m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,21 +195,21 @@ func vectorOf(t *testing.T, raw json.RawMessage) []float32 {
 }
 
 func TestEmbedMatchesTheEmbedder(t *testing.T) {
-	for _, name := range embedGateModels {
+	for _, name := range embedGateModels() {
 		t.Run(name, func(t *testing.T) {
 			_, lm, url := embedServer(t, name, Config{})
 			m := lm.m
-			want, wantIDs, limit := embedReference(t, m, embedTexts)
+			want, wantIDs, limit := embedReference(t, m, embedTexts())
 			total := 0
 			for _, x := range wantIDs {
 				total += len(x)
 			}
-			t.Logf("%s: %s, %d dims, %v pooling, at most %d tokens", name, m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), limit)
+			t.Logf("%s: %d dims, %v pooling, at most %d tokens", name, m.Cfg.NEmbd, m.Pooling(), limit)
 
 			cl := jitllmv1connect.NewInferenceServiceClient(http.DefaultClient, url)
 			t.Run("rpc, one request of every input", func(t *testing.T) {
 				req := &v1.EmbedRequest{ModelId: "emb"}
-				for _, s := range embedTexts {
+				for _, s := range embedTexts() {
 					req.Inputs = append(req.Inputs, &v1.EmbedInput{Input: &v1.EmbedInput_Text{Text: s}})
 				}
 				resp, err := cl.Embed(context.Background(), connect.NewRequest(req))
@@ -211,8 +217,8 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := resp.Msg
-				if len(got.Embeddings) != len(embedTexts) {
-					t.Fatalf("%d embeddings for %d inputs", len(got.Embeddings), len(embedTexts))
+				if len(got.Embeddings) != len(embedTexts()) {
+					t.Fatalf("%d embeddings for %d inputs", len(got.Embeddings), len(embedTexts()))
 				}
 				for i, g := range got.Embeddings {
 					requireSame(t, fmt.Sprintf("input %d", i), g.Vector, want[i])
@@ -243,7 +249,7 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 
 			t.Run("/v1/embeddings, a batch in order, floats and base64", func(t *testing.T) {
 				for _, format := range []string{"", "float", "base64"} {
-					body := map[string]any{"model": "emb", "input": embedTexts}
+					body := map[string]any{"model": "emb", "input": embedTexts()}
 					if format != "" {
 						body["encoding_format"] = format
 					}
@@ -251,7 +257,7 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 					if code != http.StatusOK {
 						t.Fatalf("%q: %d %+v", format, code, out.Error)
 					}
-					if out.Object != "list" || out.Model != "emb" || len(out.Data) != len(embedTexts) {
+					if out.Object != "list" || out.Model != "emb" || len(out.Data) != len(embedTexts()) {
 						t.Fatalf("%q: object %q model %q %d entries", format, out.Object, out.Model, len(out.Data))
 					}
 					for i, d := range out.Data {
@@ -267,7 +273,7 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 			})
 
 			t.Run("/v1/embeddings, one at a time and as ids", func(t *testing.T) {
-				for i, s := range embedTexts {
+				for i, s := range embedTexts() {
 					code, out := postEmbeddings(t, url, map[string]any{"model": "emb", "input": s})
 					if code != http.StatusOK || len(out.Data) != 1 {
 						t.Fatalf("text %d: %d %+v", i, code, out.Error)
@@ -327,12 +333,12 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 // two embedders on one model to run together. Every vector must still be the
 // embedder's, at its own index.
 func TestEmbedConcurrentRequestsAreCorrect(t *testing.T) {
-	e, lm, url := embedServer(t, embedGateModels[0], Config{})
+	e, lm, url := embedServer(t, embedGateModels()[0], Config{})
 	// Long inputs and several per request, so two requests' embeds overlap
 	// on the host rather than slipping between each other's round trips.
 	var long []string
 	for k := 0; k < 2; k++ {
-		for _, s := range embedTexts {
+		for _, s := range embedTexts() {
 			long = append(long, strings.Repeat(fmt.Sprintf("%d %s ", k, s), 150/(len(s)/4+2)+1))
 		}
 	}
@@ -444,15 +450,15 @@ func TestEmbedConcurrentRequestsAreCorrect(t *testing.T) {
 
 // TestEmbedRefusesWhatCannotEmbed: a generative container is refused by name
 // on both paths, and an encoder refuses a decoder session rather than taking
-// the server down with NewState's panic.
+// the server down with NewInstance's panic.
 func TestEmbedRefusesWhatCannotEmbed(t *testing.T) {
 	gen := testmodels.Path("stories260K.jlm")
 	fresh.Must(t, gen)
 	if _, err := os.Stat(gen); err != nil {
-		t.Skipf("MODEL MISSING: %s (internal/testmodels/fetch.sh copies stories260K and "+
+		testmodels.Missing(t, "MODEL MISSING: %s (internal/testmodels/fetch.sh copies stories260K and "+
 			"`jitllm convert` makes the container) -- this gate proved nothing", gen)
 	}
-	e, enc, url := embedServer(t, embedGateModels[0], Config{})
+	e, enc, url := embedServer(t, embedGateModels()[0], Config{})
 	if _, err := e.LoadModel(LoadOptions{Path: gen, ModelID: "gen"}); err != nil {
 		t.Fatal(err)
 	}
@@ -513,8 +519,8 @@ func TestEmbedRefusesWhatCannotEmbed(t *testing.T) {
 // it, and closes it, before the model; embeds racing the unload either finish
 // with the right vector or are refused as not found.
 func TestUnloadWaitsForEmbedsInFlight(t *testing.T) {
-	e, lm, _ := embedServer(t, embedGateModels[0], Config{})
-	want, _, _ := embedReference(t, lm.m, embedTexts[:1])
+	e, lm, _ := embedServer(t, embedGateModels()[0], Config{})
+	want, _, _ := embedReference(t, lm.m, embedTexts()[:1])
 
 	held, err := lm.takeEmbedder()
 	if err != nil {
@@ -535,7 +541,7 @@ func TestUnloadWaitsForEmbedsInFlight(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			res, err := e.Embed(context.Background(), EmbedOptions{Model: "emb",
-				Inputs: []Prompt{{Kind: PromptText, Text: embedTexts[0]}}})
+				Inputs: []Prompt{{Kind: PromptText, Text: embedTexts()[0]}}})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -571,7 +577,7 @@ func TestUnloadWaitsForEmbedsInFlight(t *testing.T) {
 	default:
 	}
 	// The held embedder still works: the model under it is open.
-	if v, err := held.Embed(lm.m.EmbedIDs(embedTexts[0])); err != nil || firstDiff(v, want[0]) >= 0 {
+	if v, err := held.embed(context.Background(), lm.m.EmbedIDs(embedTexts()[0]), engine.NormUnit); err != nil || firstDiff(v, want[0]) >= 0 {
 		t.Fatalf("the held embedder after the unload began: %v", err)
 	}
 	lm.giveEmbedder(held)

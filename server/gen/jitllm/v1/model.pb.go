@@ -279,7 +279,6 @@ type ModelInfo struct {
 	ModelId       string                 `protobuf:"bytes,1,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
 	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Architecture  string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`
 	BlockCount    int32                  `protobuf:"varint,5,opt,name=block_count,json=blockCount,proto3" json:"block_count,omitempty"`
 	EmbeddingDim  int32                  `protobuf:"varint,6,opt,name=embedding_dim,json=embeddingDim,proto3" json:"embedding_dim,omitempty"`
 	ContextLength int32                  `protobuf:"varint,7,opt,name=context_length,json=contextLength,proto3" json:"context_length,omitempty"`
@@ -305,6 +304,10 @@ type ModelInfo struct {
 	WeightBytes    *ByteSize `protobuf:"bytes,19,opt,name=weight_bytes,json=weightBytes,proto3" json:"weight_bytes,omitempty"`
 	// How many sessions currently hold this model.
 	SessionCount int32 `protobuf:"varint,20,opt,name=session_count,json=sessionCount,proto3" json:"session_count,omitempty"`
+	// The model's own draw, the one its container states, at the default
+	// window: what a session opened with no sampling draws. Unset where the
+	// container states none, and a session that asks for no draw is refused.
+	StatedSampling *SamplingParams `protobuf:"bytes,27,opt,name=stated_sampling,json=statedSampling,proto3" json:"stated_sampling,omitempty"`
 	// Default placement newly created sessions inherit.
 	DefaultDeviceIds []string `protobuf:"bytes,21,rep,name=default_device_ids,json=defaultDeviceIds,proto3" json:"default_device_ids,omitempty"`
 	// The embedding readout the container states: "mean", "cls" or "last" for
@@ -381,13 +384,6 @@ func (x *ModelInfo) GetPath() string {
 func (x *ModelInfo) GetName() string {
 	if x != nil {
 		return x.Name
-	}
-	return ""
-}
-
-func (x *ModelInfo) GetArchitecture() string {
-	if x != nil {
-		return x.Architecture
 	}
 	return ""
 }
@@ -502,6 +498,13 @@ func (x *ModelInfo) GetSessionCount() int32 {
 		return x.SessionCount
 	}
 	return 0
+}
+
+func (x *ModelInfo) GetStatedSampling() *SamplingParams {
+	if x != nil {
+		return x.StatedSampling
+	}
+	return nil
 }
 
 func (x *ModelInfo) GetDefaultDeviceIds() []string {
@@ -1522,12 +1525,13 @@ func (x *ToolCall) GetArguments() string {
 	return ""
 }
 
-// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP or GIF (its
-// first frame), within the server's byte and pixel limits.
+// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP, GIF (its
+// first frame), BMP or TIFF, within the server's byte and pixel limits.
 type ChatImage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Data  []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	// The declared media type (image/png, image/jpeg, image/webp, image/gif);
+	// The declared media type (image/png, image/jpeg, image/webp, image/gif,
+	// image/bmp, image/tiff);
 	// empty takes the bytes' own. A declared type the bytes are not is refused.
 	MediaType string `protobuf:"bytes,2,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
 	// The picture by reference instead of by bytes, exclusive with `data`: a
@@ -1739,12 +1743,11 @@ const file_jitllm_v1_model_proto_rawDesc = "" +
 	"\bmodel_id\x18\t \x01(\tR\amodelId\x12\"\n" +
 	"\fcapabilities\x18\n" +
 	" \x03(\tR\fcapabilities\x12%\n" +
-	"\x0econtext_length\x18\v \x01(\x05R\rcontextLength\"\xd5\a\n" +
+	"\x0econtext_length\x18\v \x01(\x05R\rcontextLength\"\x89\b\n" +
 	"\tModelInfo\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\x12\"\n" +
-	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x12\x1f\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1f\n" +
 	"\vblock_count\x18\x05 \x01(\x05R\n" +
 	"blockCount\x12#\n" +
 	"\rembedding_dim\x18\x06 \x01(\x05R\fembeddingDim\x12%\n" +
@@ -1763,13 +1766,14 @@ const file_jitllm_v1_model_proto_rawDesc = "" +
 	"\tpage_size\x18\x11 \x01(\v2\x13.jitllm.v1.ByteSizeR\bpageSize\x12=\n" +
 	"\x10vision_page_size\x18\x12 \x01(\v2\x13.jitllm.v1.ByteSizeR\x0evisionPageSize\x126\n" +
 	"\fweight_bytes\x18\x13 \x01(\v2\x13.jitllm.v1.ByteSizeR\vweightBytes\x12#\n" +
-	"\rsession_count\x18\x14 \x01(\x05R\fsessionCount\x12,\n" +
+	"\rsession_count\x18\x14 \x01(\x05R\fsessionCount\x12B\n" +
+	"\x0fstated_sampling\x18\x1b \x01(\v2\x19.jitllm.v1.SamplingParamsR\x0estatedSampling\x12,\n" +
 	"\x12default_device_ids\x18\x15 \x03(\tR\x10defaultDeviceIds\x12\x18\n" +
 	"\apooling\x18\x16 \x01(\tR\apooling\x12\x18\n" +
 	"\aencoder\x18\x17 \x01(\bR\aencoder\x12\x18\n" +
 	"\aaliases\x18\x18 \x03(\tR\aaliases\x12&\n" +
 	"\x0fdefault_max_seq\x18\x19 \x01(\x05R\rdefaultMaxSeq\x12\"\n" +
-	"\fcapabilities\x18\x1a \x03(\tR\fcapabilities\"R\n" +
+	"\fcapabilities\x18\x1a \x03(\tR\fcapabilitiesJ\x04\b\x04\x10\x05R\farchitecture\"R\n" +
 	"\x11ListModelsRequest\x12\x1c\n" +
 	"\tdirectory\x18\x01 \x01(\tR\tdirectory\x12\x1f\n" +
 	"\vloaded_only\x18\x02 \x01(\bR\n" +
@@ -1911,6 +1915,7 @@ var file_jitllm_v1_model_proto_goTypes = []any{
 	(*ApplyChatTemplateRequest)(nil),  // 21: jitllm.v1.ApplyChatTemplateRequest
 	(*ApplyChatTemplateResponse)(nil), // 22: jitllm.v1.ApplyChatTemplateResponse
 	(*ByteSize)(nil),                  // 23: jitllm.v1.ByteSize
+	(*SamplingParams)(nil),            // 24: jitllm.v1.SamplingParams
 }
 var file_jitllm_v1_model_proto_depIdxs = []int32{
 	2,  // 0: jitllm.v1.SetModelOptionsResponse.file:type_name -> jitllm.v1.ModelFile
@@ -1918,37 +1923,38 @@ var file_jitllm_v1_model_proto_depIdxs = []int32{
 	23, // 2: jitllm.v1.ModelInfo.page_size:type_name -> jitllm.v1.ByteSize
 	23, // 3: jitllm.v1.ModelInfo.vision_page_size:type_name -> jitllm.v1.ByteSize
 	23, // 4: jitllm.v1.ModelInfo.weight_bytes:type_name -> jitllm.v1.ByteSize
-	2,  // 5: jitllm.v1.ListModelsResponse.files:type_name -> jitllm.v1.ModelFile
-	3,  // 6: jitllm.v1.ListModelsResponse.loaded:type_name -> jitllm.v1.ModelInfo
-	3,  // 7: jitllm.v1.GetModelResponse.model:type_name -> jitllm.v1.ModelInfo
-	3,  // 8: jitllm.v1.LoadModelResponse.model:type_name -> jitllm.v1.ModelInfo
-	23, // 9: jitllm.v1.ConvertResponse.output_size:type_name -> jitllm.v1.ByteSize
-	20, // 10: jitllm.v1.ChatMessage.images:type_name -> jitllm.v1.ChatImage
-	19, // 11: jitllm.v1.ChatMessage.tool_calls:type_name -> jitllm.v1.ToolCall
-	18, // 12: jitllm.v1.ApplyChatTemplateRequest.messages:type_name -> jitllm.v1.ChatMessage
-	4,  // 13: jitllm.v1.ModelService.ListModels:input_type -> jitllm.v1.ListModelsRequest
-	6,  // 14: jitllm.v1.ModelService.GetModel:input_type -> jitllm.v1.GetModelRequest
-	8,  // 15: jitllm.v1.ModelService.LoadModel:input_type -> jitllm.v1.LoadModelRequest
-	10, // 16: jitllm.v1.ModelService.UnloadModel:input_type -> jitllm.v1.UnloadModelRequest
-	12, // 17: jitllm.v1.ModelService.Convert:input_type -> jitllm.v1.ConvertRequest
-	14, // 18: jitllm.v1.ModelService.Tokenize:input_type -> jitllm.v1.TokenizeRequest
-	16, // 19: jitllm.v1.ModelService.Detokenize:input_type -> jitllm.v1.DetokenizeRequest
-	21, // 20: jitllm.v1.ModelService.ApplyChatTemplate:input_type -> jitllm.v1.ApplyChatTemplateRequest
-	0,  // 21: jitllm.v1.ModelService.SetModelOptions:input_type -> jitllm.v1.SetModelOptionsRequest
-	5,  // 22: jitllm.v1.ModelService.ListModels:output_type -> jitllm.v1.ListModelsResponse
-	7,  // 23: jitllm.v1.ModelService.GetModel:output_type -> jitllm.v1.GetModelResponse
-	9,  // 24: jitllm.v1.ModelService.LoadModel:output_type -> jitllm.v1.LoadModelResponse
-	11, // 25: jitllm.v1.ModelService.UnloadModel:output_type -> jitllm.v1.UnloadModelResponse
-	13, // 26: jitllm.v1.ModelService.Convert:output_type -> jitllm.v1.ConvertResponse
-	15, // 27: jitllm.v1.ModelService.Tokenize:output_type -> jitllm.v1.TokenizeResponse
-	17, // 28: jitllm.v1.ModelService.Detokenize:output_type -> jitllm.v1.DetokenizeResponse
-	22, // 29: jitllm.v1.ModelService.ApplyChatTemplate:output_type -> jitllm.v1.ApplyChatTemplateResponse
-	1,  // 30: jitllm.v1.ModelService.SetModelOptions:output_type -> jitllm.v1.SetModelOptionsResponse
-	22, // [22:31] is the sub-list for method output_type
-	13, // [13:22] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	24, // 5: jitllm.v1.ModelInfo.stated_sampling:type_name -> jitllm.v1.SamplingParams
+	2,  // 6: jitllm.v1.ListModelsResponse.files:type_name -> jitllm.v1.ModelFile
+	3,  // 7: jitllm.v1.ListModelsResponse.loaded:type_name -> jitllm.v1.ModelInfo
+	3,  // 8: jitllm.v1.GetModelResponse.model:type_name -> jitllm.v1.ModelInfo
+	3,  // 9: jitllm.v1.LoadModelResponse.model:type_name -> jitllm.v1.ModelInfo
+	23, // 10: jitllm.v1.ConvertResponse.output_size:type_name -> jitllm.v1.ByteSize
+	20, // 11: jitllm.v1.ChatMessage.images:type_name -> jitllm.v1.ChatImage
+	19, // 12: jitllm.v1.ChatMessage.tool_calls:type_name -> jitllm.v1.ToolCall
+	18, // 13: jitllm.v1.ApplyChatTemplateRequest.messages:type_name -> jitllm.v1.ChatMessage
+	4,  // 14: jitllm.v1.ModelService.ListModels:input_type -> jitllm.v1.ListModelsRequest
+	6,  // 15: jitllm.v1.ModelService.GetModel:input_type -> jitllm.v1.GetModelRequest
+	8,  // 16: jitllm.v1.ModelService.LoadModel:input_type -> jitllm.v1.LoadModelRequest
+	10, // 17: jitllm.v1.ModelService.UnloadModel:input_type -> jitllm.v1.UnloadModelRequest
+	12, // 18: jitllm.v1.ModelService.Convert:input_type -> jitllm.v1.ConvertRequest
+	14, // 19: jitllm.v1.ModelService.Tokenize:input_type -> jitllm.v1.TokenizeRequest
+	16, // 20: jitllm.v1.ModelService.Detokenize:input_type -> jitllm.v1.DetokenizeRequest
+	21, // 21: jitllm.v1.ModelService.ApplyChatTemplate:input_type -> jitllm.v1.ApplyChatTemplateRequest
+	0,  // 22: jitllm.v1.ModelService.SetModelOptions:input_type -> jitllm.v1.SetModelOptionsRequest
+	5,  // 23: jitllm.v1.ModelService.ListModels:output_type -> jitllm.v1.ListModelsResponse
+	7,  // 24: jitllm.v1.ModelService.GetModel:output_type -> jitllm.v1.GetModelResponse
+	9,  // 25: jitllm.v1.ModelService.LoadModel:output_type -> jitllm.v1.LoadModelResponse
+	11, // 26: jitllm.v1.ModelService.UnloadModel:output_type -> jitllm.v1.UnloadModelResponse
+	13, // 27: jitllm.v1.ModelService.Convert:output_type -> jitllm.v1.ConvertResponse
+	15, // 28: jitllm.v1.ModelService.Tokenize:output_type -> jitllm.v1.TokenizeResponse
+	17, // 29: jitllm.v1.ModelService.Detokenize:output_type -> jitllm.v1.DetokenizeResponse
+	22, // 30: jitllm.v1.ModelService.ApplyChatTemplate:output_type -> jitllm.v1.ApplyChatTemplateResponse
+	1,  // 31: jitllm.v1.ModelService.SetModelOptions:output_type -> jitllm.v1.SetModelOptionsResponse
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_jitllm_v1_model_proto_init() }

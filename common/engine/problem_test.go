@@ -3,13 +3,14 @@ package engine
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 )
 
 // An engine error must be explained in words, with the fix that applies.
@@ -20,7 +21,7 @@ func TestEngineErrorsAreExplainedWithTheirFix(t *testing.T) {
 	header := func(name string, v uint32) string {
 		p := filepath.Join(t.TempDir(), name)
 		b := make([]byte, 64)
-		copy(b, jlm.Magic[:])
+		copy(b, jlm.Magic)
 		binary.LittleEndian.PutUint32(b[8:], v)
 		if err := os.WriteFile(p, b, 0o644); err != nil {
 			t.Fatal(err)
@@ -43,6 +44,9 @@ func TestEngineErrorsAreExplainedWithTheirFix(t *testing.T) {
 		{"newer", stageOpen, newer, errors.New("jlm: container is version 22 and this build reads 21"), fixNone, "newer jitllm"},
 		{"missing", stageOpen, "/m/gone.jlm", errors.New("open /m/gone.jlm: no such file or directory"), fixNone, "Couldn't open gone.jlm"},
 		{"device", stageDevice, "/m/x.jlm", errors.New(`no device matched "cuda:3"`), fixDevices, "device setting"},
+		// A system prompt the chat format has no role for is the Settings
+		// field's, not the chat's: a new chat would send it again.
+		{"system", stagePrompt, "/m/gemma-2.jlm", fmt.Errorf("model: %w", &model.SystemRoleError{}), fixSystem, "no system prompt"},
 		{"reply", stageReply, "/m/x.jlm", errors.New("cuda: out of memory"), fixNone, "reply stopped"},
 	}
 	for _, c := range cases {

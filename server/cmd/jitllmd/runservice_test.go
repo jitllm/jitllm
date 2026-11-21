@@ -2,16 +2,18 @@ package main
 
 import (
 	"bytes"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -20,9 +22,10 @@ import (
 // model on demand and streams the answer, and jitllm says it used the
 // service and starts no engine of its own.
 func TestJitllmRunGoesThroughTheService(t *testing.T) {
+	fresh.Must(t, testmodels.Path("stories260K.jlm"))
 	b, err := os.ReadFile(testmodels.Path("stories260K.jlm"))
 	if err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "stories260K.jlm"), b, 0o644); err != nil {
@@ -31,22 +34,14 @@ func TestJitllmRunGoesThroughTheService(t *testing.T) {
 	if ok, err := localserver.AddAlias(dir, "stories260K.jlm", "story"); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	e := server.New(server.Config{ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
-		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindHost, Available: true}}, nil
+	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
+		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindCPU, Available: true}}, nil
 	}, OnDemand: server.LoadOptions{DeviceIDs: []string{"cpu"}}})
 	defer e.Close()
 	s := httptest.NewServer(e.Handler())
 	defer s.Close()
 
-	bin := filepath.Join(t.TempDir(), "jitllm")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", bin, "./cmd/jitllm")
-	build.Dir = filepath.Join("..", "..", "..")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building jitllm: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllm", filepath.Join("..", "..", ".."), "./cmd/jitllm")
 	var stdout, stderr bytes.Buffer
 	run := exec.Command(bin, "run", "-addr", s.URL, "-n", "6", "story", "Once upon a time")
 	// An empty models folder: the run must not find the model itself.

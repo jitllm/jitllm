@@ -1,0 +1,35 @@
+package engine
+
+// Bidirectional runs inside a causal prompt: Gemma 3's reference masks an
+// image's tokens so they see each other in both directions, while every other
+// token stays causal (its token_type_ids blockwise overlay, OR'd with the
+// causal mask, AND'd with the sliding window on the local layers). The mask
+// here is a per-row key COUNT, as it is everywhere in this engine: a row in a
+// run counts keys up to the run's end instead of up to itself. Every row of a
+// run must therefore be in the same prefill chunk, since none of their scores
+// exist until all their keys are in the cache.
+
+// bidirChunk is a chunk's row count n, starting at position p0, moved so no
+// run is cut: a run that would straddle the end is left to the next chunk when
+// rows come before it, and taken whole (past n) when it starts the chunk.
+func (s *Instance) bidirChunk(p0, n int) int {
+	for _, r := range s.bidir {
+		if r.Lo < p0+n && r.Hi > p0+n {
+			if r.Lo > p0 {
+				return r.Lo - p0
+			}
+			return r.Hi - p0
+		}
+	}
+	return n
+}
+
+// bidirIn reports whether a run lies in the chunk [p0, p0+n).
+func (s *Instance) bidirIn(p0, n int) bool {
+	for _, r := range s.bidir {
+		if r.Lo < p0+n && r.Hi > p0 {
+			return true
+		}
+	}
+	return false
+}

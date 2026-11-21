@@ -1,0 +1,287 @@
+package composer
+
+import (
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// Request is what a runtime call site asks the composer to form: a slice of
+// a block's graph, its weights' storage formats, the rotaries its tables are
+// named from, the step's shape and the device.
+type Request struct {
+	Graph    *graph.Graph
+	Part     PartKind
+	Formats  map[jlm.Role]jlm.Type
+	Rotaries []graph.Rotary
+	Step     Step
+	Device   Device
+	// History is the layout of the pools the slice's history ops write and
+	// read: the call site's, addressed as it is.
+	History History
+	// More is the layout of the block's other histories, history h at
+	// More[h-1] (graph.StateRef.Hist).
+	More []History
+	// Bound is the layout of the histories of other blocks the block reads
+	// past those it binds at their indices (graph.Graph.ReadsMore): read j
+	// at Bound[j], its tables at instance 1+len(More)+j.
+	Bound []History
+	// Paged is each bank the call site holds in pages: the sheets it holds of
+	// it, reached through the step's table "experts", one word an expert
+	// naming the sheet that holds it. A bank it does not name is held whole.
+	Paged map[jlm.Role]int
+	// Strides is each bank whose sheets lie further apart than they pack:
+	// the words from one sheet's start to the next's, the same in every
+	// plane (a bank in the host's expert pages, a page apart).
+	Strides map[jlm.Role]int
+	// Tables is each weight the call site holds as a row table: its rows
+	// are read in for the indices the launches before its first reader
+	// wrote, between those launches.
+	Tables []jlm.Role
+	// Apart says the graph's inputs and outputs are buffers of their own,
+	// each the caller's: no output takes another value's storage, and no
+	// value an input's. A block's residual is one buffer, its input's and
+	// its output's.
+	Apart bool
+}
+
+// Form is req's kernels in launch order, and the Key they are cached under:
+// the slice decomposed, generated, passed and lowered as a model's part is
+// (Kernels, Lower), once per Key. What it cannot form is an error naming the
+// op and the slice's shape, remembered as the kernels are. The codes are
+// shared by every request of the Key and are not the caller's to change.
+// Requests of different Keys form side by side; one whose Key another call
+// is forming waits for that call.
+func (r *Registry) Form(req Request) (Key, []Code, error) {
+	if req.Graph == nil {
+		return 0, nil, fmt.Errorf("jit: a request with no graph")
+	}
+	key, words, err := r.keyOf(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	c := r.cache
+	if c == nil {
+		codes, err := r.form(req)
+		return key, codes, err
+	}
+	c.mu.Lock()
+	if f, ok := c.m[key]; ok {
+		c.mu.Unlock()
+		if !slices.Equal(f.words, words) {
+			return 0, nil, fmt.Errorf("jit: two requests share the key %#x", key)
+		}
+		<-f.done
+		return key, f.codes, f.err
+	}
+	f := &formed{words: words, done: make(chan struct{}), err: fmt.Errorf("jit: the formation of key %#x did not finish", key)}
+	c.m[key] = f
+	c.n++
+	c.mu.Unlock()
+	defer close(f.done)
+	f.codes, f.err = r.form(req)
+	return key, f.codes, f.err
+}
+
+// Formed is the requests r and the registries sharing its cache formed
+// afresh rather than found: the composer's runs. A phase that must compose
+// nothing holds it unchanged.
+func (r *Registry) Formed() int64 {
+	if r.cache == nil {
+		return 0
+	}
+	r.cache.mu.Lock()
+	defer r.cache.mu.Unlock()
+	return r.cache.n
+}
+
+func (r *Registry) form(req Request) ([]Code, error) {
+	prof, ok := r.Profiles[req.Device.Kind]
+	if !ok {
+		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
+	}
+	prof = prof.on(req.Device)
+	ks, err := r.formWith(req, prof, nil)
+	if err != nil {
+		return nil, err
+	}
+	t0 := time.Now()
+	codes, err := r.Lower(ks, req.Device)
+	r.cache.clock("lower", time.Since(t0))
+	if err == nil {
+		codes, err = r.untailed(req, prof, ks, codes)
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Code, len(codes))
+	for i, c := range codes {
+		out[i] = c.Code
+	}
+	return out, nil
+}
+
+// FormKernels is req's final IR beside its codes, code i kernel i's
+// lowering, formed afresh: what a measurement of the codes divides by what
+// the kernels count.
+func (r *Registry) FormKernels(req Request) ([]*Kernel, []Code, error) {
+	if req.Graph == nil {
+		return nil, nil, fmt.Errorf("jit: a request with no graph")
+	}
+	ks, err := r.formKernels(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	codes, err := r.Lower(ks, req.Device)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(codes) != len(ks) {
+		return nil, nil, fmt.Errorf("jit: %d kernels lowered to %d codes", len(ks), len(codes))
+	}
+	out := make([]Code, len(codes))
+	for i, c := range codes {
+		out[i] = c.Code
+	}
+	return ks, out, nil
+}
+
+// formKernels is a request's final IR: its ops decomposed and generated, the
+// device's passes run.
+func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
+	prof, ok := r.Profiles[req.Device.Kind]
+	if !ok {
+		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
+	}
+	return r.formWith(req, prof.on(req.Device), nil)
+}
+
+// untailed is codes, the lowering of ks, or the request formed again with
+// its tailed kernels' tail accesses counting (Kernel.Tailed), whichever
+// spills less: a base taken past the tails holds a register through the
+// loop around, which pays where it keeps the walk off the stack and costs
+// where the loop had no register to spare.
+func (r *Registry) untailed(req Request, prof Profile, ks []*Kernel, codes []PartCode) ([]PartCode, error) {
+	tailed := map[KernelAt]bool{}
+	for _, k := range ks {
+		if k.Tailed {
+			tailed[k.at()] = true
+		}
+	}
+	if len(tailed) == 0 || stackRefs(codes) == 0 {
+		return codes, nil
+	}
+	ks2, err := r.formWith(req, prof, tailed)
+	if err != nil {
+		return codes, nil
+	}
+	t0 := time.Now()
+	codes2, err := r.Lower(ks2, req.Device)
+	r.cache.clock("lower", time.Since(t0))
+	if err != nil || stackRefs(codes2) >= stackRefs(codes) {
+		return codes, nil
+	}
+	return codes2, nil
+}
+
+// stackRefs is the spills of codes, every stack operand of every code.
+func stackRefs(codes []PartCode) int {
+	n := 0
+	for _, c := range codes {
+		n += c.Code.Regs.Stack
+	}
+	return n
+}
+
+// formWith is formKernels through the passes of prof, the kernels at
+// untailed formed with their tail accesses counting (Kernel.Untailed).
+func (r *Registry) formWith(req Request, prof Profile, untailed map[KernelAt]bool) ([]*Kernel, error) {
+	sp := newExprSplit()
+	for at := range untailed {
+		sp.untailed[at] = true
+	}
+	var ks []*Kernel
+	for {
+		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
+		c.History, c.More, c.Bound, c.split, c.Paged, c.Strides, c.Tables = req.History, req.More, req.Bound, sp, req.Paged, req.Strides, req.Tables
+		prims, err := r.decomposeOps(c, 0)
+		if err != nil {
+			return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)
+		}
+		ks = nil
+		for _, p := range prims {
+			k, err := generate(p)
+			if err != nil {
+				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
+			}
+			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored, k.Unstreamed, k.Unsplit = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.at()], sp.uncursored[k.Of], sp.unstreamed[k.at()], sp.unsplit[k.Of]
+			k.Crowded, k.Folds, k.Unvector, k.Uninit = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of], sp.uninit[k.at()]
+			k.Sweep = p.Sweep
+			k.Unrolls = sp.unrolls[k.at()]
+			k.Copied, k.Untailed = sp.copied[k.at()], sp.untailed[k.at()]
+			k.Apart = req.Apart
+			k.Own = k.ownWrites()
+			k.Capacity = liveOf(p, req.Step, req.Graph)
+			ks = append(ks, k)
+		}
+		ks, err = prof.counted(ks, req.Device, r.cache)
+		if sp.splitRefused(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return ks, nil
+	}
+}
+
+// slice names a request's graph by its ops, for an error.
+func slice(g *graph.Graph) string {
+	s := ""
+	for i, o := range g.Ops {
+		if i > 0 {
+			s += "+"
+		}
+		s += o.Kind.String()
+	}
+	return s
+}
+
+// liveOf is the capacity in rows a primitive of a step of several rows is
+// formed for, its leading axis the step's rows or a grid of them: a call
+// runs the rows its table states (tableCall), at most these
+// (Kernel.Capacity) -- a GPU's launch held to them (CallRows), a CPU's calls
+// (RowCalls) -- and a grid's live rows are the call's in proportion. 0 for a
+// one-row step's, whose form is decode's, for a scan's, whose launch is its
+// state rows and whose trips are the step's rows, and for one whose leading
+// axis only measures as many (Facts.Whole).
+func liveOf(p Prim, s Step, g *graph.Graph) int {
+	if s.Rows < 2 || len(p.Shape) == 0 || p.Kind == PrimScan || p.Facts.Whole {
+		return 0
+	}
+	if p.Shape[0] == s.Rows || rowGrid(p, s.Rows, g) {
+		return s.Rows
+	}
+	return 0
+}
+
+// rowGrid says p's leading axis is a value's own rows (graph.Value.Rows)
+// that a strided op made of the step's, each of several of them -- a fold's,
+// a regroup's, a pool's -- so a call's live rows reach its rows in
+// proportion. A value of one row, or of rows that do not divide the step's
+// (a dropped class row's), keeps every row.
+func rowGrid(p Prim, rows int, g *graph.Graph) bool {
+	r := p.Shape[0]
+	if g == nil || r < 2 || r >= rows || rows%r != 0 {
+		return false
+	}
+	for _, o := range append([]Operand{p.Out}, p.In...) {
+		if o.Kind == OperandValue && int(o.Value) < len(g.Values) && g.Values[o.Value].Rows == r {
+			return true
+		}
+	}
+	return false
+}

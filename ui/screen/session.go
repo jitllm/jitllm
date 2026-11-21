@@ -1,8 +1,9 @@
 package screen
 
 import (
-	"github.com/gogpu/ui/event"
 	"strings"
+
+	"github.com/gogpu/ui/event"
 
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
@@ -13,7 +14,7 @@ import (
 )
 
 // The chat screen. It holds nothing itself: one *model.Model and one
-// *model.State stay open in the engine across many turns, and this screen is
+// *engine.Instance stay open in the engine across many turns, and this screen is
 // the prompt box, the streaming view and the stats strip around them.
 
 // ChatRequest and ChatMessage are re-exported; see [session.ChatRequest].
@@ -45,7 +46,7 @@ func Session(sh *app.Shell) widget.Widget { return SessionWith(SessionOptions{})
 // SessionWith returns the screen with, optionally, the runtime panel beside
 // it. The engine is the shell's ([Attach]):
 //
-//	sh.Register(app.TabNames[app.TabSession], screen.SessionWith(screen.SessionOptions{
+//	sh.Register(app.TabNames()[app.TabSession], screen.SessionWith(screen.SessionOptions{
 //	    Side: screen.Runtime,
 //	}))
 //

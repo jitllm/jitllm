@@ -1,0 +1,473 @@
+package engine
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/jitllm/jitllm/nn"
+)
+
+// The instance half of speculative decoding (spec.go): one call that runs rows of
+// one sequence and hands back, besides the KV it writes, the logits and the
+// normed hidden state of the rows a speculation step reads, and on a host
+// hybrid the recurrent state after each row; and the rewind that undoes the
+// rows a verification rejected.
+
+// rowsOut is what a speculation step wants back from prefillSrc (Instance.rows).
+//
+// Rows [from, n) of the call want their logits and hidden state: every row of
+// a verification (from 0), the last row alone of a draft step or of the
+// prompt's catch-up. Both slices are row-major over those rows, NVocab and
+// NEmbd wide.
+type rowsOut struct {
+	from           int
+	logits, hidden []float32
+	// noHead runs the rows for their KV and recurrent state alone: a replay
+	// whose outputs the step already has.
+	noHead bool
+	// prompt runs the rows as prompt chunks even where a device takes ragged
+	// rows: the prediction block's catch-up over a whole prompt, once a
+	// session, whose length a ragged step would compile and record for.
+	prompt bool
+	// argmax asks a one-row step for its greedy token alone where the head
+	// is on a device (nn.Head.ArgmaxOnly, ForwardGreedy's path): token is
+	// then that token, the logits are not read back, and -1 says they were.
+	// A greedy round that drafted nothing reads what plain decode reads --
+	// the vocabulary's logits are a megabyte a token across the bus.
+	//
+	// On a step of several rows that runs as rows on a device it asks the
+	// same of every wanted row: tokens holds each one's greedy token (the
+	// device's per-row argmax, nn.Head.Tokens) and the logits are not read
+	// back -- four megabytes a verification on a 248k vocabulary. tokens is
+	// nil where the logits came back instead.
+	argmax bool
+	token  int32
+	tokens []int32
+	// resBase is the step's row the chunk being collapsed begins at, for
+	// tapStreams.
+	resBase int
+}
+
+// hiddenOf points a head's hidden readback at the step's destination for the
+// duration of one call, and returns what puts it back. Callable on a nil
+// rowsOut, which is every call but a speculation step's.
+func (r *rowsOut) hiddenOf(h *nn.Head) func() {
+	if r == nil || h == nil {
+		return func() {}
+	}
+	h.Hidden = r.hidden
+	return func() { h.Hidden = nil }
+}
+
+// foldHead readies the head a chunk folds into its submission for a
+// speculation step. The rows it projects are the chunk's last (a draft step's
+// one row) or every row of the chunk (a verification), and only when the rows
+// the step wants are exactly those: anything else is projected on the host
+// after the loop (finishRows), and false says so.
+func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
+	end := base + n
+	if r.noHead {
+		return nil, false
+	}
+	switch {
+	case r.from == end-1:
+		h.Hidden = r.hidden
+		return func() { h.Hidden = nil }, true
+	case r.from == base:
+		keep := h.Logits
+		h.RowLogits, h.Logits, h.LogitRows, h.Hidden = true, r.logits, 0, r.hidden
+		return func() { h.RowLogits, h.Logits, h.LogitRows, h.Hidden = false, keep, 0, nil }, true
+	}
+	return nil, false
+}
+
+// stepRows runs src -- rows of slot 0 at the session's next positions, ids
+// their tokens (nil for rows with none: a draft's) -- and fills out (see
+// rowsOut). What reads a row's token past its embedding (an n-gram block)
+// reads ids. It is prefill with every output a speculation step
+// reads: one pass over the weights for all the rows, the KV written for each.
+// The caller holds the frames (jlm.Frames.Enter), as every inner path assumes.
+func (s *Instance) stepRows(src rowSrc, out *rowsOut) error {
+	c := s.c
+	out.token, out.tokens, out.resBase = -1, nil, 0
+	switch {
+	case src.len() == 0:
+		return errEmptyPrompt{}
+	case out.noHead && src.len() < 2:
+		return fmt.Errorf("model: a replay of %d row(s) is decode, which runs the head", src.len())
+	case out.from < 0 || out.from >= src.len():
+		return fmt.Errorf("model: a speculation step of %d rows wanting rows from %d", src.len(), out.from)
+	case !out.noHead && (len(out.logits) < (src.len()-out.from)*c.NVocab || len(out.hidden) < (src.len()-out.from)*c.NEmbd):
+		return fmt.Errorf("model: a speculation step's destinations hold fewer than its %d rows", src.len()-out.from)
+	}
+	// A final softcap needs nothing here: every head a step's rows reach caps
+	// them -- the device's per-row head and its folded one, each its graph
+	// whole as decode's, the host's in finishRows -- which
+	// TestSpecOverAFinalSoftcap holds to plain decode on every tier.
+	// On a device that runs ragged rows, a step of several rows goes as rows
+	// of this one sequence: decode's matvec over every row, recorded like
+	// decode, where a prompt chunk's batched kernels cost several decode
+	// tokens at a verification's handful of rows -- and on a hybrid far more:
+	// a verification carrying replayed rows ahead of the ones it wants cost
+	// tens of milliseconds as a chunk of five to seven rows, against a few
+	// as rows. Whatever rows it wants (stepRowsDevice).
+	if src.len() >= 2 && !out.prompt && s.rowsVerifiable() && true {
+		err := s.stepRowsDevice(src, out)
+		// A refusal (a kernel the ragged path lacks, as a float expert bank)
+		// left positions and every recurrent state where they were, so a
+		// model with no linear block takes the prompt chunk, and its per-row
+		// retry, instead. A hybrid's refusal stands: its step is rolled back
+		// as one pass (prefillSrc).
+		var ref errRowsRefused
+		if !errors.As(err, &ref) || s.recurrent() {
+			return err
+		}
+	}
+	s.rows = out
+	defer func() { s.rows = nil }()
+	h := s.head
+	if out.argmax && src.len() == 1 && h != nil { // as ForwardGreedy
+		h.ArgmaxOnly, h.Token = true, -1
+		defer func() { h.ArgmaxOnly = false }()
+	}
+	lg, err := s.prefillSrc(0, src)
+	if err != nil {
+		return err
+	}
+	// One row ran as decode (forward), whose logits come back as ever and
+	// whose hidden state the head's readback or the host norm filled.
+	switch {
+	case src.len() != 1:
+	case h != nil && h.ArgmaxOnly && h.Token >= 0:
+		out.token = h.Token
+	default:
+		copy(out.logits, lg)
+	}
+	return nil
+}
+
+// errRowsRefused is the device's refusal of a speculation step of n rows,
+// with its reason.
+type errRowsRefused struct {
+	n   int
+	why string
+}
+
+func (e errRowsRefused) Error() string {
+	return fmt.Sprintf("model: the device refused a %d-row speculation step: %s", e.n, e.why)
+}
+
+// rowsVerifiable reports a session whose speculation steps can run as ragged
+// rows: every block it runs and the head on one device that runs rows, no
+// block the ragged path refuses (latent attention).
+func (s *Instance) rowsVerifiable() bool {
+	_, ok := s.onRowsDevice()
+	return ok && !s.c.MLA()
+}
+
+// stepRowsDevice is stepRows as one ragged step on the device. The rows are
+// ordered so the ones the step wants lead (nn.Head.LogitRows): every row of a
+// verification in position order, or the last row first for a step that
+// wants it alone -- a draft, whose block is attention and takes its rows in
+// any order. Any other tail -- a verification behind replayed rows, or a
+// hybrid's last row, whose linear blocks chain the rows in position order
+// (tier.ragStep.chain) -- runs every row through the head in position order
+// into s.rowsLog and s.rowsHid, and the tail is copied out: a few rows of
+// head beside a prompt chunk.
+func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
+	if s.c.ResidStreams() {
+		return s.stepRowsStreams(src, out)
+	}
+	c := s.c
+	n := src.len()
+	p0 := s.bpos[0]
+	if p0+n > s.maxSeq {
+		return errFull{s.maxSeq, s.reqSeq}
+	}
+	order := make([]int, n)
+	for j := range order {
+		order[j] = j
+	}
+	want := n
+	tail := out.from > 0 && !out.noHead
+	if out.from == n-1 && !s.recurrent() {
+		order[0] = n - 1
+		for j := 1; j < n; j++ {
+			order[j] = j - 1
+		}
+		want, tail = 1, false
+	}
+	logits, hidden := out.logits, out.hidden
+	// Greedy rows read back their tokens alone: the device runs the head's
+	// whole graph before its argmax.
+	toks := out.argmax && !out.noHead
+	if tail {
+		s.rowsHid = grow32(s.rowsHid, n*c.NEmbd)
+		hidden = s.rowsHid
+		if !toks {
+			s.rowsLog = grow32(s.rowsLog, n*c.NVocab)
+			logits = s.rowsLog
+		}
+	}
+	s.growRows(n)
+	pos, slot := make([]int, n), make([]int, n)
+	for j, i := range order {
+		pos[j] = p0 + i
+		slot[j] = pos[j] // sequence 0's slots are its positions (nn.RowsDevice)
+	}
+	// The rows in order's order, the wanted last one first where order
+	// moved it there, their per-layer inputs beside them.
+	d, pw := c.NEmbd, c.SideWidth()
+	var ple []float32
+	if pw > 0 {
+		s.growBPLE(n)
+		ple = s.bple[:n*pw]
+	}
+	if pw > 0 && !s.inputsSide() {
+		// The speculated rows are tokens: their given side rows are zeros.
+		ple = s.tokenSide(n)
+		pw = 0
+	}
+	pleOf := func(a, b int) []float32 {
+		if ple == nil {
+			return nil
+		}
+		return ple[a*pw : b*pw]
+	}
+	if order[0] == n-1 && n > 1 {
+		if err := s.fillRows(src, n-1, 1, s.bx[:n*c.ResidW()], pleOf(0, 1), pos[:1], s.plane(n)); err != nil {
+			return err
+		}
+		if err := s.fillRows(src, 0, n-1, s.bx[d:n*c.ResidW()], pleOf(1, n), pos[1:], s.plane(n)); err != nil {
+			return err
+		}
+	} else if err := s.fillRows(src, 0, n, s.bx[:n*c.ResidW()], ple, pos, s.plane(n)); err != nil {
+		return err
+	}
+	s.layerInputs(ple)
+	s.rowsFresh = false
+	s.relocateFor(p0 + n)
+	rd, _ := s.onRowsDevice()
+	// A step with no head (a replay's commit, a piece of the prediction
+	// block's catch-up) runs the blocks alone.
+	var h *nn.Head
+	if !out.noHead {
+		h = s.head
+		keep := h.Logits
+		h.RowLogits, h.Logits, h.LogitRows, h.Hidden = !toks, nil, want, hidden[:want*c.NEmbd]
+		if !toks {
+			h.Logits = logits[:want*c.NVocab]
+		}
+		defer func() { h.RowLogits, h.Logits, h.LogitRows, h.Hidden = false, keep, 0, nil }()
+	}
+	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.batchTables(n), h) {
+		why := "no reason given"
+		if e, ok := s.ld.(nn.ErrReporter); ok {
+			why = e.Err()
+		}
+		return errRowsRefused{n, why}
+	}
+	if h != nil {
+		s.rowsHeads++
+	}
+	s.advance(0, n)
+	from := 0
+	if tail {
+		from = out.from
+	}
+	switch {
+	case h != nil && toks:
+		s.rowsTok = grow32i(s.rowsTok, want-from)
+		copy(s.rowsTok, h.Tokens[from:want])
+		out.tokens = s.rowsTok[:want-from]
+	case h != nil:
+		if tail {
+			copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:n*c.NVocab])
+		}
+	}
+	if h != nil && tail {
+		copy(out.hidden[:(n-from)*c.NEmbd], hidden[from*c.NEmbd:n*c.NEmbd])
+	}
+	return s.kvCheck()
+}
+
+// finishRows is prefillSrc's tail for a speculation step: the wanted rows'
+// logits and hidden state, from the device's head where the chunk folded it
+// (headDone) and from the host's otherwise. The wanted rows are in the last
+// chunk, whose residual rows are in s.bx from lastBase.
+func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
+	c, r := s.c, s.rows
+	if r.noHead {
+		return s.kvCheck()
+	}
+	cnt := total - r.from
+	if headDone {
+		s.rowsHeads++
+		if cnt == 1 {
+			copy(r.logits, s.logits[:c.NVocab])
+		}
+		return s.kvCheck()
+	}
+	off := r.from - lastBase
+	if off < 0 {
+		return fmt.Errorf("model: a speculation step wants row %d, before its last chunk at %d", r.from, lastBase)
+	}
+	// The CPU's composed head over the wanted rows, the norm's rows its
+	// hidden state.
+	nl := total - lastBase
+	var hidden []float32
+	if c.ResidStreams() { // its hidden state is the residual
+		r.resBase = lastBase
+		r.tapStreams(s, s.bx[:nl*c.ResidW()], nl)
+	} else {
+		hidden = r.hidden[:cnt*c.NEmbd]
+	}
+	if why := s.headRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt, s.plane(nl)); why != nn.DeclineServes {
+		return s.headDeclined(why)
+	}
+	return s.kvCheck()
+}
+
+// tapStreams copies the residual of the wanted rows among n rows of a chunk
+// x (stream-major) into the step's hidden rows, every stream of a row
+// together: over a residual of every stream a step's hidden state is the
+// residual before the head's mix (its graph mixes them), ResidW a row, not the head's input.
+func (r *rowsOut) tapStreams(s *Instance, x []float32, n int) {
+	if r == nil || r.noHead {
+		return
+	}
+	c := s.c
+	w, d := c.ResidW(), c.NEmbd
+	for i := 0; i < n; i++ {
+		g := r.resBase + i - r.from
+		if g < 0 || (g+1)*w > len(r.hidden) {
+			continue
+		}
+		for k := range c.Streams() {
+			copy(r.hidden[g*w+k*d:g*w+(k+1)*d], c.Stream(x, k, n, i))
+		}
+	}
+}
+
+// stepRowsStreams is stepRowsDevice over a residual of every stream: its
+// rows are the streams, with n-gram rows beside them where a block reads
+// them, which the batched
+// step's altRowsStep builds -- the streams expanded, the n-gram rows hashed
+// from ids, the blocks on the device as rows in position order, the head on
+// the host over the collapsed streams. Every row runs through the head and
+// the wanted tail is copied out.
+func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
+	c := s.c
+	n := src.len()
+	p0 := s.bpos[0]
+	if p0+n > s.maxSeq {
+		return errFull{s.maxSeq, s.reqSeq}
+	}
+	s.growRows(n)
+	s.growRows(n)
+	if len(s.rowsPos) < 3*n {
+		s.rowsPos = make([]int, 3*n)
+	}
+	pos, slot, seq := s.rowsPos[:n], s.rowsPos[n:2*n], s.rowsPos[2*n:3*n]
+	for i := range n {
+		pos[i] = p0 + i
+		slot[i] = pos[i] // sequence 0's slots are its positions (nn.RowsDevice)
+		seq[i] = 0
+	}
+	if err := s.fillRows(src, 0, n, s.bx[:n*c.ResidW()], nil, pos, s.plane(n)); err != nil {
+		return err
+	}
+	s.layDraft(s.bx[:n*c.ResidW()], n, 0)
+	s.rowsFresh = false
+	s.relocateFor(p0 + n)
+	rd, _ := s.onRowsDevice()
+	nlogit := n
+	if out.noHead {
+		nlogit = 0
+	}
+	s.rowsLog = grow32(s.rowsLog, n*c.NVocab)
+	logits := s.rowsLog[:n*c.NVocab]
+	// The head's call takes the wanted rows' residual (tapStreams), which
+	// is this model's hidden state.
+	s.rows, out.resBase = out, 0
+	// The head goes to the device as its own call, as decode's does
+	// (Forward): the host's projection of the rows reads the whole output
+	// matrix, about 70 ms a verification of qwen4exp on a V100's host. A
+	// refusal leaves the projection to the host.
+	devHead := nlogit > 0
+	hostLogits := nlogit
+	if devHead {
+		hostLogits = 0
+	}
+	// The device's run is opened as every rows step's is: its rows' tokens
+	// among what its blocks read.
+	if err := s.openRows(s.routeAt(s.lo), seq, pos, src.tok); err != nil {
+		return err
+	}
+	err := s.altRowsStep(rd, pos, slot, src.tok, n, logits, hostLogits)
+	if err == nil && devHead {
+		err = s.rowsHead(rd, pos, slot, n, logits, nlogit)
+	}
+	s.rows = nil
+	if err != nil {
+		return err
+	}
+	s.advance(0, n)
+	if !out.noHead {
+		from := out.from
+		copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:])
+	}
+	return s.kvCheck()
+}
+
+// rowsHead projects n rows of a verification over a residual of several
+// planes into logits: on the device as a head-only ragged call, or on the
+// CPU, whose head's graph mixes them, where it refuses.
+func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
+	c := s.m.Cfg
+	x := s.bx[:n*c.ResidW()]
+	h := s.head
+	if c.ResidStreams() {
+		s.rows.tapStreams(s, x, n)
+	}
+	if h != nil {
+		keep := h.Logits
+		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
+		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.batchTables(n), h)
+		h.RowLogits, h.Logits, h.LogitRows = false, keep, 0
+		if ok {
+			s.rowsHeads++
+			return nil
+		}
+	}
+	if why := s.headRows(x, logits, nil, nlogit, s.plane(n)); why != nn.DeclineServes {
+		return s.headDeclined(why)
+	}
+	return nil
+}
+
+// rewind takes slot 0 back to position p, forgetting what was written past
+// it. Attention reads only up to a row's own position, so the keys and values
+// past p are never addressed again and the next rows overwrite them; the
+// page store's seal mark and the noted token ids fall with it. A recurrent
+// state has no position to rewind: the caller restores it (loadRec,
+// nn.RecRewinder) before or after, which is why this is not public.
+func (s *Instance) rewind(p int) {
+	if p > s.bpos[0] {
+		panic(fmt.Sprintf("model: rewind forward from %d to %d", s.bpos[0], p))
+	}
+	// A windowed layer keeps nn.KVWindowSlack positions behind its window and
+	// releases the rest: a rewind further back would read released pages.
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		if pg := &s.kv.layers[li]; pg.win > 0 {
+			if j := pg.keyStart(p) / pg.p; j < pg.gone && !pg.resident(j) {
+				panic(fmt.Sprintf("model: rewind from %d to %d reaches block %d's page %d, released behind "+
+					"its window", s.bpos[0], p, li, j))
+			}
+		}
+	}
+	s.bpos[0], s.pos = p, p
+	s.rewindRope(0, p)
+	s.kv.seal(p)
+	s.kv.note(p)
+}

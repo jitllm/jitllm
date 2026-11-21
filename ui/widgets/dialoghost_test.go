@@ -49,6 +49,7 @@ func layout(h *DialogHost, ctx widget.Context) {
 }
 
 func TestDialogHostRaisesADialogSetFromAnotherGoroutine(t *testing.T) {
+	var seq DialogSeq
 	sig := state.NewSignal(DialogReq{})
 	h, ctx, rec := hostAndCtx(sig)
 
@@ -60,7 +61,7 @@ func TestDialogHostRaisesADialogSetFromAnotherGoroutine(t *testing.T) {
 	// The point of the whole widget: a worker raises a dialog with one Set.
 	done := make(chan struct{})
 	go func() {
-		sig.Set(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "load failed", Message: "no such file"})
+		sig.Set(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "load failed", Message: "no such file"})
 		close(done)
 	}()
 	<-done
@@ -72,7 +73,8 @@ func TestDialogHostRaisesADialogSetFromAnotherGoroutine(t *testing.T) {
 }
 
 func TestDialogHostDoesNotReRaiseTheSameRequestEveryFrame(t *testing.T) {
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "t"})
+	var seq DialogSeq
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "t"})
 	h, ctx, rec := hostAndCtx(sig)
 
 	for i := 0; i < 10; i++ {
@@ -84,6 +86,7 @@ func TestDialogHostDoesNotReRaiseTheSameRequestEveryFrame(t *testing.T) {
 }
 
 func TestDialogHostIgnoresASeqOfZeroAndKindNone(t *testing.T) {
+	var seq DialogSeq
 	// Seq 0 is the zero value: "nothing has ever been requested".
 	sig := state.NewSignal(DialogReq{Kind: DialogAlert, Title: "t"})
 	h, ctx, rec := hostAndCtx(sig)
@@ -93,7 +96,7 @@ func TestDialogHostIgnoresASeqOfZeroAndKindNone(t *testing.T) {
 	}
 
 	// A sequence with no kind is equally not a request.
-	sig.Set(DialogReq{Seq: NextDialogSeq()})
+	sig.Set(DialogReq{Seq: seq.Next()})
 	layout(h, ctx)
 	if rec.count() != 0 {
 		t.Fatal("DialogNone must not raise")
@@ -101,11 +104,12 @@ func TestDialogHostIgnoresASeqOfZeroAndKindNone(t *testing.T) {
 }
 
 func TestDialogHostWillNotStackASecondDialogOverAnOpenOne(t *testing.T) {
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "first"})
+	var seq DialogSeq
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "first"})
 	h, ctx, rec := hostAndCtx(sig)
 	layout(h, ctx)
 
-	sig.Set(DialogReq{Seq: NextDialogSeq(), Kind: DialogConfirm, Title: "second"})
+	sig.Set(DialogReq{Seq: seq.Next(), Kind: DialogConfirm, Title: "second"})
 	layout(h, ctx)
 
 	if got := rec.count(); got != 1 {
@@ -126,17 +130,19 @@ func TestDialogHostPassesThroughToItsChild(t *testing.T) {
 }
 
 func TestNextDialogSeqIsMonotonic(t *testing.T) {
-	a, b := NextDialogSeq(), NextDialogSeq()
+	var seq DialogSeq
+	a, b := seq.Next(), seq.Next()
 	if a == 0 || b <= a {
 		t.Fatalf("sequence must be non-zero and increasing, got %d then %d", a, b)
 	}
 }
 
 func TestDialogHostDoesNotReRaiseARequestTHEUSERHASDISMISSED(t *testing.T) {
+	var seq DialogSeq
 	// This is what the Seq guard is for (the "ten frames" test above passes
 	// without it, because IsOpen suppresses a re-raise): once the dialog is
 	// closed, the same request must not be raised again on the next frame.
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "t"})
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "t"})
 	h, ctx, rec := hostAndCtx(sig)
 
 	layout(h, ctx)
@@ -172,10 +178,11 @@ func windowHost(sig state.Signal[DialogReq]) (*DialogHost, *uiapp.Window) {
 // A request must be raised on the next frame even when nothing else changed.
 // Against the violation (no TickAnimation) this reads 0 overlays.
 func TestDialogHostRaisesARequestOnAnIdleWindow(t *testing.T) {
+	var seq DialogSeq
 	sig := state.NewSignal(DialogReq{})
 	_, w := windowHost(sig)
 
-	sig.Set(DialogReq{Seq: NextDialogSeq(), Kind: DialogConfirm, Title: "Clear the conversation?"})
+	sig.Set(DialogReq{Seq: seq.Next(), Kind: DialogConfirm, Title: "Clear the conversation?"})
 	w.Frame()
 	if got := w.OverlayCount(); got != 1 {
 		t.Fatalf("a request on an idle window left %d overlays, want 1", got)
@@ -184,13 +191,14 @@ func TestDialogHostRaisesARequestOnAnIdleWindow(t *testing.T) {
 
 // A request that arrives while a dialog is open must be raised when it closes.
 func TestDialogHostRaisesARequestThatWaitedBehindAnOpenOne(t *testing.T) {
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "first"})
+	var seq DialogSeq
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "first"})
 	h, w := windowHost(sig)
 	if w.OverlayCount() != 1 {
 		t.Fatalf("setup: %d overlays, want the first dialog", w.OverlayCount())
 	}
 
-	second := NextDialogSeq()
+	second := seq.Next()
 	sig.Set(DialogReq{Seq: second, Kind: DialogAlert, Title: "second"})
 	w.Frame()
 	if got := w.OverlayCount(); got != 1 {
@@ -219,8 +227,9 @@ func mountedHost(sig state.Signal[DialogReq]) (*DialogHost, *uitest.MockContext,
 // A message must wrap inside the dialog rather than run past its edge. It
 // measures every drawn line, since the canvas does not clip to the rect.
 func TestDialogHostWrapsTheMessageInsideTheDialog(t *testing.T) {
+	var seq DialogSeq
 	msg := "Removes the conversation, the draft and any attached pictures. The model stays loaded."
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogConfirm, Title: "Clear the conversation?", Message: msg})
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogConfirm, Title: "Clear the conversation?", Message: msg})
 	_, ctx, rec, frame := mountedHost(sig)
 	frame()
 	if rec.count() != 1 {
@@ -258,8 +267,9 @@ func TestDialogHostWrapsTheMessageInsideTheDialog(t *testing.T) {
 // over the buttons: core/dialog is 160 px tall whatever its content. This
 // message is six lines, where the one above is exactly two.
 func TestDialogHostCapsALongMessageToTheBand(t *testing.T) {
+	var seq DialogSeq
 	msg := strings.Repeat("jlm: container is version 17 and this build reads 21; re-run convert. ", 6)
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "Cannot open model", Message: msg})
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "Cannot open model", Message: msg})
 	_, ctx, rec, frame := mountedHost(sig)
 	frame()
 	c := &uitest.MockCanvas{}
@@ -291,9 +301,10 @@ type drawnLine struct {
 // rather than lose its reason. Against the violation (a fixed 520) the last
 // words are never drawn.
 func TestDialogHostWidensForAMessageThatWouldBeCut(t *testing.T) {
+	var seq DialogSeq
 	msg := "jlm: container is version 17 and this build reads 21; " +
 		"re-run `jitllm convert` (there is no backward compatibility, on purpose)"
-	sig := state.NewSignal(DialogReq{Seq: NextDialogSeq(), Kind: DialogAlert, Title: "Cannot open model", Message: msg})
+	sig := state.NewSignal(DialogReq{Seq: seq.Next(), Kind: DialogAlert, Title: "Cannot open model", Message: msg})
 	_, ctx, rec, frame := mountedHost(sig)
 	ctx.WindowSizeVal = geometry.Sz(1440, 900)
 	frame()

@@ -1,0 +1,7 @@
+{
+  "llama": {"kind": "spm", "byte_fallback": true, "add_space_prefix": true, "add_bos": true},
+  "gpt2": {"kind": "bpe"},
+  "bert": {"kind": "wpm", "pre": "bert"},
+  "wordpiece": {"kind": "wpm", "pre": "bert"},
+  "gemma4": {"kind": "bpe_spm", "byte_fallback": true}
+}

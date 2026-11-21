@@ -247,13 +247,24 @@ func assemble(a API) (Manifest, error) {
 		Backends:     mt.Backends,
 		API:          a,
 	}
-	for _, n := range convert.Architectures() {
-		g, _ := convert.ArchitectureGraph(n)
-		m.Architectures = append(m.Architectures, Graph{Name: n, Graph: g.String()})
+	names, err := convert.Architectures()
+	if err != nil {
+		return Manifest{}, err
 	}
-	for _, c := range convert.HFClasses() {
-		g, _ := convert.HFClassGraph(c)
-		m.SafetensorsClasses = append(m.SafetensorsClasses, Graph{Name: c, Graph: g.String()})
+	classes := convert.HFClasses()
+	graphs, err := convert.GraphsOf(append(append([]string(nil), names...), classes...))
+	if err != nil {
+		return Manifest{}, err
+	}
+	for _, n := range names {
+		g, ok := graphs[n]
+		if !ok {
+			g = n
+		}
+		m.Architectures = append(m.Architectures, Graph{Name: n, Graph: g})
+	}
+	for _, c := range classes {
+		m.SafetensorsClasses = append(m.SafetensorsClasses, Graph{Name: c, Graph: graphs[c]})
 	}
 	m.Projectors = convert.Projectors()
 	m.Quantization = quantization()
@@ -269,7 +280,7 @@ func quantization() Quantization {
 			q.Dequantable = append(q.Dequantable, t.String())
 		}
 	}
-	for _, t := range quant.PackedTypes {
+	for _, t := range quant.PackedTypes() {
 		q.Packed = append(q.Packed, t.String())
 		// An engine type (TQ2_F32) sits above the GGUF type space the walk
 		// covers.

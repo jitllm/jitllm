@@ -45,7 +45,7 @@ func TestOnlyTheCommandReadsTheEnvironment(t *testing.T) {
 	// environment variable that makes a shipped engine pretend its GPU broke is
 	// a footgun with no upside. See the file's own argument.
 	allowFile := map[string]bool{
-		"jit/gpu/tier/fault.go": true,
+		"engine/device/gpu/fault.go": true,
 		// JITLLM_MODELS, read by the test suites' model finder. Only _test.go
 		// files import it, so no engine build reads that name.
 		"internal/testmodels/testmodels.go": true,
@@ -53,6 +53,9 @@ func TestOnlyTheCommandReadsTheEnvironment(t *testing.T) {
 		// _test.go files and internal/testlock import it
 		// (internal/testdevices' guard).
 		"internal/testdevices/testdevices.go": true,
+		// JITLLM_TEST_BINDIR, where a shipped test binary finds the
+		// commands built beside it. Only _test.go files import it.
+		"internal/testbin/testbin.go": true,
 	}
 
 	var bad []string

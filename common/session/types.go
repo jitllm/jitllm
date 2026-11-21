@@ -43,7 +43,7 @@ type Turn struct {
 
 // MachineReport is the hardware probe, taken once at startup. It is cached
 // because backend.Open opens and closes every backend, and re-probing while a
-// tier.GPU is live contends for the same devices.
+// gpu.GPU is live contends for the same devices.
 type MachineReport struct {
 	Probed bool
 	Err    string
@@ -60,20 +60,7 @@ type MachineReport struct {
 	// MemWall is measured memory read bandwidth, bytes a second; 0 unprobed.
 	MemWall float64
 
-	// Kernels is one row per quantization type.
-	Kernels []KernelRow
-	GPUs    []GPUInfo
-}
-
-// KernelRow says which kernel families exist for one quantization type on this
-// host. Both columns are shown: on a pre-VNNI host the row-major column reads
-// "none" for every k-quant while the packed family, which containers use, is
-// fully generated.
-type KernelRow struct {
-	Format   string
-	RowMajor bool
-	// Packed is the container path.
-	Packed bool
+	GPUs []GPUInfo
 }
 
 // GPUInfo is one device the backend probe found.
@@ -152,14 +139,14 @@ type Allocation struct {
 	// projection -- which are read on every token and are not part of the page
 	// budget.
 	Dense uint64
-	// HostBlocks is blocks running on the host, DeviceBlocks those on a
+	// CPUBlocks is blocks running on the host, DeviceBlocks those on a
 	// device, and the two need not add to the model's depth while a block is
 	// in flight.
-	HostBlocks, DeviceBlocks, NBlocks int
+	CPUBlocks, DeviceBlocks, NBlocks int
 	// PageBytes is one block page; the file holds NBlocks of them plus Dense.
 	PageBytes uint64
-	// HostKV is the attention history the host holds for the blocks it runs.
-	HostKV uint64
+	// CPUKV is the attention history the host holds for the blocks it runs.
+	CPUKV uint64
 	// Pos is how many positions the session holds, of a MaxSeq window.
 	Pos, MaxSeq int
 }
@@ -170,7 +157,6 @@ type Allocation struct {
 type LoadedModel struct {
 	Path string
 	Name string
-	Arch string
 	// Blocks is the model's depth, which is what a placement is a fraction of.
 	Blocks int
 	// Colour indexes the transcript's palette by load order, so colours are

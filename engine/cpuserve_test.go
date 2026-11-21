@@ -1,0 +1,575 @@
+package engine
+
+import (
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
+
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
+
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
+)
+
+// cpuServedModels are the models whose every block the composer serves on
+// the CPU at decode: Ministral-3-3B among them, the attention temperature
+// read at each row's position, HunyuanOCR's XD-RoPE, and Gemma 4 E2B's per-layer
+// inputs and blocks reading an earlier block's history, and latent
+// attention: DeepSeek's fixtures (dense, V3's grouped router, V2's),
+// Kimi-Linear's beside its delta rule and Kimi-K3-0.40B. Gemma 3n E2B is
+// not here: its clean arm is in the band (median 0.634, worst 9.1e-4 where
+// main's control reaches 1.5e-3), the page fault and the new key written a
+// row early leave it, but the key-row violation stays in it even dropping
+// the step's own row (median 0.655, worst 1.25e-3): over 80 steps its
+// attention reads nearly the same value from any of its rows (attending to
+// its own key alone in every block moves the logits 6.5e-4).
+func cpuServedModels() []string {
+	return []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
+		"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
+		"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
+		"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		"synth-deepseek-dense" + q8Suffix, "synth-deepseek" + q8Suffix, "synth-deepseek-lite" + q8Suffix,
+		"synth-kimilinear" + q8Suffix, "kimik3/Kimi-K3-0.40B.Q8_0.gguf"}
+}
+
+// TestComposedCPUBlocksServe runs each model's blocks on the CPU as the
+// composer forms them (its int8 form: activations quantized in windows of
+// 32, integer dots), teacher-forced on one token sequence, the history in the
+// session's KV pages, and holds them to the CPU's float reference by
+// the GGUF oracle's spread from it (cpuReference, the user's decision): at the
+// median step no further than bandRatio times the band, at the worst no
+// further than bandWorst times its widest. Every block step must be served
+// (served = steps x blocks, nothing declined, each block composed once), and
+// every step's head is the CPU's composed head. Each violation -- the first
+// history page pointed at another slot, the first and the newest key rows
+// moved by one, the new key written a row early, the head reading another
+// row than the residual -- must leave the band.
+func TestComposedCPUBlocksServe(t *testing.T) {
+	const steps, page = 80, 32
+	for _, file := range cpuServedModels() {
+		t.Run(file, func(t *testing.T) {
+			path := jlmOf(t, testmodels.Path(file))
+			m, err := model.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			toks := cpuTokens(t, m, steps, withKVPage(page))
+			// A transformers golden holds its own text's sequences.
+			if g := rowsGolden(fixtureSource(testmodels.Path(file))); g != "" {
+				toks = goldenIDs(t, g, steps)
+			}
+			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
+			got := cpuLogits(t, m, toks, cpuFaultNone, true, withKVPage(page))
+			med, worst, widest := cpuBandTo(t, want, got, band)
+			_, agree := cpuCompare(want, got)
+			t.Logf("over %d steps the composed CPU is %.3f of the band from the float reference at the median, worst NMSE %.3g where the band's widest is %.3g; argmax agrees with the reference %d/%d",
+				steps, med, worst, widest, agree, steps)
+			// A q8 fixture's numerical reference is its class run as the
+			// container's Q8_0 runs (scripts/rowsgold.py experts q8), at the
+			// float floor, as the pages gate holds it.
+			if q := q8Golden(t, file, fixtureSource(testmodels.Path(file))); q != "" {
+				d := hfBand(t, q, 0, got, lcppSeq{toks[:1], toks[1:], nil})
+				ratios := make([]float64, len(d))
+				for i := range d {
+					ratios[i] = d[i] / band[i]
+				}
+				med, worst = median(ratios), slices.Max(d)
+				t.Logf("against its numerical reference: %.3f of the float floor at the median, worst %.3g", med, worst)
+			}
+			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+				t.Fatalf("the composed CPU blocks leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+					med, bandRatio, worst, bandWorst, widest)
+			}
+			for _, f := range append(cpuFaultsOf(t, m), cpuFaultHead) {
+				bad := cpuLogits(t, m, toks, f, true, withKVPage(page))
+				bm, bw, _ := cpuBandTo(t, want, bad, band)
+				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
+				if bm <= bandRatio && bw <= bandWorst*widest {
+					t.Errorf("violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bw)
+				}
+			}
+			for _, rw := range cpuLatentRewrites(t, m, false) {
+				var undo []func()
+				for li := range m.Cfg.NLayer {
+					if u := rewriteBlock(t, m, li, rw.rewrite); u != nil {
+						undo = append(undo, u)
+					}
+				}
+				bad := cpuLogits(t, m, toks, cpuFaultNone, true, withKVPage(page))
+				for _, u := range undo {
+					u()
+				}
+				bm, bw, _ := cpuBandTo(t, want, bad, band)
+				t.Logf("%s in %d blocks: median ratio %.3f, worst %.3g", rw.what, len(undo), bm, bw)
+				if bm <= bandRatio && bw <= bandWorst*widest {
+					t.Errorf("%s stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", rw.what, bm, bw)
+				}
+			}
+		})
+	}
+}
+
+// cpuLatentRewrite turns the key's rotary part of a latent block's cached
+// row into the latent's first NRot: the row's rotary tail not the one the
+// projection wrote.
+func cpuLatentRewrite() latentRewrite {
+	return latentRewrite{"the cached row's rotary tail read from the latent's start", func(g *graph.Graph) bool {
+		for i, o := range g.Ops {
+			if o.Kind == graph.OpSlice && o.Attr.HeadDim == 0 && o.Attr.Offset > 0 && strings.HasPrefix(g.Values[o.Out[0]].Name, "k.pe.") {
+				g.Ops[i].Attr.Offset = 0
+				return true
+			}
+		}
+		return false
+	}}
+}
+
+// cpuLatentRewrites is the latent violations the CPU arm runs on m, none for
+// a model of no latent block: latentRewrites and cpuLatentRewrite, each
+// required to reach a block but the banks swapped where their shapes
+// differ and the rotation a pair short where no block turns by the rotary.
+// The rotation a pair short runs only on a float arm: on the int8 fixtures
+// it moves the logits 1.9e-3 and 3.8e-3, under main's own int8 spread there
+// (6.1e-3, 1e-2), where a float arm reads it orders past its clean NMSE.
+func cpuLatentRewrites(t *testing.T, m *model.Model, float bool) []latentRewrite {
+	t.Helper()
+	if !m.Cfg.MLA() {
+		return nil
+	}
+	reaches := func(rw latentRewrite) bool {
+		for li := range m.Cfg.NLayer {
+			if g := m.Composing().BlockGraph(li); g != nil && rw.rewrite(cloneGraph(g)) {
+				return true
+			}
+		}
+		return false
+	}
+	short := latentRewrites()[1].what
+	all := append(slices.Clone(latentRewrites()), cpuLatentRewrite())
+	// The rotation a pair short turns the latent query's and key's rotary
+	// parts alone: an indexer beside them turns its own.
+	all[1] = latentRewrite{short, func(g *graph.Graph) bool {
+		q, k := false, false
+		for i, o := range g.Ops {
+			if o.Kind != graph.OpRope {
+				continue
+			}
+			switch n := g.Values[o.Out[0]].Name; {
+			case strings.HasPrefix(n, "q.pe.rope."):
+				q = true
+			case strings.HasPrefix(n, "k.pe.rope."):
+				k = true
+			default:
+				continue
+			}
+			g.Ops[i].Attr.NRot -= 2
+		}
+		return q && k
+	}}
+	var rws []latentRewrite
+	for _, rw := range all {
+		switch {
+		case rw.what == short && !float:
+		case reaches(rw):
+			rws = append(rws, rw)
+		case rw.what == short && m.Cfg.NoPosEnc, rw.what == latentRewrites()[2].what:
+		default:
+			t.Fatalf("%s reaches no block of a latent model: the gate cannot see it", rw.what)
+		}
+	}
+	return rws
+}
+
+// cpuFaultsOf is the violations a composed CPU gate runs on m: the
+// history's page and key row where a block attends, every recurrent block
+// bound to the first's state where it has several.
+func cpuFaultsOf(t *testing.T, m *model.Model) []cpuFault {
+	t.Helper()
+	var fs []cpuFault
+	attends, rec := false, 0
+	for li := range m.Cfg.NLayer {
+		attends = attends || m.Cfg.LayerKind(li).Attends() || !m.Cfg.LayerKind(li).Recurrent()
+		if m.Cfg.LayerKind(li).Recurrent() {
+			rec++
+		}
+	}
+	if attends {
+		fs = append(fs, cpuFaultPage, cpuFaultRow)
+		// A history shifted by a row is the same keys, which attention with
+		// no positional encoding cannot order.
+		if !m.Cfg.NoPosEnc {
+			fs = append(fs, cpuFaultWrite)
+		}
+	}
+	if rec > 1 {
+		fs = append(fs, cpuFaultRec)
+	}
+	if m.Cfg.StatesStreams() && m.ExpandsStreams() && m.Cfg.Streams() > 3 {
+		fs = append(fs, cpuFaultStreams)
+	}
+	if len(fs) == 0 {
+		t.Fatal("no violation reaches the model: the gate cannot discriminate")
+	}
+	return fs
+}
+
+// withCPUFloat opens a model whose CPU forms are the float reference
+// (modelOpts.cpuFloat).
+func withCPUFloat() Option { return func(l *loadOpts) { l.opt.cpuFloat = true } }
+
+// cpuFloat opens the model at path with the CPU's float forms over an f32
+// history, pages of page positions (withCPUFloat): a gate's reference arm.
+func cpuFloat(t *testing.T, path string, page int) (*model.Model, []Option) {
+	t.Helper()
+	instOpts := []Option{WithKVF16(false), withCPUFloat(), withKVPage(page)}
+	fm, err := model.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fm, instOpts
+}
+
+// cpuReference is what a composed CPU arm of the model at path, its GGUF
+// source src, is held to on toks teacher-forced: the logits of the CPU's
+// float forms (cpuFloat) and each step's band (lcppBand).
+func cpuReference(t *testing.T, path, src string, page int, toks []int32) ([][]float32, []float64) {
+	t.Helper()
+	fm, openOpts := cpuFloat(t, path, page)
+	defer fm.Close()
+	ref := cpuLogits(t, fm, toks, cpuFaultNone, true, openOpts...)
+	return ref, lcppBand(t, src, fm.Cfg.NLayer, ref, lcppSeq{toks[:1], toks[1:], nil})
+}
+
+// lcppSeq is one sequence the GGUF oracle is teacher-forced over: ids, then
+// toks a step each; rows picks which of its rows -- the prompt's last, then
+// each step's -- an arm's logits are, nil for every one.
+type lcppSeq struct {
+	ids, toks []int32
+	rows      []int
+}
+
+// lcppBand is each row's band around ref, the reference's logits for seqs' rows
+// in order: the wider of the GGUF oracle's CUDA and CPU arms' distances from
+// them (JITLLM_LCPP), no narrower than bandFloor of layers, or bandFloor where
+// the GGUF oracle does not read src (the user's decision).
+func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcppSeq) []float64 {
+	t.Helper()
+	floor := bandFloor(layers)
+	band := make([]float64, len(ref))
+	for i := range band {
+		band[i] = floor
+	}
+	if g := rowsGolden(src); g != "" {
+		return hfBand(t, g, floor, ref, seqs...)
+	}
+	dir := os.Getenv("JITLLM_LCPP")
+	if dir == "" {
+		t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of the GGUF oracle holding scripts/lcpplogits, the band's reference")
+	}
+	for _, ngl := range []int{99, 0} {
+		at := 0
+		for _, sq := range seqs {
+			lg, ok := lcppSteps(t, dir, src, sq.ids, sq.toks, ngl)
+			if !ok {
+				t.Logf("the GGUF oracle does not read %s: the band is the floor, %.3g", src, floor)
+				for i := range band {
+					band[i] = floor
+				}
+				return band
+			}
+			rows := sq.rows
+			if rows == nil {
+				rows = make([]int, len(lg))
+				for i := range rows {
+					rows[i] = i
+				}
+			}
+			for _, r := range rows {
+				if at >= len(ref) || r >= len(lg) || len(lg[r]) != len(ref[at]) {
+					t.Fatalf("the GGUF oracle's rows do not line up with the reference's: row %d of %d at %d of %d", r, len(lg), at, len(ref))
+				}
+				band[at] = max(band[at], logitNMSE(lg[r], ref[at]))
+				at++
+			}
+		}
+		if at != len(ref) {
+			t.Fatalf("the GGUF oracle gave %d rows where the reference has %d", at, len(ref))
+		}
+	}
+	return band
+}
+
+// rowsGolden is the transformers golden holding the band's reference for a
+// fixture the GGUF oracle cannot run (scripts/rowsgold.py), "" for every other:
+// the user's decision for such fixtures is the model's own reference, not the
+// GGUF oracle and not jitllm's CPU path. The GGUF oracle asserts
+// n_expert_groups < n_expert on synth-deepseek-yarn-af.
+func rowsGolden(src string) string {
+	switch filepath.Base(src) {
+	case "synth-deepseek-yarn-af.gguf", "synth-glm4moe-hf", "synth-qwen2moe-hf", "synth-ernie45moe-hf", "synth-hunyuanmoe-hf",
+		"synth-dots1-hf", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-kimilinear":
+		return filepath.Join("..", "testdata", "golden", "rows", filepath.Base(src)+".json")
+	}
+	return ""
+}
+
+// goldenIDs is the text's ids a transformers golden holds (rowsgold.py), the
+// first n.
+func goldenIDs(t *testing.T, path string, n int) []int32 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the transformers golden: %v -- run scripts/rowsgold.py", err)
+	}
+	var g struct {
+		IDs []int32 `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil || len(g.IDs) < n {
+		t.Fatalf("the transformers golden %s: %v (%d ids, %d wanted)", path, err, len(g.IDs), n)
+	}
+	return g.IDs[:n]
+}
+
+// hfBand is lcppBand from a transformers golden: each row's distance between
+// the golden's row for seqs and ref's, over the logits the golden keeps
+// (every stride-th), no narrower than floor. A sequence the golden does not
+// hold -- the gate's ids not the golden's -- fails rather than narrowing.
+func hfBand(t *testing.T, path string, floor float64, ref [][]float32, seqs ...lcppSeq) []float64 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the band's transformers golden: %v -- run scripts/rowsgold.py", err)
+	}
+	var g struct {
+		Stride int `json:"stride"`
+		Seqs   []struct {
+			IDs  []int32  `json:"ids"`
+			Toks []int32  `json:"toks"`
+			Rows []string `json:"rows"`
+		} `json:"seqs"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil || g.Stride < 1 {
+		t.Fatalf("the band's transformers golden %s: %v (stride %d)", path, err, g.Stride)
+	}
+	band := make([]float64, len(ref))
+	for i := range band {
+		band[i] = floor
+	}
+	at := 0
+	for _, sq := range seqs {
+		var rows []string
+		for _, gs := range g.Seqs {
+			if slices.Equal(gs.IDs, sq.ids) && slices.Equal(gs.Toks, sq.toks) {
+				rows = gs.Rows
+				break
+			}
+		}
+		if rows == nil {
+			t.Fatalf("the transformers golden %s holds no sequence of %d ids and %d steps the gate asks for: its ids are not the gate's (scripts/rowsgold.py)",
+				path, len(sq.ids), len(sq.toks))
+		}
+		pick := sq.rows
+		if pick == nil {
+			pick = make([]int, len(rows))
+			for i := range pick {
+				pick[i] = i
+			}
+		}
+		for _, r := range pick {
+			if at >= len(ref) || r >= len(rows) {
+				t.Fatalf("the golden's rows do not line up with the reference's: row %d of %d at %d of %d", r, len(rows), at, len(ref))
+			}
+			b, err := base64.StdEncoding.DecodeString(rows[r])
+			if err != nil || len(b)%4 != 0 {
+				t.Fatalf("the golden's row %d: %v", r, err)
+			}
+			var num, den float64
+			for k := range len(b) / 4 {
+				j := k * g.Stride
+				if j >= len(ref[at]) {
+					t.Fatalf("the golden's row %d reaches logit %d of a reference row of %d", r, j, len(ref[at]))
+				}
+				h, w := float64(math.Float32frombits(binary.LittleEndian.Uint32(b[4*k:]))), float64(ref[at][j])
+				num += (h - w) * (h - w)
+				den += w * w
+			}
+			band[at] = max(band[at], num/den)
+			at++
+		}
+	}
+	if at != len(ref) {
+		t.Fatalf("the golden gave %d rows where the reference has %d", at, len(ref))
+	}
+	return band
+}
+
+// cpuBandTo is an arm's distance from the reference against each step's
+// band: the median over the steps of their ratio, the arm's worst and the
+// band's widest.
+func cpuBandTo(t *testing.T, want, got [][]float32, band []float64) (med, worst, widest float64) {
+	t.Helper()
+	ratios := make([]float64, 0, len(want))
+	for i := range want {
+		eg := logitNMSE(got[i], want[i])
+		if math.IsNaN(eg) || !(band[i] > 0) {
+			t.Fatalf("step %d: the arm is %.3g from the reference, the band %.3g: a degenerate band proves nothing", i, eg, band[i])
+		}
+		ratios = append(ratios, eg/band[i])
+		worst, widest = max(worst, eg), max(widest, band[i])
+	}
+	slices.Sort(ratios)
+	return ratios[len(ratios)/2], worst, widest
+}
+
+// cpuTokens is the greedy sequence of n tokens from the model's BOS, or
+// token 1 where it states none: a token the model never trained on may
+// carry a row of zeros (Falcon-H1's >>ABSTRACT<<, token 1), whose logits
+// are zero on every arm and every distance from them 0/0.
+func cpuTokens(t *testing.T, m *model.Model, n int, io ...Option) []int32 {
+	t.Helper()
+	s := testInstance(t, m, n+1, io...)
+	defer s.Close()
+	toks := []int32{1}
+	if m.Vocab != nil && m.Vocab.BOS >= 0 {
+		toks[0] = int32(m.Vocab.BOS)
+	}
+	for len(toks) < n {
+		lg, err := s.Forward(toks[len(toks)-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		toks = append(toks, int32(argmax(lg)))
+	}
+	return toks
+}
+
+func cpuLogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed bool, io ...Option) [][]float32 {
+	t.Helper()
+	s := testInstance(t, m, len(toks)+1, io...)
+	defer s.Close()
+	setFault(s, f)
+	var out [][]float32
+	for _, tk := range toks {
+		lg, err := s.Forward(tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), lg...))
+	}
+	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
+	if composed {
+		for i, n := range declined {
+			if n > 0 {
+				t.Errorf("%d block steps declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
+			}
+		}
+		if want := len(toks) * m.Cfg.NLayer; served != want {
+			t.Fatalf("%d block steps served, want %d (steps x blocks)", served, want)
+		}
+		// Composed once, at placement: no step composes.
+		for li, n := range s.Account(nn.CPU).Forms {
+			if n != 1 {
+				t.Fatalf("block %d was composed for the CPU %d times, where it was placed there once", li, n)
+			}
+		}
+		// Every step's head on the CPU's composed head.
+		heads, hdecl := s.Account(nn.CPU).Steps.Of(nn.ComposedHead)
+		for i, n := range hdecl {
+			if n > 0 {
+				t.Errorf("%d head steps declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
+			}
+		}
+		if heads != len(toks) {
+			t.Fatalf("%d head steps served, want %d", heads, len(toks))
+		}
+		// A model of several stated streams writes every stream it expands
+		// into in its input rows' graph and mixes them in its head's, which
+		// read and write a plane of the residual a stream: the steps served
+		// above are those graphs'.
+		if m.Cfg.StatesStreams() {
+			fg := m.FrontGraphs()
+			if got := len(fg.CpuHead.In); got != m.Cfg.Streams() {
+				t.Fatalf("the head's graph reads %d planes, want %d", got, m.Cfg.Streams())
+			}
+			if got := s.inPlanes(fg.CpuEmbed); m.ExpandsStreams() && got != m.Cfg.Streams() {
+				t.Fatalf("the input rows' graph writes %d planes, want %d", got, m.Cfg.Streams())
+			}
+			rows, edecl := s.Account(nn.CPU).Steps.Of(nn.ComposedEmbed)
+			for i, n := range edecl {
+				if n > 0 {
+					t.Errorf("%d input rows declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
+				}
+			}
+			if rows != len(toks) {
+				t.Fatalf("the input rows' graph served %d rows, want %d", rows, len(toks))
+			}
+		}
+	} else if served != 0 {
+		t.Fatalf("main's arm served %d composed block steps", served)
+	}
+	return out
+}
+
+func cpuCompare(want, got [][]float32) (worst float64, agree int) {
+	for i := range want {
+		var num, den float64
+		for j := range want[i] {
+			d := float64(got[i][j] - want[i][j])
+			num += d * d
+			den += float64(want[i][j]) * float64(want[i][j])
+		}
+		e := num / den
+		if math.IsNaN(e) || e > worst || math.IsNaN(worst) {
+			worst = e
+		}
+		if argmax(want[i]) == argmax(got[i]) {
+			agree++
+		}
+	}
+	return worst, agree
+}
+
+// setFault breaks s's CPU device the way f names, in the instance and in the
+// parts the device holds.
+func setFault(s *Instance, f cpuFault) {
+	execOf(s).PlaneFault = f == cpuFaultStreams
+	if ln := execOf(s).Lanes(); ln != nil {
+		ln.RecFault = f == cpuFaultRec
+		ln.ChunkFault = f == cpuFaultChunk
+	}
+	if in, ok := s.inputs.(*cpudev.Inputs); ok {
+		in.PlaneFault = f == cpuFaultStreams
+	}
+	if r := execOf(s).Blocks(); r != nil {
+		r.FaultRow, r.FaultWrite = f == cpuFaultRow, f == cpuFaultWrite
+		r.FaultPage, r.FaultKeysFirst = f == cpuFaultPage, f == cpuFaultKeysFirst
+	}
+	if r := execOf(s).Runner(); r != nil {
+		r.FaultPicks, r.FaultExpert, r.FaultWeight = f == cpuFaultPicks, f == cpuFaultExpert, f == cpuFaultWeight
+	}
+	if h, ok := s.heads.(*cpudev.Head); ok {
+		h.PlaneFault = f == cpuFaultStreams
+		h.Wrong = nil
+		if f == cpuFaultHead {
+			h.Wrong = s.h
+		}
+	}
+}
+
+// kvRan is how many history conversions s's CPU device has served.
+func kvRan(s *Instance) int {
+	if k, ok := s.kvConv.(*cpudev.KVConv); ok {
+		return k.Ran
+	}
+	return 0
+}

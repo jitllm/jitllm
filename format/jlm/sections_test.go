@@ -12,7 +12,7 @@ import (
 // fully-populated struct is the check that sees it.
 func TestSectionsRoundTrip(t *testing.T) {
 	cfg := &Config{
-		Arch: ArchQwen3MoE, NLayer: 28, NEmbd: 2048, NHead: 16, NKVHead: 8, HeadDim: 128,
+		NLayer: 28, NEmbd: 2048, NHead: 16, NKVHead: 8, HeadDim: 128,
 		NRot: 128, NFFN: 6144, NVocab: 151936, NCtx: 40960, RMSEps: 1e-6, RopeBase: 1e6,
 		AttnFactor: 1.5, EmbdScale: 45.25, NExpert: 128, NExpertUsed: 8, NFFNExp: 768,
 		SWAWindow: 1024, SWAPeriod: 6, RopeBaseSWA: 10000,
@@ -23,6 +23,8 @@ func TestSectionsRoundTrip(t *testing.T) {
 		NFFNShExp:  512,
 		SSM:        SSMConfig{ConvKernel: 4, Groups: 16, Inner: 4096, StateSize: 128, NHeadV: 32},
 		LayerKinds: []LayerKind{LayerLinearAttn, LayerLinearAttn, LayerLinearAttn, LayerFullAttn},
+		// What a writer states for a model with a delta rule.
+		DeltaDecay: DeltaDecaySoftplus(), DeltaGate: DeltaGateSiLU(),
 	}
 	cfg.NLayer = uint32(len(cfg.LayerKinds))
 	got, err := decodeConfig(encodeConfig(cfg))
@@ -102,6 +104,29 @@ func TestSectionsRoundTrip(t *testing.T) {
 	} else if !reflect.DeepEqual(got, &sv) {
 		t.Errorf("vocab round-trip with stop ids and no ops:\n got %+v\nwant %+v", got, &sv)
 	}
+	// A pattern stage's regex and invert flag ride the last tail, which then
+	// writes every tail before it (an empty tool form among them); with no
+	// stop ids and no tool form here, so the tail is reached on its own.
+	pv := *voc
+	pv.Stop = nil
+	pv.Pre = []PreOp{
+		{Kind: PrePattern, Pattern: `\p{N}{1,3}`, Behavior: "Isolated"},
+		{Kind: PreDigits, Individual: true},
+		{Kind: PrePattern, Pattern: "[0-9]", Behavior: "MergedWithNext", Invert: true},
+		{Kind: PreByteLevel},
+	}
+	if got, err := decodeVocab(encodeVocab(&pv)); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(got, &pv) {
+		t.Errorf("vocab round-trip with pattern stages:\n got %+v\nwant %+v", got, &pv)
+	}
+	// A pattern stage that lost its pattern is refused, not run as a split on
+	// nothing.
+	nopat := pv
+	nopat.Pre = []PreOp{{Kind: PrePattern, Behavior: "Isolated"}}
+	if _, err := decodeVocab(encodeVocab(&nopat)); err == nil {
+		t.Error("a pattern stage with no pattern was accepted")
+	}
 	// An id the token table does not hold is refused, not carried to a
 	// generation loop that compares against it forever.
 	bad := *voc
@@ -140,9 +165,9 @@ func TestSectionsRefuseGarbage(t *testing.T) {
 	if _, err := decodeConfig([]byte{1, 2, 3}); err == nil {
 		t.Error("a 3-byte config was accepted")
 	}
-	// A config whose architecture code this format does not define.
-	c := encodeConfig(&Config{Arch: Arch(9999), NLayer: 1})
-	if _, err := decodeConfig(c); err == nil {
-		t.Error("an unknown architecture code was accepted")
+	// The record names no architecture, whatever an older record it was
+	// migrated from named: its first two bytes are zero.
+	if b := encodeConfig(&Config{legacy: 7, NLayer: 1}); b[0] != 0 || b[1] != 0 {
+		t.Errorf("the config record names architecture %d", uint16(b[0])|uint16(b[1])<<8)
 	}
 }

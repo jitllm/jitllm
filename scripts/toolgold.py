@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Render model.TestToolPromptMatchesTransformers' fixture through transformers.
 
-    JITLLM_TOOLGOLD=dump go test ./engine/model -run TestToolPromptMatchesTransformers
+    JITLLM_TOOLGOLD=dump go test ./engine -run TestToolPromptMatchesTransformers
     $JITLLM_HF_PY scripts/toolgold.py
 
 Reads testdata/golden/tools/<model>.tpl.json (the container's own template,
 bos and eos, dumped by the Go test) and writes <model>.want.txt with
 transformers' render_jinja_template -- the renderer apply_chat_template uses.
 The fixture below must stay the same conversation as toolFixtureMessages and
-toolFixtureTools in engine/model/tools_test.go, down to the empty assistant content
+toolFixtureTools in engine/tools_test.go, down to the empty assistant content
 the engine passes.
 """
 import datetime, glob, json, os
 from transformers.utils.chat_template_utils import render_jinja_template
 
 # The date every template prints (strftime_now), pinned: the Go test renders
-# with the same clock (toolGoldDate in engine/model/tools_test.go), so a golden
+# with the same clock (toolGoldDate in engine/tools_test.go), so a golden
 # made on one day still matches on the next.
 FIXED = datetime.datetime(2024, 7, 26)
 

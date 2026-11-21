@@ -1,4 +1,4 @@
-"""llama.cpp oracles for the gemma3 and internvl vision gates.
+"""llama.cpp oracles for the gemma3, internvl, pixtral and moondream2 vision gates.
 
 Writes, under $JITLLM_MODELS/vlm/oracle/:
 
@@ -11,7 +11,7 @@ Writes, under $JITLLM_MODELS/vlm/oracle/:
 
 Run scripts/visiongold.py first: it writes the square pictures.
 
-Usage: vlmgold.py gemma3|internvl
+Usage: vlmgold.py gemma3|internvl|pixtral|moondream2
 """
 import json
 import os
@@ -32,7 +32,15 @@ FAMILIES = {
                os.path.join(VLM, "mmproj-gemma-3-4b-it-f16.gguf"), 896),
     "internvl": (os.path.join(VLM, "InternVL3-1B-Instruct-Q8_0.gguf"),
                  os.path.join(VLM, "mmproj-InternVL3-1B-Instruct-Q8_0.gguf"), 448),
+    "pixtral": (os.path.join(MODELS, "pixtral", "pixtral-12b-Q4_K_M.gguf"),
+                os.path.join(MODELS, "pixtral", "mmproj-pixtral-12b-Q8_0.gguf"), 448),
+    "moondream2": (os.path.join(MODELS, "moondream2", "moondream2-text-model-f16_ct-vicuna.gguf"),
+                   os.path.join(MODELS, "moondream2", "moondream2-mmproj-f16-20250414.gguf"), 378),
 }
+
+# A GGUF whose template is a name llama.cpp builds in (moondream2's "vicuna")
+# has no Jinja to render: it runs llama.cpp's own.
+BUILTIN = {"moondream2"}
 
 STAMP = re.compile(r"^\d+\.\d+\.\d+\.\d+ [A-Z] ")
 
@@ -40,7 +48,7 @@ STAMP = re.compile(r"^\d+\.\d+\.\d+\.\d+ [A-Z] ")
 def run(args):
     env = dict(os.environ, LD_LIBRARY_PATH=LLAMA)
     return subprocess.run([os.path.join(LLAMA, args[0])] + args[1:], env=env,
-                          capture_output=True, text=True, check=True)
+                          capture_output=True, text=True, errors="replace", check=True)
 
 
 def chunks_of(log):
@@ -79,7 +87,8 @@ def main():
         f.write(r.stdout + r.stderr)
     pic = os.path.join(VLM, "goldens", "photo-%d.png" % size)
     r = run(["llama-mtmd-cli"] + common + ["--image", pic, "-p", PROMPT, "-n", str(N),
-                                           "--temp", "0", "--top-k", "1", "--jinja", "-v"])
+                                           "--temp", "0", "--top-k", "1", "-v"]
+            + ([] if fam in BUILTIN else ["--jinja"]))
     ch = chunks_of(r.stderr)
     # How many positions the prompt took there, image rows included: the
     # check that both engines built the same one (a doubled BOS shows here).

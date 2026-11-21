@@ -13,11 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/dev/bench"
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 func verifyCmd(args []string) error {
@@ -38,7 +39,6 @@ func verifyCmd(args []string) error {
 	maxmem := bytesFlag(fs, "maxmem", 0, "host weight residency budget, bytes or 3G/512M; 0 works it out")
 	ab := fs.String("ab", "", "instead of verifying, run a paired A/B: split, submit, head, graph, softmax, fuse, actfuse, ropetab, persist, persistdeps, persistdeps-grid, persist-aa, gateup, gateup-aa, gateup2, gateup2-aa, addnorm, addnorm-aa, qkvgemm, qkvgemm-aa, attnchunk, attnpair or regs")
 	rounds := fs.Int("rounds", 21, "A/B rounds")
-	verify := fs.Bool("verify", false, "recompute every served matvec on the host and report disagreements")
 	prefill := fs.Int("prefill", 0, "gate the BATCHED device prefill: prefill this many tokens on both tiers and diff")
 	depth := fs.Int("depth", 0, "context depth to run an -ab arm at; attention is 1% of a token at 0 and 30% at 1536")
 	registers := fs.Bool("registers", false, "instead of verifying, run decode and the batched prefill on the "+
@@ -55,24 +55,32 @@ func verifyCmd(args []string) error {
 	}
 	// The same option set every other command gets: the model and nn packages
 	// read no environment, so JITLLM_* reaches them only through here.
-	m, err := model.Open(fs.Arg(0), loadOpts(nil, *maxmem)...)
+	mo, io := loadOpts(nil, *maxmem)
+	m, err := model.Open(fs.Arg(0), mo...)
 	if err != nil {
 		return err
 	}
 	defer m.Close()
+	// One CPU device for the run: every instance it makes takes turns on its
+	// workers and shares the model's forms.
+	cd, err := engine.OpenCPU(io...)
+	if err != nil {
+		return err
+	}
+	defer cd.Close()
+	io = append(io, engine.WithCPU(cd))
 	// The split tuner is pinned: a k-split is the f32 reduction order, so two
-	// States that tuned separately differ in the last bits, and on a deep
+	// instances that tuned separately differ in the last bits, and on a deep
 	// hybrid that difference is amplified past any useful diff. It goes before
 	// gpuOptions so JITLLM_GPU_TUNE still overrides it; the rate below is
 	// therefore a fitted-split rate.
-	g, err := tier.OpenWith(append([]tier.Option{
-		tier.WithDevices(*dev), tier.WithBudget(*vram),
-		tier.WithDeviceTune(tier.TuneOff)}, gpuOptions()...)...)
+	g, err := gpu.OpenWith(append([]gpu.Option{
+		gpu.WithDevices(*dev), gpu.WithBudget(*vram),
+		gpu.WithDeviceTune(gpu.TuneOff)}, gpuOptions()...)...)
 	if err != nil {
 		return err
 	}
 	defer g.Close()
-	g.Verify = *verify
 	// KVF16 is an environment variable, not an -ab arm: it changes the V
 	// cache's layout and size at PrepLayer, so flipping it mid-run would
 	// reinterpret the cache. The value is read, not just its presence.
@@ -86,26 +94,26 @@ func verifyCmd(args []string) error {
 		// The kernels a model runs are the ones it compiles: decode, then the
 		// batched prefill (diffed against per-token decode, so a report is never
 		// read off a path that computes something else).
-		benchRun(m, nil, *n)
-		benchRun(m, g, *n)
-		if err := prefillDiff(m, g, max(*prefill, 40), 4); err != nil {
+		benchRun(m, io, nil, *n)
+		benchRun(m, io, g, *n)
+		if err := prefillDiff(m, io, g, max(*prefill, 40), 4); err != nil {
 			// The diff is printed above it; the report still describes the
 			// kernels that ran, which is what was asked for here.
 			fmt.Printf("  (prefill diff: %v)\n", err)
 		}
-		return registerReport(os.Stdout, cpu.KernelRegisters(), g.KernelResources(), *asJSON)
+		return registerReport(os.Stdout, cd.Kernels(m.Id), g.KernelResources(), *asJSON)
 	}
 	if *ab != "" {
-		abRun(m, g, *ab, *n, *rounds, *depth)
+		abRun(m, io, g, *ab, *n, *rounds, *depth)
 		return nil
 	}
 	if *prefill > 0 {
-		return prefillDiff(m, g, *prefill, *n)
+		return prefillDiff(m, io, g, *prefill, *n)
 	}
-	cpuRate := benchRun(m, nil, *n)
+	cpuRate := benchRun(m, io, nil, *n)
 	fmt.Printf("\ncpu        %7.2f tok/s\n", cpuRate)
 
-	gpuRate := benchRun(m, g, *n)
+	gpuRate := benchRun(m, io, g, *n)
 	// Stats() sums the per-device counters; DevStats() below keeps them apart.
 	st := g.Stats()
 	fmt.Printf("gpu        %7.2f tok/s   %.2fx\n", gpuRate, gpuRate/cpuRate)
@@ -117,8 +125,9 @@ func verifyCmd(args []string) error {
 		// "the second took nothing".
 		per := g.DevStats()
 		for i, n := range g.Placed() {
-			fmt.Printf("  device %-28s %d block(s), %d matvec(s), %.2f GiB of KV\n",
-				per[i].Device, n, per[i].Served, float64(per[i].KVBytes)/(1<<30))
+			served, _ := per[i].ServedPart(nn.EveryPart)
+			fmt.Printf("  device %-28s %d block(s), %d composed part step(s), %.2f GiB of KV\n",
+				per[i].Device, n, served, float64(per[i].KVBytes)/(1<<30))
 		}
 		fmt.Printf("  %d device change(s) per token (the residual stream crosses the host at each)\n",
 			g.Crossings())
@@ -127,15 +136,8 @@ func verifyCmd(args []string) error {
 		fmt.Printf("  ! %d tensors the DEVICE refused (out of memory); those matvecs ran on the CPU,\n"+
 			"    so this number is not comparable with a run that had the card to itself\n", st.NoRoom)
 	}
-	fmt.Printf("  %d matvecs on device, %d refused (no kernel for the quant format), %d over budget\n",
-		st.Served, st.NoKernel, st.Declined)
-	if st.TooSmall > 0 {
-		fmt.Printf("  %d matvecs left on the host: this model does not carry enough weight bytes"+
-			" per host/device crossing to pay for one (tier.mvPays)\n", st.TooSmall)
-	}
-	if st.Failed > 0 {
-		fmt.Printf("  ! %d matvec kernel(s) did not compile on the device; those matvecs ran on the CPU\n", st.Failed)
-	}
+	served, _ := st.ServedPart(nn.EveryPart)
+	fmt.Printf("  %d composed part step(s) on device, %d block offer(s) over budget\n", served, st.Declined)
 	if st.LastErr != "" {
 		fmt.Printf("  kernel compilation failed: %s\n", st.LastErr)
 	}
@@ -143,7 +145,7 @@ func verifyCmd(args []string) error {
 		fn := float64(*n)
 		// Say where the projection is: under a partial seam placeHead gives up
 		// blocks for the head, so the block count alone is misleading.
-		where := "host"
+		where := nn.CPU
 		if g.HeadResident() {
 			where = "device"
 		}
@@ -160,14 +162,6 @@ func verifyCmd(args []string) error {
 			fmt.Printf("  %.2f ms per token encoding launches (%.0f%% of Layers) -- the ceiling on a recording\n",
 				em, 100*em/(float64(st.TLayer.Microseconds())/1e3/fn))
 		}
-		// Which softmax ran. The warp version sums the row as a tree and the
-		// scalar one left to right, so a token that disagrees below wants this
-		// line read first.
-		if st.SoftmaxLanes == 1 {
-			fmt.Printf("  softmax: 1 thread per head (%s)\n", st.SoftmaxWhy)
-		} else {
-			fmt.Printf("  softmax: %d lanes per head (subgroup shuffle)\n", st.SoftmaxLanes)
-		}
 		// The subgroup guarantee that selected it: every kernel that needs a
 		// subgroup is chosen from this one device fact.
 		switch {
@@ -180,16 +174,10 @@ func verifyCmd(args []string) error {
 			fmt.Printf("  subgroup: %d lanes guaranteed for the compute stage\n", st.Lanes)
 		}
 	}
-	if st.Served > 0 {
-		fn := float64(*n)
-		ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1e3 / fn }
-		fmt.Printf("  per token: prep %.2f ms, device %.2f ms, widen %.2f ms\n",
-			ms(st.TStage), ms(st.TLaunch), ms(st.TConv))
-	}
 
 	// A device that took no blocks makes the "gpu" arm run on the host, where
 	// it agrees perfectly with the CPU arm. Fail instead of reporting that.
-	if st.Blocks == 0 && st.Served == 0 {
+	if st.Blocks == 0 && served == 0 {
 		fmt.Printf("\n! the device took NO blocks and served NO matvecs: this is a CPU-vs-CPU\n" +
 			"  comparison and both the rate and the agreement below are meaningless\n")
 		if st.LastErr != "" {
@@ -197,7 +185,7 @@ func verifyCmd(args []string) error {
 		}
 		return fmt.Errorf("device declined everything and reported no error")
 	}
-	return forcedDiff(m, g, *n, *migrate, *band)
+	return forcedDiff(m, io, g, *n, *migrate, *band)
 }
 
 // prefillDiff is the gate on the batched device prefill.
@@ -213,7 +201,7 @@ func verifyCmd(args []string) error {
 //
 // The length is deliberately not a multiple of the batch width: the ragged last
 // chunk writes K and V past the prompt, and decode must overwrite them.
-func prefillDiff(m *model.Model, g *tier.GPU, ntok, n int) error {
+func prefillDiff(m *model.Model, io []engine.Option, g *gpu.GPU, ntok, n int) error {
 	if ntok < 2 {
 		return fmt.Errorf("verify -prefill: want at least 2 tokens")
 	}
@@ -237,13 +225,16 @@ func prefillDiff(m *model.Model, g *tier.GPU, ntok, n int) error {
 
 	arm := func(noBatch bool) ([][]float32, error) {
 		g.NoBatch = noBatch
-		s := m.NewState(ntok + n + 16)
+		s, err := engine.NewInstance(m, ntok+n+16, io...)
+		if err != nil {
+			return nil, err
+		}
 		defer s.Close()
 		if err := s.SetDevice(g); err != nil {
 			return nil, err
 		}
 		// Hand the blocks back before the next arm: a tier holds one KV cache
-		// per block, and a second State's PrepLayer would decline on budget.
+		// per block, and a second instance's PrepLayer would decline on budget.
 		defer s.SetGPULayers(0)
 		if s.GPULayers() == 0 {
 			return nil, fmt.Errorf("verify -prefill: the device took no blocks: %s", g.Err())
@@ -339,7 +330,7 @@ func prefillDiff(m *model.Model, g *tier.GPU, ntok, n int) error {
 	// matvecs that read the activation as binary16 (GemmTile, sm_70's twins)
 	// cannot match the int8 per-token path exactly, so there the bar is token
 	// ids and a bounded max|dlogit|.
-	if st := g.Stats(); !st.AttnMMA && st.TileMV == 0 && st.VoltaMV == 0 {
+	if st := g.Stats(); st.MatrixPart(nn.EveryPart) == 0 && st.AttendPart(nn.EveryPart) == 0 {
 		if worst != 0 {
 			return fmt.Errorf("batched prefill is not bit-identical to per-token: max|dlogit| %g, %d/%d argmax flips",
 				worst, bad, len(batched))
@@ -406,10 +397,16 @@ func isFinite(v float32) bool {
 // localise a disagreement: one tie broken differently changes every later id.
 // Per position, the margin between the top two logits says whether a flip is a
 // computation error or a tie.
-func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64) error {
-	cs := m.NewState(n + 16)
+func forcedDiff(m *model.Model, io []engine.Option, g *gpu.GPU, n int, doMigrate bool, band float64) error {
+	cs, err := engine.NewInstance(m, n+16, io...)
+	if err != nil {
+		return err
+	}
 	defer cs.Close()
-	gs := m.NewState(n + 16)
+	gs, err := engine.NewInstance(m, n+16, io...)
+	if err != nil {
+		return err
+	}
 	defer gs.Close()
 	if err := gs.SetDevice(g); err != nil {
 		return err
@@ -431,8 +428,8 @@ func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64
 	// cache or a replayed graph over freed buffers yields plausible logits. The
 	// pattern walks the seam down to zero and back up to where it started.
 	//
-	// This State's own placement is printed: a full card can give this second
-	// State fewer blocks than the benchmark session.
+	// This instance's own placement is printed: a full card can give this second
+	// Instance fewer blocks than the benchmark session.
 	full := gs.GPULayers()
 	fmt.Printf("  teacher-forced arm: %d block(s) on the device, runs %v\n",
 		full, gs.DeviceBlocks())
@@ -568,8 +565,12 @@ func forcedDiff(m *model.Model, g *tier.GPU, n int, doMigrate bool, band float64
 // faults are not per-token costs. Correctness is forcedDiff's job, not this
 // one's -- a free-running chain is the right thing to TIME and the wrong thing
 // to DIFF.
-func benchRun(m *model.Model, dev *tier.GPU, n int) float64 {
-	s := m.NewState(n + 16)
+func benchRun(m *model.Model, io []engine.Option, dev *gpu.GPU, n int) float64 {
+	s, err := engine.NewInstance(m, n+16, io...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 0
+	}
 	defer s.Close()
 	if dev != nil {
 		if err := s.SetDevice(dev); err != nil {
@@ -606,14 +607,18 @@ func benchRun(m *model.Model, dev *tier.GPU, n int) float64 {
 	return float64(n) / time.Since(start).Seconds()
 }
 
-// abRun runs a paired A/B of `which`, interleaved in one process on one State,
+// abRun runs a paired A/B of `which`, interleaved in one process on one instance,
 // starting at a context depth of `depth`. Depth matters for attention arms,
 // which are a small share of a token at short context.
 //
 // The state is sized for the whole run rather than reset back to depth,
 // because re-prefilling to depth would be timed as part of an arm.
-func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
-	s := m.NewState(depth + rounds*n*2 + 16)
+func abRun(m *model.Model, io []engine.Option, g *gpu.GPU, which string, n, rounds, depth int) {
+	s, err := engine.NewInstance(m, depth+rounds*n*2+16, io...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
 	defer s.Close()
 	// attnchunk and attnpair compare host attention layouts, which do not run
 	// at all with the blocks on a device; every other arm needs the device.
@@ -640,7 +645,7 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 	// measurement at a depth, keep rounds*n*2 small against depth.
 	fmt.Printf("  context runs %d..%d over the whole A/B (-depth is the START)\n",
 		depth, min(depth+rounds*n*2, lim))
-	runOn := func(s *model.State, iters int) {
+	runOn := func(s *engine.Instance, iters int) {
 		tok := int32(1)
 		for i := 0; i < iters; i++ {
 			logits, err := s.Forward(tok)
@@ -673,64 +678,23 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 	step := func(iters int) { runOn(s, iters) }
 	var a, b bench.Case
 	switch which {
-	case "spill":
-		// The batched prefill on two tiers of the same card, each iteration
-		// four -n token prompts from a fresh history. A is a second tier that
-		// allows GemmVolta's spilling tiles unless JITLLM_AB_SPILL_A=0; B is the
-		// verify tier, which refuses them unless JITLLM_GPU_SPILLING_TILES=1.
-		// Setting both alike is the A/A self-control; swapping them prices
-		// which tier is which.
-		aAllow := os.Getenv("JITLLM_AB_SPILL_A") != "0"
-		g2, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0"),
-			tier.WithDeviceTune(tier.TuneOff)}, append(gpuOptions(),
-			tier.WithConfig(func(c *tier.Config) { c.SpillingTiles = aAllow }))...)...)
-		if err != nil {
-			panic(err)
-		}
-		defer g2.Close()
-		s2 := m.NewState(n + 16)
-		defer s2.Close()
-		if err := s2.SetDevice(g2); err != nil {
-			panic(err)
-		}
-		ids := make([]int32, n)
-		for i := range ids {
-			ids[i] = int32(1 + (i*7919)%(m.Cfg.NVocab-1))
-		}
-		// bench.AB hands each arm -n as its iteration count, which here is
-		// the prompt length; a round is four prompts instead.
-		pre := func(st *model.State, _ int) {
-			for i := 0; i < 4; i++ {
-				st.Reset()
-				if _, err := st.Prefill(ids); err != nil {
-					panic(err)
-				}
-			}
-		}
-		name := func(allow bool, which string) string {
-			if allow {
-				return "spilling tiles allowed (" + which + ")"
-			}
-			return "spilling tiles refused (" + which + ")"
-		}
-		a = bench.Case{Name: name(aAllow, "second tier"), Fn: func(it int) { pre(s2, it) }}
-		b = bench.Case{Name: name(g.SpillingTiles, "verify tier"), Fn: func(it int) { pre(s, it) }}
-		defer func() {
-			fmt.Printf("tiles refused for spilling: A %d, B %d\n", g2.Stats().SpillRefused, g.Stats().SpillRefused)
-		}()
 	case "regs":
 		// B is a second tier on the same card whose every CUDA kernel is
-		// capped at JITLLM_AB_MAXREGS registers (.maxnreg), with a State of
+		// capped at JITLLM_AB_MAXREGS registers (.maxnreg), with an instance of
 		// its own. 0 caps nothing, which makes this the A/A self-control: two
-		// tiers, two States, the same kernels.
+		// tiers, two instances, the same kernels.
 		maxRegs, _ := strconv.Atoi(os.Getenv("JITLLM_AB_MAXREGS"))
-		g2, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0"),
-			tier.WithDeviceTune(tier.TuneOff)}, append(gpuOptions(), tier.WithCUDAMaxRegs(maxRegs))...)...)
+		g2, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices("cuda:0"),
+			gpu.WithDeviceTune(gpu.TuneOff)}, append(gpuOptions(), gpu.WithCUDAMaxRegs(maxRegs))...)...)
 		if err != nil {
 			panic(err)
 		}
 		defer g2.Close()
-		s2 := m.NewState(depth + rounds*n*2 + 16)
+		s2, err := engine.NewInstance(m, depth+rounds*n*2+16, io...)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
 		defer s2.Close()
 		if err := s2.SetDevice(g2); err != nil {
 			panic(err)
@@ -764,8 +728,8 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		a = bench.Case{Name: "1 head per task", Fn: func(it int) { s.SetAttnChunk(1); step(it) }}
 		b = bench.Case{Name: fmt.Sprintf("%d heads per task", bc), Fn: func(it int) { s.SetAttnChunk(bc); step(it) }}
 	case "kvlayout":
-		// The KV layout is baked at NewState, so it cannot be alternated
-		// inside one State. This case exists only to say so.
+		// The KV layout is baked at NewInstance, so it cannot be alternated
+		// inside one Instance. This case exists only to say so.
 		panic(fmt.Errorf("use -kvlayout, not -ab kvlayout: the layout is fixed " +
 			"when a State is created, so it cannot be alternated inside one"))
 	case "attnpair":
@@ -803,14 +767,11 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		}
 		a = bench.Case{Name: an, Fn: func(it int) { s.SetAttnChunk(ac); s.SetAttnPair(ap); step(it) }}
 		b = bench.Case{Name: fmt.Sprintf("paired(%d), 2 heads/task", bp), Fn: func(it int) { s.SetAttnChunk(2); s.SetAttnPair(bp); step(it) }}
-	case "split":
-		a = bench.Case{Name: "table split", Fn: func(it int) { g.TableSplit = true; step(it) }}
-		b = bench.Case{Name: "measured split", Fn: func(it int) { g.TableSplit = false; step(it) }}
 	case "head":
 		if !s.HeadOnDevice() {
 			panic(fmt.Errorf("the device did not take the head; there is nothing to compare"))
 		}
-		a = bench.Case{Name: "head on host", Fn: func(it int) { s.SetHeadOnDevice(false); step(it) }}
+		a = bench.Case{Name: "head on cpu", Fn: func(it int) { s.SetHeadOnDevice(false); step(it) }}
 		b = bench.Case{Name: "head in the block submission", Fn: func(it int) { s.SetHeadOnDevice(true); step(it) }}
 	case "submit":
 		// Graphs off on both arms: layersOnce disables capture under
@@ -825,57 +786,6 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		// pays for a capture that the other round caused.
 		a = bench.Case{Name: "launch by launch", Fn: func(it int) { g.NoGraph = true; step(it) }}
 		b = bench.Case{Name: "one replayed graph", Fn: func(it int) { g.NoGraph = false; step(it) }}
-	case "softmax":
-		// Needs a long -n or -depth: the softmax row is pos+1 entries, so what
-		// the warp reduction removes grows with context.
-		if g.Stats().SoftmaxLanes != 32 {
-			panic(fmt.Errorf("this device runs the scalar softmax either way; there is nothing to compare"))
-		}
-		a = bench.Case{Name: "1 thread per head", Fn: func(it int) { g.ScalarSoftmax = true; step(it) }}
-		b = bench.Case{Name: "32 lanes per head", Fn: func(it int) { g.ScalarSoftmax = false; step(it) }}
-	case "fuse":
-		// Both arms' kernels are built (the fused ones beside their parts)
-		// and each arm's graph is captured once, so the rounds compare the
-		// launch sequences and nothing else.
-		g.NoFuse = false
-		step(2)
-		if g.Stats().FusedLaunches == 0 {
-			panic(fmt.Errorf("this device fused nothing; there is nothing to compare"))
-		}
-		a = bench.Case{Name: "per-op launches", Fn: func(it int) { g.NoFuse = true; step(it) }}
-		b = bench.Case{Name: "fused kernels", Fn: func(it int) { g.NoFuse = false; step(it) }}
-		if os.Getenv("JITLLM_AB_AA") == "1" {
-			// The A/A self-control on this harness: both arms per-op.
-			b = bench.Case{Name: "per-op launches (A/A)", Fn: func(it int) { g.NoFuse = true; step(it) }}
-		}
-	case "actfuse":
-		// The operand prologue alone: every other fusion on in both arms.
-		g.NoFuse, g.NoActFuse = false, false
-		// Long enough for the split tuner to settle: the prologue is built
-		// only for the splits it pays at (tier.actInMaxGroups).
-		step(max(n, 64))
-		switch st := g.Stats(); {
-		case st.ActInLaunches == 0 && st.ActInTimed == 0:
-			panic(fmt.Errorf("this device built no operand prologue; there is nothing to compare (%s)", g.Err()))
-		case st.ActInLaunches == 0:
-			// The tuner kept no site here: the two arms are one launch
-			// sequence, and the row is what shipping costs on this card.
-			fmt.Printf("the tuner kept none of %d sites on this device\n", st.ActInTimed)
-		}
-		a = bench.Case{Name: "operand by its own launch", Fn: func(it int) { g.NoActFuse = true; step(it) }}
-		b = bench.Case{Name: "operand in the matvec prologue", Fn: func(it int) { g.NoActFuse = false; step(it) }}
-		if os.Getenv("JITLLM_AB_AA") == "1" {
-			b = bench.Case{Name: "operand by its own launch (A/A)", Fn: func(it int) { g.NoActFuse = true; step(it) }}
-		}
-	case "ropetab":
-		// Refuse rather than compare a knob that reached nothing: a device
-		// with no rotary-table kernel uploads on both arms.
-		if w := g.Stats().RopeTableWhy; w != "" {
-			panic(fmt.Errorf("this device uploads the rotary table either way (%s); "+
-				"there is nothing to compare", w))
-		}
-		a = bench.Case{Name: "table uploaded from the host", Fn: func(it int) { g.RopeTableHost = true; step(it) }}
-		b = bench.Case{Name: "table built on the device", Fn: func(it int) { g.RopeTableHost = false; step(it) }}
 	case "persist":
 		// Both arms keep their recording (the graph key carries the arm), so
 		// no round pays for the other's capture or composition.
@@ -889,112 +799,21 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		// Dependency counters against grid barriers, both composed.
 		a = bench.Case{Name: "grid-barrier block kernels", Fn: func(it int) { g.Persist, g.PersistDeps = true, false; step(it) }}
 		b = bench.Case{Name: "dependency-counter block kernels", Fn: func(it int) { g.Persist, g.PersistDeps = true, true; step(it) }}
-	case "gateup":
-		a = bench.Case{Name: "gate, up, down", Fn: func(it int) { g.GateUpFuse = false; step(it) }}
-		b = bench.Case{Name: "gate+up, down forming act(gate)*up", Fn: func(it int) { g.GateUpFuse = true; step(it) }}
-	case "qkvgemm", "qkvgemm-aa":
-		// Prefill: each round four -n token prompts from a fresh history,
-		// a block's q, k and v as one grid or as three GEMMs.
-		ids := make([]int32, n)
-		for i := range ids {
-			ids[i] = int32(1 + (i*7919)%(m.Cfg.NVocab-1))
-		}
-		pre := func(three bool) func(int) {
-			return func(int) {
-				g.QKVGemm = !three
-				for i := 0; i < 4; i++ {
-					s.Reset()
-					if _, err := s.Prefill(ids); err != nil {
-						panic(err)
-					}
-				}
-			}
-		}
-		a = bench.Case{Name: "q, k, v as three GEMMs", Fn: pre(true)}
-		b = bench.Case{Name: "q, k, v as one grid", Fn: pre(false)}
-		if which == "qkvgemm-aa" {
-			b = bench.Case{Name: "q, k, v as three GEMMs (again)", Fn: pre(true)}
-		}
-		defer func() { fmt.Printf("q/k/v grids: %d\n", g.Stats().QKVGemmRuns) }()
-	case "addnorm", "addnorm-aa":
-		// Prefill: each round four -n token prompts from a fresh history,
-		// the block-end add folded into the next norm or run alone.
-		ids := make([]int32, n)
-		for i := range ids {
-			ids[i] = int32(1 + (i*7919)%(m.Cfg.NVocab-1))
-		}
-		pre := func(noFold bool) func(int) {
-			return func(int) {
-				g.NoAddNormFold = noFold
-				for i := 0; i < 4; i++ {
-					s.Reset()
-					if _, err := s.Prefill(ids); err != nil {
-						panic(err)
-					}
-				}
-			}
-		}
-		a = bench.Case{Name: "block-end add alone", Fn: pre(true)}
-		b = bench.Case{Name: "block-end add folded into the next norm", Fn: pre(false)}
-		if which == "addnorm-aa" {
-			b = bench.Case{Name: "block-end add alone (again)", Fn: pre(true)}
-		}
-		defer func() { fmt.Printf("adds folded: %d\n", g.Stats().AddNormFolded) }()
-	case "gateup2":
-		a = bench.Case{Name: "gate, up gated", Fn: func(it int) { g.GateUp2 = false; step(it) }}
-		b = bench.Case{Name: "gate and up in one Gate2 launch", Fn: func(it int) { g.GateUp2, g.GateUp2Force = true, true; step(it) }}
-	case "ffn", "ffn-aa":
-		// The FFN site's recipes (tier.FFNForm): JITLLM_VERIFY_FFN names the
-		// challenger (gate2in by default) against Gate2.
-		f, err := tier.ParseFFNForm(os.Getenv("JITLLM_VERIFY_FFN"))
-		if err != nil || f == tier.FFNTuned {
-			f = tier.FFNGate2In
-		}
-		if which == "ffn-aa" {
-			f = tier.FFNGate2
-		}
-		a = bench.Case{Name: "FFN recipe gate2", Fn: func(it int) { g.FFNForm = tier.FFNGate2; step(it) }}
-		b = bench.Case{Name: "FFN recipe " + f.String(), Fn: func(it int) { g.FFNForm = f; step(it) }}
-		defer func() {
-			st := g.Stats()
-			fmt.Printf("norm, gate and up in one launch in %d FFNs; Gate2 in %d; FFN keys timed %d, kept %d\n",
-				st.Gate2InRuns, st.GateUp2Runs, st.FFNTimed, st.FFNKept)
-		}()
-	case "gateup2-aa":
-		a = bench.Case{Name: "gate, up gated", Fn: func(it int) { g.GateUp2 = false; step(it) }}
-		b = bench.Case{Name: "gate, up gated (again)", Fn: func(it int) { g.GateUp2 = false; step(it) }}
-	case "gateup-aa":
-		a = bench.Case{Name: "gate, up, down", Fn: func(it int) { g.GateUpFuse = false; step(it) }}
-		b = bench.Case{Name: "gate, up, down (again)", Fn: func(it int) { g.GateUpFuse = false; step(it) }}
 	case "persist-aa":
 		// The A/A self-control for "persist": the same arm twice through the
 		// same harness (RULE 2).
 		a = bench.Case{Name: "per-op launches", Fn: func(it int) { g.Persist = false; step(it) }}
 		b = bench.Case{Name: "per-op launches (again)", Fn: func(it int) { g.Persist = false; step(it) }}
 	default:
-		panic(fmt.Errorf("jitllm: -ab takes split, submit, head, graph, softmax, fuse, actfuse, ropetab, persist, persistdeps, persistdeps-grid, persist-aa, gateup, gateup-aa, gateup2, gateup2-aa, ffn, ffn-aa, addnorm, addnorm-aa, qkvgemm or qkvgemm-aa, not %q", which))
+		panic(fmt.Errorf("jitllm: -ab takes regs, attnchunk, kvlayout, attnpair, head, submit, graph, persist, persistdeps, persistdeps-grid or persist-aa, not %q", which))
 	}
 	r := bench.AB(a, b, rounds, n)
 	fmt.Printf("\n%d blocks on device\n%s\n", s.GPULayers(), r)
-	if which == "ropetab" {
-		st := g.Stats()
-		fmt.Printf("%d table(s) built on the device, %d uploaded\n", st.RopeTables, st.RopeTableUploads)
-	}
-	if strings.HasPrefix(which, "gateup2") {
-		fmt.Printf("gate and up in one Gate2 launch in %d FFNs\n", g.Stats().GateUp2Runs)
-	} else if strings.HasPrefix(which, "gateup") {
-		fmt.Printf("gate/up fused in %d FFNs %s\n", g.Stats().GateUpFused, g.Stats().GateUpWhy)
-	}
 	if strings.HasPrefix(which, "persist") {
 		st := g.Stats()
 		fmt.Printf("persistent: %d launches (%d with dependency counters, %d tile edges) ran %d per-op launches in %d phases; %d built, %d fell back%s\n",
 			st.PersistLaunches, st.PersistDepLaunches, st.PersistDepTiles, st.PersistParts, st.PersistPhases, st.PersistCompiles, st.PersistFallbacks,
 			map[bool]string{true: "; declined: " + st.PersistWhy, false: ""}[st.PersistWhy != ""])
-	}
-	if which == "fuse" || which == "actfuse" {
-		st := g.Stats()
-		fmt.Printf("%d captures; %d operand-prologue launches encoded, replacing %d; %d of %d sites kept by the tuner\n",
-			st.Captures, st.ActInLaunches, st.ActInSaved, st.ActInKept, st.ActInTimed)
 	}
 	if which == "graph" {
 		fmt.Printf("%d captures over the whole A/B\n", g.Stats().Captures)

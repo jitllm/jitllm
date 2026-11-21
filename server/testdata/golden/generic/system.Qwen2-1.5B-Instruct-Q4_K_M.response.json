@@ -1,0 +1,11 @@
+{
+ "content": "",
+ "tool_calls": [
+  {
+   "name": "get_stock_price",
+   "arguments": {
+    "symbol": "MSFT"
+   }
+  }
+ ]
+}

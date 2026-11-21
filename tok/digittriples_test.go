@@ -16,15 +16,17 @@ const falconPre = `{"type": "Sequence", "pretokenizers": [{"type": "Punctuation"
 // tokenizer.json), with its byte-level Ġ/Ċ read back as the space and newline
 // they stand for: this pipeline splits raw text and maps bytes afterwards.
 //
-// It fails if "[0-9][0-9][0-9]" is read as the llama3 alternation skeleton,
-// which runs a second letter/digit regex instead of isolating digit triples.
+// It fails if "[0-9][0-9][0-9]" is read as anything but its own pattern,
+// isolated: read as the llama3 alternation skeleton it ran a second
+// letter/digit regex instead of isolating digit triples.
 func TestFalconSplitsDigitTriples(t *testing.T) {
-	ops, err := pretok.ParsePreTokenizer(strings.NewReader(realTokenizerJSON(falconPre)))
+	ops, err := pretok.ParsePreTokenizer(strings.NewReader(RealTokenizerJSON(falconPre)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if last := ops[len(ops)-1]; last.Kind != pretok.OpDigitTriples {
-		t.Fatalf("falcon's last stage parsed as %v, want DigitTriples", last.Kind)
+	want := pretok.Op{Kind: pretok.OpPattern, Pattern: "[0-9][0-9][0-9]", Behavior: "Isolated"}
+	if last := ops[len(ops)-1]; last != want {
+		t.Fatalf("falcon's last stage parsed as %+v, want %+v", last, want)
 	}
 	p, err := buildPipeline(ops)
 	if err != nil {
@@ -47,33 +49,49 @@ func TestFalconSplitsDigitTriples(t *testing.T) {
 	}
 }
 
-// TestTheDigitTripleSplitIsReadOnlyIsolated: the pattern is recognised in the
-// one form the artefacts carry, and refused in any other rather than guessed.
-//
-// The rule is deliberately narrow: refusing every Split with no letter class
-// would unresolve names (deepseek-llm among them) whose digit stages do parse
-// as the skeleton's digit group.
-func TestTheDigitTripleSplitIsReadOnlyIsolated(t *testing.T) {
-	for _, pre := range []string{
-		`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Removed", "invert": false}`,
-		`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Isolated", "invert": true}`,
+// TestTheDigitTripleSplitIsReadAsItIsWritten: a Split in another behavior, or
+// inverted, is that split -- its behavior and its invert flag are part of the
+// stage, never read as the isolated form -- and a behavior the tokenizers
+// library does not define is refused at the parse.
+func TestTheDigitTripleSplitIsReadAsItIsWritten(t *testing.T) {
+	for _, c := range []struct {
+		pre  string
+		want []string
+	}{
+		{`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Removed", "invert": false}`,
+			[]string{"a", "45b"}},
+		{`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Isolated", "invert": true}`,
+			[]string{"a", "123", "45b"}},
+		{`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "MergedWithNext", "invert": false}`,
+			[]string{"a", "12345b"}},
 	} {
-		if ops, err := pretok.ParsePreTokenizer(strings.NewReader(realTokenizerJSON(pre))); err == nil {
-			t.Errorf("%s: accepted as %+v", pre, ops)
+		ops, err := pretok.ParsePreTokenizer(strings.NewReader(RealTokenizerJSON(c.pre)))
+		if err != nil {
+			t.Fatalf("%s: %v", c.pre, err)
 		}
+		p, err := buildPipeline(ops)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.apply("a12345b"); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s:\n got %q\nwant %q", c.pre, got, c.want)
+		}
+	}
+	bad := `{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Splitted", "invert": false}`
+	if ops, err := pretok.ParsePreTokenizer(strings.NewReader(RealTokenizerJSON(bad))); err == nil {
+		t.Errorf("%s: accepted as %+v", bad, ops)
 	}
 }
 
-// TestLlamaCppDefaultPipeline holds pretok.LlamaCppDefault to llama.cpp's own
-// default regexes (llama-vocab.cpp, the `default:` arm), applied in order by
-// Python's `regex` module the way unicode_regex_split applies them: each
-// pattern over each piece, the gaps kept.
+// TestDefaultBPEPipeline holds pretok.DefaultBPE() to its regexes, applied in
+// order by Python's `regex` module: each pattern over each piece, the gaps
+// kept.
 //
 // "it's" is the sharpest row: the apostrophe is \p{P}, so the first stage
 // takes it before any contraction rule sees it. The backtick row is where this
 // class parts from HuggingFace's Punctuation.
-func TestLlamaCppDefaultPipeline(t *testing.T) {
-	p, err := buildPipeline(pretok.LlamaCppDefault)
+func TestDefaultBPEPipeline(t *testing.T) {
+	p, err := buildPipeline(pretok.DefaultBPE())
 	if err != nil {
 		t.Fatal(err)
 	}

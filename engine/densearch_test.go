@@ -1,0 +1,369 @@
+package engine
+
+import (
+	"math"
+	"slices"
+
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// The dense llama-family architectures (smollm3 and its siblings) are
+// gated by the classic-transformer (C6) harness: transformers' own class,
+// written to GGUF by convert_hf_to_gguf.py (scripts/c6gold.py), on
+// decode, prefill at every length and the batch, against the host and against
+// every device. They join its lists here rather than in c6_test.go, so the
+// gates are TestC6MatchesTransformers, TestC6FeaturesAreLoadBearing and
+// TestC6OnEveryDevice under each fixture's name, and the relocation and
+// paging gates through principleFixtures.
+func denseFixtures() []struct {
+	name string
+	sel  func(m *model.Model) bool
+} {
+	return []struct {
+		name string
+		sel  func(m *model.Model) bool
+	}{
+		{"synth-apertus", func(m *model.Model) bool {
+			c, l, l1 := m.Cfg, &m.Layers[0], &m.Layers[1]
+			return !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDim && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
+				len(l.Vector(jlm.RoleXIELU)) == 4 && len(l1.Vector(jlm.RoleXIELU)) == 4 && l.Vector(jlm.RoleXIELU)[0] != l1.Vector(jlm.RoleXIELU)[0] &&
+				l.Vector(jlm.RoleXIELU)[2] != l1.Vector(jlm.RoleXIELU)[2] && l.Vector(jlm.RoleXIELU)[3] < -0.01 && len(m.Rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
+		}},
+		{"synth-smollm3", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return !c.LayerNorm && !c.RopeNeox && c.NoPEGlobal &&
+				windowOf(m) == 0 && m.Container.Config().SWAPeriod == 4 && ropesAt(m, 0) && ropesAt(m, 2) && !ropesAt(m, 3) &&
+				!slides(m, 0) && c.NKVHead < c.NHead && l.Gate.E != nil && c.TiedEmbd
+		}},
+		{"synth-arcee", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return !c.LayerNorm && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
+				l.Vector(jlm.RoleFFNNorm) != nil && l.Vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
+		}},
+		{"synth-seedoss", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
+				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.Vector(jlm.RoleFFNNorm) != nil &&
+				l.Vector(jlm.RolePostAttnNorm) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
+		}},
+		{"synth-olmo2", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.RopeNeox && c.QKNorm && c.QKNormWide &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
+				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && !c.TiedEmbd
+		}},
+		{"synth-olmo", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.LayerNorm && !c.RopeNeox && clipped(m, 0.1) && ones(l.Vector(jlm.RoleAttnNorm)) &&
+				ones(l.Vector(jlm.RoleFFNNorm)) && l.Gate.E != nil && !c.TiedEmbd
+		}},
+		{"synth-exaone4", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.RopeNeox && c.QKNorm && !c.QKNormWide &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
+				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && c.NoPEGlobal &&
+				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && !slides(m, 3) && ropesAt(m, 2) && !ropesAt(m, 3) &&
+				c.NKVHead < c.NHead
+		}},
+		{"synth-mistral3", func(m *model.Model) bool {
+			c := m.Cfg
+			return !c.RopeNeox && !c.NoPEGlobal && c.AttnTempScale == 0.5 &&
+				c.AttnTempFloor == 4 && c.AttnTempOffs == 0 && ropeFactor(m) == 16 &&
+				m.Rope.Scale > 1.1 && m.Rope.Scale < 1.13
+		}},
+		{"synth-olmo2-gqa", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.QKNormWide && c.NKVHead < c.NHead &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil
+		}},
+		{"synth-olmo3", func(m *model.Model) bool {
+			c, l := m.Cfg, &m.Layers[0]
+			return c.QKNormWide && c.NKVHead < c.NHead && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim &&
+				windowOf(m) == 4 && m.Container.Config().SWAPeriod == 4 && slides(m, 0) && !slides(m, 3) && ropeFactor(m) == 8 &&
+				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
+				len(m.Ropes) == 1 && m.Ropes[0].Scale == 1 && m.Ropes[0].Freqs == nil && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil
+		}},
+	}
+}
+
+// neoxOff and noTemp are the violations several fixtures share.
+func neoxOff(m *model.Model) func() { return hostNormRotary(m) }
+
+func noTemp(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.AttnTempScale = 0 }) }
+
+// unitRopeScale takes mistral3's YaRN magnitude off cos and sin.
+func unitRopeScale(m *model.Model) func() {
+	undo := relowered(m)
+	was := m.Rope.Scale
+	m.Rope.Scale = 1
+	return func() { m.Rope.Scale = was; undo() }
+}
+
+// kFromQ gives each block's k norm the first n_kv*head_dim of q's weight: the
+// two whole-projection norms read as one, which is what an engine that sized
+// k's norm from q's would compute.
+func kFromQ(m *model.Model) func() {
+	return eachLayer(m, func(l *model.Layer) {
+		addVec(l, jlm.RoleAttnKNorm, l.Vector(jlm.RoleAttnQNorm)[:len(l.Vector(jlm.RoleAttnKNorm))])
+	})
+}
+
+// localYarn gives OLMo 3's sliding layers the global rotary -- YaRN's
+// frequencies and its magnitude -- and localScaled its magnitude alone.
+func localYarn(m *model.Model) func() {
+	was := m.Ropes[0]
+	m.Ropes[0] = m.Rope
+	m.Ropes[0].Base = was.Base
+	return func() { m.Ropes[0] = was }
+}
+
+// windowBy is the model with its sliding window d keys wider: a window off
+// by one position, which the device arm must see past the window.
+func windowBy(d int) func(m *model.Model) func() {
+	return func(m *model.Model) func() {
+		return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = uint32(int(c.SWAWindow) + d) })
+	}
+}
+
+// clipped says the container bounds q, k and v at bound (clip_qkv) and the
+// model runs the bound.
+func clipped(m *model.Model, bound float32) bool {
+	return m.Container.Config().ClampKQV == bound && m.Cfg.QKVAct != nil
+}
+
+// ones says v is a vector of ones: a norm of no weight, as OLMo's are.
+func ones(v []float32) bool {
+	return len(v) > 0 && !slices.ContainsFunc(v, func(x float32) bool { return x != 1 })
+}
+
+// rmsForLayer normalises each block's LayerNorms by the root mean square,
+// the mean left in.
+func rmsForLayer(m *model.Model) func() {
+	return restated(m, editing(opsOfKind(graph.OpLayerNorm), func(o *graph.Op) { o.Kind = graph.OpNorm }))
+}
+
+func localScaled(m *model.Model) func() {
+	was := m.Ropes[0].Scale
+	m.Ropes[0].Scale = m.Rope.Scale
+	return func() { m.Ropes[0].Scale = was }
+}
+
+func denseViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-olmo2-gqa": {
+			{"a per-head q/k norm", perHeadQK},
+			{"k's norm read from q's weight", kFromQ},
+		},
+		"synth-olmo3": {
+			{"YaRN on the sliding layers", localYarn},
+			{"YaRN's magnitude on the sliding layers", localScaled},
+			{"no YaRN magnitude on the global layers", unitRopeScale},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
+			{"k's norm read from q's weight", kFromQ},
+		},
+		"synth-smollm3": {
+			{"rotary on the NoPE layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
+			{"NoPE every second layer", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAPeriod = 2 }) }},
+		},
+		"synth-arcee": {
+			{"SiLU for relu2", actSwap(0)},
+			{"GELU for relu2", actSwap(jlm.FlagGELU)},
+		},
+		"synth-seedoss": {
+			{"no q/k/v biases", noQKVBias},
+			{"NORM rotary for NEOX", neoxOff},
+			{"the attention's norm before the FFN", func(m *model.Model) func() {
+				return eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RoleAttnNorm)) })
+			}},
+		},
+		"synth-olmo2": {
+			{"a per-head q/k norm", perHeadQK},
+			{"no post-attention norm", noPostAttnNorm},
+			{"no post-FFN norm", noPostFFNNorm},
+			{"the post-norms as pre-norms", postAsPre},
+			{"NORM rotary for NEOX", neoxOff},
+		},
+		"synth-olmo": {
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = nil }) }},
+			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = clampTwice(m) }) }},
+			{"RMSNorm for the LayerNorms", rmsForLayer},
+		},
+		"synth-exaone4": {
+			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
+			{"no q/k norm", noQKNorm},
+			{"no post-FFN norm", noPostFFNNorm},
+			{"the post-norms as pre-norms", postAsPre},
+		},
+		"synth-mistral3": {
+			{"no attention temperature", noTemp},
+			{"no YaRN magnitude on cos and sin", unitRopeScale},
+		},
+		"synth-apertus": apertusViolations(),
+	}
+}
+
+// apertusViolations take each piece of Apertus's xIELU and rotary out. They
+// run on the host and on every device: the numbers ride with each block's
+// weights, and the rotary factors are folded into the plan's table.
+func apertusViolations() []c6Violation {
+	return []c6Violation{
+		{"xIELU's eps ignored", xieluMut(func(p []float32, _ int) { p[3] = float32(math.Inf(1)) })},
+		{"xIELU's alphas exchanged", xieluMut(func(p []float32, _ int) { p[0], p[1] = p[1], p[0] })},
+		{"xIELU's beta*x dropped", xieluMut(func(p []float32, _ int) { p[2] = 0 })},
+		{"xIELU's alpha_p without the softplus", xieluMut(func(p []float32, _ int) {
+			p[0] = float32(math.Log(math.Expm1(float64(p[0]))))
+		})},
+		{"every block running block 0's xIELU", func(m *model.Model) func() {
+			p0 := slices.Clone(m.Layers[0].Vector(jlm.RoleXIELU))
+			return eachLayer(m, func(l *model.Layer) {
+				setVec(l, jlm.RoleXIELU, func([]float32) []float32 { return p0 })
+			})
+		}},
+		{"no llama 3 rotary factors", noRopeFreqs},
+		{"NORM rotary for NEOX", neoxOff},
+		{"no q/k norm", noQKNorm},
+	}
+}
+
+// apertusDevViolations are apertusViolations with the rotary pairing flipped
+// in the config, which is what the device reads; the host's table is built
+// at Open, so the host list flips that instead.
+func apertusDevViolations() []c6Violation {
+	return append(slices.Clone(apertusViolations()[:len(apertusViolations())-2]),
+		c6Violation{"NORM rotary for NEOX", func(m *model.Model) func() {
+			return cfgMut(m, func(c *model.Config) { c.RopeNeox = false })
+		}},
+		c6Violation{"no q/k norm", noQKNorm})
+}
+
+// xieluMut runs f on a copy of every block's xIELU numbers.
+func xieluMut(f func(p []float32, li int)) func(m *model.Model) func() {
+	return func(m *model.Model) func() {
+		li := 0
+		return eachLayer(m, func(l *model.Layer) {
+			setVec(l, jlm.RoleXIELU, func(v []float32) []float32 {
+				p := slices.Clone(v)
+				f(p, li)
+				return p
+			})
+			li++
+		})
+	}
+}
+
+// perHeadQK runs OLMo 2's whole-projection q/k norm one head at a time, with
+// each head reading the first head_dim of the weight -- what an engine that
+// took the qwen3 reading of the same tensor names would compute.
+func perHeadQK(m *model.Model) func() {
+	hd := m.Cfg.HeadDim
+	undoL := eachLayer(m, func(l *model.Layer) {
+		setVec(l, jlm.RoleAttnQNorm, func(v []float32) []float32 { return v[:hd] })
+		setVec(l, jlm.RoleAttnKNorm, func(v []float32) []float32 { return v[:hd] })
+	})
+	perHead := func(r jlm.Role) func(*graph.Graph) *graph.Graph {
+		return editing(opsBinding(r), func(o *graph.Op) {
+			o.Kind, o.Attr.HeadDim = graph.OpHeadNorm, hd
+			o.Weight = []graph.Binding{{Role: r, K: hd}}
+		})
+	}
+	undo := restated(m, func(g *graph.Graph) *graph.Graph { return perHead(jlm.RoleAttnKNorm)(perHead(jlm.RoleAttnQNorm)(g)) })
+	return func() { undo(); undoL() }
+}
+
+// postAsPre moves each post-norm to the pre-norm slot of its branch, which is
+// llama's block with OLMo 2's weights: the sublayer reads its input normed by
+// the post-norm's weight, and its output goes to the residual as it is.
+func postAsPre(m *model.Model) func() {
+	return restated(m, func(g *graph.Graph) *graph.Graph {
+		out := cloned(g)
+		moved := false
+		for _, r := range []jlm.Role{jlm.RolePostAttnNorm, jlm.RolePostFFNNorm} {
+			k := slices.IndexFunc(out.Ops, func(o graph.Op) bool { return binding(r)(0, &o) })
+			if k < 0 {
+				continue
+			}
+			post := out.Ops[k]
+			y, z := post.In[0], post.Out[0]
+			add := slices.IndexFunc(out.Ops, func(o graph.Op) bool { return o.Kind == graph.OpAdd && slices.Contains(o.In, z) })
+			if add < 0 {
+				continue
+			}
+			in := out.Ops[add].In[0]
+			if in == z {
+				in = out.Ops[add].In[1]
+			}
+			redirect(out, z, y, k+1)
+			pre, from := insert(out, writer(out, in), func(b *graph.Builder) graph.ValueID {
+				return b.Emit(post.Kind, []graph.ValueID{in}, []graph.Result{{Name: "pre", Width: out.Values[in].Width}},
+					post.Weight, post.Attr, nil, nil)[0]
+			})
+			redirect(out, in, pre, from)
+			// The residual adds the sublayer's input as it was.
+			for i := range out.Ops {
+				if o := &out.Ops[i]; o.Kind == graph.OpAdd && slices.Contains(o.In, y) {
+					for j := range o.In {
+						if o.In[j] == pre {
+							o.In[j] = in
+						}
+					}
+				}
+			}
+			moved = true
+		}
+		if !moved {
+			return g
+		}
+		return out
+	})
+}
+
+func denseDevViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-apertus": apertusDevViolations(),
+		"synth-olmo2-gqa": {
+			{"a per-head q/k norm", perHeadQK},
+			{"k's norm read from q's weight", kFromQ},
+		},
+		"synth-olmo3": {
+			{"YaRN on the sliding layers", localYarn},
+			{"YaRN's magnitude on the sliding layers", localScaled},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
+			{"a window one key wider", windowBy(1)},
+			{"a window one key narrower", windowBy(-1)},
+		},
+		"synth-smollm3": {
+			{"rotary on the NoPE layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
+		},
+		"synth-arcee": {
+			{"SiLU for relu2", actSwap(0)},
+		},
+		"synth-seedoss": {
+			{"no q/k/v biases", noQKVBias},
+			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+		},
+		"synth-olmo2": {
+			{"a per-head q/k norm", perHeadQK},
+			{"the post-norms as pre-norms", postAsPre},
+			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+		},
+		"synth-olmo": {
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = nil }) }},
+			{"RMSNorm for the LayerNorms", rmsForLayer},
+		},
+		"synth-exaone4": {
+			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
+			{"no sliding window", func(m *model.Model) func() { return jlmMut(m, func(c *jlm.Config) { c.SWAWindow = 0 }) }},
+			{"a window one key wider", windowBy(1)},
+			{"a window one key narrower", windowBy(-1)},
+			{"the post-norms as pre-norms", postAsPre},
+		},
+		"synth-mistral3": {
+			{"no attention temperature", noTemp},
+		},
+	}
+}

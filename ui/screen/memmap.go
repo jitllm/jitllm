@@ -19,7 +19,7 @@ func memoryMap(sh *app.Shell) widget.Widget {
 	}, st.BlockMap.AsReadonly(), st.Alloc.AsReadonly())
 	c := sh.P.Colors
 	return widgets.NewMemoryMap(view, widgets.MemColors{
-		Host:    c.Outline,
+		CPU:     c.Outline,
 		Devices: []widget.Color{c.Primary, c.Tertiary, c.Secondary},
 		Dense:   c.OnSurfaceVariant,
 		KV:      sh.P.Warn,
@@ -65,9 +65,9 @@ func MemView(blocks []byte, a app.Allocation) widgets.MemView {
 	}
 	hostLane.Segs = append(hostLane.Segs,
 		widgets.MemSeg{Kind: widgets.SegDense, Bytes: a.Dense},
-		widgets.MemSeg{Kind: widgets.SegKV, Bytes: a.HostKV})
-	if a.HostKV > 0 {
-		hostLane.Caption += "  + " + app.Bytes(a.HostKV) + " kv"
+		widgets.MemSeg{Kind: widgets.SegKV, Bytes: a.CPUKV})
+	if a.CPUKV > 0 {
+		hostLane.Caption += "  + " + app.Bytes(a.CPUKV) + " kv"
 	}
 	v.Lanes = append(v.Lanes, hostLane)
 

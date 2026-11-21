@@ -1,0 +1,336 @@
+package jlm
+
+import "github.com/jitllm/jitllm/format/quant"
+
+// The reading rules of a packed weight, stated once over an arithmetic the
+// caller supplies: a Go evaluator's values are numbers (DecodeElement), the
+// composer's are the nodes of a kernel, so the device's decode and the
+// format's own reader are one definition. TestDecodeMatchesThePacker holds
+// it to the packer's reference reader for every packed type.
+
+// Plane is one of a packed tensor's three word arrays.
+type Plane uint8
+
+const (
+	PlaneQS Plane = iota // the payload
+	PlaneD               // the super-scales (and minimums)
+	PlaneSC              // the per-sub-block scales (and minimums)
+)
+
+// Arith is the arithmetic the rules are written in. Integer operations are
+// on u32 values, float operations on f32 ones; Word reads word i of a plane.
+// A shift is always below 32. Bit fields are joined by addition: the rules
+// only ever join fields that do not overlap, where it is or.
+type Arith[V any] interface {
+	U(uint32) V
+	Add(a, b V) V
+	Sub(a, b V) V
+	Mul(a, b V) V
+	Div(a, b V) V
+	Rem(a, b V) V
+	Min(a, b V) V
+	Shr(a, b V) V
+	Shl(a, b V) V
+	And(a, b V) V
+	Xor(a, b V) V
+	Word(p Plane, i V) V
+	// Code is entry q of a 16-entry code table.
+	Code(t *[16]uint8, q V) V
+	// Half is the low binary16 half of a u32 as a float, F32 its bits as a
+	// float, Int it as a signed int32 converted to a float, Float it as an
+	// unsigned one converted.
+	Half(V) V
+	F32(V) V
+	Int(V) V
+	Float(V) V
+	FConst(float32) V
+	FMul(a, b V) V
+	FSub(a, b V) V
+	FAdd(a, b V) V
+}
+
+// scStreamWords is the three words a super-block's six-bit scales and
+// minimums take, eight sub-blocks of two fields each.
+const scStreamWords = 3
+
+// dSlots is how many rows' super-scales share a d word: four E8M0 bytes, two
+// binary16 halves, or one row's whole word where a minimum or an f32 scale
+// takes it.
+func (l TypeLayout) dSlots() int {
+	switch {
+	case l.E8M0:
+		return 4
+	case l.HasMin || l.D32:
+		return 1
+	case l.SuperSub == 1:
+		return 2
+	}
+	return 1
+}
+
+// scStream reports a format whose per-sub-block scales and minimums are six
+// bits each in a stream of scStreamWords words a super-block.
+func (l TypeLayout) scStream() bool { return l.HasMin && l.SuperSub == 8 }
+
+// DecodeElement is element c of row r of a packed tensor of rows rows: its
+// code, scaled, less its bias.
+func DecodeElement[V any](a Arith[V], l TypeLayout, rows int, r, c V) V {
+	code, scale, bias := DecodeParts(a, l, rows, r, c)
+	q := a.Float(code)
+	if l.Signed {
+		q = a.Int(code)
+	}
+	return a.FSub(a.FMul(scale, q), bias)
+}
+
+// DecodeParts is element c of row r taken apart: its integer code, a u32
+// (a signed format's sign-extended, its bits an int32), and its
+// sub-block's scale and bias, the element being scale*code - bias. A
+// matvec over int8 activations dots the codes and applies the scale and
+// the bias once a sub-block.
+func DecodeParts[V any](a Arith[V], l TypeLayout, rows int, r, c V) (code, scale, bias V) {
+	u := a.U
+	R := u(uint32(rows))
+	sub, bits, hi := l.Sub, l.Planes[0], l.Planes[1]
+	pw, hw := sub*bits/32, sub*hi/32
+	si, e := a.Div(c, u(uint32(sub))), a.Rem(c, u(uint32(sub)))
+	super := a.Div(si, u(uint32(l.SuperSub)))
+
+	// The super-scale, and the minimum where the d word carries one.
+	var dmin V
+	n := l.dSlots()
+	slot := u(0)
+	di := a.Add(a.Mul(super, R), r)
+	if n > 1 {
+		di = a.Add(a.Mul(super, u(uint32((rows+n-1)/n))), a.Div(r, u(uint32(n))))
+		slot = a.Rem(r, u(uint32(n)))
+	}
+	dw := a.Word(PlaneD, di)
+	switch {
+	case n == 4:
+		b := a.And(a.Shr(dw, a.Mul(slot, u(8))), u(0xff))
+		scale = a.F32(a.Shl(b, u(23)))
+	case n == 2:
+		scale = a.Half(a.Shr(dw, a.Mul(slot, u(16))))
+	case l.D32:
+		scale = a.F32(dw)
+	default:
+		scale, dmin = a.Half(dw), a.Half(a.Shr(dw, u(16)))
+	}
+
+	// The sub-block's own scale and minimum, and the bias.
+	switch {
+	case l.scStream():
+		// The scale and the minimum are one twelve-bit field.
+		bit := a.Mul(a.Rem(si, u(8)), u(12))
+		w, b := a.Div(bit, u(32)), a.Rem(bit, u(32))
+		word := func(w V) V {
+			return a.Word(PlaneSC, a.Add(a.Mul(a.Add(a.Mul(super, u(scStreamWords)), w), R), r))
+		}
+		lo := a.Shr(word(w), b)
+		// A field past bit 20 takes its high bits from the next word;
+		// shifted 32-b in two steps, so no shift reaches 32, and the
+		// next word's index held inside the stream.
+		next := word(a.Min(a.Add(w, u(1)), u(scStreamWords-1)))
+		pair := a.Add(lo, a.Shl(a.Shl(next, u(1)), a.Sub(u(31), b)))
+		scale = a.FMul(scale, a.Float(a.And(pair, u(63))))
+		bias = a.FMul(dmin, a.Float(a.And(a.Shr(pair, u(6)), u(63))))
+	case l.SuperSub > 1:
+		perWord, stride := 4, 8
+		if l.HasMin {
+			perWord, stride = 2, 16
+		}
+		sw := a.Word(PlaneSC, a.Add(a.Mul(a.Div(si, u(uint32(perWord))), R), r))
+		sh := a.Mul(a.Rem(si, u(uint32(perWord))), u(uint32(stride)))
+		sv := a.FAdd(a.Float(a.And(a.Shr(sw, sh), u(0xff))), a.FConst(float32(l.ScaleOff)))
+		scale = a.FMul(scale, sv)
+		if l.HasMin {
+			bias = a.FMul(dmin, a.Float(a.And(a.Shr(sw, a.Add(sh, u(8))), u(0xff))))
+		}
+	case l.HasMin:
+		bias = dmin
+	}
+	if !l.HasMin {
+		bias = a.FMul(scale, a.FConst(l.Bias))
+	}
+
+	// The code: the primary plane's field, the secondary plane's bits above
+	// it, through the code table where the format has one.
+	base := a.Add(a.Mul(si, u(uint32((pw+hw)*rows))), r)
+	var q V
+	if bits < 8 {
+		fields := 8 / bits
+		h := sub / fields
+		f, rem := a.Div(e, u(uint32(h))), a.Rem(e, u(uint32(h)))
+		w, b := a.Div(rem, u(4)), a.Rem(rem, u(4))
+		v := a.Word(PlaneQS, a.Add(base, a.Mul(w, R)))
+		sh := a.Add(a.Mul(b, u(8)), a.Mul(f, u(uint32(bits))))
+		q = a.And(a.Shr(v, sh), u(uint32(1)<<bits-1))
+		if l.Codes != nil {
+			q = a.Code(l.Codes, q)
+		}
+		if hi > 0 {
+			lanes := 8 / hi
+			g := a.Div(e, u(4))
+			hv := a.Word(PlaneQS, a.Add(base, a.Mul(a.Add(u(uint32(pw)), a.Div(g, u(uint32(lanes)))), R)))
+			hsh := a.Add(a.Mul(a.Rem(e, u(4)), u(8)), a.Mul(a.Rem(g, u(uint32(lanes))), u(uint32(hi))))
+			hb := a.And(a.Shr(hv, hsh), u(uint32(1)<<hi-1))
+			q = a.Add(q, a.Shl(hb, u(uint32(bits))))
+		}
+		return q, scale, bias
+	}
+	v := a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(e, u(4)), R)))
+	by := a.And(a.Shr(v, a.Mul(a.Rem(e, u(4)), u(8))), u(0xff))
+	if l.Signed {
+		// The byte's sign extended: its top bit flipped, 128 taken away.
+		return a.Sub(a.Xor(by, u(0x80)), u(0x80)), scale, bias
+	}
+	return by, scale, bias
+}
+
+// DecodeWord is the codes of elements c to c+3 of row r, c a multiple of
+// four, one byte each in a word as a four-way byte dot reads them: the
+// fields of one word of the primary plane at one shift, and the secondary
+// plane's bits above each, or each field's entry of the format's code
+// table. ok is false where a code is not such a field -- a field of eight
+// bits or more past its sign.
+func DecodeWord[V any](a Arith[V], l TypeLayout, rows int, r, c V) (codes V, ok bool) {
+	if !l.WordCodes() {
+		return codes, false
+	}
+	bits, hi := l.Planes[0], l.Planes[1]
+	u := a.U
+	R := u(uint32(rows))
+	sub := l.Sub
+	pw, hw := sub*bits/32, sub*hi/32
+	si, e := a.Div(c, u(uint32(sub))), a.Rem(c, u(uint32(sub)))
+	base := a.Add(a.Mul(si, u(uint32((pw+hw)*rows))), r)
+	if bits == 8 {
+		return a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(e, u(4)), R))), true
+	}
+	fields := 8 / bits
+	h := sub / fields
+	bytes := func(m uint32) V { return u(m | m<<8 | m<<16 | m<<24) }
+	f, rem := a.Div(e, u(uint32(h))), a.Rem(e, u(uint32(h)))
+	v := a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(rem, u(4)), R)))
+	q := a.And(a.Shr(v, a.Mul(f, u(uint32(bits)))), bytes(uint32(1)<<bits-1))
+	if l.Codes != nil && *l.Codes == mx4Codes() {
+		return e2m1Word(a, q), true
+	}
+	if l.Codes != nil {
+		m := u(uint32(1)<<bits - 1)
+		t := a.Code(l.Codes, a.And(q, m))
+		for b := 1; b < 4; b++ {
+			t = a.Add(t, a.Shl(a.Code(l.Codes, a.And(a.Shr(q, u(uint32(8*b))), m)), u(uint32(8*b))))
+		}
+		return t, true
+	}
+	if hi > 0 {
+		lanes := 8 / hi
+		g := a.Div(e, u(4))
+		hv := a.Word(PlaneQS, a.Add(base, a.Mul(a.Add(u(uint32(pw)), a.Div(g, u(uint32(lanes)))), R)))
+		hb := a.And(a.Shr(hv, a.Mul(a.Rem(g, u(uint32(lanes))), u(uint32(hi)))), bytes(uint32(1)<<hi-1))
+		q = a.Add(q, a.Shl(hb, u(uint32(bits))))
+	}
+	return q, true
+}
+
+// e2m1Word is mx4Codes' entries of the four codes of q, one a byte,
+// computed: with l the code's two low bits and b2 its third, the doubled
+// magnitude is l + (l if b2) + 4*b2 + 2*(b0 b1 b2), and the entry 12 plus
+// it, or less it where the sign bit is set. No byte passes 24.
+func e2m1Word[V any](a Arith[V], q V) V {
+	u := a.U
+	ones := u(0x01010101)
+	l := a.And(q, u(0x03030303))
+	b2 := a.And(a.Shr(q, u(2)), ones)
+	v := a.Add(a.Add(l, a.And(l, a.Mul(b2, u(0xff)))), a.Shl(b2, u(2)))
+	v = a.Add(v, a.Shl(a.And(a.And(q, a.Shr(q, u(1))), b2), u(1)))
+	neg := a.Mul(a.And(a.Shr(q, u(3)), ones), u(0xff))
+	return a.Sub(a.Add(v, u(12*0x01010101)), a.And(a.Shl(v, u(1)), neg))
+}
+
+// WordCodes reports whether DecodeWord states the format: its codes fields
+// of a byte or less, through a code table only from one plane, four of them
+// in one word.
+func (l TypeLayout) WordCodes() bool {
+	bits := l.Planes[0]
+	if l.Codes != nil && (l.Planes[1] != 0 || l.Signed) || l.Sub%4 != 0 || bits > 8 || 8%bits != 0 {
+		return false
+	}
+	return bits == 8 || l.Sub/(8/bits)%4 == 0
+}
+
+// Words is how many words each plane of a packed tensor of rows rows of k
+// holds: the payload, the super-scales, the per-sub-block scales.
+func (l TypeLayout) Words(rows, k int) (qs, d, sc int) {
+	nsub := k / l.Sub
+	qs = rows * nsub * (l.Sub * (l.Planes[0] + l.Planes[1]) / 32)
+	nsuper := nsub / l.SuperSub
+	if n := l.dSlots(); n > 1 {
+		d = nsuper * ((rows + n - 1) / n)
+	} else {
+		d = nsuper * rows
+	}
+	switch {
+	case l.scStream():
+		sc = rows * nsuper * scStreamWords
+	case l.SuperSub > 1:
+		per := 4
+		if l.HasMin {
+			per = 2
+		}
+		sc = rows * ((nsub + per - 1) / per)
+	}
+	return qs, d, sc
+}
+
+// DecodeVerbatim is element c of row r of a verbatim tensor of k columns:
+// row-major values, an f32 a word, an f16 or a bf16 a half of one; IQ4_NL's
+// own 18-byte blocks of 32, a row whole blocks, each an f16 scale and a
+// nibble an element indexing its code table.
+func DecodeVerbatim[V any](a Arith[V], t Type, k int, r, c V) V {
+	u := a.U
+	if t == TypeIQ4NL {
+		byteAt := func(o V) V {
+			return a.Shr(a.Word(PlaneQS, a.Div(o, u(4))), a.Mul(a.Rem(o, u(4)), u(8)))
+		}
+		j := a.Rem(c, u(32))
+		o := a.Add(a.Mul(r, u(uint32(k/32*18))), a.Mul(a.Div(c, u(32)), u(18)))
+		q := a.And(a.Shr(byteAt(a.Add(o, a.Add(u(2), a.Rem(j, u(16))))), a.Mul(a.Div(j, u(16)), u(4))), u(15))
+		codes := iq4nlCodes()
+		return a.FMul(a.Half(byteAt(o)), a.FSub(a.Float(a.Code(&codes, q)), a.FConst(127)))
+	}
+	i := a.Add(a.Mul(r, u(uint32(k))), c)
+	if t == TypeF32 {
+		return a.F32(a.Word(PlaneQS, i))
+	}
+	h := a.Shr(a.Word(PlaneQS, a.Div(i, u(2))), a.Mul(a.Rem(i, u(2)), u(16)))
+	if t == TypeBF16 {
+		return a.F32(a.Shl(a.And(h, u(0xffff)), u(16)))
+	}
+	return a.Half(h)
+}
+
+// Verbatim reports a type DecodeVerbatim reads an element a word or a half
+// of one.
+func Verbatim(t Type) bool { return t == TypeF32 || t == TypeF16 || t == TypeBF16 }
+
+// VerbatimRows reports a type DecodeVerbatim reads, the blocked IQ4_NL with
+// the element types.
+func VerbatimRows(t Type) bool { return Verbatim(t) || t == TypeIQ4NL }
+
+// VerbatimWords is the words rows rows of k columns of verbatim type t take.
+func VerbatimWords(t Type, rows, k int) (int, error) {
+	b, err := verbatimBytes(t, uint64(k))
+	return (rows*int(b) + 3) / 4, err
+}
+
+// iq4nlCodes is IQ4_NL's code table plus 127, so every entry is unsigned.
+func iq4nlCodes() [16]uint8 {
+	var t [16]uint8
+	for i, v := range quant.IQ4NLValues() {
+		t[i] = uint8(int(v) + 127)
+	}
+	return t
+}

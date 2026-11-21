@@ -79,7 +79,7 @@ func TestJobsAreTheSameForEveryArmOfARound(t *testing.T) {
 			na++
 		}
 		if n := len(strings.Fields(x[i].prompt)); n != 4 && n != 16 {
-			t.Fatalf("a prompt of %d words", n)
+			t.Fatalf("a prompt of %d words()", n)
 		}
 	}
 	if same {

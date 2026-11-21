@@ -11,8 +11,8 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -35,7 +35,7 @@ func (s *ModelService) ListModels(ctx context.Context, req *connect.Request[v1.L
 		for _, f := range files {
 			mf := pbModelFile(f)
 			if f.IsContainer {
-				d := containerDetails.get(f.Path, probeContainer)
+				d := s.E.details.get(f.Path, probeContainer)
 				mf.ContainerVersion = d.version
 				mf.ContextLength = d.ctx
 				mf.Capabilities = d.caps
@@ -70,7 +70,7 @@ func probeContainer(path string) details {
 			_, chat = v.Template("")
 		}
 		d.ctx = int32(c.NCtx)
-		d.caps = modelCapabilities(chat, h.VisionBlocks() > 0, c.Flags.Pooling() != jlm.PoolNone, c.Arch.Encoder())
+		d.caps = modelCapabilities(chat, h.VisionBlocks() > 0, c.Flags.Pooling() != jlm.PoolNone, c.Flags.Has(jlm.FlagNonCausal))
 	}
 	return d
 }
@@ -90,8 +90,6 @@ type cachedDetails struct {
 	mtime time.Time
 	d     details
 }
-
-var containerDetails detailsCache
 
 func (c *detailsCache) get(path string, probe func(string) details) details {
 	fi, err := os.Stat(path)
@@ -308,7 +306,9 @@ func (s *ModelService) Convert(ctx context.Context, req *connect.Request[v1.Conv
 }
 
 // Tokenize encodes text with the model's tokenizer and returns the ids with
-// each one's piece.
+// each one's piece. A control token written in the text is matched as itself
+// (EncodeSpecial), as the /tokenize route reads its content: a rendered chat
+// template tokenizes as the ids ApplyChatTemplate returns.
 func (s *ModelService) Tokenize(ctx context.Context, req *connect.Request[v1.TokenizeRequest]) (*connect.Response[v1.TokenizeResponse], error) {
 	lm, err := s.E.Model(req.Msg.ModelId)
 	if err != nil {
@@ -317,7 +317,7 @@ func (s *ModelService) Tokenize(ctx context.Context, req *connect.Request[v1.Tok
 	if lm.m.Vocab == nil {
 		return nil, connectErr(fmt.Errorf("server: model %q has no tokenizer: %v", lm.id, lm.m.TokErr))
 	}
-	ids := lm.m.Vocab.Encode(req.Msg.Text, req.Msg.AddSpecial)
+	ids := lm.m.Vocab.EncodeSpecial(req.Msg.Text, req.Msg.AddSpecial)
 	pieces := make([]string, len(ids))
 	for i, id := range ids {
 		pieces[i] = lm.m.Vocab.Text(id)
@@ -366,7 +366,7 @@ func (s *ModelService) ApplyChatTemplate(ctx context.Context, req *connect.Reque
 	}
 	prompt, err := lm.m.ChatPrompt(msgs, req.Msg.AddGenerationPrompt)
 	if err != nil {
-		return nil, connectErr(err)
+		return nil, connectErr(chatErr(err))
 	}
 	ids, err := lm.m.ChatIDs(msgs, req.Msg.AddGenerationPrompt)
 	if err != nil {

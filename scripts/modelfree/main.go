@@ -22,7 +22,7 @@
 //
 // Left out: ./dev/bench, the measurements with throughput floors (RULE 4 puts
 // perf floors there), since a shared runner is not a quiet box; ./ui/stage,
-// which CI's ui job runs beside the app's build; and ./jit/gpu/backend on
+// which CI's ui job runs beside the app's build; and ./backend on
 // macOS only (see notRun).
 package main
 
@@ -53,7 +53,7 @@ func notRun() map[string]string {
 	// and the gates fail. The Linux and Windows runners, which have no GPU,
 	// still run the package.
 	if runtime.GOOS == "darwin" {
-		m["github.com/jitllm/jitllm/jit/gpu/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
+		m["github.com/jitllm/jitllm/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
 	}
 	return m
 }
@@ -116,7 +116,7 @@ func modelFree() bool {
 	// forcing hooks, so the SSE tier's kernels run on an AVX2 runner. amd64
 	// only: the tier does not exist elsewhere.
 	if runtime.GOARCH == "amd64" {
-		runs = append(runs, testRun{"sse-tier", root, []string{"-tags", "jitllmtest", "./jit/cpu", "./engine/nn"}})
+		runs = append(runs, testRun{"sse-tier", root, []string{"-tags", "jitllmtest", "./engine/device/cpu", "./nn"}})
 	}
 	runs = append(runs, testRun{"server", filepath.Join(root, "server"), []string{"./..."}})
 	runs = append(runs, testRun{"common", filepath.Join(root, "common"), []string{"./..."}})
@@ -233,7 +233,9 @@ func goTest(name, dir, out string, args []string) (result, bool) {
 	return res, !res.exitFail && !res.buildFailed && sc.Err() == nil
 }
 
-var space = regexp.MustCompile(`\s+`)
+func space() *regexp.Regexp {
+	return regexp.MustCompile(`\s+`)
+}
 
 // reason is the last line a test printed that is not the harness's own.
 func reason(lines []string) string {
@@ -242,7 +244,7 @@ func reason(lines []string) string {
 		if l == "" || strings.HasPrefix(l, "=== ") || strings.HasPrefix(l, "--- ") {
 			continue
 		}
-		l = space.ReplaceAllString(l, " ")
+		l = space().ReplaceAllString(l, " ")
 		if len(l) > 220 {
 			l = l[:220]
 		}

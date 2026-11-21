@@ -65,7 +65,7 @@ curl -s http://127.0.0.1:4242/v1/completions -H 'Content-Type: application/json'
 {"id":"cmpl-oa-...","object":"text_completion","model":"stories260K",
  "choices":[{"index":0,"text":", there was a little girl named Lily. She loved to play","finish_reason":"length"}],
  "usage":{"prompt_tokens":5,"completion_tokens":16,"total_tokens":21},
- "jitllm":{"device_blocks":0,"host_blocks":5,"prefill_ms":1,"decode_tokens_per_second":5414.4}}
+ "jitllm":{"device_blocks":0,"cpu_blocks":5,"prefill_ms":1,"decode_tokens_per_second":5414.4}}
 ```
 
 The `jitllm` object is the server's account of the request: where its blocks

@@ -1,0 +1,924 @@
+package composer
+
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/composer/ir"
+)
+
+// redirect points every reader of node from, but node keep, at node to.
+func (n *Kernel) redirect(from, to, keep int) {
+	var buf [3]int
+	for i := range n.Nodes {
+		if i == keep || !slices.Contains(n.args(i, &buf), from) {
+			continue
+		}
+		nd := &n.Nodes[i]
+		for _, p := range n.Operands(nd) {
+			if *p == from {
+				*p = to
+			}
+		}
+	}
+	for i := range n.Stores {
+		if n.Stores[i].Barrier || n.Stores[i].Run {
+			continue
+		}
+		for _, p := range n.storeArgs(&n.Stores[i]) {
+			if *p == from {
+				*p = to
+			}
+		}
+	}
+}
+
+// storeArgs is a store's node fields.
+func (n *Kernel) storeArgs(s *Store) []*int {
+	out := []*int{&s.Ix, &s.Val}
+	for i := range s.Ax {
+		out = append(out, &s.Ax[i])
+	}
+	if s.Tile {
+		out = append(out, &s.Stride)
+	}
+	return out
+}
+
+// moveLoops appends m's loops to n, re-pointed at n's buffers (bufOf) and
+// loops, a loop of none set inside top, and returns each loop's index in n.
+func (n *Kernel) moveLoops(m *Kernel, bufOf []int, top int) []int {
+	loopOf := make([]int, len(m.Loops))
+	for i := range loopOf {
+		loopOf[i] = len(n.Loops) + i
+	}
+	for _, l := range m.Loops {
+		p := l.Parent
+		l.Parent = top
+		if p >= 0 {
+			l.Parent = loopOf[p]
+		}
+		if l.Of > 0 {
+			l.Of = loopOf[l.Of-1] + 1
+		}
+		cs := make([]Cursor, len(l.Cursors))
+		for j, c := range l.Cursors {
+			c.Buf = bufOf[c.Buf]
+			cs[j] = c
+		}
+		l.Cursors = cs
+		n.Loops = append(n.Loops, l)
+	}
+	return loopOf
+}
+
+// moveNode re-points node nd, copied from one kernel into another, at the
+// other's buffers (bufOf) and loops (loopOf).
+func moveNode(nd *Node, bufOf, loopOf []int) {
+	switch {
+	case nd.Op == OpIter || nd.Op == OpFold:
+		nd.At = loopOf[nd.At]
+	case (nd.Op == OpLoad || nd.Op == OpTileLoad) && nd.At > 0:
+		nd.At = loopOf[nd.At-1] + 1
+	}
+	switch nd.Op {
+	case OpLoad, OpTileLoad, OpTileScale:
+		nd.Buf = bufOf[nd.Buf]
+	}
+}
+
+// moveStore is store s copied from one kernel into another: at its
+// buffers and loops, a store at the element's end at loop top, and its
+// nodes walk's.
+func (n *Kernel) moveStore(s Store, bufOf, loopOf []int, top int, walk func(int) int) Store {
+	s.Ax = slices.Clone(s.Ax)
+	if s.At >= 0 {
+		s.At = loopOf[s.At]
+	} else {
+		s.At = top
+	}
+	if s.Barrier || s.Run {
+		return s
+	}
+	s.Buf = bufOf[s.Buf]
+	for _, p := range n.storeArgs(&s) {
+		*p = walk(*p)
+	}
+	return s
+}
+
+// Operands is node nd's operand fields, a fold's start and step among them.
+func (n *Kernel) Operands(nd *Node) []*int {
+	if nd.Op == OpExchange {
+		return exchangeArgs(nd)
+	}
+	if nd.Op == OpLoad && nd.Ax != nil || nd.Op == OpMMA {
+		nd.Ax = append([]int(nil), nd.Ax...)
+		out := make([]*int, len(nd.Ax))
+		for i := range nd.Ax {
+			out[i] = &nd.Ax[i]
+		}
+		return out
+	}
+	switch arity(nd.Op) {
+	case 0:
+		return nil
+	case 1:
+		return []*int{&nd.A}
+	case 3:
+		return []*int{&nd.A, &nd.B, &nd.C}
+	}
+	return []*int{&nd.A, &nd.B}
+}
+
+// args is node i's operands as Operands states them, read and not
+// written: the node's own index fields, or its axes, in buf where it has
+// no axes.
+func (n *Kernel) args(i int, buf *[3]int) []int {
+	nd := &n.Nodes[i]
+	if nd.Op == OpLoad && nd.Ax != nil || nd.Op == OpMMA {
+		return nd.Ax
+	}
+	buf[0], buf[1], buf[2] = nd.A, nd.B, nd.C
+	switch {
+	case nd.Op == OpExchange && nd.C < 0:
+		return buf[:2]
+	case nd.Op == OpExchange:
+		return buf[:3]
+	}
+	switch arity(nd.Op) {
+	case 0:
+		return nil
+	case 1:
+		return buf[:1]
+	case 3:
+		return buf[:3]
+	}
+	return buf[:2]
+}
+
+// arity is how many operands an op reads, a fold its step and its start.
+func arity(op Op) int {
+	switch op {
+	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength, OpSpan, OpLanes:
+		return 0
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32, OpDupEven, OpDupOdd, OpSwapPairs, OpCopy, OpUpper, OpWidenHalf, OpTileSplat, OpMMAGet, OpSpanSum:
+		return 1
+	case OpFma, OpSelect, OpDot4, OpDot4U, OpTileMMA, OpFmaF16x2:
+		return 3
+	}
+	return 2
+}
+
+// exchangeArgs is an exchange's operand fields, its start where it has one.
+func exchangeArgs(nd *Node) []*int {
+	if nd.C < 0 {
+		return []*int{&nd.A, &nd.B}
+	}
+	return []*int{&nd.A, &nd.B, &nd.C}
+}
+
+// Varies reports whether node i changes from trip to trip of loop c.
+func (n *Kernel) Varies(i, c int) bool {
+	seen := map[int]bool{}
+	var walk func(i int) bool
+	walk = func(i int) bool {
+		if seen[i] {
+			return false
+		}
+		seen[i] = true
+		nd := n.Nodes[i]
+		if (nd.Op == OpIter || nd.Op == OpFold) && n.within(nd.At, c) {
+			return true
+		}
+		if (nd.Op == OpLoad || nd.Op == OpTileLoad) && nd.At > 0 && n.within(nd.At-1, c) {
+			return true
+		}
+		if nd.Op == OpFold {
+			return false
+		}
+		var buf [3]int
+		for _, a := range n.args(i, &buf) {
+			if walk(a) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(i)
+}
+
+// within reports whether loop h is c or sits in it.
+func (n *Kernel) within(h, c int) bool {
+	for ; h >= 0; h = n.Loops[h].Parent {
+		if h == c {
+			return true
+		}
+	}
+	return false
+}
+
+// copyOf is node i with each node in sub replaced: the nodes that read a
+// replaced one copied, the rest shared.
+func (n *Kernel) copyOf(i int, sub map[int]int) int {
+	return n.copyMemo(i, sub, map[int]int{})
+}
+
+// copyMemo is copyOf with the copies made kept in memo, so copies of other
+// nodes under the same sub share them.
+func (n *Kernel) copyMemo(i int, sub, memo map[int]int) int {
+	var walk func(i int) int
+	walk = func(i int) int {
+		if v, ok := sub[i]; ok {
+			return v
+		}
+		if v, ok := memo[i]; ok {
+			return v
+		}
+		nd := n.Nodes[i]
+		if nd.Op == OpFold {
+			return i
+		}
+		changed := false
+		for _, p := range n.Operands(&nd) {
+			if v := walk(*p); v != *p {
+				*p, changed = v, true
+			}
+		}
+		v := i
+		if changed {
+			v = n.add(nd)
+		}
+		memo[i] = v
+		return v
+	}
+	return walk(i)
+}
+
+// copyKeep is copyOf with each copy kept in sub, so a later copy of the
+// same nodes reuses it.
+func (n *Kernel) copyKeep(i int, sub map[int]int) int {
+	var walk func(i int) int
+	walk = func(i int) int {
+		if v, ok := sub[i]; ok {
+			return v
+		}
+		nd := n.Nodes[i]
+		if nd.Op == OpFold {
+			return i
+		}
+		changed := false
+		for _, p := range n.Operands(&nd) {
+			if v := walk(*p); v != *p {
+				*p, changed = v, true
+			}
+		}
+		if !changed {
+			return i
+		}
+		v := n.add(nd)
+		sub[i] = v
+		return v
+	}
+	return walk(i)
+}
+
+// wordsSum reports whether fold f sums the words a load reads: an index
+// row's sum, a lane a word. A count a comparison makes stays a word a trip:
+// vectorized, the composer's forming of the infill draw's counts went from
+// about a second to minutes (TestComposedCPUSampleInfill logs the time).
+func (n *Kernel) wordsSum(f int) bool {
+	st := n.Nodes[n.Nodes[f].A]
+	return st.Op == OpAdd && st.A == f && n.Nodes[st.B].Op == OpLoad && n.Nodes[st.B].Type == ir.U32
+}
+
+// sumFold reports whether fold f's step adds into it: an fma onto it or an
+// add of it.
+func (n *Kernel) sumFold(f int) bool {
+	st := n.Nodes[n.Nodes[f].A]
+	return st.Op == OpFma && st.C == f || st.Op == OpAdd && st.A == f
+}
+
+// extremeTerm is the term fold f's step takes the largest or least of with
+// it, -1 where the step is not such a choice.
+func (n *Kernel) extremeTerm(f int) int {
+	st := n.Nodes[n.Nodes[f].A]
+	if (st.Op != OpMax && st.Op != OpMin) || st.Type != ir.F32 {
+		return -1
+	}
+	switch f {
+	case st.A:
+		return st.B
+	case st.B:
+		return st.A
+	}
+	return -1
+}
+
+// carriedBy is the fold whose choice fold f carries a value with: f's step
+// selects a new value where that fold's term is above it, as a select or
+// as its bits, -1 where f is not carried.
+func (n *Kernel) carriedBy(f int) int {
+	st := n.Nodes[n.Nodes[f].A]
+	pred := -1
+	switch {
+	case st.Op == OpSelect && st.C == f:
+		pred = st.A
+	case st.Op == OpOr:
+		set, clear := n.Nodes[st.A], n.Nodes[st.B]
+		if set.Op == OpAnd && clear.Op == OpAndNot && clear.A == f && clear.B == set.B {
+			pred = set.B
+		}
+	}
+	if pred < 0 {
+		return -1
+	}
+	won := n.Nodes[pred]
+	if won.Op != OpLess || n.Nodes[won.A].Op != OpFold || n.extremeTerm(won.A) != won.B {
+		return -1
+	}
+	return won.A
+}
+
+// foldsOf is loop c's folds.
+func (n *Kernel) foldsOf(c int) []int {
+	var out []int
+	for i, nd := range n.Nodes {
+		if nd.Op == OpFold && nd.At == c {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// iterOf is loop c's iteration node, -1 where nothing reads it.
+func (n *Kernel) iterOf(c int) int {
+	for i, nd := range n.Nodes {
+		if nd.Op == OpIter && nd.At == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// copyInto is src's node root as nodes of dst: each node src reaches from
+// root copied, its operands first, a load into dst's buffer of the same
+// operand, kind and shape; leaf, where it answers, stands for a node,
+// given the node with its operands already copied.
+func copyInto(dst, src *Kernel, root int, leaf func(i int, nd Node) (int, bool)) int {
+	memo := map[int]int{}
+	var walk func(i int) int
+	walk = func(i int) int {
+		if v, ok := memo[i]; ok {
+			return v
+		}
+		nd := src.Nodes[i]
+		if nd.Op == OpFold {
+			if v, ok := leaf(i, nd); ok {
+				memo[i] = v
+				return v
+			}
+			v := dst.add(Node{})
+			memo[i] = v
+			for _, a := range src.Operands(&nd) {
+				*a = walk(*a)
+			}
+			dst.Nodes[v] = nd
+			return v
+		}
+		args := src.Operands(&nd)
+		for _, a := range args {
+			*a = walk(*a)
+		}
+		if v, ok := leaf(i, nd); ok {
+			memo[i] = v
+			return v
+		}
+		if nd.Op == OpLoad {
+			nd.Buf = dst.bufLike(src.Bufs[nd.Buf])
+		}
+		v := dst.add(nd)
+		memo[i] = v
+		return v
+	}
+	return walk(root)
+}
+
+// bufLike is k's buffer of b's operand, kind and shape, added where k has
+// none.
+func (k *Kernel) bufLike(b Buf) int {
+	for i, x := range k.Bufs {
+		if x.Operand == b.Operand && x.Kind == b.Kind && sameShape(x.Shape, b.Shape) {
+			return i
+		}
+	}
+	return k.buf(b)
+}
+
+// compact drops the nodes nothing reaches: neither a store, nor a loop's
+// count, live span or element, nor a fact.
+func (k *Kernel) compact() {
+	live := make([]bool, len(k.Nodes))
+	reached := 0
+	var stack []int
+	var buf [3]int
+	walk := func(i int) {
+		stack = append(stack[:0], i)
+		for len(stack) > 0 {
+			i := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if i < 0 || i >= len(k.Nodes) || live[i] {
+				continue
+			}
+			live[i] = true
+			reached++
+			stack = append(stack, k.args(i, &buf)...)
+		}
+	}
+	for i := range k.Stores {
+		s := k.Stores[i]
+		if !s.Barrier && !s.Run {
+			for _, a := range k.storeArgs(&s) {
+				walk(*a)
+			}
+		}
+	}
+	for _, l := range k.Loops {
+		for _, x := range []int{l.Count, l.Span, l.Elem, l.End} {
+			if x > 0 {
+				walk(x - 1)
+			}
+		}
+		for _, cu := range l.Cursors {
+			if cu.Init > 0 {
+				walk(cu.Init - 1)
+			}
+		}
+	}
+	for _, x := range []int{k.Rows, k.Clamp, k.TileBase, k.TileLast, k.TileFirst} {
+		if x > 0 {
+			walk(x - 1)
+		}
+	}
+	for _, b := range k.Bufs {
+		for _, x := range append([]int{b.Base, b.Offset}, b.Dims...) {
+			if x > 0 {
+				walk(x - 1)
+			}
+		}
+	}
+	for _, a := range k.Args {
+		if a.Node > 0 {
+			walk(a.Node - 1)
+		}
+	}
+	if p := k.Positions; p != nil {
+		for _, x := range append(append([]int{p.First, p.End}, p.Live...), p.Pos...) {
+			walk(x)
+		}
+		for _, x := range []int{p.Span, p.Part} {
+			if x > 0 {
+				walk(x - 1)
+			}
+		}
+	}
+	if reached == len(k.Nodes) {
+		return
+	}
+	at := make([]int, len(k.Nodes))
+	var nodes []Node
+	for i, nd := range k.Nodes {
+		at[i] = -1
+		if live[i] {
+			at[i] = len(nodes)
+			nodes = append(nodes, nd)
+		}
+	}
+	for i := range nodes {
+		for _, a := range k.Operands(&nodes[i]) {
+			*a = at[*a]
+		}
+	}
+	k.Nodes = nodes
+	for i := range k.Stores {
+		s := &k.Stores[i]
+		if s.Barrier || s.Run {
+			continue
+		}
+		for _, a := range k.storeArgs(s) {
+			*a = at[*a]
+		}
+	}
+	re := func(x int) int {
+		if x > 0 {
+			return at[x-1] + 1
+		}
+		return x
+	}
+	for i := range k.Loops {
+		l := &k.Loops[i]
+		l.Count, l.Span, l.Elem, l.End = re(l.Count), re(l.Span), re(l.Elem), re(l.End)
+		for j := range l.Cursors {
+			l.Cursors[j].Init = re(l.Cursors[j].Init)
+		}
+	}
+	k.Rows, k.Clamp = re(k.Rows), re(k.Clamp)
+	k.TileBase, k.TileLast, k.TileFirst = re(k.TileBase), re(k.TileLast), re(k.TileFirst)
+	for i := range k.Bufs {
+		k.Bufs[i].Base, k.Bufs[i].Offset = re(k.Bufs[i].Base), re(k.Bufs[i].Offset)
+		for j := range k.Bufs[i].Dims {
+			k.Bufs[i].Dims[j] = re(k.Bufs[i].Dims[j])
+		}
+	}
+	for i := range k.Args {
+		k.Args[i].Node = re(k.Args[i].Node)
+	}
+	for i := range k.Lines {
+		k.Lines[i].Load = at[k.Lines[i].Load]
+	}
+	if k.Seq != nil {
+		var seq []Entry
+		for _, st := range k.Seq {
+			if st.Kind == EntryNode {
+				if at[st.I] < 0 {
+					continue
+				}
+				st.I = at[st.I]
+			}
+			seq = append(seq, st)
+		}
+		k.Seq = seq
+	}
+	if q := k.Quarter; q != nil {
+		if at[q.Sum] < 0 || at[q.Rest] < 0 || at[q.Turn] < 0 || at[q.Part] < 0 {
+			k.Quarter = nil
+		} else {
+			k.Quarter = &Quarter{Sum: at[q.Sum], Rest: at[q.Rest], Turn: at[q.Turn], Part: at[q.Part], Bound: q.Bound}
+		}
+	}
+	if p := k.Positions; p != nil {
+		q := *p
+		q.First, q.End = at[p.First], at[p.End]
+		q.Live, q.Pos = nil, nil
+		for _, x := range p.Live {
+			q.Live = append(q.Live, at[x])
+		}
+		for _, x := range p.Pos {
+			q.Pos = append(q.Pos, at[x])
+		}
+		q.Span, q.Part = re(p.Span), re(p.Part)
+		k.Positions = &q
+	}
+}
+
+// insertLoop puts l at index at, the loops from at on one later.
+func (n *Kernel) insertLoop(at int, l Loop) int {
+	sh := func(x int) int {
+		if x >= at {
+			return x + 1
+		}
+		return x
+	}
+	for i := range n.Loops {
+		n.Loops[i].Parent = sh(n.Loops[i].Parent)
+		if n.Loops[i].Of > 0 {
+			n.Loops[i].Of = sh(n.Loops[i].Of-1) + 1
+		}
+	}
+	l.Parent = sh(l.Parent)
+	if l.Of > 0 {
+		l.Of = sh(l.Of-1) + 1
+	}
+	n.Loops = append(n.Loops[:at:at], append([]Loop{l}, n.Loops[at:]...)...)
+	for i := range n.Nodes {
+		nd := &n.Nodes[i]
+		switch {
+		case nd.Op == OpIter || nd.Op == OpFold:
+			nd.At = sh(nd.At)
+		case nd.Op == OpLoad && nd.At > 0:
+			nd.At = sh(nd.At-1) + 1
+		}
+	}
+	for i := range n.Stores {
+		if n.Stores[i].At >= 0 {
+			n.Stores[i].At = sh(n.Stores[i].At)
+		}
+	}
+	if p := n.Positions; p != nil && p.Loop >= 0 {
+		q := *p
+		q.Loop = sh(p.Loop)
+		n.Positions = &q
+	}
+	for i := range n.Seq {
+		if e := &n.Seq[i]; e.Kind == EntryLoop || e.Kind == EntryEnd {
+			e.I = sh(e.I)
+		}
+	}
+	return at
+}
+
+// Homes is, for each node, the innermost loop whose trips change it: an
+// iteration's loop, a cursor's load's loop, a sum's loop for the nodes of
+// the sum's step, and for a sum read after its loop the loop around it.
+// -1 for a node no loop changes.
+func (n *Kernel) Homes() []int {
+	nn := len(n.Nodes)
+	// step is the loop of the sum whose step a node is made in, -1 for
+	// none; the first sum to reach a node keeps it.
+	step := make([]int, nn)
+	for i := range step {
+		step[i] = -1
+	}
+	// known is reachesFold(i, f) for the fold f being walked, each node's
+	// answer kept under the walk's mark gen (gen<<2 | 1 no, gen<<2 | 2 yes;
+	// another walk's mark unknown): the nodes below the folds are acyclic.
+	var known []uint32
+	var gen uint32
+	for f := range n.Nodes {
+		nd := &n.Nodes[f]
+		if nd.Op != OpFold {
+			continue
+		}
+		if known == nil {
+			known = make([]uint32, nn)
+		}
+		gen++
+		var reaches func(i int) bool
+		reaches = func(i int) bool {
+			if i == f {
+				return true
+			}
+			if r := known[i]; r>>2 == gen {
+				return r&3 == 2
+			}
+			known[i] = gen<<2 | 1
+			if x := n.Nodes[i]; x.Op == OpFold {
+				// Another sum of the loop, read in this one's step, is read
+				// as it runs: what reads it is made in the trip too.
+				if x.At == nd.At {
+					known[i] = gen<<2 | 2
+				}
+				return known[i]&3 == 2
+			}
+			var buf [3]int
+			for _, a := range n.args(i, &buf) {
+				if reaches(a) {
+					known[i] = gen<<2 | 2
+					return true
+				}
+			}
+			return false
+		}
+		var walk func(i int)
+		walk = func(i int) {
+			if i == f || step[i] >= 0 {
+				return
+			}
+			if n.Nodes[i].Op == OpFold || !reaches(i) {
+				return
+			}
+			step[i] = nd.At
+			var buf [3]int
+			for _, a := range n.args(i, &buf) {
+				walk(a)
+			}
+		}
+		walk(nd.A)
+	}
+	out := make([]int, nn)
+	done := make([]bool, nn)
+	inner := func(a, b int) int {
+		switch {
+		case a < 0:
+			return b
+		case b < 0:
+			return a
+		case n.within(a, b):
+			return a
+		}
+		return b
+	}
+	var home func(i int) int
+	home = func(i int) int {
+		if done[i] {
+			return out[i]
+		}
+		done[i], out[i] = true, -1
+		nd := &n.Nodes[i]
+		h := -1
+		switch {
+		case nd.Op == OpIter:
+			h = nd.At
+		case nd.Op == OpFold:
+			h = n.Loops[nd.At].Parent
+		case nd.Op == OpLoad && nd.At > 0:
+			h = nd.At - 1
+		}
+		if c := step[i]; c >= 0 {
+			h = inner(h, c)
+		}
+		if nd.Op != OpFold {
+			var buf [3]int
+			for _, a := range n.args(i, &buf) {
+				h = inner(h, home(a))
+				if x := n.Nodes[a]; x.Op == OpFold && x.Running {
+					h = inner(h, x.At)
+				}
+			}
+		}
+		out[i] = h
+		return h
+	}
+	for i := range n.Nodes {
+		home(i)
+	}
+	return out
+}
+
+// depth is the length of the longest chain of operations node i is made
+// from, a sum and a leaf 0; an fma multiplying an fma only it reads (a
+// Horner step) adds none, as it needs no register more. A node made
+// reports (where made is given) is a leaf too. uc is each node's readers
+// (useCounts).
+func (n *Kernel) depth(i int, memo map[int]int, made func(int) bool, uc []int) int {
+	if made != nil && made(i) {
+		return 0
+	}
+	if d, ok := memo[i]; ok {
+		return d
+	}
+	memo[i] = 0
+	nd := n.Nodes[i]
+	if nd.Op == OpFold || arity(nd.Op) == 0 {
+		return 0
+	}
+	d := 0
+	var buf [3]int
+	for _, a := range n.args(i, &buf) {
+		step := 1
+		if nd.Op == OpFma && n.Nodes[a].Op == OpFma && uc[a] == 1 && a != nd.C {
+			step = 0
+		}
+		d = max(d, n.depth(a, memo, made, uc)+step)
+	}
+	memo[i] = d
+	return d
+}
+
+// evalArgs is node nd's operands in the order its code evaluates them: the
+// deeper first, the earlier of two alike, an fma's addend the earliest; a
+// Horner step's accumulator before all.
+func (n *Kernel) evalArgs(nd *Node, memo map[int]int, made func(int) bool, uc []int) []*int {
+	args := n.Operands(nd)
+	if nd.Op == OpFma {
+		args = []*int{&nd.C, &nd.A, &nd.B}
+		for _, x := range []*int{&nd.A, &nd.B} {
+			if n.Nodes[*x].Op == OpFma && uc[*x] == 1 {
+				out := []*int{x, &nd.C}
+				if x == &nd.A {
+					return append(out, &nd.B)
+				}
+				return append(out, &nd.A)
+			}
+		}
+	}
+	out := append([]*int(nil), args...)
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && n.depth(*out[j], memo, made, uc) > n.depth(*out[j-1], memo, made, uc); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// takeTo is where one step of a loop's takes puts a take's value.
+type takeTo uint8
+
+const (
+	// takeOwn writes the take's register.
+	takeOwn takeTo = iota
+	// takePark stores the value in a spill slot: a take not yet emitted
+	// still reads the take's register.
+	takePark
+	// takeUnpark loads a parked value into the take's register, once no take
+	// left reads it.
+	takeUnpark
+)
+
+// takeStep is one step of a loop's takes: take I, an index into the loop's
+// cursors, to where To says, through spill slot Slot where parked.
+type takeStep struct {
+	I, Slot int
+	To      takeTo
+}
+
+// takeOrder is loop c's takes in the steps a lowering emits them; false
+// where they cannot be. The register binder reads a loop's takes as one
+// assignment -- every source (a copy's pointer, an offset base, a sheet's
+// term) read before any copy is written -- so a take whose register another
+// take still reads goes after that take, and where takes each write what
+// another reads, one is parked in a spill slot the binding left free until
+// its register's readers have read it. Every slot taken is the stack guard's
+// limit (spillSlots), the one place it fails.
+func (n *Kernel) takeOrder(c int) ([]takeStep, bool) {
+	l := n.Loops[c]
+	var pend []int
+	for i, cu := range l.Cursors {
+		if cu.Take {
+			pend = append(pend, i)
+		}
+	}
+	read := func(i int) bool {
+		d := n.takeWrites(l.Cursors[i])
+		for _, o := range pend {
+			if o != i && d > 0 && n.takeReads(l.Cursors[o], d) {
+				return true
+			}
+		}
+		return false
+	}
+	out := make([]takeStep, 0, len(pend))
+	var parked []takeStep
+	slot := n.spillsUsed()
+	for len(pend) > 0 || len(parked) > 0 {
+		if j := slices.IndexFunc(parked, func(p takeStep) bool { return !read(p.I) }); j >= 0 {
+			out = append(out, takeStep{I: parked[j].I, Slot: parked[j].Slot, To: takeUnpark})
+			parked = slices.Delete(parked, j, j+1)
+			continue
+		}
+		to := takeOwn
+		pick := slices.IndexFunc(pend, func(i int) bool { return !read(i) })
+		if pick < 0 {
+			pick = slices.IndexFunc(pend, func(i int) bool { return !n.takeZeroes(l.Cursors[i]) })
+			if slot++; pick < 0 || slot > spillSlots {
+				return nil, false
+			}
+			to = takePark
+		}
+		st := takeStep{I: pend[pick], To: to}
+		if to == takePark {
+			st.Slot = slot
+			parked = append(parked, st)
+		}
+		out = append(out, st)
+		pend = slices.Delete(pend, pick, pick+1)
+	}
+	return out, true
+}
+
+// takeZeroes reports whether take cu only zeroes an offset register.
+func (n *Kernel) takeZeroes(cu Cursor) bool {
+	return cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Off > 0
+}
+
+// spillsUsed is the highest spill slot the binding gave a value or a copy:
+// the slots past it are free for the whole kernel.
+func (n *Kernel) spillsUsed() int {
+	s := 0
+	for _, nd := range n.Nodes {
+		s = max(s, nd.Spill)
+	}
+	for _, p := range n.Ptrs {
+		s = max(s, p.Spill)
+	}
+	return s
+}
+
+// takeWrites is the register (1 + its number) take cu writes, 0 for a copy
+// that lives in a spill slot.
+func (n *Kernel) takeWrites(cu Cursor) int {
+	switch {
+	case cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Off > 0:
+		return n.Ptrs[cu.Ptr-1].Off
+	case cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Spill > 0:
+		return 0
+	case cu.Ptr > 0:
+		return n.Ptrs[cu.Ptr-1].Reg
+	}
+	return n.Bufs[cu.Buf].Reg
+}
+
+// takeReads reports whether take cu reads register r (1 + its number): its
+// source pointer's, an offset base's, or its term's. An offset's take only
+// zeroes it.
+func (n *Kernel) takeReads(cu Cursor, r int) bool {
+	if cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Off > 0 {
+		return false
+	}
+	if cu.Init > 0 {
+		if nd := n.Nodes[cu.Init-1]; nd.Spill == 0 && nd.Reg == r {
+			return true
+		}
+	}
+	if cu.From == 0 {
+		return n.Bufs[cu.Buf].Reg == r
+	}
+	p := n.Ptrs[cu.From-1]
+	if p.Off > 0 {
+		base := n.Bufs[p.Buf].Reg
+		if p.From > 0 {
+			base = n.Ptrs[p.From-1].Reg
+		}
+		return p.Off == r || base == r
+	}
+	return p.Spill == 0 && p.Reg == r
+}

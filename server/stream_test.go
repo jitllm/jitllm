@@ -13,14 +13,6 @@ import (
 
 type fakeVocab struct{ pieces map[int32]string }
 
-func (v fakeVocab) Decode(ids []int32) string {
-	var b strings.Builder
-	for _, id := range ids {
-		b.WriteString(v.pieces[id])
-	}
-	return b.String()
-}
-
 // TestStopStringIsNeverLeakedAcrossTokens is the gate for the held-back tail.
 // With the hold-back removed (hold = 0) it fails with `leaked "<" before the
 // stop string completed`; a check on the final text alone cannot see this.

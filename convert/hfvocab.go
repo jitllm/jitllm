@@ -13,7 +13,7 @@ import (
 
 // The tokenizer, read from the model's own tokenizer.json (RULE 7m). A GGUF
 // carries only a pre-tokenizer label (tokenizer.ggml.pre) that the GGUF path
-// resolves through pretok.Table; a HuggingFace directory ships the artefact
+// resolves through pretok.Table(); a HuggingFace directory ships the artefact
 // the weights were trained against, so this path parses the pipeline out of it
 // with pretok.ParsePreTokenizer and reads as fields what the GGUF side infers
 // from a family:
@@ -214,7 +214,7 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	// diverges a few tokens in.) tokenizer_config's explicit key still overrides
 	// -- for a class that reads it. The generic PreTrainedTokenizerFast does
 	// not: it runs tokenizer.json's post-processor as written, so Hunyuan's
-	// "add_bos_token": true adds no BOS under transformers (or llama.cpp), and
+	// "add_bos_token": true adds no BOS under transformers, and
 	// obeying the key put one in front of every prompt.
 	v.AddBOS, v.AddEOS = hfTemplateAdds(tj.PostProcessor)
 	generic := tc.TokenizerClass == "PreTrainedTokenizerFast"

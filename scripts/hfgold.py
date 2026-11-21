@@ -53,6 +53,8 @@ DIRS = [
     "synth-dots1-hf", "synth-phimoe-hf", "synth-apertus-hf",
     # YaRN's stated and derived magnitudes, as scripts/c6gold.py saves them.
     "synth-olmo3-af-hf", "synth-mistral3-af-hf", "synth-deepseek-yarn-hf", "synth-deepseek-yarn-af-hf",
+    # A class with a tower, read by a model.json (convert/models).
+    "synth-hf-qwen35",
 ]
 NPOS, NLOGIT = 8, 256
 # Texts for the tokenizer half: a leading space, a double space (sentencepiece
@@ -84,9 +86,28 @@ SYNTH = {
     "synth-mixtral": ("mixtral", dict(num_local_experts=4, num_experts_per_tok=2, hidden_act="silu"),
                       "tiny-random-MixtralForCausalLM"),
     "synth-qwen2": ("qwen2", dict(), "qwen2.5-tiny-random"),
+    # Qwen3 under YaRN, a factor of 4 over an original context of 16, so the
+    # correction range and the magnitude bite inside the golden positions.
+    "synth-hf-qwen3-yarn": ("qwen3", dict(rope_parameters={"rope_type": "yarn", "factor": 4.0,
+                                                          "original_max_position_embeddings": 16,
+                                                          "rope_theta": 10000.0}),
+                            "qwen2.5-tiny-random"),
+    # Mixtral with a window of 4: MixtralModel masks every layer to it.
+    "synth-hf-mixtral-swa": ("mixtral", dict(num_local_experts=4, num_experts_per_tok=2, hidden_act="silu",
+                                             sliding_window=4), "tiny-random-MixtralForCausalLM"),
     # A window of 4 so it bites inside the 8 golden positions: Phi3 masks every
     # layer to it, and the tiny-random fixtures' 2047 never reach it.
     "synth-phi3": ("phi3", dict(sliding_window=4), "tiny-random-Phi3ForCausalLM"),
+    # Phi3 under LongRoPE over an original context of 16, every factor its
+    # own: a golden of 40 positions runs past it, so transformers turns the
+    # long factors and the magnitude of a fourfold context, and an instance of
+    # 41 positions turns them too (model.RopeFor).
+    "synth-phi3-longrope": ("phi3", dict(
+        original_max_position_embeddings=16, max_position_embeddings=64,
+        rope_parameters={"rope_type": "longrope", "rope_theta": 10000.0, "original_max_position_embeddings": 16,
+                         "short_factor": [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75],
+                         "long_factor": [3.0, 4.5, 2.5, 6.0, 3.5, 5.0, 7.5, 4.0]}),
+                            "tiny-random-Phi3ForCausalLM"),
     # MLA and the V3 router, in megabytes. Every knob here is switched ON
     # because the point of a synthetic fixture is that a wiring error shows as
     # an uncorrelated logit vector: q_lora_rank exercises the two-step query,
@@ -227,6 +248,10 @@ SYNTH = {
         moe_intermediate_size=32, n_group=1, topk_group=1,
         routed_scaling_factor=2.446, norm_topk_prob=True,
         num_hidden_layers=3, hidden_act="silu",
+        # A context past one device prefill chunk (512 rows), which the
+        # hybrid batch gate's prompt crosses: KimiLinearConfig's context key
+        # is model_max_length.
+        model_max_length=1024,
         layer_types=["linear_attention", "full_attention", "linear_attention"],
         mlp_layer_types=["dense", "sparse", "sparse"],
         # The donor vocabulary is far smaller than this config's default
@@ -254,6 +279,10 @@ SYNTH = {
     # OLMo 3: OLMo 2's block with a window of 4 on three layers in four.
     "synth-hf-olmo3": ("olmo3", dict(**SPM_IDS, num_hidden_layers=4, num_key_value_heads=4, sliding_window=4),
                        "tiny-random-MixtralForCausalLM"),
+    # OLMo: LayerNorms of no weight and no bias, and q, k, v clamped at 0.1, a
+    # value the projections' outputs pass at this width.
+    "synth-hf-olmo": ("olmo", dict(**SPM_IDS, num_hidden_layers=3, num_key_value_heads=4, clip_qkv=0.1),
+                      "tiny-random-MixtralForCausalLM"),
     # EXAONE 4: post-norms, a per-head q/k norm, a window of 4 on three layers
     # in four and no rotary on the fourth.
     "synth-hf-exaone4": ("exaone4", dict(**SPM_IDS, num_hidden_layers=4, sliding_window=4, sliding_window_pattern=4),
@@ -261,6 +290,29 @@ SYNTH = {
     # Ministral 3: YaRN factor 16 over 4 original positions, so the temperature
     # (llama_4_scaling_beta 0.5) moves at every 4th position; mscale_all_dim 0.5
     # against mscale 1 puts the magnitude at 1.12 rather than exactly one.
+    # Llama 3's rope scaling over 16 original positions: every pair's
+    # wavelength is past 4, so all but the first are divided by the factor and
+    # the first is blended, which bites at every one of the 8 positions.
+    "synth-hf-llama3": ("llama", dict(**SPM_IDS, rope_parameters={
+        "rope_type": "llama3", "rope_theta": 10000.0, "factor": 8.0, "low_freq_factor": 1.0,
+        "high_freq_factor": 4.0, "original_max_position_embeddings": 16}), "tiny-random-LlamaForCausalLM"),
+    # Two classes added by their library files alone (convert/models/gptneox.json
+    # and opt.json): GPT-NeoX's parallel block, its per-head fused q|k|v and its
+    # rotary over half of each head; OPT's learned positions read past an offset
+    # of 2 and its ReLU MLP.
+    "synth-hf-gptneox": ("gpt_neox", dict(**SPM_IDS, num_hidden_layers=3, hidden_act="gelu", use_parallel_residual=True,
+                                          rope_parameters={"rope_type": "default", "rope_theta": 10000.0,
+                                                           "partial_rotary_factor": 0.5}),
+                         "tiny-random-MixtralForCausalLM"),
+    "synth-hf-opt": ("opt", dict(**SPM_IDS, num_hidden_layers=3, ffn_dim=96, word_embed_proj_dim=64,
+                                 activation_function="relu", do_layer_norm_before=True),
+                     "tiny-random-MixtralForCausalLM"),
+    # GPT-J, by convert/models/gptj.json alone: the attention and the MLP in
+    # parallel off one LayerNorm, the rotary over 8 of each head's 16 on
+    # adjacent pairs, the tanh GELU, and the head's bias.
+    "synth-hf-gptj": ("gptj", dict(**SPM_IDS, n_embd=64, n_layer=3, n_head=4, n_inner=96, n_positions=512,
+                                   rotary_dim=8, activation_function="gelu_new"),
+                      "tiny-random-MixtralForCausalLM"),
     "synth-hf-ministral3": ("ministral3", dict(**SPM_IDS, 
         num_hidden_layers=3,
         rope_parameters={"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 16.0,
@@ -289,6 +341,10 @@ def synth(name):
         for n, p in m.named_parameters():
             if p.dim() == 1:  # norms (and biases): random, so their wiring shows
                 p.copy_(torch.randn_like(p) * 0.5 + (0 if mt == "gemma" else 1))
+            # A head's bias is a logit offset: around 1 it outweighs the
+            # logits and every position's argmax is its largest entry.
+            if n == "lm_head.bias":
+                p.copy_(torch.randn_like(p) * 0.1)
         # ★ AND THE SELECTION BIAS BY NAME, BECAUSE IT IS A BUFFER AND NOT A
         # PARAMETER. DeepseekV3TopkRouter declares
         # `self.e_score_correction_bias = nn.Buffer(torch.zeros(num_experts))`,
@@ -317,10 +373,66 @@ def synth(name):
     print("made", dst)
 
 
+# Qwen3.5 as Qwen3_5ForConditionalGeneration, the class convert/models/qwen3_5.json
+# reads: the text model under model.language_model., hyperparameters under
+# text_config, and a one-block tower under model.visual. that the converter
+# skips. Four value heads over two key heads, so transformers' grouped head
+# order and the beta/alpha interleave bite; a full block between recurrent
+# ones; the (1 + w) norms random around 0 and the gated norm, a plain weight,
+# around 1. Its own builder: AutoModelForCausalLM would make the flat text class.
+QWEN35_TEXT = dict(
+    hidden_size=64, intermediate_size=96, num_hidden_layers=4, num_attention_heads=4,
+    num_key_value_heads=2, head_dim=32, hidden_act="silu", attn_output_gate=True,
+    linear_conv_kernel_dim=4, linear_key_head_dim=32, linear_value_head_dim=32,
+    linear_num_key_heads=2, linear_num_value_heads=4,
+    layer_types=["linear_attention", "linear_attention", "full_attention", "linear_attention"],
+    max_position_embeddings=512, rms_norm_eps=1e-6, initializer_range=0.1,
+    rope_parameters={"rope_type": "default", "rope_theta": 10000.0, "partial_rotary_factor": 0.25,
+                     "mrope_section": [2, 1, 1], "mrope_interleaved": True},
+    pad_token_id=0, bos_token_id=1, eos_token_id=2, tie_word_embeddings=False)
+
+
+def synth_qwen35(name):
+    import shutil
+    from transformers import Qwen3_5Config, Qwen3_5ForConditionalGeneration
+    donor = "qwen2.5-tiny-random"
+    dst = os.path.realpath(os.path.join(MODELS, name))
+    src = os.path.realpath(os.path.join(MODELS, donor))
+    vocab = Tokenizer.from_file(os.path.join(src, "tokenizer.json")).get_vocab_size()
+    vision = dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=64,
+                  patch_size=16, spatial_merge_size=2, temporal_patch_size=2, in_channels=3,
+                  deepstack_visual_indexes=[])
+    cfg = Qwen3_5Config(text_config=dict(QWEN35_TEXT, vocab_size=vocab), vision_config=vision,
+                        tie_word_embeddings=False)
+    torch.manual_seed(1234)
+    m = Qwen3_5ForConditionalGeneration(cfg).to(torch.float32)
+    with torch.no_grad():
+        for n, p in m.named_parameters():
+            if p.dim() == 1:
+                p.copy_(torch.randn_like(p) * 0.5 + (1 if n.endswith("linear_attn.norm.weight") else 0))
+    m.save_pretrained(dst)
+    for f in TOKFILES:
+        if os.path.exists(os.path.join(src, f)):
+            shutil.copy(os.path.join(src, f), dst)
+    print("made", dst)
+
+
+def qwen35Stale(name):
+    """True when name has no fixture, or one whose text_config disagrees with QWEN35_TEXT."""
+    p = os.path.join(MODELS, name, "config.json")
+    if not os.path.exists(p):
+        return True
+    have = json.load(open(p)).get("text_config", {})
+    return any(k in have and have[k] != v for k, v in QWEN35_TEXT.items() if k != "rope_parameters")
+
+
+BUILT = {"synth-hf-qwen35": (synth_qwen35, qwen35Stale)}
+
+
 # A windowed fixture runs long enough to cross KV page boundaries: a window
 # SHORTER than a page (32 positions) is read out of one page until it is not,
 # and 8 positions never leave the first.
-LONG = {"synth-phi3": 80, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24}
+LONG = {"synth-phi3": 80, "synth-phi3-longrope": 40, "synth-hf-qwen3-yarn": 40, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24, "synth-hf-gptneox": 24, "synth-hf-opt": 24}
 
 
 def ids_for(vocab, n=NPOS):
@@ -355,8 +467,16 @@ def main(dirs):
         # getting a byte-identical argmax list is what caught it.
         if d in SYNTH and synthStale(d):
             synth(d)
+        if d in BUILT and BUILT[d][1](d):
+            BUILT[d][0](d)
         path = os.path.realpath(os.path.join(MODELS, d))
         cfg = AutoConfig.from_pretrained(path)
+        # A class with a tower is loaded as itself, its vocabulary its text model's.
+        cls = AutoModelForCausalLM
+        if d in BUILT:
+            import transformers
+            cls = getattr(transformers, cfg.architectures[0])
+        vocab = getattr(cfg, "vocab_size", None) or cfg.get_text_config().vocab_size
         note = None
         # transformers 5 reads hidden_act ONLY; hidden_activation is the key 4.x
         # added so gemma's mislabelled "gelu" (trained as the tanh approximation)
@@ -366,9 +486,9 @@ def main(dirs):
         if ha and ha != cfg.hidden_act:
             note = "hidden_act %s -> %s (hidden_activation)" % (cfg.hidden_act, ha)
             cfg.hidden_act = ha
-        m = AutoModelForCausalLM.from_pretrained(path, config=cfg, dtype=torch.float32)
+        m = cls.from_pretrained(path, config=cfg, dtype=torch.float32)
         m.eval()
-        ids = ids_for(cfg.vocab_size, LONG.get(d, NPOS))
+        ids = ids_for(vocab, LONG.get(d, NPOS))
         with torch.no_grad():
             lg = m(torch.tensor([ids])).logits[0]
         rows = []
@@ -381,6 +501,13 @@ def main(dirs):
                 "head": [round(float(x), 7) for x in r[:NLOGIT]],
             })
         tk = Tokenizer.from_file(os.path.join(path, "tokenizer.json"))
+        # The specials the class adds: a class that reads add_bos_token or
+        # add_eos_token rebuilds tokenizer.json's post-processor from them.
+        try:
+            from transformers import AutoTokenizer
+            ctk = AutoTokenizer.from_pretrained(path)
+        except Exception:
+            ctk = None
         sp = None
         if os.path.exists(os.path.join(path, "tokenizer.model")):
             import sentencepiece
@@ -389,6 +516,13 @@ def main(dirs):
         for x in TEXTS:
             e = tk.encode(x).ids
             r = {"text": x, "ids": e, "dec": tk.decode(e, skip_special_tokens=True)}
+            if ctk is not None:
+                c, cp = ctk(x)["input_ids"], ctk(x, add_special_tokens=False)["input_ids"]
+                k = next((i for i in range(len(c) - len(cp) + 1) if c[i:i + len(cp)] == cp), None)
+                if k is not None:
+                    cls = c[:k] + tk.encode(x, add_special_tokens=False).ids + c[k + len(cp):]
+                    if cls != e:
+                        r["cls_ids"] = cls
             if sp is not None:
                 # The post-processor's leading specials (a BOS), then the
                 # sentencepiece encoding; sentencepiece adds no specials itself.
@@ -396,7 +530,9 @@ def main(dirs):
                 r["sp_ids"] = lead + sp.encode(x)
                 r["sp_dec"] = tk.decode(r["sp_ids"], skip_special_tokens=True)
             toks.append(r)
-        rec = {"dir": d, "ids": ids, "vocab": cfg.vocab_size, "pos": rows, "tok": toks}
+        # The checkpoint's bytes: the gates sweep one over 2 GiB only when asked.
+        size = sum(os.path.getsize(os.path.join(path, f)) for f in os.listdir(path) if f.endswith(".safetensors"))
+        rec = {"dir": d, "ids": ids, "vocab": vocab, "pos": rows, "tok": toks, "bytes": size}
         if note:
             rec["note"] = note
         with open(os.path.join(OUT, d + ".json"), "w") as f:

@@ -1,0 +1,279 @@
+package composer
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// decomposeSelect is OpSelect over the paged history: each query head's dot
+// with every attended position's key (its HeadDim elements at Offset of the
+// pool row), each group's sum of its heads' scores through Fn and the
+// weights, each block's best, each block's place among the blocks a group
+// ranks (the Local ones ending at the row's own kept apart), then the keep
+// mask an OpAttend reads, one a row, group and attended position, and the
+// blocks each group keeps. Pooled, a block's score is its pooled key's
+// instead (selectPooled), only the complete blocks rank and the row's
+// incomplete one is kept beside them. Its ranking compares every pair of
+// blocks: the basic form.
+func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
+	undo, err := c.onHistory(o)
+	if err != nil {
+		return nil, err
+	}
+	defer undo()
+	a := o.Attr
+	if len(o.In) < 1 || len(o.In) > 2 || len(o.Out) != 1 || len(o.Reads) != 1 || a.Window != 0 || a.Bidir ||
+		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || a.Span <= 0 || a.TopK <= 0 || a.Local < 0 ||
+		a.HeadDim <= 0 || a.Offset < 0 || a.Offset+a.HeadDim > a.Width || c.Step.Page <= 0 || c.Step.Keys <= 0 ||
+		a.Pooled && (a.Local != 0 || len(o.Weight) != 1 || a.Firsts) || !a.Pooled && len(o.Weight) != 0 {
+		return nil, fmt.Errorf("a selection of %d heads in %d groups, keys of %d at %d of %d, blocks of %d, window %d",
+			a.NHead, a.NKVHead, a.HeadDim, a.Offset, a.Width, a.Span, a.Window)
+	}
+	var fn Op
+	switch a.Fn {
+	case 0:
+	case graph.MapMax:
+		fn = OpMax
+	case graph.MapMin:
+		fn = OpMin
+	default:
+		return nil, fmt.Errorf("a selection's score through %v", a.Fn)
+	}
+	pool := c.History.Keys
+	keys, desc, pages := pool.operand(c.tab(TableKeys)), TableRows.op(), c.tab(TablePages)
+	if err := pool.check(a.Width); err != nil {
+		return nil, err
+	}
+	if f := o.Reads[0].From; f > 0 {
+		n := f - 1
+		if c.Graph.Block < 0 {
+			return nil, fmt.Errorf("a selection over block %d's history outside a block", n)
+		}
+		keys.Of = c.blockPart(n)
+	}
+	U, F := ir.U32, ir.F32
+	period, _ := c.selPositions()
+	C, err := c.selWhole()
+	if err != nil {
+		return nil, err
+	}
+	R, H, D, G, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span
+	NB := (C + a.Span - 1) / a.Span
+	out := c.value(o.Out[0])
+	tmp := func(name string, t ir.Type) Operand {
+		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Elem: t, Temp: true}
+	}
+	dots, scores, best, rank, keep := tmp("dots", F), tmp("scores", F), tmp("best", F), tmp("rank", U), tmp("keep", U)
+	mask := maskOf(c, o.Out[0])
+	minus := math.Float32frombits(0xff7fffff)
+	hs := history{a: a, pageSize: c.Step.Page, period: period, passes: c.History.Passes}
+	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, pages}, ops[1:]...) }
+	ext := func() map[int]int { return map[int]int{1: R * rowWords, 2: c.pages()} }
+	rng := Facts{Range: hs.span(2), Extents: ext()}
+	rng.Extents[0] = R * H * D
+
+	// The block's bounds on the row: its first and end positions, its own
+	// block, the first of the blocks forced in and whether block b is one,
+	// and whether block b holds an attended position.
+	boundsOf := func(x *exprs) selectBounds {
+		first, end := hs.start(x), hs.end(x)
+		own := x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, end, x.u(1)), x.u(1)), x.u(uint32(B)))
+		forced := x.op(OpMin, U, x.u(uint32(a.Local)), x.op(OpAdd, U, own, x.u(1)))
+		return selectBounds{first, end, own, x.op(OpSub, U, x.op(OpAdd, U, own, x.u(1)), forced)}
+	}
+	held := func(x *exprs, bd selectBounds, b int) int {
+		lo, hi := x.op(OpMul, U, b, x.u(uint32(B))), x.op(OpMul, U, x.op(OpAdd, U, b, x.u(1)), x.u(uint32(B)))
+		return x.sel(U, x.op(OpLess, ir.Pred, lo, bd.end), x.sel(U, x.op(OpLess, ir.Pred, bd.first, hi), x.u(1), x.u(0)), x.u(0))
+	}
+	// complete is whether block b's positions are all written.
+	complete := func(x *exprs, bd selectBounds, b int) int {
+		last := x.op(OpAdd, U, x.op(OpMul, U, b, x.u(uint32(B))), x.u(uint32(B-1)))
+		return x.sel(U, x.op(OpLess, ir.Pred, last, bd.end), x.u(1), x.u(0))
+	}
+	// isForced is whether block b is kept whatever it scores: the Local
+	// blocks ending at the row's own, or pooled a held block not complete.
+	isForced := func(x *exprs, bd selectBounds, b int) int {
+		if a.Pooled {
+			return x.op(OpAnd, U, held(x, bd, b), x.op(OpXor, U, complete(x, bd, b), x.u(1)))
+		}
+		return x.sel(U, x.op(OpLess, ir.Pred, b, bd.lo), x.u(0), x.sel(U, x.op(OpLess, ir.Pred, bd.own, b), x.u(0), x.u(1)))
+	}
+	// ranks is whether block b competes: a held block not forced in, or
+	// pooled a complete one.
+	ranks := func(x *exprs, bd selectBounds, b int) int {
+		if a.Pooled {
+			return complete(x, bd, b)
+		}
+		return x.op(OpAnd, U, held(x, bd, b), x.op(OpXor, U, isForced(x, bd, b), x.u(1)))
+	}
+	// kept is whether block b is kept: a held block forced in, or ranked
+	// within what the forced leave of TopK -- every held block where they
+	// number at most TopK, a block's rank among the rest below their count.
+	// Pooled, the forced block is kept beside TopK.
+	kept := func(x *exprs, bd selectBounds, b, rk int) int {
+		forced := x.op(OpSub, U, x.op(OpAdd, U, bd.own, x.u(1)), bd.lo)
+		if a.Pooled {
+			forced = x.u(0)
+		}
+		ranked := x.sel(U, x.op(OpLess, ir.Pred, x.op(OpAdd, U, rk, forced), x.u(uint32(a.TopK))), x.u(1), x.u(0))
+		return x.op(OpAnd, U, x.op(OpOr, U, isForced(x, bd, b), ranked), held(x, bd, b))
+	}
+
+	flat := Facts{Extents: ext()}
+	var scoring []Prim
+	ranked := best
+	switch {
+	case a.Pooled:
+		if scoring, err = selectPooled(o, c, pool, keys, tables, flat, best, NB); err != nil {
+			return nil, err
+		}
+	case c.History.Passes:
+		// A pass scores the blocks it holds, which the sweep folds into the
+		// whole history's: the ranking reads the fold after the last.
+		var nbp int
+		scoring, nbp = selectBest(o, c, fn, pool, keys, tables, rng, flat, dots, scores, best, minus, boundsOf)
+		scoring = append(scoring, foldSelection(c, a, best, nbp, NB, hs, tables, flat))
+		ranked = TableSelOut.op()
+	default:
+		scoring, _ = selectBest(o, c, fn, pool, keys, tables, rng, flat, dots, scores, best, minus, boundsOf)
+	}
+
+	var rx exprs
+	rbd := boundsOf(&rx)
+	b, b2 := rx.coord(2), rx.coord(3)
+	vb, vb2 := rx.at(0, []int{R, G, NB}, rx.coord(0), rx.coord(1), b), rx.at(0, []int{R, G, NB}, rx.coord(0), rx.coord(1), b2)
+	ahead := rx.sel(U, rx.op(OpLess, ir.Pred, vb, vb2), rx.u(1),
+		rx.sel(U, rx.op(OpLess, ir.Pred, vb2, vb), rx.u(0), rx.sel(U, rx.op(OpLess, ir.Pred, b2, b), rx.u(1), rx.u(0))))
+	counts := rx.op(OpAnd, U, ahead, ranks(&rx, rbd, b2))
+	rx.op(OpAdd, U, counts, rx.u(0))
+
+	var kx exprs
+	kbd := boundsOf(&kx)
+	kept(&kx, kbd, kx.coord(2), kx.at(0, []int{R, G, NB}, kx.coord(0), kx.coord(1), kx.coord(2)))
+
+	var mx exprs
+	mpos := mx.op(OpAdd, U, hs.start(&mx), mx.coord(2))
+	mb := mx.op(OpMin, U, mx.op(OpDiv, U, mpos, mx.u(uint32(B))), mx.u(uint32(NB-1)))
+	live := mx.sel(U, mx.op(OpLess, ir.Pred, mpos, hs.end(&mx)), mx.u(1), mx.u(0))
+	mx.un(OpCvtF32, F, mx.op(OpAnd, U, live, mx.at(0, []int{R, G, NB}, mx.coord(0), mx.coord(1), mb)))
+
+	var cx exprs
+	cx.at(0, []int{R, G, C}, cx.coord(0), cx.coord(1), cx.coord(2))
+
+	return append(scoring,
+		Prim{Kind: PrimReduce, Shape: []int{R, G, NB, NB}, In: tables(ranked), Out: rank, Combine: OpAdd, Type: U, Expr: rx.e, Facts: flat},
+		Prim{Kind: PrimMap, Shape: []int{R, G, NB}, In: tables(rank), Out: keep, Expr: kx.e, Facts: flat},
+		Prim{Kind: PrimMap, Shape: []int{R, G, C}, In: tables(keep), Out: mask, Expr: mx.e, Facts: flat},
+		Prim{Kind: PrimReduce, Shape: []int{R, G, C}, In: []Operand{mask}, Out: out, Combine: OpAdd, Expr: cx.e},
+	), nil
+}
+
+// selectBest is a selection's block scores from its positions': each query
+// head's dot with every attended position's key, each group's sum of its
+// heads' scores through fn and the weights, each block's best (minus where
+// no position of it is attended), and how many blocks it scores. Over a
+// history read in passes they are the blocks a pass of C positions reaches
+// from its first, its first position's block on.
+func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables func(...Operand) []Operand, rng, flat Facts,
+	dots, scores, best Operand, minus float32, boundsOf func(*exprs) selectBounds) ([]Prim, int) {
+	a := o.Attr
+	U, F := ir.U32, ir.F32
+	period, C := c.selPositions()
+	R, H, D, G, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span
+	J, NB := H/G, (C+a.Span-1)/a.Span
+	if c.History.Passes {
+		NB = C/B + 1
+	}
+	hs := history{a: a, pageSize: c.Step.Page, period: period, passes: c.History.Passes}
+	var dx exprs
+	h, d := dx.coord(1), dx.coord(3)
+	pos, first := hs.position(&dx)
+	pid, off := hs.page(&dx, hs.held(&dx, pos, first))
+	qat := dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, dx.coord(0), dx.u(uint32(H))), h), dx.u(uint32(D))), d)
+	dx.op(OpMul, F, dx.load(0, qat), c.poolRead(&dx, 3, pool, a.Width, pid, off, dx.op(OpAdd, U, d, dx.u(uint32(a.Offset)))))
+
+	var gx exprs
+	gh := gx.op(OpAdd, U, gx.op(OpMul, U, gx.coord(1), gx.u(uint32(J))), gx.coord(3))
+	s := gx.at(0, []int{R, H, C}, gx.coord(0), gh, gx.coord(2))
+	if fn != 0 {
+		s = gx.op(fn, F, s, gx.f(float32(a.Const)))
+	}
+	sumIn := []Operand{dots}
+	if len(o.In) == 2 {
+		s = gx.op(OpMul, F, s, gx.at(1, []int{R, H}, gx.coord(0), gh))
+		sumIn = append(sumIn, c.value(o.In[1]))
+	}
+
+	var bx exprs
+	bbd := boundsOf(&bx)
+	blk := bx.coord(2)
+	if c.History.Passes {
+		blk = bx.op(OpAdd, U, bx.op(OpDiv, U, bbd.first, bx.u(uint32(B))), blk)
+	}
+	t := bx.op(OpAdd, U, bx.op(OpMul, U, blk, bx.u(uint32(B))), bx.coord(3))
+	in := bx.sel(U, bx.op(OpLess, ir.Pred, t, bbd.first), bx.u(0), bx.sel(U, bx.op(OpLess, ir.Pred, t, bbd.end), bx.u(1), bx.u(0)))
+	if a.Firsts {
+		// Only the block's first attended position scores it.
+		lead := bx.op(OpMax, U, bx.op(OpMul, U, blk, bx.u(uint32(B))), bbd.first)
+		in = bx.sel(U, bx.op(OpLess, ir.Pred, lead, t), bx.u(0), in)
+	}
+	rel := bx.op(OpMin, U, bx.op(OpSub, U, bx.op(OpMax, U, t, bbd.first), bbd.first), bx.u(uint32(C-1)))
+	v := bx.at(0, []int{R, G, C}, bx.coord(0), bx.coord(1), rel)
+	bx.sel(F, bx.op(OpLess, ir.Pred, bx.u(0), in), v, bx.f(minus))
+
+	sw := c.History.Passes
+	return []Prim{
+		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), keys), Out: dots, Expr: dx.e, Facts: rng, Sweep: sw},
+		{Kind: PrimReduce, Shape: []int{R, G, C, J}, In: sumIn, Out: scores, Combine: OpAdd, Expr: gx.e, Sweep: sw},
+		{Kind: PrimReduce, Shape: []int{R, G, NB, B}, In: tables(scores), Out: best, Combine: OpMax,
+			Init: int64(math.Float32bits(minus)), Expr: bx.e, Facts: flat, Sweep: sw},
+	}, NB
+}
+
+// foldSelection folds a pass's scores best, of the nbp blocks from its
+// first position's, into the running scores of the whole history's nb
+// blocks (sel.in -> sel.out): each block the larger, a block outside the
+// pass keeping what it had. The first pass folds into the least floats.
+func foldSelection(c *Context, a graph.Attrs, best Operand, nbp, nb int, hs history, tables func(...Operand) []Operand, flat Facts) Prim {
+	U, F := ir.U32, ir.F32
+	R, G := c.Step.Rows, a.NKVHead
+	var x exprs
+	r, g, b := x.coord(0), x.coord(1), x.coord(2)
+	lb := x.op(OpSub, U, b, x.op(OpDiv, U, hs.start(&x), x.u(uint32(a.Span))))
+	in := x.op(OpLess, ir.Pred, lb, x.u(uint32(nbp)))
+	v := x.sel(F, in, x.at(0, []int{R, G, nbp}, r, g, x.op(OpMin, U, lb, x.u(uint32(nbp-1)))), x.f(math.Float32frombits(0xff7fffff)))
+	x.op(OpMax, F, x.at(3, []int{R, G, nb}, r, g, b), v)
+	return Prim{Kind: PrimMap, Shape: []int{R, G, nb}, In: tables(best, TableSelIn.op()), Out: TableSelOut.op(), Expr: x.e, Facts: flat, Sweep: true}
+}
+
+// selWhole is the positions a selection ranks and its keep mask spans: the
+// step's keys, or over a history read in passes the whole history's
+// (Step.Context), each over entries the entries they close.
+func (c *Context) selWhole() (int, error) { return c.wholeKeys(c.History.Period) }
+
+// wholeKeys is the positions of a history of an entry each period, the
+// step's keys or over passes the whole history's (Step.Context).
+func (c *Context) wholeKeys(period int) (int, error) {
+	w := c.Step.Keys
+	if c.History.Passes {
+		if c.Step.Context < c.Step.Keys {
+			return 0, fmt.Errorf("a selection over a history read in passes of %d positions, %d a pass", c.Step.Context, c.Step.Keys)
+		}
+		w = c.Step.Context
+	}
+	return max(1, w/max(1, period)), nil
+}
+
+// selPositions is the period of the history a selection reads (1 for one
+// of rows) and the positions its rows can see: the step's keys, or over
+// entries the entries they close.
+func (c *Context) selPositions() (period, positions int) {
+	period, positions = max(1, c.History.Period), c.Step.Keys
+	if period > 1 {
+		positions = max(1, positions/period)
+	}
+	return period, positions
+}

@@ -261,7 +261,7 @@ func (r *Remote) publishModels() {
 	out := make([]session.LoadedModel, 0, len(resp.Msg.GetLoaded()))
 	for i, m := range resp.Msg.GetLoaded() {
 		r.ids[m.GetPath()] = m.GetModelId()
-		lm := session.LoadedModel{Path: m.GetPath(), Name: m.GetName(), Arch: m.GetArchitecture(),
+		lm := session.LoadedModel{Path: m.GetPath(), Name: m.GetName(),
 			Blocks: int(m.GetBlockCount()), Colour: i, Active: m.GetPath() == r.active}
 		if lm.Name == "" {
 			lm.Name = short(m.GetPath())
@@ -367,13 +367,14 @@ func (r *Remote) activate(path string) {
 	}
 	r.active, r.session, r.window = path, resp.Msg.GetSession().GetSessionId(), window
 	r.publishModels()
-	chatOK, vision := info.GetChatCapable(), info.GetHasVisionTower()
+	chatOK, vision, own := info.GetChatCapable(), info.GetHasVisionTower(), info.GetStatedSampling()
 	r.sh.Post(func() {
 		if !chatOK {
 			r.st.Chat.Set(false)
 		}
 		r.st.ChatCapable.Set(chatOK)
 		r.st.Vision.Set(vision)
+		r.st.Own.Set(ownOf(own))
 		r.st.ModelPath.Set(path)
 		r.st.Loaded.Set(true)
 		r.st.Problem.Set(session.Problem{})
@@ -443,9 +444,9 @@ func placementView(p *v1.Placement, devs []*v1.Device) ([]byte, session.Allocati
 	var uses []session.DeviceUse
 	blocks := make([]byte, len(p.GetBlocks()))
 	alloc := session.Allocation{NBlocks: len(p.GetBlocks()),
-		HostBlocks: int(p.GetHostBlockCount()), DeviceBlocks: int(p.GetDeviceBlockCount())}
+		CPUBlocks: int(p.GetCpuBlockCount()), DeviceBlocks: int(p.GetDeviceBlockCount())}
 	for i, b := range p.GetBlocks() {
-		pl := session.PlaceHost
+		pl := session.PlaceCPU
 		if b.GetLocation() == v1.BlockLocation_BLOCK_LOCATION_DEVICE {
 			k, ok := ord[b.GetDeviceId()]
 			if !ok {
@@ -466,7 +467,7 @@ func placementView(p *v1.Placement, devs []*v1.Device) ([]byte, session.Allocati
 			uses[k].Weights += b.GetBytes().GetBytes()
 			pl = session.OnDevice(k)
 		}
-		if b.GetHostResident() {
+		if b.GetCpuResident() {
 			pl |= session.PlaceResident
 		}
 		if i < len(blocks) {
@@ -506,6 +507,7 @@ func (r *Remote) Unload(path string) {
 				r.st.ModelPath.Set("")
 				r.st.ModelSummary.Set("")
 				r.st.Vision.Set(false)
+				r.st.Own.Set(session.Sampling{})
 				r.st.BlockMap.Set(nil)
 				r.st.Alloc.Set(session.Allocation{})
 			})
@@ -655,10 +657,25 @@ func (r *Remote) opensThinking(req session.ChatRequest) bool {
 	return strings.HasSuffix(strings.TrimRight(resp.Msg.GetPrompt(), " \t\r\n"), thinkOpen)
 }
 
+// ownOf is the service's statement of a model's draw as the app's settings
+// (Own set), none where it states none.
+func ownOf(p *v1.SamplingParams) session.Sampling {
+	if p == nil {
+		return session.Sampling{}
+	}
+	return session.Sampling{Temp: p.GetTemperature(), TopK: int(p.GetTopK()), TopP: p.GetTopP(), MinP: p.GetMinP(),
+		TypicalP: p.GetTypicalP(), RepeatPen: p.GetRepeatPenalty(), RepeatLastN: int(p.GetRepeatLastN()), Own: true}
+}
+
+// samplingOf is the settings as a request asks them: none where they are the
+// model's own, which the session the service opened draws with.
 func samplingOf(s session.Sampling) *v1.SamplingParams {
-	temp, topP, minP, pen := s.Temp, s.TopP, s.MinP, s.RepeatPen
+	if s.Stated {
+		return nil
+	}
+	temp, topP, minP, typP, pen := s.Temp, s.TopP, s.MinP, s.TypicalP, s.RepeatPen
 	topK, lastN := int32(s.TopK), int32(s.RepeatLastN)
-	p := &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK, MinP: &minP,
+	p := &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK, MinP: &minP, TypicalP: &typP,
 		RepeatPenalty: &pen, RepeatLastN: &lastN}
 	if s.Seed != 0 {
 		seed := uint64(s.Seed)

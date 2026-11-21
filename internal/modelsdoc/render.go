@@ -17,7 +17,6 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/library"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -27,16 +26,20 @@ const Path = "docs/models.md"
 // Command regenerates it.
 const Command = "go run ./scripts/genmodels " + Path
 
-// lines is the human half of the page (describe.go), passed in so a test can
-// take one away.
+// lines is the human half of the page, each name's describe in the library
+// (convert.Descriptions), passed in so a test can take one away.
 type lines struct {
-	gguf, hf, projector map[string]string
+	gguf, hf, projector, audio map[string]string
 }
 
 // Render is docs/models.md as the code makes it now. It fails when a name in
 // the converter's lists has no line in describe.go, or a line names nothing.
 func Render() ([]byte, error) {
-	return render(lines{gguf: ggufModels, hf: hfModels, projector: projectorModels})
+	d, err := convert.Descriptions()
+	if err != nil {
+		return nil, err
+	}
+	return render(lines{gguf: d.GGUF, hf: d.Classes, projector: d.Projectors, audio: d.Audio})
 }
 
 // covered checks that the keys of have are exactly names.
@@ -56,11 +59,11 @@ func covered(what string, names []string, have map[string]string) error {
 	}
 	sort.Strings(stale)
 	if len(missing) > 0 {
-		return fmt.Errorf("modelsdoc: %s %s in the code with no line in internal/modelsdoc/describe.go: "+
-			"say which models it covers", what, strings.Join(missing, ", "))
+		return fmt.Errorf("modelsdoc: %s %s in the code with no describe in the library "+
+			"(convert/models, convert/projectors.json): say which models it covers", what, strings.Join(missing, ", "))
 	}
 	if len(stale) > 0 {
-		return fmt.Errorf("modelsdoc: internal/modelsdoc/describe.go describes %s %s, which the code does not have",
+		return fmt.Errorf("modelsdoc: the library describes %s %s, which the code does not have",
 			what, strings.Join(stale, ", "))
 	}
 	return nil
@@ -77,7 +80,10 @@ func codes(ss []string) string {
 }
 
 func render(d lines) ([]byte, error) {
-	names := convert.Architectures()
+	names, err := convert.Architectures()
+	if err != nil {
+		return nil, err
+	}
 	classes := convert.HFClasses()
 	projectors := convert.Projectors()
 	if err := covered("GGUF architecture", names, d.gguf); err != nil {
@@ -89,28 +95,36 @@ func render(d lines) ([]byte, error) {
 	if err := covered("projector", projectors, d.projector); err != nil {
 		return nil, err
 	}
+	audio := convert.AudioProjectors()
+	if err := covered("audio projector", audio, d.audio); err != nil {
+		return nil, err
+	}
 
 	// Group both lists by the graph each name converts to. The vision tower's
 	// own name (clip) is not a text architecture; it goes with the projectors.
 	type graph struct {
-		arch    jlm.Arch
+		name    string
 		gguf    []string
 		classes []string
 	}
-	graphs := map[jlm.Arch]*graph{}
-	at := func(a jlm.Arch) *graph {
+	graphs := map[string]*graph{}
+	at := func(a string) *graph {
 		g := graphs[a]
 		if g == nil {
-			g = &graph{arch: a}
+			g = &graph{name: a}
 			graphs[a] = g
 		}
 		return g
 	}
+	graphOf, err := convert.GraphsOf(append(append([]string(nil), names...), classes...))
+	if err != nil {
+		return nil, err
+	}
 	var towers []string
 	textNames := 0
 	for _, n := range names {
-		a, _ := convert.ArchitectureGraph(n)
-		if a == jlm.ArchCLIP {
+		a, ok := graphOf[n]
+		if !ok {
 			towers = append(towers, n)
 			continue
 		}
@@ -118,7 +132,7 @@ func render(d lines) ([]byte, error) {
 		at(a).gguf = append(at(a).gguf, n)
 	}
 	for _, c := range classes {
-		a, _ := convert.HFClassGraph(c)
+		a := graphOf[c]
 		at(a).classes = append(at(a).classes, c)
 	}
 	order := make([]*graph, 0, len(graphs))
@@ -135,13 +149,11 @@ func render(d lines) ([]byte, error) {
 			}
 		}
 	}
-	sort.Slice(order, func(i, j int) bool { return order[i].arch.String() < order[j].arch.String() })
+	sort.Slice(order, func(i, j int) bool { return order[i].name < order[j].name })
 
-	var encoders []string
-	for _, n := range names {
-		if a, _ := convert.ArchitectureGraph(n); a.Encoder() {
-			encoders = append(encoders, n)
-		}
+	encoders, err := convert.Encoders()
+	if err != nil {
+		return nil, err
 	}
 
 	var read []quant.Type
@@ -159,7 +171,7 @@ func render(d lines) ([]byte, error) {
 	}
 
 	vision := 0
-	for _, m := range library.Models {
+	for _, m := range library.Models() {
 		if m.Vision() {
 			vision++
 		}
@@ -178,13 +190,14 @@ func render(d lines) ([]byte, error) {
 		textNames, ggufGraphs)
 	p("- **%d** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **%d** graphs, **%d** of them reached only from safetensors\n",
 		len(classes), hfGraphs, hfOnly)
-	p("- **%d** graphs in all (`jlm.Arch`)\n", len(graphs))
+	p("- **%d** graphs in all (`convert.GraphOf`, each a library file)\n", len(graphs))
 	p("- **%d** vision projectors (`clip.projector_type`, `convert.Projectors`)\n", len(projectors))
+	p("- **%d** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)\n", len(audio))
 	p("- **%d** embedding encoders, and pooling on any decoder\n", len(encoders))
-	p("- **%d** weight types read (`quant.Dequantable`), **%d** of them packed quantizations (`quant.PackedTypes`)\n",
-		len(read), len(quant.PackedTypes))
+	p("- **%d** weight types read (`quant.Dequantable`), **%d** of them packed quantizations (`quant.PackedTypes()`)\n",
+		len(read), len(quant.PackedTypes()))
 	p("- **%d** models in the download catalogue (`jitllm library`), **%d** of them with a vision tower\n\n",
-		len(library.Models), vision)
+		len(library.Models()), vision)
 
 	p("## Text architectures\n\n")
 	p("One row per graph: several source names can convert to one graph. The file can refine a graph\n")
@@ -214,7 +227,7 @@ func render(d lines) ([]byte, error) {
 		if hc == "" {
 			hc = "--"
 		}
-		p("| %s | %s | %s | %s |\n", code(g.arch.String()), gg, hc, strings.Join(models, "; "))
+		p("| %s | %s | %s | %s |\n", code(g.name), gg, hc, strings.Join(models, "; "))
 	}
 
 	p("\n## Hugging Face classes\n\n")
@@ -222,8 +235,7 @@ func render(d lines) ([]byte, error) {
 	p("classes; any other is refused, and `model_type` is not a fallback.\n\n")
 	p("| Class | Graph | Models |\n|---|---|---|\n")
 	for _, c := range classes {
-		a, _ := convert.HFClassGraph(c)
-		p("| %s | %s | %s |\n", code(c), code(a.String()), d.hf[c])
+		p("| %s | %s | %s |\n", code(c), code(graphOf[c]), d.hf[c])
 	}
 
 	p("\n## Vision projectors\n\n")
@@ -233,6 +245,14 @@ func render(d lines) ([]byte, error) {
 	p("| Projector | Models |\n|---|---|\n")
 	for _, n := range projectors {
 		p("| %s | %s |\n", code(n), d.projector[n])
+	}
+
+	p("\n## Audio projectors\n\n")
+	p("An audio tower rides its model's mmproj beside the vision tower and converts with it; the\n")
+	p("projector is the mmproj's `clip.audio.projector_type`.\n\n")
+	p("| Projector | Models |\n|---|---|\n")
+	for _, n := range audio {
+		p("| %s | %s |\n", code(n), d.audio[n])
 	}
 
 	p("\n## Embedding models\n\n")
@@ -246,14 +266,14 @@ func render(d lines) ([]byte, error) {
 
 	p("\n## Weight types\n\n")
 	p("Read: %s.\n\n", typeNames(read))
-	p("Packed quantizations: %s. A GGUF's quantization is kept; `-q8` stores a float safetensors model's\n", typeNames(quant.PackedTypes))
+	p("Packed quantizations: %s. A GGUF's quantization is kept; `-q8` stores a float safetensors model's\n", typeNames(quant.PackedTypes()))
 	p("matrices as Q8_0.\n")
 
 	p("\n## Download catalogue\n\n")
 	p("`jitllm convert NAME` fetches and converts these (`convert/library`). It is a curated subset of the\n")
 	p("lists above, each entry downloaded, converted and made to generate before it was added.\n\n")
 	p("| Name | Model | Architecture | Parameters | Weights | Images |\n|---|---|---|---|---|---|\n")
-	for _, m := range library.Models {
+	for _, m := range library.Models() {
 		img := ""
 		if m.Vision() {
 			img = "yes"

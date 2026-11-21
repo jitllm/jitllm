@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/tok/pretok"
@@ -13,21 +14,21 @@ import (
 // TestKimiK2SplitsAsMoonshotDoes runs the kimi-k2 pre-tokenizer against a
 // golden generated from Moonshot's own pattern.
 //
-// The authority is Moonshot's `pat_str`, not llama.cpp (AGENTS.md RULE 7m).
-// llama.cpp's unicode_regex_split_custom_kimi_k2 is lossy in a way this golden
-// pins:
+// The authority is Moonshot's `pat_str`. A split that walks one
+// `is_letter && !is_han` run is lossy in a way this golden pins:
 //
-//	input         Moonshot's own      llama.cpp's kimi-k2
+//	input         Moonshot's own      one letter run
 //	getUserName   [get User Name]     [getUserName]
 //	iPhone        [i Phone]           [iPhone]
 //	helloWorld    [hello World]       [helloWorld]
 //
-// llama.cpp walks one `is_letter && !is_han` run where the pattern specifies
-// o200k's two case-split alternatives (jitllm's CaseRuns).
+// where the pattern specifies o200k's two case-split alternatives (jitllm's
+// CaseRuns).
 //
 // \p{Han} is the pinned 15.1.0 set on both sides (the golden's generator reads
 // tok/unicodedata.go). The corpus includes U+2E80, U+3005, U+F900 and U+2EBF0,
-// which separate the pinned set from newer Unicode and from llama.cpp's.
+// which separate the pinned set from newer Unicode and from a CJK-blocks-only
+// Han.
 func TestKimiK2SplitsAsMoonshotDoes(t *testing.T) {
 	ops, ok := pretok.PreOps("kimi-k2")
 	if !ok {
@@ -75,7 +76,7 @@ func TestKimiK2SplitsAsMoonshotDoes(t *testing.T) {
 		t.Errorf("only %d golden case(s) contain Han -- the flag under test is barely exercised", han)
 	}
 	if camel == 0 {
-		t.Error("no camelCase case in the golden -- the divergence from llama.cpp is untested")
+		t.Error("no camelCase case in the golden -- the case-split alternatives are untested")
 	}
 	t.Logf("%d case(s), %d with Han", len(golden), han)
 }
@@ -92,13 +93,14 @@ func TestKimiK2NeedsHanRuns(t *testing.T) {
 	copy(off, ops)
 	found := false
 	for i := range off {
-		if off[i].Kind == pretok.OpSplit && off[i].Split.HanRuns {
-			off[i].Split.HanRuns = false
+		if off[i].Kind == pretok.OpPattern && strings.HasPrefix(off[i].Pattern, `[\p{Han}]+|`) {
+			p := strings.TrimPrefix(off[i].Pattern, `[\p{Han}]+|`)
+			off[i].Pattern = strings.ReplaceAll(p, `&&[^\p{Han}]`, "")
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("kimi-k2's entry has no HanRuns stage -- it is gpt-4o's pipeline")
+		t.Fatal("kimi-k2's entry has no Han runs -- it is gpt-4o's pipeline")
 	}
 	on, err := buildPipeline(ops)
 	if err != nil {
@@ -109,8 +111,8 @@ func TestKimiK2NeedsHanRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each of these separates the two, and each is a different reason:
-	// a Han/Latin boundary, the radical block llama.cpp omits, and the
-	// iteration mark that is Lm rather than Lo.
+	// a Han/Latin boundary, the radical block a CJK-blocks-only Han omits, and
+	// the iteration mark that is Lm rather than Lo.
 	for _, text := range []string{"中文abc", "⺀一x", "々y", "日本語テスト"} {
 		a, b := on.apply(text), no.apply(text)
 		if reflect.DeepEqual(a, b) {

@@ -24,16 +24,14 @@ func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request
 
 		callerPlaced: len(normaliseDeviceIDs(m.DeviceIds)) > 0,
 
-		KeepOffHost: m.KeepOffHost,
+		KeepOffCpu:  m.KeepOffCpu,
 		PromptCache: m.PromptCache,
 		CacheKey:    m.CacheKey,
 	}
 	if m.MaxDeviceBlocks != nil {
 		o.MaxDeviceBlocks = int(*m.MaxDeviceBlocks)
 	}
-	if sp := pbSampling(m.Sampling); sp != nil {
-		o.Sampling = *sp
-	}
+	o.Sampling = pbSampling(m.Sampling)
 	if sp := pbSpeculation(m.Speculation); sp != nil {
 		o.Speculation = *sp
 	}
@@ -97,12 +95,16 @@ func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[
 	if err != nil {
 		return nil, connectErr(err)
 	}
-	// Reset mutates the State, so it waits for any generate in flight rather
+	// Reset mutates the instance, so it waits for any generate in flight rather
 	// than racing it.
 	sess.mu.Lock()
-	sess.st.Reset()
+	err = sess.reset(ctx)
+	sess.ms.Release()
 	sess.refresh()
 	sess.mu.Unlock()
+	if err != nil {
+		return nil, connectErr(err)
+	}
 	return connect.NewResponse(&v1.ResetSessionResponse{Session: s.E.pbSession(sess)}), nil
 }
 
@@ -111,7 +113,7 @@ func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[
 func (s *SessionService) GetDeviceQueue(ctx context.Context, req *connect.Request[v1.GetDeviceQueueRequest]) (*connect.Response[v1.GetDeviceQueueResponse], error) {
 	id := req.Msg.DeviceId
 	if id == "" {
-		id = HostGateID
+		id = CPUGateID
 	}
 	queue, running, waiting := s.E.deviceQueue(s.E.gateKey(id))
 	return connect.NewResponse(&v1.GetDeviceQueueResponse{

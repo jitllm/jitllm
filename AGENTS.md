@@ -1,8 +1,11 @@
 # jitllm — project rules
 
-**This file is the only place a binding requirement lives.** Everything under
-`docs/` is EVIDENCE: what was measured, what was tried, what was wrong. If a
-sentence there reads like an instruction, this file governs.
+**This file is the only place a binding requirement lives.** The repository
+keeps the principles and rules (this file) and the user-facing docs (`docs/`).
+The engineering notes -- what was measured, what was tried, what was wrong, the
+designs and the open items -- are EVIDENCE, kept out of the repository in
+`.notes/` (git-ignored). If a sentence there reads like an instruction, this
+file governs.
 
 That separation exists because a review of the single 415 KB file this
 was split out of named its real failure exactly: *"historical
@@ -20,18 +23,19 @@ matching evidence file and leave a pointer.
 
 | working on | read first |
 |---|---|
-| the scoreboard, any ratio against llama.cpp | `docs/perf/current.md` |
-| amd64/arm64 kernels, packing, attention on the host | `docs/engineering-history/cpu-kernels.md` |
-| PTX/SPIR-V/MSL, the IR, device prefill, tensor cores, Metal decode | `docs/engineering-history/gpu-kernels.md` |
-| a new architecture, tokenizer, MoE, the vision tower, the chat template | `docs/engineering-history/model-correctness.md` |
-| the pool, dispatch, the JIT's structure, benchmark harnesses, the measurement method | `docs/engineering-history/scheduling-and-measurement.md` |
-| CPU/GPU seam, VRAM budgets, what goes on the card, paging, the prefix cache | `docs/engineering-history/placement.md` |
-| what is open, and the levers shelved for being small | `docs/open-questions.md` |
-| the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey | `docs/design/` |
+| the scoreboard, any ratio against llama.cpp | `.notes/perf/current.md` |
+| amd64/arm64 kernels, packing, attention on the host | `.notes/engineering-history/cpu-kernels.md` |
+| PTX/SPIR-V/MSL, the IR, device prefill, tensor cores, Metal decode | `.notes/engineering-history/gpu-kernels.md` |
+| a new architecture, tokenizer, MoE, the vision tower, the chat template | `.notes/engineering-history/model-correctness.md` |
+| the pool, dispatch, the JIT's structure, benchmark harnesses, the measurement method | `.notes/engineering-history/scheduling-and-measurement.md` |
+| CPU/GPU seam, VRAM budgets, what goes on the card, paging, the prefix cache | `.notes/engineering-history/placement.md` |
+| what is open, and the levers shelved for being small | `.notes/open-questions.md` |
+| the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey; instances and sessions | `.notes/design/` |
 | which models a test reads, and every model-selecting test variable | `docs/testing.md` |
 | every architecture, class and projector that converts, and the models each covers | `docs/models.md` (generated from the converter's lists) |
 | what this build converts, runs and serves, by machine; `jitllm doctor` | `docs/capabilities.md` (`docs/capabilities.json` is generated) |
 | which checks a change needs, and running them | `docs/checks.md` (`go run ./scripts/checks <paths or range>`) |
+| an architecture's or projector's gates and evidence; a recorded llama.cpp divergence | `.notes/architectures.md`; `.notes/divergences.md` |
 
 Those files carry the reasoning and the failed attempts. Skipping them is how an
 idea gets proposed for the fourth time; several have a section that exists
@@ -49,11 +53,11 @@ gate below before it counts.
 
 | principle | what it means | the gate |
 |---|---|---|
-| **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device paths through `kernels`/IR only |
-| **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `model.TestEveryModelRunsGenerated` |
-| **Relocation** | any block, its KV pages and its recurrent state can move host <-> device and between devices mid-sequence, with the same answer | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamBringsTheSummaryHome`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
-| **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place: no page held by a session and the prefix cache both, no host copy of a card's history); decision models: `TestDecisionPagesWithTheSameAnswer`, `TestLayaPagesWithTheSameAnswer` |
-| **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `model.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate` |
+| **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device code only from the composer's forms (no hand-written kernels) |
+| **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `engine.TestEveryModelRunsGenerated` |
+| **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`, `TestTwoInstancesRunABlockOnTwoCards` (one block on two cards, each instance on its own copy), `TestAHistoryReadAcrossCards` (a block reading another's history on another card, its card holding a copy), `TestAHistoryReadAcrossTheCPU` (the same across the CPU and a card, each side holding the copy its readers read); decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes`; embedding models and Laya's marker head: the first three gates' `embed/` and `laya/` arms |
+| **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place per device: no page a session holds beside the prefix cache's on its device, no host mirror of a card's history), `TestSharedPrefixMovesToTheCard`, `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer`; embedding models: the first three gates' `embed/` arms (the third's on a session's lease) |
+| **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `engine.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestDecodeDoesNotAllocateAcrossCards` (a history read across two cards), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate`; a warm embedding: `TestDecodeDoesNotAllocate`'s `embed/` arms |
 
 A new architecture is added to each gate's model list, not only to the
 correctness gates -- a gate that never runs a model does not cover it
@@ -103,10 +107,10 @@ correctness gates -- a gate that never runs a model does not cover it
   a row where one arm holds 14 GiB of weights and the other 26 is not an engine
   comparison.
 - **This file carries no scoreboard.** The current board is
-  `docs/perf/current.md`.
+  `.notes/perf/current.md`.
 
-Evidence: `docs/perf/current.md` ("Boards that stood in AGENTS.md RULE 1");
-`docs/engineering-history/scheduling-and-measurement.md` ("The 0.90 and 0.70
+Evidence: `.notes/perf/current.md` ("Boards that stood in AGENTS.md RULE 1");
+`.notes/engineering-history/scheduling-and-measurement.md` ("The 0.90 and 0.70
 readings, and the harness that produced them").
 
 ## RULE 2: a perf claim is paired, interleaved, and gated.
@@ -159,13 +163,13 @@ per-round ratios** with its IQR; **reject if IQR/median > 0.10**.
   gate, A/A control or second pass can see that. The harness takes llama.cpp's
   thread count from `$CORES`.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 2 as
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 2 as
 it stood in AGENTS.md", "The 0.90 and 0.70 readings").
 
 ## RULE 2f: the Go collector is part of the engine's budget.
 
 Page frames and the dense region are anonymous mappings outside the Go heap
-(`kernels.MapOffHeap`), outside the collector's goal, its memory-limit
+(`offheap.MapOffHeap`), outside the collector's goal, its memory-limit
 arithmetic and its marking. Page frames are permanently live, so on the heap a
 budget close to the memory limit leaves the collector a goal it can never reach:
 on Qwen3-Next-80B it was 42.5% of the CPU, and the cliff is sharp (8.34 GiB of
@@ -186,7 +190,7 @@ budget 6 GC cycles, 8.99 GiB 648).
 - A gate that measures RSS is measuring the allocator. A leak gate reads the live
   heap and the tier's device ledger.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("THE GO
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("THE GO
 COLLECTOR WAS 42% OF THE ENGINE'S CPU", "RULE 2f as it stood in AGENTS.md").
 
 ## RULE 3: on the developer's machine, every heavy job runs under `scripts/cap`. Agents included.
@@ -230,7 +234,7 @@ uncapped is a trap.
    started before a context compaction keeps running afterwards and neither end
    knows.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 3 as
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 3 as
 it stood in AGENTS.md", "The cap is the developer machine's, not a
 measurement's").
 
@@ -259,14 +263,14 @@ coreset A/B: pe 0.864x, smt 0.965x, all 0.807x against p).
   next. `cmd/jitllm` aligns `GOMAXPROCS` to the engine's width,
   `PCores`/`ECores`/`SMTSiblings` intersect `sched_getaffinity` so a narrower
   `taskset` yields fewer workers, and `LockOSThread` survives only where an API
-  binds state to a thread (CUDA contexts, `jit/gpu/cuda`).
-- **The shipped per-region dispatch cost** is `model.TestFusionCeiling`'s
+  binds state to a thread (CUDA contexts, `backend/cuda`).
+- **The shipped per-region dispatch cost** is `engine.TestFusionCeiling`'s
   2.70 us on Linux and 3.008 us on the M4.
 - **Measure at the thread count that SHIPS.** A win measured on one core has
   evaporated or reversed at the real thread count eight times here — the single
   most repeated mistake in the evidence files.
 
-Evidence: `docs/engineering-history/cpu-kernels.md` ("RULE 5 as it stood in
+Evidence: `.notes/engineering-history/cpu-kernels.md` ("RULE 5 as it stood in
 AGENTS.md", "On the M4, prefill wants the E-cores and decode does not",
 "Prefill and the E-cores on the container path").
 
@@ -323,8 +327,9 @@ balance (fewer instructions, 13.5% slower).
 
 ## RULE 7: the architecture list is a LIST, and adding one is a decision.
 
-`convert.archOf` (`convert/config.go`) is the list of GGUF architectures,
-`hfArchTable` (`convert/safetensors.go`) the list of safetensors classes, and
+The library's files (`convert/models/*.json`) are the list: their `gguf`
+lists are the GGUF architectures (`convert.Architectures`, with the towers'
+`clip`), their `classes` the safetensors classes (`convert.HFClasses`), and
 `convert.projectorOf` (`convert/config.go`, a case each in `visionOf`) the list
 of projectors. An architecture not in them does not convert (`configOf`:
 "architecture %q is not implemented"); an unknown projector is refused at
@@ -339,7 +344,7 @@ a name without one) and reruns `go run ./scripts/genmodels docs/models.md`;
 
 **Scope is jitllm's only defence.** llama.cpp has 176 `LLM_ARCH_` cases and 50
 graph builders; Ollama had a funded team, covered ~21 architectures, and deleted
-430,004 lines citing exactly this. `docs/design/model-coverage.md` is the survey
+430,004 lines citing exactly this. `.notes/design/model-coverage.md` is the survey
 an addition is chosen from and priced against.
 
 ### The bar a new entry meets before it counts
@@ -347,26 +352,33 @@ an addition is chosen from and priced against.
 1. **A converter entry** that reads the file and states in the container what
    the reference hardcodes against the name (a container field, or an arch code
    of its own so an older reader refuses the container rather than running it
-   wrong). An absent key takes the CLASS's default (`hfClassDefaults`), never the
-   tree's; a key spelled two ways that disagree is refused, because there is no
-   way to know which the weights were trained under.
+   wrong). An absent key takes the CLASS's default (the `??` default its
+   library file states, `convert.TestDenseHFClassDefaults`), never the tree's;
+   a key spelled two ways that disagree is refused, because there is no way to
+   know which the weights were trained under.
 2. **A fixture from the family's own transformers class, with every parameter
    AND every buffer randomised**, written to GGUF by llama.cpp's own
    `convert_hf_to_gguf.py` where llama.cpp has the family, and a golden from
    that class (`scripts/*gold.py`). A buffer left at its initial zeros is often
    the identity -- DeepSeek-V3's selection bias was, and every gate that claimed
    to cover it compared two arms computing the same function. A new safetensors
-   class needs a fixture and a golden in `model.TestSafetensorsMatchTransformers`
+   class needs a fixture and a golden in `engine.TestSafetensorsMatchTransformers`
    or it is a claim with nothing behind it.
 3. **A features-are-load-bearing gate**: each graph difference, removed, fails
    it. A position-0 comparison cannot see a rotary bug (a rotation by 0 is the
    identity), and a greedy gate cannot see a positive logit divisor -- compare
    values, past position 0.
-4. **Every tier**: the host on amd64 and arm64, and CUDA, Vulkan and Metal with
-   every block placed against the host (RULE 11c), plus a partial seam that
-   leaves blocks home -- a gate asserting every block placed runs no host
-   attention and cannot see a host-side bug.
+4. **Every tier**: the CPU device on amd64 and arm64, and CUDA, Vulkan and
+   Metal with every block placed against the CPU (RULE 11c), plus a partial
+   seam that leaves blocks on the CPU -- a gate asserting every block placed
+   on a card runs no CPU attention and cannot see a CPU-side bug.
 5. **The five principles' gates**, with the model added to each gate's list.
+   The census's list is checked: `engine.TestTheCensusCoversEveryFeature` fails
+   until a model it runs takes every feature the new statement states (each
+   op of its graph, its front and its tower by what it computes, each
+   container field, and each choice the readout, rotary, generation,
+   tool-form, tower-tensor and picture tables state) and carries the new
+   projector.
 6. **A real checkpoint against llama.cpp**, teacher-forced
    (`TestGreedyMatchesLlamaCpp`; `JITLLM_GREEDY_MODEL` names one over its size
    limit), wherever one fits a box.
@@ -374,8 +386,8 @@ an addition is chosen from and priced against.
 Further rules for every entry:
 
 - **A router's gating function is read per CLASS, never from an absent key**
-  (`hardcodesSigmoid`, `hardcodesSoftmax`); a file whose `scoring_func`
-  contradicts its class is refused (`hfGateAgrees`). The same holds for
+  (the class statement's `gating`); a file whose `scoring_func` contradicts
+  its class is refused (the statement's `require`). The same holds for
   renormalisation and every literal a reference builder hardcodes.
 - **Names matching is not the graph matching.** A class that maps onto an
   existing entry tensor for tensor still needs its own fixture and golden.
@@ -396,90 +408,24 @@ Further rules for every entry:
   every kernel is gated against the oracle. `quant.PackedTypes`
   (`format/quant/types.go`) is the canonical list of packed types a gate sweeps;
   a hand-written copy anywhere else is a bug waiting.
-- **Arch codes** are allocated by group: the dense llama family from the top of
-  the code space down (`format/jlm/archdense.go`), the flagships counting up from
-  44 (`format/jlm/archflagship.go`), the state-space families from 100
-  (`format/jlm/archssm.go`), the vision families from the top down
-  (`format/jlm/visionfam.go`), the encoders after BERT from 150
-  (`format/jlm/archencoder.go`), the vision-language families' text models up
-  from 200 (`format/jlm/archvision.go`). `Arch.Valid` asks the name tables.
+- **The architecture is the converter's alone, and is a name** (the user's
+  D1): what a family's reference does is data in its library file; the
+  converter names a source's architecture only by the name the source states
+  (`convert.Config.Name`, for messages) and a graph by the library file that
+  states it (`convert.GraphOf`). There is no architecture type. Nothing past
+  the converter -- not the container, not `model/`, `engine/`, the devices or
+  the composer -- holds one (`srcgate.TestNoFamilyCode`). A container written
+  before v31 carries its old code as an opaque number, which the migration
+  reads from a table of numbers (`jlm.Stating`, `convert.LegacyStated`); the
+  numbers must not move, since a pre-v31 container's code is read by number.
 
-### The architectures
+### The architectures and projectors
 
-A new architecture adds one row here and its narrative in
-`docs/engineering-history/model-correctness.md` (MC below; GK is
-`gpu-kernels.md`, PL `placement.md`). Names are as `convert.archOf` and
-`hfArchTable` spell them.
-
-| architecture (source names) | what is special about its graph | gates | evidence |
-|---|---|---|---|
-| llama (Llama 2 and 3 declare it; ernie4_5 dense; `MixtralForCausalLM`) | the base block; ERNIE 4.5 dense is this graph exactly | `TestGreedyMatchesLlamaCpp`, `TestBatchMatchesForward`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
-| qwen2 | biased q/k/v | `TestAttentionBiasesReachTheModel`, `TestDeviceMatchesHostOnABiasedModel`, `TestGreedyMatchesLlamaCpp` | MC "RULE 7q", "RULE 7f" |
-| qwen3 | per-head q/k norm | `TestGreedyMatchesLlamaCpp`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
-| qwen3moe | softmax top-k mixture | `TestGreedyMatchesLlamaCpp`, `TestMoEFFNRunsBatched`, `TestSafetensorsMatchTransformers` | MC "RULE 14: MIXTURE OF EXPERTS" |
-| olmoe | mixture with a whole-projection q/k norm | `TestGreedyMatchesLlamaCpp`, `TestMoEFFNRunsBatched` | MC "RULE 7k" |
-| gemma (Gemma 1) | embedding scale, GELU, NEOX rotary | `TestGreedyMatchesLlamaCpp` | MC "RULE 7 (original)" |
-| gemma2 | post-norms, attention and final softcap, sliding layers | `TestGemma2SoftcapOnDevice`, `TestFinalSoftcapReachesTheDeviceHead`, `TestSpecOverAFinalSoftcap` | GK "gemma2 never stepped" |
-| gemma3 | local/global layers, two rotary bases, a linearly scaled global rotary | `TestGemma3GlobalLayersAreLinearlyScaled`, `TestSlidingWindowIsHonouredEverywhere`, `TestSlidingWindowRunsOnTheDevice` | MC "gemma3 on the device" |
-| phi3 (Phi-4 declares it) | fused qkv and gate/up, split at conversion (`convert.unfuse`) | `convert.TestUnfuseSplitsAFusedQKVBias`, `convert.TestPhi3SlidesEveryLayer`, `TestGreedyMatchesLlamaCpp` | GK "RULE 11c's cases" |
-| qwen2vl | qwen2's block with M-RoPE, a property of the row | `TestMRopeMatchesTransformers`, `TestMRopeKeepsTheFivePrinciples`, `TestQwenVLMatchesTransformersEndToEnd` | MC "M-RoPE, the 2-D vision rotary" |
-| qwen3vl (qwen3vlmoe) | qwen3 / qwen3moe under the INTERLEAVED M-RoPE (`nn.IMRopeRuns`; qwen35 takes the same split), deepstack rows added into the first text blocks (`Span.Deep`) | `TestMRopeMatchesTransformers`, `TestQwen3VLRotaryIsInterleaved`, `TestQwen3VLPictureCarriesItsTaps` | MC "Qwen3-VL: deepstack rows" |
-| qwen3next (qwen35, qwen35moe) | the first hybrid: gated delta rule beside attention, shared expert, gated double-width query, partial rotary; qwen35's value heads tiled | `TestHybridRuns`, `TestHybridAttentionBlockOnDevice`, `TestDeltaKeyTiledIsTheDeltaRulesPairing`, `convert.TestQwen35ConvertsIntoQwen3NextsContainer` | MC "qwen3next, qwen35 and qwen35moe"; PL "Qwen3-Next-80B on the card" |
-| gpt-oss | MXFP4 expert banks, attention sinks, mixture biases, exact YaRN | `TestGPTOSSMatchesLlamaCppIntermediates`, `TestSynthGPTOSSMatchesTransformers`, `TestSynthGPTOSSOnEveryDevice` | MC "gpt-oss IS THE TWELFTH ARCHITECTURE" |
-| deepseek2 (DeepSeek-V2/V3/R1, Kimi-K2, Moonlight; `Glm4MoeLiteForCausalLM`) | MLA latent KV cache, V3 router (sigmoid, selection bias, grouped top-k, routed scale), dense lead, ungated shared expert | `TestMLAOnEveryDevice`, `TestMLABatchMatchesDecode`, `TestMLAStepsTheKVDownAtTheRightWidths`, `TestAttnScaleReachesEveryPath`, `TestSafetensorsMatchTransformers` | MC "deepseek2 IS THE THIRTEENTH ARCHITECTURE" |
-| kimilinear (`KimiLinearForCausalLM`, safetensors only) | Kimi Delta Attention (per-channel decay, low-rank gates) beside MLA with no rotary (`FlagNoPosEnc`) | `TestSafetensorsMatchTransformers`, `TestNoPEMLAOnEveryDevice`, `convert.TestKimiLinearConverts` | MC "kimilinear"; GK "One shared Vulkan command buffer" |
-| llama4 | chunked attention, NoPE every fourth layer, attention temperature, weightless q/k norm, top-1 sigmoid router scaling the expert input | `TestSynthLlama4MatchesTransformers`, `TestSynthLlama4FeaturesAreLoadBearing`, `TestSynthLlama4OnEveryDevice` | MC "llama4 IS THE FIFTEENTH ARCHITECTURE" |
-| granite (granitemoe) | four stated constants: embedding, residual, attention and logit scale | `TestGraniteMatchesLlamaCppValues`, `TestGraniteScalesOnEveryDevice`, `TestGraniteOnEveryDevice` | MC "granite and granitemoe"; GK "Granite on the device" |
-| phi2, starcoder, starcoder2, command-r (cohere2), stablelm, falcon, nemotron, dbrx | the classic-transformer kit (C6): LayerNorm with biases, parallel residual, ungated FFNs; starcoder's learned position table, nemotron's squared ReLU, dbrx's clamped q/k/v on a mixture | `TestC6MatchesTransformers`, `TestC6FeaturesAreLoadBearing`, `TestC6OnEveryDevice` | MC "The classic-transformer kit (C6)" |
-| glm4 (GLM-4-0414) | llama's block with biased q/k/v and a norm after the attention and after the MLP; the rotary on half of each head, NORM pairs, or with sections the NEOX M-RoPE of GLM-4.1V (glm4moe with sections is `ArchGLM4VMoE`) | `TestC6MatchesTransformers`, `TestC6FeaturesAreLoadBearing`, `TestMRopeMatchesTransformers` | MC "Qwen3.5's tower, and GLM-4.1V" |
-| glm4moe | DeepSeek-V3's router on GQA attention, sigmoid whatever the file says | `TestMoEFamiliesMatchTransformers`, `TestMoEFamilyFeaturesAreLoadBearing`, `TestMoEFamiliesOnEveryDevice`, `TestMoEFamiliesPageWithTheSameAnswer` | MC "The mixture families: glm4moe" |
-| qwen2moe | softmax top-k not renormalised, sigmoid-gated shared expert | as glm4moe | MC "qwen2moe" |
-| ernie4_5-moe | softmax router with a bias on the probability, renormalised | as glm4moe | MC "ernie4_5-moe and ernie4_5" |
-| hunyuan (hunyuan-moe, hunyuan-dense) | q/k norm after the rotary, run by folding k's weight into q's at conversion | as glm4moe, `TestBatchSeamMovesCarryEveryRowHunyuan`, `tok.TestHunyuanSplitsAsItsTokenizerDoes` | MC "hunyuan" |
-| hunyuan_vl (HunyuanOCR) | hunyuan's dense block under XD-RoPE: four coordinates (sequence, column, row, picture) assigned per ELEMENT of each head, so a NEOX pair's two halves turn by two tables (`nn.XDRopeRuns`, `RoPESplit` on every host tier and the device IR), and k's norm after the rotary as well as q's; a picture's rows keep their sequence positions | `TestHunyuanVLTextMatchesTransformers`, `TestHunyuanVLLaysTheImageOutAsTransformersDoes`, `TestHunyuanVLPrefixCacheKeysOnPositions`, `TestHunyuanVLKeepsTheFivePrinciples`, `TestQwenVLRealMatchesTransformers` (HunyuanOCR), `jit/cpu.TestEmitRoPESplitMatchesReference` | MC "HunyuanVL" |
-| smollm3, arcee, seed_oss, olmo2 (OLMo 3), exaone4, mistral3 | switches over llama's block: NoPE period, squared ReLU, post-norm block, attention temperature on every layer | `TestC6MatchesTransformers`, `convert.TestDenseSafetensorsMatchesItsGGUF`, `TestSafetensorsDenseFamilySelected` | MC "The dense llama family" |
-| minimax-m2 | OLMoE's q/k norm, partial NEOX rotary, V3's sigmoid router without a shared expert | as glm4moe | MC "minimax-m2" |
-| gemma4 | layers of two attention geometries, a dense MLP beside a mixture, per-layer embeddings and KV sharing on the E-models | `TestGemma4MatchesTransformers`, `TestGemma4FeaturesAreLoadBearing`, `TestGemma4OnEveryDevice`, `TestBatchSeamMovesCarryEveryRowGemma4` | MC "gemma4" |
-| deepseek32 | deepseek2 with the lightning indexer, its key the tail of the MLA row | `TestDeepseek32MatchesTransformers`, `TestDeepseek32FeaturesAreLoadBearing`, `TestDeepseek32OnEveryDevice` | MC "deepseek32" |
-| gemma3n | AltUp's four residual streams as one stream-major residual, LAuReL, gaussian top-k | `TestGemma3nMatchesTransformers`, `TestGemma3nFeaturesAreLoadBearing`, `TestGemma3nOnEveryDevice`, `TestBatchSeamMovesCarryEveryRowAltUp` | MC "gemma3n" |
-| minimax-m3 | MiniMax Sparse Attention: per kv group the top-k position blocks by their best indexer score, the query's own forced in, the indexer's key one more kv head of the cached row; V3's mixture with a shared expert; clamped SwiGLU | `TestMiniMaxM3MatchesTransformers`, `TestMiniMaxM3FeaturesAreLoadBearing`, `TestMiniMaxM3OnEveryDevice`, `TestGreedyMatchesLlamaCpp` (llama.cpp with flash attention on, without which it runs dense attention) | MC "minimax-m3" |
-| bailingmoe2 (Ling and Ring 2.0) | glm4moe's composition: DeepSeek-V3's group-limited sigmoid router, sigmoid whatever the file says, on GQA with a per-head q/k norm and NEOX rotary on half the head; the fused `query_key_value` is unfused at conversion | as glm4moe, in `principleMixtures` | MC "Ling 2.0 (bailingmoe2)" |
-| dots1 (dots.llm1) | DeepSeek-V3's sigmoid router ungrouped, beside two shared experts after a dense lead, on qwen3's attention (per-head q/k norm, NEOX over the whole head); a stated sliding window is refused | as glm4moe, `convert.TestMixtureFamiliesConvertAlikeFromEitherInput`, `TestSafetensorsMatchTransformers` | MC "dots.llm1 (dots1)" |
-| phimoe (Phi-3.5-MoE, Phi-mini-MoE, Phi-tiny-MoE) | the C6 kit's LayerNorm block with every bias and phi3's LongRoPE, routed by sparsemixer (a generated kernel on every tier; the arch carries the 0.01 jitter); safetensors writes the LongRoPE factors from config.json; a GGUF that does not state its head width (Phi-tiny-MoE's) is refused | as glm4moe, `convert.TestPhimoeRefusesAHeadWidthTheFileDoesNotState`, `convert.TestMixtureFamiliesConvertAlikeFromEitherInput`, `TestSafetensorsMatchTransformers`; llama.cpp is not its oracle (RULE 7m) | MC "Phi-3.5-MoE (phimoe)" |
-| apertus (Apertus) | llama's block with a per-head q/k norm, llama 3's rotary factors and an ungated xIELU MLP: four numbers a block folded once at conversion into `jlm.RoleXIELU`, read by one generated kernel per tier with the numbers a buffer; safetensors writes `rope_freqs` from config.json to the bit and gathers the four scalars (`hfArch.gather`) | `TestC6MatchesTransformers`, `TestC6FeaturesAreLoadBearing`, `TestC6OnEveryDevice`, `convert.TestDenseSafetensorsMatchesItsGGUF`, `cpu.TestXIELUMatchesTheOracle`, `backend.TestXIELUMatchesTheOracle` | MC "Apertus" |
-| bitnet-b1.58 (`BitNetForCausalLM`) | llama's block with an RMSNorm before wo and before down (`jlm.RoleAttnSubNorm`, `RoleFFNSubNorm`), squared ReLU on the gate, NEOX rotary, tied embedding; ternary weights in a 2-bit plane (`quant.TQ2_0`, or `TQ2_F32` when the scale is not f16-exact, as I2_S's per-tensor f32 scales are) with the file's scales folded in at conversion, run as ternary x int8 with no f32 dequantize; activations quantized per TOKEN (int8 absmax over the row, `nn.WithActWindow`) as transformers does | `TestBitNetMatchesTransformers`, `TestBitNetFeaturesAreLoadBearing`, `TestBitNetOnEveryDevice`, `TestBitNetRealMatchesReference` (the release, its bf16 master, Microsoft's I2_S GGUF), `quant.TestTernaryMatchesGGUFPy`; llama.cpp is not its oracle (RULE 7m) | MC "BitNet b1.58" |
-| deepseek4 | four hyper-connection streams (stream-major, Sinkhorn-mixed per row); one key head that is the value, rotated on its last NRot dimensions and back after the softmax; sinks, a grouped low-rank output and a window on every block; compressed blocks attend to pooled entries in a second paged history (HCA every visible entry, CSA the indexer's top-k); sqrt(softplus) gating with hash-routed blocks; clamped SwiGLU | `TestDeepseek4MatchesTransformers`, `TestDeepseek4FeaturesAreLoadBearing`, `TestDeepseek4OnEveryDevice`, `TestDeepseek4DeviceRunsTheChunkWhole` | MC "deepseek4" |
-| kimi-k3 (`KimiK3ForConditionalGeneration` too: the release streamed from safetensors) | Kimi-Linear's KDA and NoPE MLA with residual attention (checkpoint streams mixed per sublayer by a softmax over normed scores, stream-major), a latent mixture beside full-width shared experts, situ, an MLA output gate, a full-rank KDA gate and a decay lower-bounded when the file states a bound (Kimi-Linear's softplus when not); a mixed quantization's q, k and v re-stored as one Q8_0 projection; from safetensors, text_config through configOf as llama.cpp's keys, compressed-tensors `mxfp4-pack-quantized` experts moved byte for byte into the container's MXFP4 (`convert/hfmxfp4.go`, every other compressed-tensors scheme refused by name), the release's zero-padded A_log cut to its heads, the vision tower named and not carried | `TestKimiK3MatchesReference`, `TestKimiK3FeaturesAreLoadBearing`, `TestKimiK3OnEveryDevice`, `TestKimiK3DeviceRunsTheChunkWhole`, `TestKimiK3RealMatchesReference` (trained Kimi-K3-0.40B, from GGUF and safetensors, and its MXFP4 release-format checkpoint), `convert.TestK3JoinsAMixedQuantization`, `convert.TestK3SafetensorsMatchesItsGGUF`, `convert.TestK3MXFP4ExpertsMatchTheGGUF`, `convert.TestMXFP4RepackIsLossless`, `convert.TestPlanIsTheWrite` | MC "kimi-k3", "Real trained weights", "The release from safetensors" |
-| qwen4exp (Qwen3.8-Flash-Next) | qwen35's gated delta rule with a sigmoid gate on its gated norm, beside qwen3next's gated attention under interleaved M-RoPE; four hyper-connection streams (stream-major), each sublayer reading a low-rank sigmoid-gated mean of the grouped-normed streams and placed into every stream at 2*sigmoid(inject/4), the head the mix alone with no norm; QSA on every attention block (the indexer's raw key one more cached head, each complete block of four positions pooled, normed and turned at its start, the best budget/4 blocks and the tail kept); a 512-expert softmax top-10 mixture with a sigmoid-gated shared expert; one n-gram block (16 heads hashing 2- and 3-grams with an end-of-sequence reset, rows of a 28.8 GB IQ4_NL table read a row at a time, a per-stream signed-root gate and a dilated convolution whose history is the block's recurrent tail) | `TestQwen4ExpMatchesTransformers`, `TestQwen4ExpFeaturesAreLoadBearing`, `TestQwen4ExpOnEveryDevice`, `TestQwen4ExpDeviceRunsTheChunkWhole`, `TestQwen4ExpQSATurnsByTheMarks`, `TestBatchSeamMovesCarryEveryRowQwen4Exp`, `TestPrefixCacheRestoresQwen4Exp`, `backend.TestQ4EKernelsMatchTheLoops`, `cpu.TestNGramHashMatchesReference`, `nn.TestRowIQ4NLMatchesTheDecoder`, `jlm.TestRowTableIsReadARowAtATime`, `TestGreedyMatchesLlamaCpp` (UD-Q4_K_XL) | MC "qwen4exp: Qwen3.8-Flash-Next", "qwen4exp: what was built" |
-| mamba2, granitehybrid, nemotron_h (nemotron_h_moe), falcon-h1, lfm2 (lfm2moe), mamba (FalconMamba), jamba | state-space layers as a layer kind (`jlm.LayerSSD`): the delta rule's state with the key dot removed; lfm2's short convolutions; Mamba-1's selective scan | `TestSSMFamiliesMatchTransformers`, `TestSSDFeaturesAreLoadBearing`, `TestSSMFamiliesOnEveryDevice`, `TestSSMFamiliesPageWithTheSameAnswer`, `TestSSMRealModelsTeacherForced`, `TestBatchSeamMovesCarryEveryRowSSM` | MC "The state-space hybrids" |
-| modern-bert (Laya) | a pre-norm encoder with no biases, GeGLU, NEOX rotary at two bases, global every third layer and a symmetric window on the rest; Laya's decision head (a type row per question type, two biased pre-norm blocks at max(1, d/64) heads, a scorer at each option's [MASK]) after it. On the device as non-causal blocks through an encoder segment's placement (`engine/model/encdev.go`) | `TestLayaMatchesReference` (random fixture and the real checkpoint, held to Laya's own code; host and every device), `TestLayaFeaturesAreLoadBearing` (host and every device), `TestLayaPagesWithTheSameAnswer`, `TestDecisionMatchesLlamaCpp`, `TestDecisionOnEveryDevice`, `TestDecisionRelocatesBetweenDevices`, `TestDecisionEncodeDoesNotAllocate` | MC "Decision models"; `docs/design/decision-models.md` |
-| clef (Clef-Flash) | qwen35's backbone (the arch "clef" converts into qwen3next's container) with Clef's joint schema head (`jlm.DecisionClef`, its tensors a role group of their own at `DenseBlock` with the head block in `Index`): one prompt per request, every row's final residual kept (`State.rowTap`), each question's and option's span mean-pooled, two routing blocks (the options cross-attend the normed memory), four joint blocks (the questions self-attend, then cross-attend the raw memory), a prior from the output embedding's rows, a cosine and a scorer over [f, o, f*o, |f-o|]; on the host's generated kernels, and on the device holding the output projection as a program of `kernels.DH*` launches (`jit/gpu/tier/dechead.go`) | `TestClefMatchesReference` (random fixture held to Clef's own code), `TestClefFeaturesAreLoadBearing`, `TestClefMediaMatchesReference` (pictures and a video), `TestDecisionMatchesLlamaCpp` (the release and the fixture), `TestDecisionOnEveryDevice`, `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes`, `TestDecisionPagesWithTheSameAnswer`, `TestDecisionBatchMatchesAlone`, `TestDecisionDoesNotAllocate` | MC "Decision models"; `docs/design/decision-models.md` |
-| lfm2 with decision.type lfm2-d1-omni (`jlm.ArchLFM2Enc`, d1-omni; its mmproj's d1omni_a, the first audio tower: a log-mel front end, FastConformer blocks with relative-position attention as tower blocks after the vision blocks, on a device as nn.ConvConformer programs) | LFM2 made an encoder: a centred 3-tap convolution, no causal mask, a media prefix that reads only itself; Laya's head and scorer after it, in a non-causal set of its own on a device (`nn.LayerPlan.HeadSet`); the head's blocks cut from the file's per-layer arrays at conversion | `TestD1OmniMatchesReference`, `TestD1OmniFeaturesAreLoadBearing`, `TestD1OmniKeepsThePrinciples`, `TestD1OmniDecidesOverPicturesAsItsReference`, `TestD1OmniOnEveryDevice`, `TestDecisionRelocatesBetweenDevices`, `backend.TestConv3CentredMatchesTheLoop`, `TestD1OmniHearsAsItsReference`, `TestD1OmniAudioFeaturesAreLoadBearing`, `TestD1OmniVoiceMatchesLlamaCpp`, `nn.TestLnMatchesTheDefinition`, `TestD1OmniHearsOnEveryDevice`, `backend.TestConformerKernelsMatchTheLoops` | MC "d1-omni: an LFM2 encoder under Laya's head" |
-| bert, nomic-bert | embedding encoders (post-norm, `engine/model/encoder.go`; on the device with the norms after the residual adds, `nn.LayerPlan.PostResidNorm`); qwen3-embedding and EmbeddingGemma are qwen3/gemma3 with pooling bits | `TestEmbeddingsMatchReference`, `TestEmbeddingGateDiscriminates`, `TestEmbeddingsOnEveryDevice` | MC "Embedding models" |
-| clip | the vision tower's blocks (see the projectors) | the projectors' gates | MC "Vision as blocks" |
-
-### The projectors
-
-| projector (`clip.projector_type`) | models | gates | evidence |
-|---|---|---|---|
-| idefics3 | SmolVLM | `TestTowerMatchesLlamaCpp`, `TestTowerOnDeviceMatchesHost`, `TestTowerEncodes` | MC "RULE 7j", "Vision as blocks" |
-| mlp | llava | `TestLlavaTowerEncodes`, `TestLlavaTowerRunsOnTheDevice` | MC "llava/CLIP IS NOT BROKEN ON arm64" |
-| qwen2vl_merger | Qwen2-VL | `TestQwenTowerMatchesTransformers`, `TestQwenVLMatchesTransformersEndToEnd`, `TestRotaryTowerOnDeviceMatchesHost` | MC "qwen2vl AND qwen2vl_merger" |
-| qwen2.5vl_merger | Qwen2.5-VL (window attention) | `TestQwenVLRealMatchesTransformers`, `TestQwenVLWindowsSurviveQueryChunks` | MC "M-RoPE ... and Qwen2.5-VL" |
-| qwen3vl_merger | Qwen3-VL (a learned table resampled bilinear to the grid, deepstack mergers on three taps) and Qwen3.5 (no taps) | `TestQwenTowerMatchesTransformers`, `TestQwenVLMatchesTransformersEndToEnd`, `TestQwenPreprocessMatchesTheProcessor`, `TestRotaryTowerOnDeviceMatchesHost` | MC "Qwen3-VL: deepstack rows" |
-| kimivl | Kimi-VL-A3B (MoonViT: a table resampled bicubic, the 2-D rotary in complex pairs, column then row; a LayerNorm over each patch before the shuffle; pictures padded, resized only past 4096 patches) in front of deepseek2 | `TestQwenTowerMatchesTransformers`, `TestKimiVLTextMatchesTransformers`, `TestKimiVLTowerOnDeviceMatchesHost`, `TestKimiVLKeepsTheFivePrinciples`, `TestKimiVLRealTowerMatchesMoonshot` | MC "Kimi-VL" |
-| glm4v | GLM-4.1V, 4.5V, 4.6V (an RMSNorm after the patch embedding, a table resampled bicubic, a 2x2 merging convolution, a gated MLP projector; bounds per temporal frame) | `TestQwenTowerMatchesTransformers`, `TestQwenVLMatchesTransformersEndToEnd`, `TestQwenPreprocessMatchesTheProcessor`, `TestRotaryTowerOnDeviceMatchesHost` | MC "Qwen3.5's tower, and GLM-4.1V" |
-| hunyuanvl | HunyuanOCR (a LayerNorm ViT over the patches in raster order with a table resampled bilinear; an RMSNorm, a 2x2 convolution, GELU, a 1x1 convolution, a newline row after each merged row, a linear, begin and end rows, an RMSNorm) | `TestQwenTowerMatchesTransformers`, `TestQwenVLMatchesTransformersEndToEnd`, `TestQwenPreprocessMatchesTheProcessor`, `TestHunyuanVLTowerOnDeviceMatchesHost`, `TestHunyuanVLRealTowerOnDevice`, `TestHunyuanVLChatSpansAreTheProcessors`, `TestHunyuanVLPictureCountsItsNewlineAndEndRows` | MC "HunyuanVL" |
-| gemma3 | Gemma 3 (SigLIP, average pool) | `TestGemma3TowerMatchesLlamaCpp`, `TestGemma3TowerOnDevice`, `TestProjectorMatchesTransformers`, `TestPreprocessMatchesTransformers` | MC "Gemma 3 vision and InternVL" |
-| internvl | InternVL 2.5/3 (InternViT-300M; the 6B ViT refused by name) | `TestInternVLTowerMatchesLlamaCpp`, `TestInternVLTowerOnDevice` | MC "Gemma 3 vision and InternVL" |
-| resampler | MiniCPM-V 2.6/4.0/4.5 (minicpmv_version 3-6) | `TestMiniCPMVMatchesTransformers`, `TestMiniCPMVOnDeviceMatchesHost`, `TestMiniCPMVLayoutMatchesProcessor` | MC "MiniCPM-V" |
-| janus_pro | Janus-Pro | `TestJanusMatchesTransformers`, `TestJanusOnDeviceMatchesHost` | MC "Janus-Pro" |
-| pixtral | Mistral Small 3.x, Ministral 3, Pixtral-12B | `TestPixtralMatchesTransformersEndToEnd`, `TestPixtralOnDeviceMatchesHost`, `TestPixtralPreprocessMatchesTheProcessor` | MC "Pixtral / Mistral 3 vision" |
-| llama4 | Llama 4 Scout and Maverick (tiles) | `TestLlama4MatchesTransformersEndToEnd`, `TestLlama4OnDeviceMatchesHost`, `TestLlama4PreprocessMatchesTheProcessor` | MC "Llama 4 vision" |
-| gemma4v | every Gemma 4 (E2B/E4B clamp every matrix; 26B/31B standardise and see image rows bidirectionally on the sliding layers) | `TestGemma4TowerMatchesTransformers`, `TestGemma4MatchesTransformersEndToEnd`, `TestGemma4OnDeviceMatchesHost`, `TestGemma4PreprocessMatchesTheProcessor`, `TestGemma4RealMatchesTransformers` | MC "Gemma 4 vision" |
-| phi4 | Phi-4-reasoning-vision-15B (SigLIP2 NaFlex; not Phi-4-multimodal) | `TestPhi4TowerMatchesTransformers`, `TestPhi4MatchesTransformersEndToEnd`, `TestPhi4TowerOnDeviceMatchesHost`, `TestPhi4PreprocessMatchesTheProcessor`, `TestNaflexSizeMatchesProcessor`, `TestPositionTableResizeMatchesTorch`, `TestPhi4RealMatchesTransformers` | MC "Phi-4-reasoning-vision" |
-| lfm2 (d1omni_v) | LFM2-VL, LFM2.5-VL, d1-3B, d1-omni's vision half, its rows a prefix of the prompt (SigLIP2 NaFlex with its post-LayerNorm, each piece at its own grid; past twice the token budget 2-10 tiles of 512 pixels and a thumbnail, Lfm2VlImageProcessor's plan with torchvision's 8-bit resize; the 2x2 unshuffle, an optional LayerNorm, linear, erf GELU, linear; pictures in a decision request through the systemone template's markers) | `TestLFM2LayoutMatchesProcessor`, `TestLFM2RealMatchesTransformers`, `TestD1DecidesOverPicturesAsItsReference`, `TestD1PicturesMatchLlamaCpp`, `TestDecisionMediaReadsLlamaCppsShapes`, `TestWarmImageEncodeDoesNotAllocate`, `TestEveryTowerRunsSSE`, `TestLFM2FixtureMatchesTransformers`, `TestTowerEncodeResumesAcrossARelocation` | MC "LFM2-VL and d1's pictures" |
-| gemma3nv | Gemma 3n E2B/E4B (MobileNet-V5: convolutional blocks as programs of generated kernels on every tier; the end-of-image marker from the vision embedder's hard table) | `TestGemma3nTowerMatchesTransformers`, `TestGemma3nMatchesTransformersEndToEnd`, `TestGemma3nTowerOnDeviceMatchesHost`, `TestGemma3nPreprocessMatchesTheProcessor`, `TestTowerEncodeResumesAcrossARelocation`, `TestGemma3nTowerPagesThroughTheDevice`, `tier.TestConvTowerReturnsEveryDeviceBuffer`, `backend.TestConvKernelsMatchTheLoops`, `cpu.TestEmitDWConv*`, `TestGemma3nRealMatchesTransformers` | MC "Gemma 3n vision" |
+The list is `.notes/architectures.md`: every architecture and projector, what is
+special about its graph, its gates and its evidence. A new architecture or
+projector adds one row there and its narrative in
+`.notes/engineering-history/model-correctness.md` (MC in the evidence lines
+below; GK is `gpu-kernels.md`, PL `placement.md`).
 
 ### The chat template
 
@@ -531,50 +477,8 @@ holds only names with no `tokenizer.json` to parse at all, each with the
 artefact that replaces it. The scope is conformance to an identified artefact,
 not provenance.
 
-The recorded divergences (each with its measurement in the evidence file):
-
-| where | llama.cpp | jitllm follows | evidence |
-|---|---|---|---|
-| contraction regex `(?i:'s...)` | `[sS]` adaptation (misses U+017F, U+212A) | the model's regex: simple case folding (`ucFold`), so `'` + U+017F is a contraction | MC "The tokenizer authorities and the kimi-k2 pre-tokenizer" |
-| kimi-k2 pre-tokenizer | one `\p{L}+` run | Moonshot's `pat_str`: o200k's case split plus Han runs (`SplitParams.HanRuns`) | same |
-| Han ranges | CJK Ext A-F | the UCD's Scripts.txt, Unicode 15.1.0 | same |
-| llama4 tokenizer label "default" | gpt-4o with ignore_merges false | the model's tokenizer.json (o200k, ignore_merges) | MC "llama4 IS THE FIFTEENTH ARCHITECTURE" |
-| YaRN stated `attention_factor` | never read | transformers: the stated value on cos and sin | MC "YaRN's attention_factor" |
-| YaRN correction range | floored and ceiled | unrounded where the config says `truncate: false` (`FlagYarnExact`) | MC "gpt-oss IS THE TWELFTH ARCHITECTURE" |
-| the router's renormalising divisor | a clamp | DeepSeek's `sum + 1e-20` (`nn.TestRouterFloorMatchesTheKernel`) | MC "The router's renormalising divisor floor" |
-| ERNIE's divisor floor and shared width | -- | DeepSeek's floor; width read off the tensor | MC "ernie4_5-moe and ernie4_5" |
-| starcoder2's config sliding window | not applied | llama.cpp (the GGUF carries no window) | MC "The classic-transformer kit (C6)" |
-| falcon's GELU | tanh approximation | llama.cpp (the model trains with erf) | same |
-| EXAONE 4's window | slides only at 64 layers | the file's key, fixture held to transformers | MC "The dense llama family" |
-| the SSM gated norm and dt | grouped norm, dt unclamped | llama.cpp and mamba_ssm (transformers clamps dt on a prompt) | MC "The state-space hybrids" |
-| FalconMamba's dt/B/C norm epsilon | the layer norm's | the file, i.e. llama.cpp | MC "mamba and jamba" |
-| phimoe's norms and router | phi3's graph: an RMSNorm plus a bias, a renormalised softmax top-2 | transformers' PhimoeForCausalLM: LayerNorm, sparsemixer not renormalised; the real checkpoints held to it on their own weights | MC "Phi-3.5-MoE (phimoe)" |
-| phimoe's cos/sin scale | its converter's `attn_factor` | the file's on the GGUF input, `short_mscale` on safetensors (the two differ on Phi-3.5-MoE) | same |
-| Jamba at Q4_K_M ("Once upon a time") | its CPU and CUDA arms part at the second token | neither engine: transformers on the file's own weights parts from both (8-bit activations through 26 recurrences); the gate holds Jamba at F16, where all agree at every position | MC "mamba and jamba" |
-| gemma3n's gaussian top-k variance | divides by n-1 | the reference: divides by n | MC "gemma3n" |
-| MiniMax-M3's indexer key in an f16 cache | f32 (its converter forces it) | f32: an MSA model's host cache defaults to f32, since a rounded key flips a near-tied block | MC "minimax-m3" |
-| DeepSeek V4's CSA and HCA blocks | named by ratio against the constants 4 and 128 | a kind per block and a rate per kind in the container, told apart at conversion by their tensors | MC "deepseek4" |
-| Kimi-Linear's and Kimi-K3's MLA latent norm epsilon | rms_norm_eps | the model's code: the RMSNorm class default, 1e-6 (`jlm.Config.LatentNormEps`) | MC "kimi-k3" |
-| HunyuanVL's XD-RoPE | a coordinate per rotated PAIR (`ggml_rope_multi`) | transformers: a coordinate per ELEMENT, so a pair's halves turn by different angles on a picture's rows | MC "HunyuanVL" |
-| QSA's indexer score | unscaled | llama.cpp: transformers scales by 1/sqrt(head_dim), and a positive scale on a relu sum selects the same blocks | MC "qwen4exp: Qwen3.8-Flash-Next" |
-| QSA's cache precision | the converter's f16/f32 choice | f32: QSA pools raw cached keys, which its references hold at f32; a q8_0 cache is refused by name | MC "qwen4exp: what was built" |
-| the n-gram reset id | its converter writes the last of the config's end-of-sequence list as `ple.eos_token_id` | llama.cpp: the file's key (transformers' module takes the first of the list; the two agree where the list has one id) | MC "qwen4exp: Qwen3.8-Flash-Next" |
-| LFM2-VL's projector GELU | tanh form (FFN_GELU) | transformers' erf form (ACT2FN["gelu"]) | MC "LFM2-VL and d1's pictures" |
-| d1's pictures over 1024x1024 | handed to mtmd as they came | d1's runner.py: resized to 1 MiPx with Pillow BICUBIC first (cap_pixels) | same |
-| InternVL's class token | last | first, as the reference | MC "Gemma 3 vision and InternVL" |
-| MiniCPM-V's image ids, resize and slicing | three departures from the processor | the processor | MC "MiniCPM-V" |
-| Kimi-K3-0.40B-MXFP4's dynamic MXFP4 input activations | -- (its converter moves the weights alone) | the release's W4A16: the experts' weights moved, their activations the engine's MXFP4 kernels' own | MC "The release from safetensors" |
-| BitNet b1.58 2B-4T's graph | llama.cpp's `bitnet` is 1bitLLM's reproduction (SiLU gate, NORM rotary) and its converter maps neither inner norm; bitnet.cpp's `bitnet-b1.58` runs SiLU too | transformers' BitNetForCausalLM: squared ReLU, NEOX (on the release, NLL 1.70 against SiLU's 2.51); `bitnet` is refused by name | MC "BitNet b1.58" |
-| BitNet's activation quantization | per 256-element block (q8_K, TQ2_0's dot) | transformers: per token, int8 absmax over the whole row | same |
-| I2_S's scales | f32 per tensor | carried exactly (`TQ2_F32`); rounding them to f16 moves the logits 4e-4..3.6e-3 in NMSE on the fixture | same |
-| the chat template | the GGUF's | the publisher's when given (`-chat-template`) | MC "The chat template, applied" |
-| a decision request without `instructions` | refused | TypeSafe's protocol: optional, asked by the question's id (Clef's code, lev's template) | `docs/design/decision-models.md` |
-| Laya's confidence | TypeSafe's formula | Laya's code: one minus normalised entropy | same |
-| Laya's sequence | the template rendered whole, then re-cut | `rl_common.build_sequence`: each piece tokenized alone (token for token equal on the gates' requests) | same |
-| Laya's GELU (GeGLU and the scorer) | tanh in the GeGLU, erf in the scorer | the reference: erf in both (`ActGELUErf`, generated on every tier; worst logit 1e-6 on the f32 fixture, where tanh was 3e-4) | same |
-| Laya's state cut | the context | the context: the GGUF does not carry the reference's max_len (512) | same |
-| Clef's confidence | TypeSafe's formula | Clef's code (`systemone_answer`): the chosen option's probability, a score's largest | same |
-| the stop set | EOS, a GGUF's eot, eom and FIM ids, and its name list | llama.cpp's from a GGUF (`tok.TestStopSetMatchesLlamaCpp`); from safetensors transformers' generation_config eos list beside the names | MC "The stop set: what the file states, carried into the container" |
+The recorded divergences are `.notes/divergences.md`, each with its measurement
+in the evidence file. A new divergence adds one row there.
 
 ## RULE 8: every op a token runs is generated code. There is no interpreted tier.
 
@@ -609,9 +513,12 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
   missing extensions (`nn.HostRefusal`), and a host with no code generator at
   all refuses too (`nn.Available`).
 - **No pregenerated assembly.** The only `.s` files in the project are the
-  Go-to-generated-code call boundary, `jit/cpu/trampoline_{amd64,arm64}.s`
-  (stated by the user). Every kernel is emitted at run time for the
-  host in front of it. `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
+  Go-to-generated-code call boundary, `engine/device/cpu/trampoline_{amd64,arm64}.s`
+  (stated by the user), and there is no kernel in any other language either
+  (PTX, CUDA, OpenCL, Metal, the shader languages, C); the C under `scripts/`
+  drives llama.cpp, the reference, and the gate names each file. Every kernel
+  is emitted at run time for the device in front of it.
+  `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
 - **Gate the tail.** Every kernel gate sweeps ragged widths (1 through a few
   vectors) with a guard after the output, and is run against a violation --
   a tail kernel that is right at whole vectors and wrong at 7 is the shape
@@ -619,7 +526,7 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
 
 The history -- the arm64 24.5x that returned TRUE, the counters that could not
 see an op that never asked, the audits -- is in
-`docs/engineering-history/cpu-kernels.md`, "The reference tier, before it was
+`.notes/engineering-history/cpu-kernels.md`, "The reference tier, before it was
 removed".
 
 ## RULE 8b: f32 is the engine's precision. The oracle is f32 too.
@@ -630,22 +537,22 @@ signature. The oracle's matvec (`internal/oracle.MatVec`,
 test-only) is f32 with Neumaier compensation, so the reference stays an
 independent METHOD (compensated scalar) rather than the kernel's arithmetic
 twice. What float64 is left is measurement -- the tuners' statistics
-(`engine/model/seamtune.go`, `engine/nn/tune.go`), the expert-use accounting
-(`engine/model/hotness.go`) and setup scalars before a kernel call.
+(`engine/seamtune.go`, `nn/tune.go`), the expert-use accounting
+(`engine/hotness.go`) and setup scalars before a kernel call.
 
 Why: it makes the elementwise ops emittable with the assembler that already
 exists. It is not a perf win and must not be quoted as one (decode is bound by
 weight traffic, and the conversions were not weights). The gate is
 `TestGreedyMatchesLlamaCpp` plus the teacher-forced diff on the clean models.
 
-Evidence: `docs/engineering-history/cpu-kernels.md` ("f32 is the engine's
+Evidence: `.notes/engineering-history/cpu-kernels.md` ("f32 is the engine's
 precision").
 
 ## RULE 8a: a BLOCK is the unit, and it must stay orchestrable.
 
 The device never learns what a transformer is beyond one repeating unit:
-`engine/model/` keeps the graph and nothing in `jit/gpu` knows about embedding lookup,
-sampling or tied output weights. That is what makes `PrepLayer` able to decline
+`model/` states the graph, `engine/` runs it, and nothing in `engine/device/gpu`
+knows about embedding lookup, sampling or tied output weights. That is what makes `PrepLayer` able to decline
 per block, and it is why a model too big for the card runs its first N blocks on
 the device and the rest on the host.
 
@@ -722,7 +629,7 @@ constraint and leaves the next session to find it again.
 - **A gate that has been red since a refactor is that refactor's unfinished
   half**, and the commonest shape is a test that worked by accident.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 11b's
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 11b's
 cases").
 
 ## RULE 11d: a gate that never runs on an architecture does not cover it.
@@ -733,7 +640,7 @@ kernel and below a model compare the engine against something that is not
 itself -- the batched path (`TestBatchMatchesForward`) and llama.cpp's goldens
 (`TestGreedyMatchesLlamaCpp`):
 
-    GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 ./scripts/cap 8G -- go test -c -o model.test ./engine/model
+    GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 ./scripts/cap 8G -- go test -c -o model.test ./engine
     # copy model.test and the package's testdata/ to the arm64 host, sign it
     # with .github/release/entitlements.plist (codesign -s - --entitlements), then:
     ./model.test -test.run 'TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestEveryModelRunsGenerated'
@@ -755,21 +662,22 @@ The SSE tier binds the same way on amd64:
 - **Run the WHOLE suite on the SSE host, not a filtered slice**, natively on the
   Atom:
 
-      model.test -test.run 'TestEveryModelRunsSSE|TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestHybridRuns|TestTowerEncodes'
+      model.test -test.run 'TestEveryModelRunsSSE|TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestHybridRuns|TestStatedTowerEncodesAPicture'
 
 - **The SSE and AVX2 tiers are two transcriptions, not one**: a comparison
   between them pins the KV width and holds the SSE arm to a same-process control
-  (`TestEveryModelRunsSSE`). A forced tier is set with
-  `cpu.ForceTierForTest(cpu.TierSSE)` (build tag `jitllmtest`) BEFORE
-  `NewJIT`/`Open`.
+  (`TestEveryModelRunsSSE`). A lower tier is a CPU device opened as one:
+  `WithDevices("cpu:sse")` for a model (`cpu:novnni` and `cpu:nodotprod`
+  likewise), a `cpuArm` at `cpu.AtTier(cpu.TierSSE)` for a composer gate.
+  Nothing forces a tier process-wide.
 
-Evidence: `docs/engineering-history/cpu-kernels.md` ("RULE 11d's cases", "THE
+Evidence: `.notes/engineering-history/cpu-kernels.md` ("RULE 11d's cases", "THE
 SSE TIER").
 
 ## RULE 11c: the kernels are gated. The tier's wiring of them is not.
 
 **A new graph feature is not on the device until an end-to-end gate runs a model
-that HAS it, every block placed, against the host.** A gate on `kernels.MatVec`
+that HAS it, every block placed, against the host.** A gate on a composed form
 proves the kernel and says nothing about whether the tier asked for the right
 one; a kernel gate and a host gate can both be green while the tier wires them
 wrongly. Declining a block is not the answer to a packing choice of the file:
@@ -783,13 +691,13 @@ that dies at conversion.
 - **The band grows with the blocks below the seam.** An absolute logit
   difference across a deep seam is not evidence of a device bug; the falsifiable
   form is to move the seam and see whether the error tracks the depth below it
-  (`model.TestHybridDeviceErrorIsAmplification`,
-  `model.TestPostNormDeviceErrorIsAmplification`).
+  (`engine.TestHybridDeviceErrorIsAmplification`,
+  `engine.TestPostNormDeviceErrorIsAmplification`).
 - **A gate that pins a knob does not cover that knob's default.** Run the
   shipping default (the f16 KV cache on amd64) on a partial seam too.
 
-Evidence: `docs/engineering-history/gpu-kernels.md` ("RULE 11c's cases");
-`docs/engineering-history/placement.md` 15i.
+Evidence: `.notes/engineering-history/gpu-kernels.md` ("RULE 11c's cases");
+`.notes/engineering-history/placement.md` 15i.
 
 ## RULE 11e: do not invent constraints. Name a limit's source before obeying it.
 
@@ -808,7 +716,7 @@ best rate.
 - **A real limit is where the search starts, not where it ends**: batch,
   stage, queue or reorder around it before accepting its cost.
 
-Evidence: `docs/engineering-history/gpu-kernels.md` ("RULE 11e's cases").
+Evidence: `.notes/engineering-history/gpu-kernels.md` ("RULE 11e's cases").
 
 ## RULE 11f: before building anything, find what already does it.
 
@@ -820,7 +728,7 @@ with RULE 6's checklist. A PR reports all three, each under its own heading:
 evidence**. A PR that cannot name what it searched for first skipped the first
 step.
 
-Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 11f's
+Evidence: `.notes/engineering-history/scheduling-and-measurement.md` ("RULE 11f's
 cases: a cache that existed, a store that existed").
 
 ## RULE 12: a comment explaining why something is NOT done is a claim about the code, and it rots.
@@ -834,7 +742,7 @@ it was retired, and one claiming the vision tower has no block pages. The same
 holds for a number cited as measured: check that the measurement it came from
 still stands.
 
-Evidence: `docs/engineering-history/placement.md` ("RULE 12's tower case").
+Evidence: `.notes/engineering-history/placement.md` ("RULE 12's tower case").
 
 ## RULE 13: device kernels — three invariants that do not bend.
 
@@ -853,6 +761,41 @@ Evidence: `docs/engineering-history/placement.md` ("RULE 12's tower case").
 - **Poison the buffer, do not trust the allocator.** A fresh device buffer is
   usually zero, so reading memory nothing wrote is invisible until it is not.
   `0 * NaN` is NaN.
+
+## The shape: model, instance, session, scheduler
+
+Stated by the user, and the shape every entry point takes:
+
+1. **A model** is the weights, loaded once.
+2. **Composing makes an instance**: every kernel for one placement (which
+   device each block runs on, how heavily it pages). A model has as many
+   instances as the caller makes, each its own placement.
+3. **Composition happens only when an instance is made, relocated or tuned
+   at runtime** -- never in a prefill, a token or a draw, and never because a
+   session opened (`engine.TestComposesOnlyWithAnInstance`,
+   `Instance.Account(dev).Asks`, the CPU's as a card's; a card's
+   `UnformedAtStep`). Each device composes only inside a placement call, and
+   a form asked at a step is declined unformed
+   (`engine.TestTheCPUDeviceComposesNothingAtAStep`,
+   `gpu.TestTheCardComposesNothingAtAStep`).
+4. **A session is a conversation's history** -- its own KV pages, recurrent
+   state, positions, logits and device view (`engine.Session`). Opening one
+   composes nothing.
+5. **The scheduler leases a session an instance per phase** (prefill,
+   generate), the lease held for the whole phase and handed back
+   (`engine.Scheduler`, swappable by `WithScheduler`; `engine.Pool` is the
+   default). Prefill and generation may lease different instances; a session
+   moving between them moves only the blocks placed differently, the source
+   freed once the copy has landed.
+6. **Batching is many sessions leasing one instance**: each step carries every
+   decoding session's next token and prompts' chunks beside them, one pass
+   over the weights per instance (`engine.StepRuns`, `engine.Batcher`), rows
+   reassigned every step (`engine.TestSessionsShareAnInstance`).
+7. **Relocating an instance moves the history of every session leasing it**;
+   parking a session moves its history alone and leaves the instance where it
+   is (`Instance.Park`, `Instance.Settle`).
+
+Evidence: `.notes/design/instances-and-sessions.md`.
 
 ## Scope
 
@@ -876,11 +819,11 @@ does for processes and threads, jitllm does for models and blocks:
 | a page fault | a page-in |
 
 **"Scheduler" is already taken in this tree for a different axis.**
-`model.Scheduler` puts SEQUENCES onto batch rows (admission and retirement,
+`engine.Scheduler` puts SEQUENCES onto batch rows (admission and retirement,
 driven rather than self-running). Block placement puts BLOCKS onto compute
 resources with memory paged; it is the core. You cannot schedule what you cannot
 relocate, which is why block paging is primed whether or not the model fits
-(`docs/design/block-paging.md`).
+(`.notes/design/block-paging.md`).
 
 **Standing goal, not current work: a kernel composer.** Stated by the user:
 the JIT should eventually *compose* kernels, choosing and fusing from the
@@ -893,9 +836,12 @@ into a call site.
 
 **What is missing is the PLURAL**: several devices at once rather than one,
 layer migration across devices rather than only to and from the host, and
-device-side paging. Not done, named rather than implied: concurrent sessions on
-one device (a session's calls are serialised there) and the sessions-per-device
-budget.
+device-side paging. Two instances put one block, and the projection, on
+different cards of one tier, each session routed to its own copy
+(`TestTwoInstancesRunABlockOnTwoCards`). How many sessions' history a card
+holds at a context is its room past the instance, measured
+(`TestACardHoldsTheSessionsItsRoomStates`); past it history goes home and is
+streamed back, and a session's state takes a streamed block's page.
 
 - **The libraries read no environment.** Every knob is a `With...()` option;
   `cmd/jitllm` reads the `JITLLM_*` names and passes them through. The one file
@@ -904,17 +850,22 @@ budget.
   package's knobs by what it READS, not by a literal grep for `os.Getenv`. A
   `t.Setenv` of a migrated name reaches nothing and leaves a gate green on a
   configuration never selected.
-- **A session owns the sequence; the tier owns the model.** Two `model.State`s on
-  one tier each get their own KV history through `tier.GPU.Attach()`, which
-  satisfies `nn.LayerDevice` unchanged. Refusing a second State is not an option,
-  stated by the user: *"we can't refuse, jitllm is an inference os multimodel
-  multi devices multi instances"*. A session bringing a block home leaves it on
-  the card for every other session using it
-  (`model.TestABatchLeavesAnotherSessionAlone`).
-- **KV is never held twice.** Host storage follows ownership: a page lives on
-  the host or on the device that owns it, never as a standing mirror of both,
-  and a prefix shared between sessions is one page (`SharedStore`), not a copy
-  per session.
+- **A session owns its history; the instance owns the placement; the tier owns
+  the weights.** Each session's device history is its own view of the tier
+  (`gpu.GPU.Attach()`), which satisfies `nn.LayerDevice` unchanged. Refusing a
+  second session is not an option, stated by the user: *"we can't refuse,
+  jitllm is an inference os multimodel multi devices multi instances"*. A
+  session's view letting a block go leaves it on the card for every other view
+  holding it (`engine.TestABatchLeavesAnotherSessionAlone`).
+- **KV is held once per device** (stated by the user). Each session reads each
+  position's history from one place. On one device, sessions and the prefix
+  cache share one page for a prefix they agree on (`SharedStore` on the host,
+  the card's named pages on a card), never a copy per session. Devices may each
+  hold a copy for sessions placed on them independently: a sharing session's
+  block moves to a card like any other, taking the card's page of its prefix
+  or naming the one it brings (`kvCache.nameMoved`). A session keeps no mirror
+  of a history it moved, and a host page the card now holds goes at its last
+  holder's release.
 - **A device that shares the host's memory is not a second pool.** An integrated
   GPU's heap and Apple Silicon's are system RAM: `UnifiedMemory()` reports it on
   every backend with one contract -- SUBTRACT, DO NOT ADD. Vulkan decides this by
@@ -940,18 +891,22 @@ budget.
   fits" means enough pages were allocated to hold every block, and nothing is
   ever evicted. There is no paging-off mode, and a measurement that reports one
   measures a path that no longer exists.
-- **The test suite converts** (`engine/model/jlm_helper_test.go`) because it has
+- **The test suite converts** (`engine/jlm_helper_test.go`) because it has
   to run what ships; an open error is a failure, never a `t.Skipf`.
+- **`composer/` generates code and never runs a model** (stated by the user).
+  The passes, the lowerings and every device's emitters live there; what runs
+  a model is the devices' runtimes under `engine/device/`, the CPU's beside
+  the cards' because the CPU is a device.
 - **Three GPU backends, one interface.** CUDA, Vulkan and Metal are reached
-  through goffi (`jit/gpu/ffi`) with no cgo, one `backend.Device` interface over
+  through goffi (`backend/ffi`) with no cgo, one `backend.Device` interface over
   three implementations. **Do not add a fourth abstraction in advance of a second
   implementation of anything.**
 - **Models live on a dedicated model disk** (`JITLLM_MODELS`) — never `~`, never `/tmp`.
   Tests find them through `JITLLM_MODELS` (default: the repo's `models/`);
   `docs/testing.md` has every model-selecting test variable.
 
-Evidence: `docs/engineering-history/placement.md` ("Scope as it stood in
-AGENTS.md", 15u); `docs/design/device-sessions.md`.
+Evidence: `.notes/engineering-history/placement.md` ("Scope as it stood in
+AGENTS.md", 15u); `.notes/design/device-sessions.md`.
 
 ## There is one model. Vision is not a second one.
 
@@ -961,9 +916,15 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
 
 - **GGUF is the converter's input, so the two-file contract dies at
   conversion**: `jitllm convert model.gguf mmproj.gguf out.jlm`. `model.Open`
-  builds the tower when the container carries one (`m.Tower()`); there is no
-  `OpenTower` and no `-mmproj`. A projector width that does not match the text
-  model is refused at conversion, where there is a file in front of a person.
+  builds the tower when the container carries one; there is no `OpenTower`
+  and no `-mmproj`. A projector width that does not match the text model is
+  refused at conversion, where there is a file in front of a person.
+- **The converter states the tower; the engine knows no family.** What a
+  family's reference does -- its preprocessing steps, its entry and head as
+  programs of ops, its block's attributes, its picture's markers -- is written
+  into the container at conversion (`jlm.Tower`), and `model.Open` lowers that
+  record into graphs, never switching on `Projector`. A family the converter
+  does not state yet is refused at Open by name.
 - **Two page arrays, one pager.** Vision block i is at
   `VisDataOff + i*VisPageSize`, because one page size is wrong in both
   directions; vision blocks occupy `NBlocks..NBlocks+NVisBlocks-1` of one block
@@ -972,42 +933,74 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
 - **The tower is a segment of the model, run by the one runner**: its blocks are
   `Model.layers[NBlocks:]`, run through the text runner's block body on the text
   State's JIT and pool. Two pools on six P-cores is the worst configuration this
-  engine has. `docs/design/vision-as-blocks.md` is the design.
-- **A picture is a span of the prompt, not a stage before it**, encoded in the
-  State's vision segment or answered by the image cache, and split across steps
-  by blocks, never by rows. It is named by `ImageKey` (sha256 over what the tower
-  reads, known before a block runs), so the prefix cache names the rows after it
-  as it names text.
+  engine has. `.notes/design/vision-as-blocks.md` is the design.
+- **A picture is a span of the prompt, not a stage before it**: the prefill
+  encodes it through the tower's instance wherever its rows are not restored
+  (`encodePictures`). It is named by a `RowsKey` (sha256 over what the tower
+  reads, known before a block runs), so the prefix cache names the rows after
+  it as it names text, and a restore past the picture runs no tower block
+  (`TestTwoTurnImageChatRestoresPastThePicture`).
+- **A picture of a size of its own** (`jlm.PreResizeLive`) is encoded in the
+  smallest of the squares the entry is formed for at placement, its rows the
+  call's live rows (`composer.TestComposedCPUFoldFollowsTheCall`).
 - **The tower runs on the device** through the one placement path
-  (`State.offerRange`); a block the device cannot express is declined by the
+  (`Instance.offerRange`); a block the device cannot express is declined by the
   device, never withheld by the model (RULE 8a). A vision block is one
   submission: bidirectional attention needs every row's k and v first.
-- Gates: `TestOneContainerCarriesTextAndVision`,
-  `TestTowerOffersItsBlocksToTheDevice`, `TestVisionRunsAsBlocksOfTheModel`,
-  `TestTowerOnDeviceMatchesHost` (bounded after ONE block: int8 activations
-  compound), `TestWarmImageEncodeDoesNotAllocate`,
-  `TestTwoTurnImageChatRestoresPastThePicture`.
+- Gates: `jlm.TestTowerRefusesWhatItCannotRead`, each stater's
+  `convert.Test*StatesItsTower` (SmolVLM, Gemma 3, llava, InternVL, Qwen2-VL,
+  Qwen2.5-VL, Qwen3.5-VL) and `convert.TestQwen3VLStatesItsTaps`,
+  `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
+  `TestStatedTowerEncodesAPicture`, `TestWarmImageEncodeDoesNotAllocate`,
+  `TestStatedTowerSeesThePicture` and each family's `Test*TowerSeesThePicture`
+  (a blank picture is the violation), `TestTowerBlocksMoveBetweenDevices` (to the
+  CPU and back between pictures, each picture its placement's rows),
+  `TestTowerHoldsOneBlocksHistory`, `TestStatedTowerRunsOnTheCard` (every
+  block and a partial seam, against the CPU), `TestQwen2VLTowerMatchesTransformers`
+  (Qwen2-VL's, Qwen2.5-VL's, Qwen3.5-VL's and Qwen3-VL's: the processor's
+  samples, every one, the tower's rows and Qwen3-VL's taps'),
+  `TestQwen2VLTowerRunsOnTheCard` (their grid rotary from the card's own table,
+  Qwen2.5-VL's windows and Qwen3-VL's taps, every block and a half seam),
+  `TestQwen2VLMatchesTransformers`, the M-RoPE gates (`TestMRope*`, the text
+  side on transformers' own tower rows), the real checkpoints against
+  transformers (`TestRealTowersMatchTransformers`: Gemma 4, Gemma 3n and
+  Ministral 3's towers; `TestQwenVLRealMatchesTransformers`: the Qwen family's
+  and HunyuanOCR's whole models; `TestLFM2VLRealMatchesTransformers`: LFM2-VL's
+  tower converted with its publisher's processor config;
+  `TestKimiVLRealMatchesMoonshot` and `TestPhi4RealMatchesTransformers`: Kimi-VL's
+  and Phi-4-reasoning-vision's towers against their own code), `TestChatSpansFollowTheTemplate`,
+  `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
+  `composer.TestComposedCPURegroup`, `composer.TestComposedCPUPatchifyTiles`
+  and `composer.TestComposedCPUUntile` (the windows' order, against
+  get_window_index), `composer.TestComposedCPUPosResampleFollowsTheReference`
+  and `composer.TestComposedCPUPosResampleCubic` (a learned table at the
+  picture's grid, fast_pos_embed_interpolate and grid_sample's bicubic);
+  through the front ends
+  `server.TestImageRequestsMatchTheEngine`, `cmd/jitllm.TestImageRunsThroughTheTower`
+  (a run restored past the picture answers alike) and
+  `common/engine.TestAnAttachedPictureReachesTheModel` (a follow-up turn sees
+  the picture in its history).
 
 **The bar for a new projector family**, on top of RULE 7's:
 
-- **Its preprocessing is the reference processor's, to the bit**
-  (`engine/model/imageproc.go`), held to transformers' pixel values on real
-  pictures (PNG -- a JPEG's decoders disagree first);
-  `TestPreprocessMatchesTransformers` demands zero differing values. Every
-  pixel and patch passes through generated code (`engine/nn/image.go`): the
-  decoded rows, the resize, the normalisation, the patch gather and the
-  position tables built per grid; what is Go is geometry from the sizes and
-  the tower's constant tables (`TestImagePathRunsGeneratedCode`).
+- **Its preprocessing is the reference processor's, to the bit**, stated as
+  steps (`jlm.PreStep`), held to transformers' pixel values on real pictures
+  (PNG -- a JPEG's decoders disagree first), or a divergence recorded in
+  `.notes/divergences.md`. Every pixel and patch passes through generated code
+  (`graph.OpPicture`, `graph.OpPatchify`): the decoded rows, the resize, the
+  normalisation, the patch gather and the position tables built per grid;
+  what is Go is geometry from the sizes and the tower's constant tables
+  (`TestImagePathRunsGeneratedCode`).
 - **A gate against transformers runs the PROJECTOR ALONE too**
   (`TestProjectorMatchesTransformers`): the tower's int8 activations put
   end-to-end features wider than what the projector's own errors move.
 - **The class token goes where the reference puts it** (InternVL first, as
   transformers does and llama.cpp does not; Llama 4 last).
 - **A bidirectional run in a causal prompt is a per-row key count**
-  (`Span.Bidir`, `nn.KeyRunDevice`, `engine/model/bidir.go`): a prefill chunk
+  (`Span.Bidir`, `nn.KeyRunDevice`, `engine/bidir.go`): a prefill chunk
   never cuts one, and a device that cannot honour it does not run the chunk.
 
-Evidence: `docs/engineering-history/model-correctness.md` ("Vision as blocks:
+Evidence: `.notes/engineering-history/model-correctness.md` ("Vision as blocks:
 the tower on the one runner" and each family's section).
 
 ## No mmap of files. Anonymous memory is decided by measurement.
@@ -1030,11 +1023,11 @@ pages keep the MRU rule the cyclic scan makes optimal. Count reads by syscalls,
 not by `/proc/<pid>/io` `read_bytes`, which misses whatever the buffered handle
 serves from cache.
 
-Evidence: `docs/engineering-history/placement.md` ("No mmap of files: the
+Evidence: `.notes/engineering-history/placement.md` ("No mmap of files: the
 measurements, and expert pages"); `format/jlm/read.go`.
 
 ## Open questions and shelved levers
 
-They live in `docs/open-questions.md`, a work list rather than rules. RULE 6
+They live in `.notes/open-questions.md`, a work list rather than rules. RULE 6
 governs every entry: a number decides ORDER, never admission. A closed entry
 moves to the matching evidence file.

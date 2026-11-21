@@ -9,77 +9,61 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// A decision model's GGUF states its readout as llama.cpp's converter writes
-// it (conversion/{lev,lfm2,bert}.py): <arch>.decision.type names the readout,
+// A decision model's GGUF states its readout: <arch>.decision.type names the readout,
 // <arch>.decision.temperature.<type>[.<band>] the fitted temperatures, and the
 // prompt is the template tokenizer.chat_template.systemone, which the vocab
-// reader already carries by name. docs/design/decision-models.md has the
-// family.
+// reader already carries by name. What each readout reads is its statement
+// in readouts.json; .notes/design/decision-models.md has the family.
 
-// decisionBands are the option-count buckets the temperatures were fitted on,
-// by the names llama.cpp's converter gives them: rl_common.temp_bucket's
-// 2 / 3-5 / 6-10 / 11+ (Laya and the models that copy it) and lev's
-// calibration bands small <= 8, mid <= 26, large.
-var decisionBands = map[string][2]uint32{
-	"2": {0, 2}, "3_5": {3, 5}, "6_10": {6, 10}, "11": {11, 0},
-	"small": {0, 8}, "mid": {9, 26}, "large": {27, 0},
+func questionTypes(name string) (jlm.QuestionType, bool) {
+	switch name {
+	case "choice":
+		return jlm.QuestionChoice, true
+	case "score":
+		return jlm.QuestionScore, true
+	case "noul":
+		return jlm.QuestionNoul, true
+	}
+	return 0, false
 }
 
-var questionTypes = map[string]jlm.QuestionType{
-	"choice": jlm.QuestionChoice, "score": jlm.QuestionScore, "noul": jlm.QuestionNoul,
+// decisionType is the readout f's decision.type names, "" for none.
+func decisionType(f *meta.File) string {
+	v, ok := f.Key("decision.type")
+	if !ok {
+		return ""
+	}
+	name, _ := v.String()
+	return name
 }
 
-// decisionOf fills c's decision fields from f. A file with no decision type
-// is not a decision model and is left alone; a type this engine has no readout
-// for is refused, since the model would otherwise convert into the backbone
-// and answer a decision request by generating text.
-func decisionOf(f *meta.File, c *jlm.Config) error {
+// decisionOf fills c's decision fields from f, as the library states its
+// readout. A file with no decision type is not a decision model and is left
+// alone; a type the library states no readout for is refused, since the
+// model would otherwise convert into the backbone and answer a decision
+// request by generating text.
+func decisionOf(f *meta.File, c *Config) error {
 	v, ok := f.Key("decision.type")
 	if !ok {
 		return nil
 	}
 	name, _ := v.String()
-	kind, ok := jlm.DecisionKindOf(name)
-	if !ok {
+	lib, err := readoutLibrary()
+	if err != nil {
+		return err
+	}
+	st := lib.Readouts[name]
+	if st == nil {
 		return fmt.Errorf("decision type %q is not implemented: %w", name, ErrNotImplemented)
 	}
 	if _, ok := f.KV["tokenizer.chat_template.systemone"]; !ok {
 		return fmt.Errorf("decision model %q carries no systemone template, which is its prompt", name)
 	}
-	c.Decision = kind
 	c.DecisionBlocks = uint32(f.UintKey("decision.block_count", 0))
-	if kind == jlm.DecisionLaya {
-		if c.Arch != jlm.ArchModernBERT || c.DecisionBlocks == 0 {
-			return fmt.Errorf("a laya readout is a ModernBERT encoder with head blocks, and this is %v with %d", c.Arch, c.DecisionBlocks)
-		}
-		if c.DecisionHeadTokens = uint32(f.UintKey("decision.max_head_tokens", 0)); c.DecisionHeadTokens == 0 {
-			return fmt.Errorf("a laya readout needs decision.max_head_tokens, the budget its prompt is cut to")
-		}
-		// rl_common.DecisionModel builds its head with max(1, d // 64) heads,
-		// whatever the encoder's count; llama.cpp's graph runs the encoder's,
-		// which agrees on every published checkpoint (1024 wide, 16 heads)
-		// and on no smaller one. A file that states it is taken at its word.
-		c.DecisionHeads = uint32(f.UintKey("decision.head_count", uint64(max(1, c.NEmbd/64))))
-		if c.DecisionHeads == 0 || c.NEmbd%c.DecisionHeads != 0 {
-			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
-		}
-	} else if kind == jlm.DecisionClef {
-		if err := clefOf(f, c); err != nil {
-			return err
-		}
-	} else if kind == jlm.DecisionD1Omni {
-		// Laya's head, which d1-omni's encoder.py builds the same way:
-		// nn.TransformerEncoderLayer at d // 64 heads, on the trunk's rows.
-		if c.DecisionBlocks == 0 {
-			return fmt.Errorf("an lfm2-d1-omni readout needs its head blocks")
-		}
-		c.DecisionHeads = uint32(f.UintKey("decision.head_count", uint64(max(1, c.NEmbd/64))))
-		if c.DecisionHeads == 0 || c.NEmbd%c.DecisionHeads != 0 {
-			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
-		}
-	} else if c.DecisionBlocks != 0 {
-		return fmt.Errorf("decision type %q with %d head blocks: only laya's and clef's heads are implemented: %w", name, c.DecisionBlocks, ErrNotImplemented)
+	if err := st.state(name, f, c); err != nil {
+		return err
 	}
+	c.take("readout " + name)
 
 	prefix := f.Arch() + ".decision.temperature."
 	for key, val := range f.KV {
@@ -92,17 +76,18 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 			return fmt.Errorf("decision temperature %s is %s, not a positive number", key, val.Short())
 		}
 		typ, band, banded := strings.Cut(rest, ".")
-		qt, ok := questionTypes[typ]
+		qt, ok := questionTypes(typ)
 		if !ok {
 			return fmt.Errorf("decision temperature %s names no question type", key)
 		}
 		d := jlm.DecisionTemp{Type: qt, T: float32(t)}
 		if banded {
-			b, ok := decisionBands[band]
+			b, ok := lib.Bands[band]
 			if !ok {
 				return fmt.Errorf("decision temperature %s names band %q, which no reference fits", key, band)
 			}
 			d.MinOptions, d.MaxOptions = b[0], b[1]
+			c.take("readout band " + band)
 		}
 		c.DecisionTemps = append(c.DecisionTemps, d)
 	}
@@ -123,23 +108,12 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 	return nil
 }
 
-// modernBERTConfig is ModernBERT's encoder, and the decision head llama.cpp
-// appends to it as trailing blocks (conversion/bert.py,
-// ModernBertDecisionModel): block_count counts both, decision.block_count the
-// head, and feed_forward_length is per block because the head's MLP is 4x
-// wide. From here on NLayer is the encoder; the head is blocks NLayer.. and
-// Config.DecisionBlocks says how many.
-func modernBERTConfig(f *meta.File, c *jlm.Config) error {
-	c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-5))
-	c.Flags |= jlm.FlagNonCausal | jlm.FlagRopeNeox | jlm.FlagGELU
-	if v, ok := f.Key("hidden_activation"); ok {
-		// IBM's Granite Embedding R2 runs the same graph under SiLU; nothing
-		// here has a fixture for it.
-		if s, _ := v.String(); s != "gelu" {
-			return fmt.Errorf("hidden_activation %q is not implemented: %w", s, ErrNotImplemented)
-		}
-	}
-	head := uint32(f.UintKey("decision.block_count", 0))
+// stateHeadBlocks splits a decision head a GGUF appends to an encoder as
+// trailing blocks off c (the head_blocks statement; ModernBertDecisionModel):
+// block_count counts both, head the head, and feed_forward_length may be per
+// block because the head's MLP is wider. From here on NLayer is the encoder;
+// the head is blocks NLayer.. and Config.DecisionBlocks says how many.
+func stateHeadBlocks(f *meta.File, c *Config, head uint32) error {
 	if head >= c.NLayer {
 		return fmt.Errorf("decision.block_count %d in a %d-block file", head, c.NLayer)
 	}
@@ -150,30 +124,39 @@ func modernBERTConfig(f *meta.File, c *jlm.Config) error {
 	}
 	if v, ok := ffn.Uint(); ok {
 		c.NFFN = uint32(v)
-	} else {
-		vs, err := ffn.Int32s()
-		if err != nil {
-			return fmt.Errorf("feed_forward_length: %w", err)
-		}
-		if uint32(len(vs)) != c.NLayer+head {
-			return fmt.Errorf("feed_forward_length has %d entries for %d blocks", len(vs), c.NLayer+head)
-		}
-		for i := uint32(0); i < c.NLayer; i++ {
-			if vs[i] != vs[0] || vs[i] <= 0 {
-				return fmt.Errorf("feed_forward_length differs between encoder blocks: %w", ErrNotImplemented)
-			}
-		}
-		c.NFFN = uint32(vs[0])
+		return nil
 	}
-	// Every SWAPeriod-th layer from the first attends to everything; the
-	// others within a symmetric window. An absent window is every layer
-	// global.
-	c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
-	if c.SWAWindow != 0 {
-		if err := swaPatternOf(f, c, 3); err != nil {
-			return err
+	vs, err := ffn.Int32s()
+	if err != nil {
+		return fmt.Errorf("feed_forward_length: %w", err)
+	}
+	if uint32(len(vs)) != c.NLayer+head {
+		return fmt.Errorf("feed_forward_length has %d entries for %d blocks", len(vs), c.NLayer+head)
+	}
+	for i := uint32(0); i < c.NLayer; i++ {
+		if vs[i] != vs[0] || vs[i] <= 0 {
+			return fmt.Errorf("feed_forward_length differs between encoder blocks: %w", ErrNotImplemented)
 		}
 	}
-	c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", float64(c.RopeBase)))
+	c.NFFN = uint32(vs[0])
 	return nil
+}
+
+// headSeam is where a marker head's model-level tensor goes once its blocks
+// are the model's: the trunk's final norm closes the trunk's last block, a
+// norm over its residual (RoleLayerOutNorm), and the question types' table
+// is the first head block's, whose input adds the question's row.
+func headSeam(role jlm.Role, block int32, c *Config) (jlm.Role, int32) {
+	if !c.Flags2.Has(jlm.Flag2HeadBlocks) || block != jlm.DenseBlock {
+		return role, block
+	}
+	switch role {
+	case jlm.RoleOutputNorm:
+		return jlm.RoleLayerOutNorm, int32(c.NLayer) - 1
+	case jlm.RoleOutputNormBias:
+		return jlm.RoleLayerOutNormBias, int32(c.NLayer) - 1
+	case jlm.RoleTokenTypes:
+		return role, int32(c.NLayer)
+	}
+	return role, block
 }

@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"net"
 	"os"
 	"os/exec"
@@ -16,38 +15,18 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testbin"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // The connected engine is gated against a real jitllmd: the binary built from
 // this tree, serving on a free port, over the model folder the tests read.
 
-var (
-	jitllmdOnce sync.Once
-	jitllmdBin  string
-	jitllmdErr  error
-)
-
-// buildJitllmd builds server/cmd/jitllmd once per test binary.
+// buildJitllmd builds server/cmd/jitllmd into the test's own directory.
 func buildJitllmd(t *testing.T) string {
 	t.Helper()
-	jitllmdOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "jitllmd-bin")
-		if err != nil {
-			jitllmdErr = err
-			return
-		}
-		jitllmdBin = filepath.Join(dir, "jitllmd"+exeSuffix())
-		cmd := exec.Command("go", "build", "-o", jitllmdBin, "./cmd/jitllmd")
-		cmd.Dir = filepath.Join("..", "..", "server")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			jitllmdErr = err
-			jitllmdBin = string(out)
-		}
-	})
-	if jitllmdErr != nil {
-		t.Fatalf("building jitllmd: %v\n%s", jitllmdErr, jitllmdBin)
-	}
-	return jitllmdBin
+	return testbin.Build(t, "jitllmd", filepath.Join("..", "..", "server"), "./cmd/jitllmd")
 }
 
 // freeAddr is a loopback address nothing listens on.
@@ -67,7 +46,7 @@ func freeAddr(t *testing.T) string {
 func startJitllmd(t *testing.T, addr string) (stop func()) {
 	t.Helper()
 	bin := buildJitllmd(t)
-	cmd := exec.Command(bin, "serve", "-addr", addr, "-models", filepath.Dir(modelPath), "-version", "9.8.7")
+	cmd := exec.Command(bin, "serve", "-addr", addr, "-models", filepath.Dir(modelPath()), "-version", "9.8.7")
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -95,9 +74,9 @@ func startJitllmd(t *testing.T, addr string) (stop func()) {
 
 func needModel(t *testing.T) {
 	t.Helper()
-	fresh.Must(t, modelPath)
-	if _, err := os.Stat(modelPath); err != nil {
-		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
+	fresh.Must(t, modelPath())
+	if _, err := os.Stat(modelPath()); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}
 }
 
@@ -126,7 +105,7 @@ func TestAutoPicksARunningJitllmd(t *testing.T) {
 		t.Errorf("badge %q, want %q", got, want)
 	}
 
-	r.Load(modelPath)
+	r.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the model to load on the service", func() bool {
 		if p := st.Problem.Get(); p.Seq != 0 {
 			t.Fatalf("%s: %s", p.Title, p.Detail)
@@ -135,11 +114,11 @@ func TestAutoPicksARunningJitllmd(t *testing.T) {
 	})
 	pump(t, sh, 10*time.Second, "the models list", func() bool { return len(st.Models.Get()) == 1 })
 	m := st.Models.Get()[0]
-	if m.Path != modelPath || !m.Active || m.Blocks == 0 {
+	if m.Path != modelPath() || !m.Active || m.Blocks == 0 {
 		t.Errorf("listed %+v", m)
 	}
 	pump(t, sh, 10*time.Second, "the block map", func() bool { return len(st.BlockMap.Get()) == m.Blocks })
-	if a := st.Alloc.Get(); a.NBlocks != m.Blocks || a.HostBlocks+a.DeviceBlocks != m.Blocks {
+	if a := st.Alloc.Get(); a.NBlocks != m.Blocks || a.CPUBlocks+a.DeviceBlocks != m.Blocks {
 		t.Errorf("allocation %+v for %d blocks", a, m.Blocks)
 	}
 	if !strings.Contains(st.ModelSummary.Get(), "jitllmd at "+addr) {
@@ -160,7 +139,7 @@ func TestAutoPicksARunningJitllmd(t *testing.T) {
 		t.Errorf("%d partials for %d tokens: the reply did not stream", len(partials), turn.Tokens)
 	}
 
-	r.Unload(modelPath)
+	r.Unload(modelPath())
 	pump(t, sh, 10*time.Second, "the unload", func() bool { return len(st.Models.Get()) == 0 && !st.Loaded.Get() })
 }
 

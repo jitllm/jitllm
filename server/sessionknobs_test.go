@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // TestSessionKnobsReachTheStateOverHTTP: the session knobs SessionOptions
-// carries are on CreateSession's wire, they reach the State, and a value no
+// carries are on CreateSession's wire, they reach the instance, and a value no
 // session can be made from is a 400 over plain HTTP, not a 500 and not a
 // silent default. The server-wide KV width reaches a load that names none.
 //
@@ -24,8 +24,8 @@ import (
 func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 	path := modelPath(t, smallModel)
 	for _, f16 := range []bool{true, false} {
-		e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
-			KVF16: &f16, PromptStore: model.NewMemStore()})
+		e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
+			KVF16: &f16, PromptStore: engine.NewMemStore()}))
 		t.Cleanup(e.Close)
 		if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
 			t.Fatal(err)
@@ -43,14 +43,14 @@ func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 		for _, bad := range []string{
 			`{"modelId":"small","maxSeq":-1}`,
 			`{"modelId":"small","maxDeviceBlocks":-2}`,
-			`{"modelId":"small","relocateWhileServing":true,"keepOffHost":true}`,
+			`{"modelId":"small","relocateWhileServing":true,"keepOffCpu":true}`,
 			`{"modelId":"small","cacheKey":"k"}`,
 		} {
 			if got := post(bad); got != http.StatusBadRequest {
 				t.Errorf("CreateSession %s: status %d, want 400", bad, got)
 			}
 		}
-		if got := post(`{"modelId":"small","sessionId":"c","maxSeq":64,"keepOffHost":true,"promptCache":true,"cacheKey":"k"}`); got != http.StatusOK {
+		if got := post(`{"modelId":"small","sessionId":"c","maxSeq":64,"keepOffCpu":true,"promptCache":true,"cacheKey":"k"}`); got != http.StatusOK {
 			t.Fatalf("a valid CreateSession: status %d", got)
 		}
 		s, err := e.Session("c")
@@ -60,7 +60,7 @@ func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 		if !s.cached {
 			t.Errorf("prompt_cache: the session has no prompt store")
 		}
-		if got := s.st.KVIsF16(); got != f16 {
+		if got := s.in().KVIsF16(); got != f16 {
 			t.Errorf("Config.KVF16 %v: the session's cache is f16=%v", f16, got)
 		}
 		// The store is used: a generate writes the prompt's pages.
@@ -70,7 +70,7 @@ func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 	}
 
 	// A server with no store refuses prompt_cache.
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test"})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test"}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
 		t.Fatal(err)

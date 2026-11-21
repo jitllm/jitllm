@@ -8,11 +8,12 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The placement surface with a real tier under it: the only way to reach the
-// seam moves, RelocateBlocks' arms and TuneSeam, which a host-only model
+// seam moves, RelocateBlocks' arms and TuneSeam, which a CPU-only model
 // refuses before it gets to them.
 
 // deviceModel is a container every block of which a device can run:
@@ -24,7 +25,7 @@ const deviceModel = "stories15M-q8_0.jlm"
 func deviceEngine(t *testing.T) (*Engine, clients) {
 	t.Helper()
 	path := modelPath(t, deviceModel)
-	e := New(Config{Probe: oneCardProbe, Version: "test"})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test"}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"}}); err != nil {
 		t.Skipf("NO DEVICE: loading onto -devices gpu:0 failed (%v) -- this gate proved nothing", err)
@@ -38,6 +39,7 @@ func deviceEngine(t *testing.T) (*Engine, clients) {
 // is refused with its reason. With RelocateBlocks' tail check removed the
 // hole is accepted and the placement silently differs from the request.
 func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
+	testdevices.Refusing(t, "cuda:7")
 	e, c := deviceEngine(t)
 	ctx := context.Background()
 	if _, err := e.CreateSession(SessionOptions{ModelID: "dev", SessionID: "d", MaxSeq: 64}); err != nil {
@@ -58,14 +60,14 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 			n, full.GetDeclines())
 	}
 	for i, b := range full.GetBlocks()[:n] {
-		if b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_DEVICE || b.GetDeviceId() != "gpu:0" || b.GetHostResident() {
+		if b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_DEVICE || b.GetDeviceId() != "gpu:0" || b.GetCpuResident() {
 			t.Fatalf("placed block %d reads %+v", i, b)
 		}
 	}
 
 	// The tail of the device set comes home.
 	home, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
-		SessionId: "d", FirstBlock: n - 1, LastBlock: n - 1, ToHost: true,
+		SessionId: "d", FirstBlock: n - 1, LastBlock: n - 1, ToDeviceId: "cpu",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -134,8 +136,8 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := r.Msg.GetStarted(); s.GetDeviceBlocks() != n || s.GetHostBlocks() != 6-n || s.GetDeviceIds()[0] != "gpu:0" {
-		t.Fatalf("the generate reports %d device / %d host blocks on %v", s.GetDeviceBlocks(), s.GetHostBlocks(), s.GetDeviceIds())
+	if s := r.Msg.GetStarted(); s.GetDeviceBlocks() != n || s.GetCpuBlocks() != 6-n || s.GetDeviceIds()[0] != "gpu:0" {
+		t.Fatalf("the generate reports %d device / %d host blocks on %v", s.GetDeviceBlocks(), s.GetCpuBlocks(), s.GetDeviceIds())
 	}
 	ls, err := c.session.ListSessions(ctx, req(&v1.ListSessionsRequest{DeviceId: "gpu:0"}))
 	if err != nil || len(ls.Msg.GetSessions()) != 1 {
@@ -162,13 +164,13 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 }
 
 // TestTuneSeamReadsTheSessionsSnapshot: TuneSeam's ticker reports what the
-// tuner settled on while the session generates. model.State's tuner is
+// tuner settled on while the session generates. engine.Instance's tuner is
 // written by Forward with no lock, so the report must come from the snapshot
-// the session publishes under its own lock, never from the State.
+// the session publishes under its own lock, never from the Instance.
 //
-// VIOLATION SIGNATURE. Read sess.st.SeamTuned() in TuneSeam's loop again and
+// VIOLATION SIGNATURE. Read the instance's SeamTuned() in TuneSeam's loop again and
 // this fails under -race with "WARNING: DATA RACE" between seamTuner.observe
-// (or finish) and State.SeamTuned.
+// (or finish) and Instance.SeamTuned.
 //
 // Batching is off: the tuner advances once per Forward, and a session that
 // decodes as a row of the step loop never reaches it. The model's whole
@@ -176,10 +178,12 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 // once returned before stepping the tuner: with those steps removed this
 // fails with "the tuner did not settle".
 func TestTuneSeamReadsTheSessionsSnapshot(t *testing.T) {
-	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 	t.Cleanup(e.Close)
-	if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, deviceModel), ModelID: "dev", DeviceIDs: []string{"gpu:0"}}); err != nil {
-		t.Skipf("NO DEVICE: loading onto -devices gpu:0 failed (%v) -- this gate proved nothing", err)
+	// The tuner's seams leave blocks on the CPU, so the CPU is listed: a list
+	// of cards alone keeps every block on them and leaves no seam to tune.
+	if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, deviceModel), ModelID: "dev", DeviceIDs: []string{"gpu:0", "cpu"}}); err != nil {
+		t.Skipf("NO DEVICE: loading onto -devices gpu:0,cpu failed (%v) -- this gate proved nothing", err)
 	}
 	c := serveEngine(t, e)
 	ctx := context.Background()

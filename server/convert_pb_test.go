@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -51,6 +54,14 @@ func TestEveryEngineErrorHasItsCode(t *testing.T) {
 	if got := ce.Meta().Get("jitllm-not-converted"); got != "/m/x.gguf" {
 		t.Fatalf("jitllm-not-converted metadata %q, want the GGUF's path", got)
 	}
+	// A container of another version says which fix reaches it.
+	for _, ve := range []*jlm.VersionError{{Have: 31, Want: 33, Upgradable: true}, {Have: 12, Want: 33}} {
+		want := map[bool]string{true: "upgrade", false: "convert"}[ve.Upgradable]
+		ce := wantCode(t, ve.Error(), connectErr(fmt.Errorf("load m.jlm: %w", ve)), connect.CodeFailedPrecondition)
+		if got := ce.Meta().Get("jitllm-container-version"); got != want {
+			t.Fatalf("a version %d container's metadata says %q, want %q", ve.Have, got, want)
+		}
+	}
 	wantCode(t, "invalid()", invalid("x %d", 1), connect.CodeInvalidArgument)
 	wantCode(t, "unimplemented()", unimplemented("x"), connect.CodeUnimplemented)
 }
@@ -69,7 +80,7 @@ func TestEveryEnumValueHasItsWireValue(t *testing.T) {
 		}
 	}
 	kinds := map[DeviceKind]v1.DeviceKind{
-		KindHost: v1.DeviceKind_DEVICE_KIND_HOST, KindDiscrete: v1.DeviceKind_DEVICE_KIND_DISCRETE,
+		KindCPU: v1.DeviceKind_DEVICE_KIND_CPU, KindDiscrete: v1.DeviceKind_DEVICE_KIND_DISCRETE,
 		KindIntegrated: v1.DeviceKind_DEVICE_KIND_INTEGRATED, KindUnspecified: v1.DeviceKind_DEVICE_KIND_UNSPECIFIED,
 		DeviceKind(99): v1.DeviceKind_DEVICE_KIND_UNSPECIFIED,
 	}
@@ -109,16 +120,21 @@ func TestEverySamplingFieldReachesTheSampler(t *testing.T) {
 	i32 := func(v int32) *int32 { return &v }
 	seed := uint64(7)
 	got := pbSampling(&v1.SamplingParams{
-		Temperature: f32(0.5), TopP: f32(0.25), TopK: i32(40), MinP: f32(0.125),
+		Temperature: f32(0.5), TopP: f32(0.25), TopK: i32(40), MinP: f32(0.125), TypicalP: f32(0.75),
 		Seed: &seed, RepeatPenalty: f32(1.5), RepeatLastN: i32(32),
 	})
-	if got.Temp != 0.5 || got.TopP != 0.25 || got.TopK != 40 || got.MinP != 0.125 || got.Seed != 7 ||
+	if got.Temp != 0.5 || got.TopP != 0.25 || got.TopK != 40 || got.MinP != 0.125 || got.TypicalP != 0.75 || got.Seed != 7 ||
 		got.RepeatPen != 1.5 || got.RepeatLastN != 32 {
 		t.Fatalf("sampling reached the engine as %+v", *got)
 	}
 	if got := pbSampling(&v1.SamplingParams{}); got.Temp != 0 || got.TopP != 0 || got.TopK != 0 || got.MinP != 0 ||
-		got.Seed != 0 || got.RepeatPen != 0 || got.RepeatLastN != 0 {
+		got.TypicalP != 0 || got.Seed != 0 || got.RepeatPen != 0 || got.RepeatLastN != 0 {
 		t.Fatalf("an empty params message set fields: %+v", *got)
+	}
+	for _, v := range []float32{-0.1, 1.5} {
+		if err := samplingOf(&v1.SamplingParams{TypicalP: f32(v)}).validate(); err == nil || !strings.Contains(err.Error(), "typical_p") {
+			t.Errorf("typical_p %v was not refused by name: %v", v, err)
+		}
 	}
 }
 
@@ -188,5 +204,25 @@ func TestAnSSEErrorFrameIsNamedAndTyped(t *testing.T) {
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" || w.Header().Get("X-Accel-Buffering") != "no" {
 		t.Fatalf("headers %v: a proxy that buffers defeats the flush", w.Header())
+	}
+}
+
+// TestValidTextMarshals: a completion cut inside a character (its token
+// limit, a lone byte token) reaches the wire, which refuses invalid UTF-8;
+// validText makes it marshal and leaves valid text alone. The cut text
+// itself is the violation.
+func TestValidTextMarshals(t *testing.T) {
+	cut := "caf\xc3"
+	if _, err := proto.Marshal(&v1.CompleteResponse{Text: cut}); err == nil {
+		t.Fatal("a text cut inside a character marshalled: the violation proves nothing")
+	}
+	if _, err := proto.Marshal(&v1.CompleteResponse{Text: validText(cut)}); err != nil {
+		t.Fatalf("validText(%q) = %q does not marshal: %v", cut, validText(cut), err)
+	}
+	if got := validText("caf\u00e9"); got != "caf\u00e9" {
+		t.Fatalf("validText changed valid text: %q", got)
+	}
+	if ev := pbEvent(Event{Kind: EventToken, Token: &Token{Text: cut}}); ev.GetToken().GetText() != validText(cut) {
+		t.Fatalf("a token event carries %q", ev.GetToken().GetText())
 	}
 }

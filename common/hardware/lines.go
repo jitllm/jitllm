@@ -90,22 +90,6 @@ func Ints(v []int) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// KernelCell is one cell of the kernel table: 0 format, 1 row-major, 2 packed.
-func KernelCell(r Report, row, col int) string {
-	if row >= len(r.Kernels) {
-		return ""
-	}
-	k := r.Kernels[row]
-	switch col {
-	case 0:
-		return k.Format
-	case 1:
-		return k.NativeNote
-	default:
-		return k.PackedNote
-	}
-}
-
 // DeviceLine is one opened device, as one line.
 func DeviceLine(g GPU) string {
 	mem := g.MemNote
@@ -170,12 +154,8 @@ func ReportText(r Report) string {
 	}
 	fmt.Fprintf(&b, "          budget %s   limit %s   collector cap %s\n",
 		session.Bytes(r.MemBudget), session.Bytes(r.MemLimit), session.Bytes(r.GCBudgetCap))
-	fmt.Fprintf(&b, "jit       %s emitter\n", r.Arch)
-	fmt.Fprintf(&b, "          isa %s\n", r.ISA)
-	// Both columns, always: see the kernels section.
-	for _, k := range r.Kernels {
-		fmt.Fprintf(&b, "          %-6s row-major %-12s packed %s\n", k.Format, k.NativeNote, k.PackedNote)
-	}
+	fmt.Fprintf(&b, "composer  %s\n", r.Form)
+	fmt.Fprintf(&b, "          isa %s (%s)\n", r.ISA, r.Arch)
 	if len(r.GPUs) == 0 {
 		fmt.Fprintf(&b, "gpu       none opened here\n")
 	}

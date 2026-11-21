@@ -1,0 +1,12 @@
+{
+  "llama3": {"add_bos": true, "ignore_merges": true},
+  "llama-v3": {"add_bos": true, "ignore_merges": true},
+  "llama-bpe": {"add_bos": true, "ignore_merges": true},
+  "falcon3": {"add_bos": true, "ignore_merges": true},
+  "falcon-h1": {"add_bos": true, "ignore_merges": true},
+  "pixtral": {"add_bos": true, "ignore_merges": true},
+  "midm-2.0": {"add_bos": true, "ignore_merges": true},
+  "lfm2": {"add_bos": true, "ignore_merges": true},
+  "jina-v5-nano": {"add_bos": true, "ignore_merges": true},
+  "llama4": {"add_bos": true, "ignore_merges": true}
+}

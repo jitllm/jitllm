@@ -303,9 +303,9 @@ on the same machine:
 - **Up to 1.67x llama.cpp's prefill on a 12-core Xeon**, and up to 6x
   mistral.rs's decode.
 
-The [performance overview](docs/performance.md) has every row with its
+The [performance overview](.notes/performance.md) has every row with its
 hardware, backends and lengths, and where jitllm is still behind; the
-[scoreboard](docs/perf/current.md) has the commands and controls behind each.
+[scoreboard](.notes/perf/current.md) has the commands and controls behind each.
 
 ## Why Go?
 

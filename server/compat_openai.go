@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,8 +10,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // OpenAI-compatible HTTP.
@@ -61,7 +64,7 @@ type oaChatRequest struct {
 	// reasoning models and clients in the wild send either.
 	MaxCompletionTokens *int `json:"max_completion_tokens"`
 
-	// IgnoreEOS is the vLLM and llama-server extension: generate past an
+	// IgnoreEOS is an extension field beyond the OpenAI API: generate past an
 	// end-of-generation token, up to max_tokens.
 	IgnoreEOS bool `json:"ignore_eos"`
 
@@ -73,6 +76,9 @@ type oaChatRequest struct {
 	// JitllmSpeculate turns speculative decoding on or off for the request
 	// (Speculation); absent takes the session's.
 	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// JitllmDecodeGroups bounds the step loop's decode groups while the
+	// request decodes (GenerateOptions.DecodeGroups).
+	JitllmDecodeGroups int `json:"jitllm_decode_groups,omitempty"`
 	// ResponseFormat is OpenAI's structured output: text, json_object or
 	// json_schema (grammar.go).
 	ResponseFormat json.RawMessage `json:"response_format"`
@@ -94,6 +100,9 @@ type oaCompletionRequest struct {
 	// JitllmSpeculate turns speculative decoding on or off for the request
 	// (Speculation); absent takes the session's.
 	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// JitllmDecodeGroups bounds the step loop's decode groups while the
+	// request decodes (GenerateOptions.DecodeGroups).
+	JitllmDecodeGroups int `json:"jitllm_decode_groups,omitempty"`
 	// ResponseFormat is OpenAI's structured output: text, json_object or
 	// json_schema (grammar.go).
 	ResponseFormat json.RawMessage `json:"response_format"`
@@ -145,7 +154,7 @@ type oaJitllmExtra struct {
 	QueuedMillis  int64    `json:"queued_ms"`
 	QueueDepth    int32    `json:"queue_depth_on_entry"`
 	DeviceBlocks  int      `json:"device_blocks"`
-	HostBlocks    int      `json:"host_blocks"`
+	CPUBlocks     int      `json:"cpu_blocks"`
 	DeviceIDs     []string `json:"device_ids,omitempty"`
 	PrefillMillis int64    `json:"prefill_ms"`
 	// RestoredTokens is how many prompt tokens came from the prompt store.
@@ -172,17 +181,19 @@ type oaErrorBody struct {
 // oaContent accepts both content shapes the API has shipped: a bare string,
 // and the content-part array every SDK sends. A shim that only took
 // the string form rejects the default request of the official python client.
-// The text parts are joined; each image_url part is returned in order with its
-// index, for the caller to decode. A part the model cannot be shown (audio, a
-// file) is refused by index rather than dropped, so a request never succeeds
-// with the model having seen less than the client sent.
-func oaContent(raw json.RawMessage) (string, []oaImagePart, error) {
+// The text parts are joined, and a file part of text is its text after a blank
+// line (oaPartFile.text, a stored file read by files); each image_url part is
+// returned in order with its index, for the caller to decode, and each video
+// part (oaVideoOf) with its frames. A part the model cannot be shown (audio,
+// a PDF) is refused by index rather than dropped, so a request never
+// succeeds with the model having seen less than the client sent.
+func oaContent(raw json.RawMessage, files storedFiles) (string, []oaImagePart, []oaVideoPart, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil, nil
+		return s, nil, nil, nil
 	}
 	var parts []struct {
 		Type     string `json:"type"`
@@ -190,26 +201,135 @@ func oaContent(raw json.RawMessage) (string, []oaImagePart, error) {
 		ImageURL *struct {
 			URL string `json:"url"`
 		} `json:"image_url"`
+		Video json.RawMessage `json:"video"`
+		File  *oaPartFile     `json:"file"`
+		oaPartFile
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", nil, fmt.Errorf("content must be a string or an array of content parts")
+		return "", nil, nil, fmt.Errorf("content must be a string or an array of content parts")
 	}
 	var b strings.Builder
 	var imgs []oaImagePart
+	var vids []oaVideoPart
 	for i, p := range parts {
 		switch p.Type {
 		case "text", "":
 			b.WriteString(p.Text)
 		case "image_url":
 			if p.ImageURL == nil || p.ImageURL.URL == "" {
-				return "", nil, fmt.Errorf("content[%d] is an image_url part with no image_url.url", i)
+				return "", nil, nil, fmt.Errorf("content[%d] is an image_url part with no image_url.url", i)
 			}
 			imgs = append(imgs, oaImagePart{index: i, url: p.ImageURL.URL})
-		case "input_audio", "file", "input_file":
-			return "", nil, fmt.Errorf("content[%d] is a %q part, which this server does not take", i, p.Type)
+		case "video":
+			v, err := oaVideoOf(p.Video)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("content[%d] %v", i, err)
+			}
+			v.index = i
+			vids = append(vids, v)
+		case "file", "input_file":
+			f := p.File
+			if f == nil {
+				f = &p.oaPartFile
+			}
+			text, err := f.text(files)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("content[%d] %v", i, err)
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(text)
+		case "input_audio":
+			return "", nil, nil, fmt.Errorf("content[%d] is a %q part, which this server does not take", i, p.Type)
 		}
 	}
-	return b.String(), imgs, nil
+	return b.String(), imgs, vids, nil
+}
+
+// oaVideoPart is a video part of a message's content: its frames' picture
+// URLs and their rate, 0 where the part states none.
+type oaVideoPart struct {
+	index int
+	urls  []string
+	fps   float64
+}
+
+// oaVideoOf is a video part's "video": a list of frame URLs, or an object of
+// "frames", that list, and "fps", their rate -- the shape /v1/systemone
+// takes a video in.
+func oaVideoOf(raw json.RawMessage) (oaVideoPart, error) {
+	var urls []string
+	if err := json.Unmarshal(raw, &urls); err == nil && len(urls) > 0 {
+		return oaVideoPart{urls: urls}, nil
+	}
+	var obj struct {
+		Frames []string `json:"frames"`
+		FPS    *float64 `json:"fps"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil || len(obj.Frames) == 0 {
+		return oaVideoPart{}, errors.New("is a video part whose video is no list of frame URLs or object of them")
+	}
+	v := oaVideoPart{urls: obj.Frames}
+	if obj.FPS != nil {
+		if !(*obj.FPS > 0) {
+			return oaVideoPart{}, errors.New("is a video part whose fps is not a positive number of frames a second")
+		}
+		v.fps = *obj.FPS
+	}
+	return v, nil
+}
+
+// storedFiles reads a file the Files API holds: its name and bytes.
+type storedFiles func(id string) (string, []byte, error)
+
+// oaPartFile is a file content part's file: chat's {"file": {...}}, or the
+// responses API's fields on the part itself.
+type oaPartFile struct {
+	FileData string `json:"file_data"`
+	FileID   string `json:"file_id"`
+	Filename string `json:"filename"`
+}
+
+// text is the file's text after its file name and a blank line: file_data's
+// bytes where its data URL's type is text (text/*, application/json), or the
+// stored file's where they are.
+func (f oaPartFile) text(files storedFiles) (string, error) {
+	name, body := f.Filename, ""
+	switch {
+	case f.FileData != "":
+		head, data, ok := strings.Cut(f.FileData, ",")
+		if !ok || !strings.HasPrefix(head, "data:") || !strings.HasSuffix(head, ";base64") {
+			return "", errors.New("file_data is not a base64 data URL")
+		}
+		mime, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(head, "data:"), ";base64"), ";")
+		if !strings.HasPrefix(mime, "text/") && mime != "application/json" {
+			return "", fmt.Errorf("is a %s file, and this server reads no PDF: send its text", mime)
+		}
+		raw, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			return "", fmt.Errorf("file_data is not base64: %v", err)
+		}
+		body = string(raw)
+	case f.FileID != "":
+		stored, raw, err := files(f.FileID)
+		if err != nil {
+			return "", fmt.Errorf("names file %q: %v", f.FileID, err)
+		}
+		if bytes.HasPrefix(raw, []byte("%PDF")) || !utf8.Valid(raw) {
+			return "", fmt.Errorf("names file %q, which is not text, and this server reads no PDF: send its text", f.FileID)
+		}
+		if name == "" {
+			name = stored
+		}
+		body = string(raw)
+	default:
+		return "", errors.New("is a file part with neither file_data nor file_id")
+	}
+	if name == "" {
+		return body, nil
+	}
+	return name + "\n\n" + body, nil
 }
 
 // oaImagePart is an image_url part of a message's content.
@@ -243,8 +363,8 @@ func (e *compat) openAIModels(w http.ResponseWriter, r *http.Request) {
 		Object  string `json:"object"`
 		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
-		// MaxModelLen is the context a request on this model gets, vLLM's
-		// field; a benchmark harness reads it to size its prompts.
+		// MaxModelLen is the context a request on this model gets, an
+		// extension field; a benchmark harness reads it to size its prompts.
 		MaxModelLen int `json:"max_model_len,omitempty"`
 		// Loaded and Aliases are jitllm's: a model in the models folder is
 		// listed before it is loaded, since naming it loads it, and each of
@@ -295,8 +415,10 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	chat := &ChatInput{AddGenerationPrompt: true}
 	pics := newPictures(e.img)
+	frames := pics.videoFrames()
+	var px int64
 	for i, m := range req.Messages {
-		c, imgs, err := oaContent(m.Content)
+		c, imgs, vids, err := oaContent(m.Content, e.storedFile)
 		if err != nil {
 			oaFail(w, http.StatusBadRequest, fmt.Sprintf("messages[%d].%v", i, err), "invalid_request_error")
 			return
@@ -310,8 +432,18 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		for _, vp := range vids {
+			v, err := frames.readVideo(r.Context(), vp.urls, vp.fps, &px, func(j int) string {
+				return fmt.Sprintf("messages[%d].content[%d].video[%d]", i, vp.index, j)
+			})
+			if err != nil {
+				oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+				return
+			}
+			chat.Videos = append(chat.Videos, v)
+		}
 		cm := chatMessage(m.Role, c)
-		cm.Images = len(imgs)
+		cm.Images, cm.Videos = len(imgs), len(vids)
 		cm.ToolCallID, cm.Name = m.ToolCallID, m.Name
 		for _, tc := range m.ToolCalls {
 			cm.ToolCalls = append(cm.ToolCalls, model.ToolCall{ID: tc.ID, Name: tc.Function.Name,
@@ -351,16 +483,21 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := GenerateOptions{
-		Prompt:      Prompt{Kind: PromptChat, Chat: chat},
-		MaxTokens:   maxTok,
-		Stop:        oaStop(req.Stop),
-		Sampling:    sampling,
-		IgnoreEOS:   req.IgnoreEOS,
-		Seeds:       seeds,
-		Speculation: oaSpeculation(req.JitllmSpeculate),
-		Priority:    req.JitllmPriority,
+		Prompt:       Prompt{Kind: PromptChat, Chat: chat},
+		MaxTokens:    maxTok,
+		Stop:         oaStop(req.Stop),
+		Sampling:     sampling,
+		IgnoreEOS:    req.IgnoreEOS,
+		Seeds:        seeds,
+		Speculation:  oaSpeculation(req.JitllmSpeculate),
+		Priority:     req.JitllmPriority,
+		DecodeGroups: req.JitllmDecodeGroups,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
+	}
+	if o.LogitBias, err = req.logitBias(); err != nil {
 		oaFailErr(w, err)
 		return
 	}
@@ -413,10 +550,6 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaFail(w, http.StatusBadRequest, "prompt must be a string, an array of strings, or token ids", "invalid_request_error")
 		return
 	}
-	if len(ps) > 1 && req.Stream {
-		oaFail(w, http.StatusBadRequest, "a list of prompts cannot be streamed; send one request per prompt", "invalid_request_error")
-		return
-	}
 	maxTok := 0
 	if req.MaxTokens != nil {
 		maxTok = *req.MaxTokens
@@ -426,32 +559,28 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	if lpr.on && req.Echo {
-		oaFail(w, http.StatusBadRequest, errLogprobsWithEcho, "invalid_request_error")
-		return
-	}
 	seeds, err := oaChoiceSeeds(req.N, req.Seed)
 	if err != nil {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	if len(ps) > 1 && (lpr.on || len(seeds) > 0) {
-		oaFail(w, http.StatusBadRequest, "logprobs and n with a list of prompts are not built; "+
-			"send one request per prompt", "invalid_request_error")
-		return
-	}
 	o := GenerateOptions{
-		Prompt:      ps[0],
-		MaxTokens:   maxTok,
-		Stop:        oaStop(req.Stop),
-		Echo:        req.Echo,
-		Sampling:    sampling,
-		IgnoreEOS:   req.IgnoreEOS,
-		Seeds:       seeds,
-		Speculation: oaSpeculation(req.JitllmSpeculate),
-		Priority:    req.JitllmPriority,
+		Prompt:       ps[0],
+		MaxTokens:    maxTok,
+		Stop:         oaStop(req.Stop),
+		Echo:         req.Echo,
+		Sampling:     sampling,
+		IgnoreEOS:    req.IgnoreEOS,
+		Seeds:        seeds,
+		Speculation:  oaSpeculation(req.JitllmSpeculate),
+		Priority:     req.JitllmPriority,
+		DecodeGroups: req.JitllmDecodeGroups,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
+	}
+	if o.LogitBias, err = req.logitBias(); err != nil {
 		oaFailErr(w, err)
 		return
 	}
@@ -460,11 +589,7 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaBindFail(w, err)
 		return
 	}
-	if len(ps) > 1 {
-		e.runCompletions(w, r, o, ps, req.Model)
-		return
-	}
-	e.runOpenAI(w, r, o, req.Model, req.Stream, false)
+	e.runOpenAI(w, r, o, req.Model, req.Stream, false, ps...)
 }
 
 // oaChoice is one continuation's state while a response is built.
@@ -517,65 +642,14 @@ func (c *oaChoice) legacyLogprobs(lp bool) *oaLegacyLogprobs {
 	return out
 }
 
-// runCompletions answers a list of prompts with one choice each, in order. The
-// prompts run one after another, each with a copy of the sampler, so a seeded
-// request draws the same text for a prompt wherever it sits in the list.
-func (e *compat) runCompletions(w http.ResponseWriter, r *http.Request, o GenerateOptions, ps []Prompt, modelName string) {
-	type choice struct {
-		Index        int       `json:"index"`
-		Text         string    `json:"text"`
-		FinishReason *string   `json:"finish_reason"`
-		Logprobs     *struct{} `json:"logprobs"`
-	}
-	var choices []choice
-	usage := &oaUsage{}
-	for i, p := range ps {
-		oi := o
-		oi.Prompt = p
-		if o.Sampling != nil {
-			sc := *o.Sampling
-			oi.Sampling = &sc
-		}
-		var text strings.Builder
-		var fin *Finished
-		err := e.b.Generate(r.Context(), oi, func(ev Event) error {
-			switch ev.Kind {
-			case EventToken:
-				text.WriteString(ev.Token.Text)
-			case EventFinished:
-				fin = ev.Finished
-			}
-			return nil
-		})
-		if err != nil {
-			oaFailErr(w, err)
-			return
-		}
-		if fin == nil {
-			oaFail(w, http.StatusInternalServerError,
-				"the generate finished without a finished event", "server_error")
-			return
-		}
-		reason := oaFinish(fin.Reason)
-		choices = append(choices, choice{Index: i, Text: text.String(), FinishReason: &reason})
-		usage.PromptTokens += fin.PromptTokens
-		usage.CompletionTokens += fin.CompletionTokens
-	}
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	writeJSON(w, http.StatusOK, struct {
-		ID      string   `json:"id"`
-		Object  string   `json:"object"`
-		Created int64    `json:"created"`
-		Model   string   `json:"model"`
-		Choices []choice `json:"choices"`
-		Usage   *oaUsage `json:"usage"`
-	}{"cmpl-" + e.b.NextID("oa"), "text_completion", time.Now().Unix(), modelName, choices, usage})
-}
-
 // runOpenAI is the one place a generate becomes an OpenAI response, streaming
 // or not. Both entry points funnel through it so the two shapes cannot drift.
 // Several choices (n) arrive as one generate whose events carry their index.
-func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOptions, modelName string, stream, chat bool) {
+// A list of prompts (ps, more than one) runs one generate a prompt, one after
+// another, each with a copy of the sampler so a seeded request draws the same
+// text for a prompt wherever it sits in the list; prompt p's choices are
+// p*n to p*n+n-1.
+func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOptions, modelName string, stream, chat bool, ps ...Prompt) {
 	id := "chatcmpl-" + e.b.NextID("oa")
 	object, deltaObject := "chat.completion", "chat.completion.chunk"
 	if !chat {
@@ -589,7 +663,8 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 	if o.Prompt.Chat != nil {
 		tools = o.Prompt.Chat.Tools
 	}
-	n := max(len(o.Seeds), 1)
+	per := max(len(o.Seeds), 1)
+	n := per * max(len(ps), 1)
 	cs := make([]*oaChoice, n)
 	for i := range cs {
 		cs[i] = &oaChoice{tt: newToolText(tools), legacy: &oaLegacyLogprobs{}}
@@ -600,11 +675,14 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			if c.fin == nil {
 				continue
 			}
-			// The prompt is counted once: every choice after the first
+			// A prompt is counted once: every choice of it after the first
 			// restored it rather than running it.
-			if i == 0 {
-				u.PromptTokens = c.fin.PromptTokens
-				u.PromptTokensDetails = &oaPromptTokenInfo{CachedTokens: c.fin.Restored}
+			if i%per == 0 {
+				if u.PromptTokensDetails == nil {
+					u.PromptTokensDetails = &oaPromptTokenInfo{}
+				}
+				u.PromptTokens += c.fin.PromptTokens
+				u.PromptTokensDetails.CachedTokens += c.fin.Restored
 			}
 			u.CompletionTokens += c.fin.CompletionTokens
 		}
@@ -629,9 +707,30 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		}
 		return cs[ev.Choice]
 	}
+	generate := func(emit func(Event) error) error {
+		if len(ps) <= 1 {
+			return e.b.Generate(r.Context(), o, emit)
+		}
+		for p, pr := range ps {
+			op := o
+			op.Prompt = pr
+			if o.Sampling != nil {
+				sc := *o.Sampling
+				op.Sampling = &sc
+			}
+			err := e.b.Generate(r.Context(), op, func(ev Event) error {
+				ev.Choice += p * per
+				return emit(ev)
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	if !stream {
-		err := e.b.Generate(r.Context(), o, func(ev Event) error {
+		err := generate(func(ev Event) error {
 			c := choice(ev)
 			switch ev.Kind {
 			case EventStarted:
@@ -680,6 +779,8 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			if _, _, content := c.tt.finish(c.fin.StopMatched); len(c.tt.calls) > 0 {
 				reason = "tool_calls"
 				msg.Content, msg.ToolCalls = content, e.oaCalls(c.tt.calls, false, 0)
+			} else if c.tt.generic() {
+				msg.Content = content
 			}
 			resp.Choices = append(resp.Choices, oaChatChoice{Index: i, Message: msg,
 				FinishReason: &reason, Logprobs: c.chatLogprobs(lp)})
@@ -746,7 +847,7 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		}
 		sse.send(last)
 	}
-	gerr := e.b.Generate(r.Context(), o, func(ev Event) error {
+	gerr := generate(func(ev Event) error {
 		c := choice(ev)
 		i := ev.Choice
 		switch ev.Kind {
@@ -856,7 +957,7 @@ func jitllmExtra(s *Started, f *Finished) *oaJitllmExtra {
 		QueuedMillis:   s.QueuedFor.Milliseconds(),
 		QueueDepth:     s.QueueDepth,
 		DeviceBlocks:   s.DeviceBlocks,
-		HostBlocks:     s.HostBlocks,
+		CPUBlocks:      s.CPUBlocks,
 		DeviceIDs:      s.DeviceIDs,
 		PrefillMillis:  s.Prefill.Milliseconds(),
 		RestoredTokens: s.Restored,
@@ -978,7 +1079,9 @@ func oaTools(raw, choice json.RawMessage) ([]byte, error) {
 	var ts []struct {
 		Type     string `json:"type"`
 		Function struct {
-			Name string `json:"name"`
+			Name       string          `json:"name"`
+			Parameters json.RawMessage `json:"parameters"`
+			Strict     *bool           `json:"strict"`
 		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &ts); err != nil {
@@ -987,6 +1090,14 @@ func oaTools(raw, choice json.RawMessage) ([]byte, error) {
 	for i, t := range ts {
 		if t.Type != "function" || t.Function.Name == "" {
 			return nil, fmt.Errorf("tools[%d]: only {\"type\": \"function\"} with a name is supported", i)
+		}
+		if s := t.Function.Strict; s != nil && *s {
+			if len(t.Function.Parameters) == 0 {
+				return nil, fmt.Errorf("tools[%d] %q is strict and states no parameters", i, t.Function.Name)
+			}
+			if err := strictSchema(t.Function.Parameters); err != nil {
+				return nil, fmt.Errorf("tools[%d] %q is strict: %v", i, t.Function.Name, err)
+			}
 		}
 	}
 	if len(ts) == 0 {

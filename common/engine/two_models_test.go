@@ -9,15 +9,17 @@ import (
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // Loading a second model leaves the first loaded and usable: several models
 // at once is the design, and only Unload removes one.
 func TestLoadingASecondModelLeavesTheFirstLoaded(t *testing.T) {
-	a, b := modelPath, testmodels.Path("stories15M-q8_0.jlm")
+	a, b := modelPath(), testmodels.Path("stories15M-q8_0.jlm")
 	for _, p := range []string{a, b} {
+		fresh.Must(t, p)
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 		}
 	}
 	sh := newTestShell()

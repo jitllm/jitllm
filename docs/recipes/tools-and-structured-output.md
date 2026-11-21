@@ -106,23 +106,24 @@ curl -s http://127.0.0.1:4242/v1/chat/completions -H 'Content-Type: application/
 `{"type": "json_object"}` asks for any JSON object. Both work on
 `/v1/completions` too, and on a base model.
 
-A schema keyword the grammar builder does not support is refused by name, not
-ignored:
+A string's `pattern` is an ECMA-262 regular expression, unanchored as JSON
+Schema reads it. A keyword or a pattern's feature the grammar builder does not
+support is refused by name, not ignored:
 
 ```sh
 curl -s http://127.0.0.1:4242/v1/chat/completions -H 'Content-Type: application/json' -d '{
   "model": "qwen3-0.6b", "messages": [{"role": "user", "content": "x"}],
   "response_format": {"type": "json_schema", "json_schema": {"name": "p",
-    "schema": {"type": "string", "pattern": "a+"}}}}'
+    "schema": {"type": "string", "pattern": "(a)\\1"}}}}'
 ```
-<!-- test: expect JSON Schema keyword \"pattern\" is not supported -->
+<!-- test: expect JSON Schema a backreference in a pattern is not supported -->
 
 ## When it does not work
 
 | You see | Cause | Do this |
 |---|---|---|
 | `a forced tool call and response_format are one constraint each; give one` | both in one request | pick one; a forced call already constrains the arguments to the tool's schema |
-| `JSON Schema keyword "X" is not supported` | `pattern`, `format`, numeric bounds, `allOf`, ... | drop the keyword and validate it in your code |
+| `JSON Schema ... is not supported` | a keyword the builder does not read, a number's `minimum` or `maximum`, a pattern's lookaround, backreference or `\b` | drop it and validate it in your code |
 | `finish_reason` `length` with no `tool_calls` | a reasoning model spent `max_tokens` thinking before the call | raise `max_tokens`, or `/no_think` on Qwen3 |
 | the model never calls a tool under `auto` | small models often answer instead | force it with `tool_choice` |
-| `refuses ignore_eos` / speculation refused | a constrained reply decodes alone, without speculation | drop those fields on constrained requests |
+| a constrained reply runs no faster with speculation on | a constrained reply decodes a token a step, without speculation | nothing to do: speculation runs on the unconstrained requests |

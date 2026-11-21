@@ -3,8 +3,10 @@ package convert
 import (
 	"math"
 	"math/rand"
+	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -85,9 +87,10 @@ func TestPadFFNIsTheSameFunction(t *testing.T) {
 	}
 }
 
-// TestFoldLayerScalesScalesTheRowsTheyFollow checks InternViT's layer scales
-// land on the attention output's rows and on the MLP contraction's -- found by
-// shape, whatever the file calls it -- with their biases, and nowhere else.
+// TestFoldLayerScalesScalesTheRowsTheyFollow checks internvl's gathers land
+// InternViT's layer scales on the attention output's rows and on the MLP
+// contraction's, with their biases, and nowhere else; a block with one scale
+// of two is refused.
 func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	r := rand.New(rand.NewSource(2))
 	const e, f = 32, 64
@@ -95,17 +98,48 @@ func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	up, bup := randVals(r, f*e), randVals(r, f) // the expansion, named FC1
 	dn, bdn := randVals(r, e*f), randVals(r, e) // the contraction, named FC2
 	ls1, ls2 := randVals(r, e), randVals(r, e)
-	s := &jlm.Source{Vision: &jlm.Vision{NLayer: 1, NEmbd: e, NFFN: f}}
-	s.Tensors = []jlm.Tensor{
-		f32Tensor(t, jlm.RoleVAttnOut, 0, wo, e, e), f32Tensor(t, jlm.RoleVAttnOutBias, 0, bo, e),
-		f32Tensor(t, jlm.RoleVFC1, 0, up, e, f), f32Tensor(t, jlm.RoleVFC1Bias, 0, bup, f),
-		f32Tensor(t, jlm.RoleVFC2, 0, dn, f, e), f32Tensor(t, jlm.RoleVFC2Bias, 0, bdn, e),
+	named := func(n string, x jlm.Tensor) jlm.Tensor { x.Name = "v.blk.0." + n; return x }
+	block := func(scales ...jlm.Tensor) []jlm.Tensor {
+		return append([]jlm.Tensor{
+			named("attn_out.weight", f32Tensor(t, jlm.RoleVAttnOut, 0, wo, e, e)), named("attn_out.bias", f32Tensor(t, jlm.RoleVAttnOutBias, 0, bo, e)),
+			named("ffn_up.weight", f32Tensor(t, jlm.RoleVFC1, 0, up, e, f)), named("ffn_up.bias", f32Tensor(t, jlm.RoleVFC1Bias, 0, bup, f)),
+			named("ffn_down.weight", f32Tensor(t, jlm.RoleVFC2, 0, dn, f, e)), named("ffn_down.bias", f32Tensor(t, jlm.RoleVFC2Bias, 0, bdn, e)),
+		}, scales...)
 	}
-	if err := foldLayerScales(s, map[int32][2][]float32{0: {ls1, ls2}}); err != nil {
+	scale := func(n string, v []float32) jlm.Tensor {
+		x := named(n, f32Tensor(t, jlm.RoleNone, jlm.DenseBlock, v, e))
+		x.Block = jlm.DenseBlock
+		return x
+	}
+	gather := func(in []jlm.Tensor) ([]jlm.Tensor, error) {
+		lib, err := projectorLibrary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := lib["internvl"].statement()
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := meta.New("x.gguf", map[string]meta.Value{"general.architecture": meta.MakeString("clip"),
+			"clip.vision.embedding_length": meta.MakeUint(e), "clip.vision.feed_forward_length": meta.MakeUint(f)}, nil)
+		s := &jlm.Source{Tensors: in}
+		err = statedGathers(&Config{Config: &jlm.Config{NLayer: 1}, Stated: st}, s, file, "v.blk.")
+		return s.Tensors, err
+	}
+	out, err := gather(block(scale("ls1.weight", ls1), scale("ls2.weight", ls2)))
+	if err != nil {
 		t.Fatal(err)
 	}
+	byRole := map[jlm.Role]*jlm.Tensor{}
+	for i := range out {
+		byRole[out[i].Role] = &out[i]
+	}
+	roles := []jlm.Role{jlm.RoleVAttnOut, jlm.RoleVAttnOutBias, jlm.RoleVFC1, jlm.RoleVFC1Bias, jlm.RoleVFC2, jlm.RoleVFC2Bias}
+	if len(out) != len(roles) {
+		t.Fatalf("%d tensors after the gathers, want %d: the scales are consumed", len(out), len(roles))
+	}
 	check := func(i int, orig, ls []float32, k int, what string) {
-		v, err := vecOf(&s.Tensors[i])
+		v, err := vecOf(byRole[roles[i]])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,27 +160,51 @@ func TestFoldLayerScalesScalesTheRowsTheyFollow(t *testing.T) {
 	check(4, dn, ls2, f, "the contraction")
 	check(5, bdn, ls2, 1, "the contraction's bias")
 
-	if err := foldLayerScales(s, map[int32][2][]float32{0: {ls1, nil}}); err == nil {
+	if _, err := gather(block(scale("ls1.weight", ls1))); err == nil {
 		t.Error("a block with one layer scale of two folded")
 	}
 }
 
-// TestGemma3ProjectionIsTransposed lays the [text, tower] source matrix out k
-// first, element for element.
-func TestGemma3ProjectionIsTransposed(t *testing.T) {
-	r := rand.New(rand.NewSource(3))
-	const tower, text = 32, 48
-	src := randVals(r, tower*text) // ggml [text, tower]: tower rows of text values
-	s := &jlm.Source{Vision: &jlm.Vision{NEmbd: tower, ProjDim: text, Projector: jlm.ProjGemma3}}
-	s.Tensors = []jlm.Tensor{f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, text, tower)}
-	if err := transposeGemma3Projection(s); err != nil {
-		t.Fatal(err)
-	}
-	got, err := vecOf(&s.Tensors[0])
+// towerTable runs projector name's tensor table from the library on in, its
+// sizes read off keys.
+func towerTable(t *testing.T, name string, in []jlm.Tensor, keys map[string]any) ([]jlm.Tensor, error) {
+	t.Helper()
+	lib, err := projectorLibrary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := s.Tensors[0].Dims; d[0] != tower || d[1] != text {
+	p, ok := lib[name]
+	if !ok || p.Tensors == nil {
+		t.Fatalf("the library states no %s tensor table", name)
+	}
+	st, err := p.statement()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &jlm.Source{Tensors: slices.Clone(in)}
+	err = statedTensors(&Config{Config: &jlm.Config{}, Stated: st}, s, func(k string) any { return keys[k] })
+	return s.Tensors, err
+}
+
+// TestGemma3ProjectionIsTransposed lays the [text, tower] source matrix out k
+// first, element for element, by gemma3's table; one already laid out so is
+// refused rather than turned back.
+func TestGemma3ProjectionIsTransposed(t *testing.T) {
+	r := rand.New(rand.NewSource(3))
+	const tower, text = 32, 48
+	src := randVals(r, tower*text) // GGUF [text, tower]: tower rows of text values
+	in := f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, text, tower)
+	in.Name = "mm.input_projection.weight"
+	keys := map[string]any{"vision.embedding_length": float64(tower)}
+	out, err := towerTable(t, "gemma3", []jlm.Tensor{in}, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := vecOf(&out[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := out[0].Dims; d[0] != tower || d[1] != text {
 		t.Fatalf("dims %v, want k=%d rows=%d", d[:2], tower, text)
 	}
 	for row := 0; row < text; row++ {
@@ -156,10 +214,16 @@ func TestGemma3ProjectionIsTransposed(t *testing.T) {
 			}
 		}
 	}
+	laid := f32Tensor(t, jlm.RoleVProj, jlm.DenseBlock, src, tower, text)
+	laid.Name = in.Name
+	if _, err := towerTable(t, "gemma3", []jlm.Tensor{laid}, keys); err == nil {
+		t.Error("a projection already laid out k first was transposed")
+	}
 }
 
 // TestPermuteMergerIsTheSameFunction holds Mistral 3's merger, permuted into
-// the shuffle's order, to the reference's product on the reference's order:
+// the shuffle's order by pixtral's table, to the reference's product on the
+// reference's order:
 // the unfold's channel-major group read by the source matrix equals the
 // shuffle's patch-major group read by the permuted one, exactly. A merger
 // left unpermuted fails it.
@@ -167,17 +231,19 @@ func TestPermuteMergerIsTheSameFunction(t *testing.T) {
 	r := rand.New(rand.NewSource(3))
 	const d, s2 = 32, 4
 	w := randVals(r, d*d*s2)
+	keys := map[string]any{"vision.embedding_length": float64(d), "vision.spatial_merge_size": 2.0}
 	for _, permute := range []bool{true, false} {
-		src := &jlm.Source{Vision: &jlm.Vision{NEmbd: d, Scale: 2}}
-		src.Tensors = []jlm.Tensor{f32Tensor(t, jlm.RoleVMerge, jlm.DenseBlock, w, d*s2, d)}
+		pw := w
 		if permute {
-			if err := permuteMerger(src); err != nil {
+			in := f32Tensor(t, jlm.RoleVMerge, jlm.DenseBlock, w, d*s2, d)
+			in.Name = "mm.patch_merger.weight"
+			out, err := towerTable(t, "pixtral", []jlm.Tensor{in}, keys)
+			if err != nil {
 				t.Fatal(err)
 			}
-		}
-		pw, err := vecOf(&src.Tensors[0])
-		if err != nil {
-			t.Fatal(err)
+			if pw, err = vecOf(&out[0]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		patches := randVals(r, s2*d) // patch p's channels at p*d
 		exact := true

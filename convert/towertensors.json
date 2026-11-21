@@ -1,0 +1,89 @@
+{
+ "unread": {
+  "resampler.pos_embed_k": "the resampler's position is computed per grid"
+ },
+ "projectors": {
+  "qwen3vl_merger": {
+   "indexed": [{"prefix": "v.deepstack.", "roles": {"norm.weight": "v_ds_norm", "norm.bias": "v_ds_norm.bias",
+     "fc1.weight": "v_ds_fc1", "fc1.bias": "v_ds_fc1.bias", "fc2.weight": "v_ds_fc2", "fc2.bias": "v_ds_fc2.bias"}}]
+  },
+  "janus_pro": {
+   "renames": [{"prefix": "mm.1.", "to": "mm.2."}]
+  },
+  "llama4": {
+   "renames": [{"infix": ".attn_post_norm.", "to": ".ln2."}],
+   "roles": {
+    "mm.model.mlp.1.weight": "v_proj",
+    "mm.model.mlp.2.weight": "v_proj2",
+    "mm.model.fc.weight": "mm.model.fc"
+   }
+  },
+  "kimivl": {
+   "renames": [{"prefix": "mm.1.", "to": "mm.0."}],
+   "roles": {
+    "mm.input_norm.weight": "v_proj_in_norm",
+    "mm.input_norm.bias": "v_proj_in_norm.bias"
+   }
+  },
+  "lfm2": {
+   "renames": [{"prefix": "mm.1.", "to": "mm.0."}],
+   "roles": {
+    "mm.input_norm.weight": "v_proj_norm",
+    "mm.input_norm.bias": "v_proj_norm.bias"
+   }
+  },
+  "pixtral": {
+   "roles": {
+    "mm.1.weight": "v_proj",
+    "mm.1.bias": "v_proj.bias",
+    "mm.input_norm.weight": "v_post_norm",
+    "mm.patch_merger.weight": "mm.patch_merger",
+    "v.token_embd.img_break": "v.token_embd.img_break"
+   }
+  },
+  "internvl": {
+   "roles": {
+    "mm.model.mlp.0.weight": "v_proj_norm",
+    "mm.model.mlp.0.bias": "v_proj_norm.bias",
+    "mm.model.mlp.1.weight": "v_proj",
+    "mm.model.mlp.1.bias": "v_proj.bias",
+    "mm.model.mlp.3.weight": "v_proj2",
+    "mm.model.mlp.3.bias": "v_proj2.bias"
+   }
+  },
+  "glm4v": {
+   "roles": {
+    "v.norm_embd.weight": "v_embd_norm",
+    "mm.patch_merger.weight": "v_merge_conv",
+    "mm.patch_merger.bias": "v_merge_conv.bias",
+    "mm.post_norm.weight": "v_proj_norm",
+    "mm.post_norm.bias": "v_proj_norm.bias",
+    "mm.gate.weight": "v_proj_gate",
+    "mm.up.weight": "v_proj_up",
+    "mm.down.weight": "v_proj_down"
+   }
+  },
+  "hunyuanvl": {
+   "roles": {
+    "mm.pre_norm.weight": "v_proj_in_norm",
+    "mm.0.weight": "v_merge_conv",
+    "mm.0.bias": "v_merge_conv.bias",
+    "mm.2.weight": "v_proj",
+    "mm.2.bias": "v_proj.bias",
+    "mm.model.fc.weight": "v_proj2",
+    "mm.model.fc.bias": "v_proj2.bias",
+    "mm.post_norm.weight": "v_proj_norm",
+    "v.image_newline": "v_img_newline",
+    "mm.image_begin": "v_img_begin",
+    "mm.image_end": "v_img_end"
+   },
+   "unread": ["v.view_seperator"]
+  },
+  "gemma4v": {
+   "unread_prefixes": ["a.", "mm.a."]
+  },
+  "gemma3nv": {
+   "unread_prefixes": ["a.", "mm.a."]
+  }
+ }
+}

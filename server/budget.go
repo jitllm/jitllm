@@ -2,8 +2,6 @@ package server
 
 import (
 	"fmt"
-
-	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // backgroundShare is the fraction of the host budget that all backgrounded
@@ -17,7 +15,7 @@ const backgroundShare = 8
 // shares divides the host weight budget between the open models.
 //
 // Something here has to divide it because nothing in the engine does:
-// sched.MemBudget() is stateless and model.Open, tier.OpenWith and NewState
+// sched.MemBudget() is stateless and model.Open, gpu.OpenWith and NewInstance
 // each read it independently, so two models would each believe they hold the
 // machine. The cgroup then throttles into reclaim, and neither pager can see
 // the other model. (The vision tower avoided this by sharing one container
@@ -113,13 +111,13 @@ func (e *Engine) rereadHostLocked() {
 }
 
 // heldLocked is the host memory this engine's models hold: resident weights,
-// the memory caches, every session's and pooled State's history, and each
-// model's host step scratch. e.mu
+// the memory caches, every session's and pooled session's history, and each
+// model's routed step scratch. e.mu
 // held.
 func (e *Engine) heldLocked() uint64 {
 	var n uint64
 	for _, lm := range e.models {
-		n += lm.m.HostBytes() + lm.idleKV() + lm.m.StepScratchBytes()
+		n += lm.m.HostBytes(lm.frames()) + lm.stepScratchBytes()
 		if st := lm.ttft.store; st != nil {
 			n += st.Bytes()
 		}
@@ -136,7 +134,7 @@ func (e *Engine) availNow() uint64 {
 	if e.hostAvail != nil {
 		return e.hostAvail()
 	}
-	return sched.MemBudget()
+	return e.cfg.GC.Budget()
 }
 
 // sharesLocked divides the host budget between the loaded models, plus extra
@@ -162,18 +160,21 @@ func (e *Engine) rebudget() {
 	e.mu.Lock()
 	sh := e.sharesLocked("")
 	models := make([]*LoadedModel, 0, len(e.models))
-	var sum uint64
+	var sum, mapped uint64
 	for id, lm := range e.models {
 		lm.mu.Lock()
 		lm.budget = sh[id]
 		lm.mu.Unlock()
 		sum += sh[id]
+		if lm.m != nil {
+			mapped += lm.m.MappedBytes(lm.frames())
+		}
 		models = append(models, lm)
 	}
 	// Under e.mu, so two rebudgets cannot hand the limit their sums out of
 	// order.
 	if e.cfg.OffHeap != nil {
-		e.cfg.OffHeap(sum)
+		e.cfg.OffHeap(sum, mapped)
 	}
 	e.mu.Unlock()
 	for _, lm := range models {

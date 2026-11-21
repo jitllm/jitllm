@@ -1,0 +1,25 @@
+package gpu
+
+import "github.com/jitllm/jitllm/nn"
+
+// AccountOn is what the card named dev kept (nn.Ledger): its own counters,
+// which every instance it serves writes.
+func (g *GPU) AccountOn(dev string) (nn.Account, bool) {
+	for _, d := range g.devs {
+		if d.name == dev {
+			s := d.stats()
+			a := nn.Account{Steps: s.Steps, Forms: s.BlockForms, Asks: int64(s.FormAsks), Composing: s.FormTook, FormErr: s.FormErr}
+			d.mu.Lock()
+			r := d.composer
+			d.mu.Unlock()
+			if r != nil {
+				a.Passes = r.PassTimes()
+			}
+			return a, true
+		}
+	}
+	return nn.Account{}, false
+}
+
+// AccountOn is the device's (GPU.AccountOn).
+func (s *gpuSession) AccountOn(dev string) (nn.Account, bool) { return s.g.AccountOn(dev) }

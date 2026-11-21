@@ -79,9 +79,9 @@ func (c *chatPage) SetSize(w, h int) {
 		c.sideW = sideW
 	}
 	mid := w - c.listW - c.sideW
-	c.promptW = mid - sCard.GetHorizontalFrameSize()
+	c.promptW = mid - sCard().GetHorizontalFrameSize()
 	c.prompt.SetWidth(c.promptW)
-	c.promptH = c.prompt.Height() + sCard.GetVerticalFrameSize()
+	c.promptH = c.prompt.Height() + sCard().GetVerticalFrameSize()
 	iw, ih := inner(mid, h-c.promptH)
 	c.tr.SetSize(iw, ih)
 }
@@ -278,10 +278,8 @@ type slashCmd struct {
 	run              func(c *chatPage, arg string) tea.Cmd
 }
 
-var slashCmds []slashCmd
-
-func init() {
-	slashCmds = []slashCmd{
+func slashCmds() []slashCmd {
+	return []slashCmd{
 		{"new", "", "start a new chat", func(c *chatPage, _ string) tea.Cmd { return c.newChat() }},
 		{"delete", "", "delete this chat", func(c *chatPage, _ string) tea.Cmd { return c.deleteChat() }},
 		{"models", "", "the models screen", func(*chatPage, string) tea.Cmd { return show(scrModels) }},
@@ -297,7 +295,9 @@ func init() {
 			if err != nil || v < 0 {
 				return notify("usage: /temp 0.7")
 			}
-			c.env.cfg.Sampling.Temp = float32(v)
+			s := c.env.cfg.Sampling.Shown(c.env.f.st.Own.Get())
+			s.Stated, s.Own, s.Temp = false, false, float32(v)
+			c.env.cfg.Sampling = s
 			return tea.Batch(saveConfig(c.env), notify(fmt.Sprintf("temperature %.2f", v)))
 		}},
 		{"seam", "<blocks>", "blocks on the device", func(c *chatPage, a string) tea.Cmd {
@@ -320,7 +320,7 @@ func init() {
 func slashMatches(text string) []slashCmd {
 	word, _, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
 	var out []slashCmd
-	for _, c := range slashCmds {
+	for _, c := range slashCmds() {
 		if strings.HasPrefix(c.name, word) {
 			out = append(out, c)
 		}
@@ -331,7 +331,7 @@ func slashMatches(text string) []slashCmd {
 func (c *chatPage) slash(text string) tea.Cmd {
 	word, arg, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
 	arg = strings.TrimSpace(arg)
-	for _, s := range slashCmds {
+	for _, s := range slashCmds() {
 		if s.name == word {
 			return s.run(c, arg)
 		}
@@ -371,7 +371,7 @@ func (c *chatPage) View() string {
 	if c.env.f.st.Busy.Get() {
 		focus = cLine
 	}
-	box := sCard.BorderForeground(focus).Width(mid - sCard.GetHorizontalBorderSize()).Render(c.prompt.View())
+	box := sCard().BorderForeground(focus).Width(mid - sCard().GetHorizontalBorderSize()).Render(c.prompt.View())
 	title := "conversation"
 	if n := c.env.f.turnCount(); n > 0 {
 		title += fmt.Sprintf(" · %d", n)
@@ -403,13 +403,13 @@ func (c *chatPage) chatList() string {
 			b.WriteString(lipgloss.NewStyle().Foreground(cBg).Background(cBrand).Bold(true).Width(iw).
 				Render(truncate(" "+title, iw)) + "\n")
 		} else {
-			b.WriteString(sMuted.Render(truncate(" "+title, iw)) + "\n")
+			b.WriteString(sMuted().Render(truncate(" "+title, iw)) + "\n")
 		}
 		if info.Model != "" {
-			b.WriteString(sDim.Render(truncate("  "+strings.TrimSuffix(filepath.Base(info.Model), ".jlm"), iw)) + "\n")
+			b.WriteString(sDim().Render(truncate("  "+strings.TrimSuffix(filepath.Base(info.Model), ".jlm"), iw)) + "\n")
 		}
 	}
-	hint := sDim.Render(truncate("ctrl+↑↓ · ctrl+n new", iw))
+	hint := sDim().Render(truncate("ctrl+↑↓ · ctrl+n new", iw))
 	list := lipgloss.NewStyle().Height(ih - 1).Render(fitHeight(b.String(), ih-1))
 	return panel(fmt.Sprintf("chats · %d", len(c.chats.Chats)), list+"\n"+hint, c.listW, c.h, cMagenta)
 }
@@ -420,31 +420,31 @@ func sidebar(env *env, w, h int) string {
 	st := env.f.st
 	iw, _ := inner(w, h)
 	var b strings.Builder
-	section := func(title string) { b.WriteString(sBrand.Render(title) + "\n") }
+	section := func(title string) { b.WriteString(sBrand().Render(title) + "\n") }
 	kv := func(k, v string) { b.WriteString(kvLine(k, v, iw) + "\n") }
 
 	section("MODELS")
 	models := st.Models.Get()
 	if len(models) == 0 {
-		b.WriteString(sDim.Render("none loaded · f2") + "\n")
+		b.WriteString(sDim().Render("none loaded · f2") + "\n")
 	}
 	for _, lm := range models {
 		name := truncate(strings.TrimSuffix(lm.Name, ".jlm"), iw-2)
 		// Every loaded model is loaded and usable; the chat's own is bold.
-		ns := sMuted
+		ns := sMuted()
 		if lm.Active {
-			ns = sBold
+			ns = sBold()
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(colourOf(lm.Colour, modelColours)).Render("●") + " " + ns.Render(name) + "\n")
-		b.WriteString("  " + sDim.Render(fmt.Sprintf("%s · %d blocks", lm.Arch, lm.Blocks)) + "\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(colourOf(lm.Colour, modelColours())).Render("●") + " " + ns.Render(name) + "\n")
+		b.WriteString("  " + sDim().Render(fmt.Sprintf("%d blocks", lm.Blocks)) + "\n")
 	}
 
 	b.WriteString("\n")
 	section("SPEED")
 	if r := st.DecodeTokS.Get(); r > 0 {
-		b.WriteString(sBrand.Render(fmt.Sprintf("%.1f", r)) + sDim.Render(" tok/s decode") + "\n")
+		b.WriteString(sBrand().Render(fmt.Sprintf("%.1f", r)) + sDim().Render(" tok/s decode") + "\n")
 	} else {
-		b.WriteString(sDim.Render("—") + "\n")
+		b.WriteString(sDim().Render("—") + "\n")
 	}
 	if ch := env.tele.decode.chart(iw, 2, cBrand); ch != "" {
 		b.WriteString(ch + "\n")
@@ -481,7 +481,7 @@ func sidebar(env *env, w, h int) string {
 			}
 			kv(deviceName(d.Name, iw/2), v)
 			if d.Limit > 0 {
-				c := colourOf(i, deviceColours)
+				c := colourOf(i, deviceColours())
 				b.WriteString(meter(float64(d.Used)/float64(d.Limit), iw, c, lerp(c, "#ffffff", 0.3)) + "\n")
 			}
 		}

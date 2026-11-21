@@ -3,17 +3,22 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/grammar"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok"
 )
 
-// Structured output: a generate constrained to a grammar (GBNF, or a JSON
-// Schema compiled to it). Each step the tokens the grammar does not allow go
+// Structured output: a generate constrained to a grammar (a JSON Schema
+// compiled by grammar.FromJSONSchema, or the grammar text a compatibility
+// endpoint takes). Each step the tokens the grammar does not allow go
 // to -inf in a copy of the logits before the sampler reads them, and the
 // sampled token advances the grammar. A grammar is compiled, and its states'
 // allowed sets kept, once per (model, grammar text): JSON revisits its states,
@@ -63,24 +68,105 @@ func (lm *LoadedModel) matcher(src string) (*grammar.Matcher, error) {
 type constraint struct {
 	m  *grammar.Matcher
 	st grammar.State
-	// lg is the masked copy of the step's logits.
-	lg []float32
+	// lg is the masked copy of the step's logits, bias the row it adds: 0
+	// at the tokens the grammar allows while a mask is taken, -inf elsewhere
+	// and between.
+	lg, bias []float32
+	// on is ignore_eos: the reply does not end while the grammar lets it go
+	// on (grammar.Matcher.AllowOn).
+	on bool
+	// ub is the request's logit bias over the vocabulary (logitBias), nil
+	// for none, and biased the logits plus it, which the grammar's mask then
+	// reads.
+	ub, biased []float32
 }
 
-// mask is logits with every token the grammar does not allow at -inf, in
-// the constraint's own copy.
-func (c *constraint) mask(logits []float32) []float32 {
-	if cap(c.lg) < len(logits) {
-		c.lg = make([]float32, len(logits))
+// mask is logits plus the request's logit bias, with every token the
+// grammar does not allow at -inf, in the constraint's own copies, through
+// in's composed mask. m is nil for a bias alone.
+func (c *constraint) mask(in *engine.Instance, logits []float32) ([]float32, error) {
+	if c.ub != nil {
+		if err := in.MaskRow(c.biased, logits, c.ub); err != nil {
+			return nil, err
+		}
+		logits = c.biased
 	}
-	c.lg = c.lg[:len(logits)]
-	copy(c.lg, logits)
-	c.m.Mask(c.st, c.lg)
-	return c.lg
+	if c.m == nil {
+		return logits, nil
+	}
+	n := len(logits)
+	if cap(c.lg) < n {
+		c.lg, c.bias = make([]float32, n), make([]float32, n)
+		for i := range c.bias {
+			c.bias[i] = float32(math.Inf(-1))
+		}
+	}
+	c.lg, c.bias = c.lg[:n], c.bias[:n]
+	if c.on {
+		c.m.AllowOn(c.st, c.bias, 0)
+	} else {
+		c.m.Allow(c.st, c.bias, 0)
+	}
+	err := in.MaskRow(c.lg, logits, c.bias)
+	if c.on {
+		c.m.AllowOn(c.st, c.bias, float32(math.Inf(-1)))
+	} else {
+		c.m.Allow(c.st, c.bias, float32(math.Inf(-1)))
+	}
+	return c.lg, err
+}
+
+// specConstraint is a generate's constraint as its Speculator reads it
+// (engine.SpecConstraint): states[i] the grammar's state after the round's
+// first i pushed tokens, states[0] the committed one, which the generate's
+// constraint holds once the round commits.
+type specConstraint struct {
+	c      *constraint
+	in     *engine.Instance
+	states []grammar.State
+}
+
+// spec is c as a Speculator on in reads it.
+func (c *constraint) spec(in *engine.Instance) *specConstraint {
+	return &specConstraint{c: c, in: in, states: []grammar.State{c.st}}
+}
+
+// Mask is the logits the constraint allows after the round's first depth
+// pushes, through in's composed mask.
+func (s *specConstraint) Mask(depth int, logits []float32) ([]float32, error) {
+	st := s.c.st
+	s.c.st = s.states[depth]
+	lg, err := s.c.mask(s.in, logits)
+	s.c.st = st
+	return lg, err
+}
+
+// Push advances the round past tok, false where the grammar does not allow
+// it; a bias alone allows every token.
+func (s *specConstraint) Push(tok int32) bool {
+	at := s.states[len(s.states)-1]
+	if s.c.m != nil {
+		var ok bool
+		if at, ok = s.c.m.Accept(at, tok); !ok {
+			return false
+		}
+	}
+	s.states = append(s.states, at)
+	return true
+}
+
+// Commit keeps the round's first n pushes: the generate's constraint
+// advances past them.
+func (s *specConstraint) Commit(n int) {
+	s.c.st = s.states[n]
+	s.states = append(s.states[:0], s.c.st)
 }
 
 // accept advances past tok; false where the grammar does not allow it.
 func (c *constraint) accept(tok int32) bool {
+	if c.m == nil {
+		return true
+	}
 	st, ok := c.m.Accept(c.st, tok)
 	if ok {
 		c.st = st
@@ -116,6 +202,11 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 		if rf.JSONSchema == nil || len(rf.JSONSchema.Schema) == 0 {
 			return "", fmt.Errorf("%w: response_format json_schema needs json_schema.schema", ErrInvalid)
 		}
+		if s := rf.JSONSchema.Strict; s != nil && *s {
+			if err := strictSchema(rf.JSONSchema.Schema); err != nil {
+				return "", fmt.Errorf("%w: response_format json_schema %q is strict: %v", ErrInvalid, rf.JSONSchema.Name, err)
+			}
+		}
 		src, err := grammar.FromJSONSchema(rf.JSONSchema.Schema)
 		if err != nil {
 			return "", fmt.Errorf("%w: response_format: %v", ErrInvalid, err)
@@ -125,13 +216,106 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 	return "", fmt.Errorf("%w: response_format type %q: text, json_object or json_schema", ErrInvalid, rf.Type)
 }
 
-// toolStream reads a generate's tool calls, when its chat declares tools.
-func (lm *LoadedModel) toolStream(o GenerateOptions) *model.ToolStream {
+// strictSchema refuses what OpenAI's strict mode refuses of a schema, so the
+// compatible routes answer a strict request as the API they serve does: an
+// object that does not close itself (additionalProperties false) or does not
+// require every property it lists, at any depth -- a property, an item, a
+// branch of anyOf, allOf or oneOf, a definition.
+func strictSchema(raw json.RawMessage) error {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	return strictAt(v, "the schema")
+}
+
+// strictAt is strictSchema at v, which at names as a path of keys.
+func strictAt(v any, at string) error {
+	switch x := v.(type) {
+	case []any:
+		for i, e := range x {
+			if err := strictAt(e, fmt.Sprintf("%s[%d]", at, i)); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		props, _ := x["properties"].(map[string]any)
+		object := props != nil || x["type"] == "object"
+		if ts, ok := x["type"].([]any); ok {
+			object = object || slices.Contains(ts, any("object"))
+		}
+		if object {
+			if ap, ok := x["additionalProperties"].(bool); !ok || ap {
+				return fmt.Errorf("%s states no additionalProperties false, which a strict schema states on every object", at)
+			}
+			req := map[string]bool{}
+			if rs, ok := x["required"].([]any); ok {
+				for _, r := range rs {
+					if s, ok := r.(string); ok {
+						req[s] = true
+					}
+				}
+			}
+			for _, k := range slices.Sorted(maps.Keys(props)) {
+				if !req[k] {
+					return fmt.Errorf("%s does not require %q, and a strict schema requires every property it lists", at, k)
+				}
+			}
+		}
+		for _, k := range []string{"properties", "$defs", "definitions"} {
+			if m, ok := x[k].(map[string]any); ok {
+				for _, n := range slices.Sorted(maps.Keys(m)) {
+					if err := strictAt(m[n], at+"."+k+"."+n); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		for _, k := range []string{"items", "prefixItems", "anyOf", "allOf", "oneOf"} {
+			if e, ok := x[k]; ok {
+				if err := strictAt(e, at+"."+k); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// toolStream reads a generate's tool calls, when its chat declares tools: in
+// the form the model's container states, or refused where it states none.
+func (lm *LoadedModel) toolStream(o GenerateOptions) (*model.ToolStream, error) {
 	ch := o.Prompt.Chat
 	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 || lm.m.Vocab == nil {
-		return nil
+		return nil, nil
 	}
-	return lm.m.NewToolStream(model.ParseToolSet(ch.Tools))
+	ts, err := lm.m.NewToolStream(model.ParseToolSet(ch.Tools))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return ts, nil
+}
+
+// logitBias is a request's logit bias as a row over the model's logits:
+// each entry's bias at its token, or at every token its text encodes to
+// without specials, summed where entries meet, as entries added one after
+// another are. A token outside the vocabulary is refused.
+func (lm *LoadedModel) logitBias(bs []TokenBias) ([]float32, error) {
+	n := lm.m.Cfg.NVocab
+	row := make([]float32, n)
+	for _, b := range bs {
+		ids := []int32{b.ID}
+		if b.Text != "" {
+			ids = lm.m.Vocab.Encode(b.Text, false)
+		}
+		for _, id := range ids {
+			if id < 0 || int(id) >= n {
+				return nil, fmt.Errorf("%w: logit_bias token id %d is outside the vocabulary of %d", ErrInvalid, id, n)
+			}
+			row[id] += b.Bias
+		}
+	}
+	return row, nil
 }
 
 // toolConstraint is the constraint a chat whose tool_choice forces a call
@@ -140,8 +324,15 @@ func (lm *LoadedModel) toolStream(o GenerateOptions) *model.ToolStream {
 // structured output. nil when the choice forces nothing.
 func (lm *LoadedModel) toolConstraint(o GenerateOptions, ids []int32) (*constraint, error) {
 	ch := o.Prompt.Chat
-	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 || !ch.ToolChoice.Forces() {
+	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 {
 		return nil, nil
+	}
+	if !ch.ToolChoice.Forces() {
+		// A model whose template reads no tools has every reply held to
+		// the generic form's object; a caller's own grammar replaces it.
+		if syn, err := lm.m.ToolSyntax(); err != nil || o.Grammar != "" || !syn.ConstrainsReply(ch.ToolChoice) {
+			return nil, nil
+		}
 	}
 	if o.Grammar != "" {
 		return nil, fmt.Errorf("%w: a forced tool call and response_format are one constraint each; give one",
@@ -185,7 +376,11 @@ func (lm *LoadedModel) toolMatcher(src string) (*grammar.Matcher, error) {
 		g.m = map[string]*grammar.Matcher{}
 	}
 	if g.toolToks == nil {
-		g.toolToks = grammar.IndexTokens(markedVocab{lm.m.Vocab, markers(lm.m.Vocab, lm.m.ToolSyntax())})
+		syn, err := lm.m.ToolSyntax()
+		if err != nil {
+			return nil, err
+		}
+		g.toolToks = grammar.IndexTokens(markedVocab{lm.m.Vocab, markers(lm.m.Vocab, syn)})
 	}
 	m := grammar.NewMatcher(gr, g.toolToks)
 	g.m[key] = m

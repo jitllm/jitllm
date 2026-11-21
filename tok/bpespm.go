@@ -22,13 +22,11 @@ import (
 // and it is neither: SPM merges any adjacent pair whose concatenation is a
 // token, by score, where this merges only the pairs the merge list names.
 //
-// llama.cpp splits the run on newlines first ("[^\n]+|[\n]+", llama-vocab.cpp,
-// LLAMA_VOCAB_PRE_TYPE_GEMMA4), because its BPE asserts no newline inside a
-// word. HF tokenizers does not split, and the model's own tokenizer is the
-// authority (RULE 7m): this runs the whole run. The two could differ only
-// where a merge joins a newline to another character, and Gemma 4's 262144
-// tokens carry none (every token with a newline in it is newlines alone), so
-// on this vocabulary they agree on every input.
+// The run is merged whole, newlines and all, as the model's own tokenizer (the
+// tokenizers library) merges it. Splitting it on newlines first would differ
+// only where a merge joins a newline to another character, and Gemma 4's
+// 262144 tokens carry none (every token with a newline in it is newlines
+// alone).
 
 // spmBPE is the merge table of a VocabBPESPM vocabulary.
 type spmBPE struct {
@@ -66,8 +64,8 @@ func (v *Vocab) encodeSPMBPERun(text string, out []int32) []int32 {
 		text = " " + text
 	}
 	work := strings.ReplaceAll(text, " ", spaceMark)
-	sc := bpeScratches.Get().(*bpeScratch)
-	defer sc.release()
+	sc := v.getScratch()
+	defer v.putScratch(sc)
 	// One symbol per character: its token, or -1 for a character the
 	// vocabulary lacks, which no merge names and which falls back to bytes.
 	syms := sc.syms[:0]
@@ -134,12 +132,12 @@ func (v *Vocab) encodeSPMBPERun(text string, out []int32) []int32 {
 // encodeSPMBPE is Vocab.Encode for a VocabBPESPM vocabulary. Every control
 // and user-defined token is matched literally first, as HF tokenizers matches
 // added tokens before the normalizer.
-func (v *Vocab) encodeSPMBPE(text string, addSpecial bool) []int32 {
+func (v *Vocab) encodeSPMBPE(text string, addSpecial, control bool) []int32 {
 	out := make([]int32, 0, len(text)/3+2)
 	if addSpecial && v.AddBOS && v.BOS >= 0 {
 		out = append(out, v.BOS)
 	}
-	for _, run := range v.partitionSpecial(text, true) {
+	for _, run := range v.partitionSpecial(text, control) {
 		if run.id >= 0 {
 			out = append(out, run.id)
 			continue

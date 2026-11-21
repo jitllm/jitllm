@@ -80,7 +80,7 @@ func Row(dst []float32, wt quant.Type, w []byte, r, k int) error {
 // RMSNorm computes y = x / sqrt(mean(x^2) + eps) * w.
 //
 // The mean is over the whole vector and the reciprocal square root is applied
-// before the weight, matching ggml_rms_norm followed by ggml_mul. Note that some
+// before the weight, as the models' reference RMSNorm computes it. Note that some
 // architectures bake a +1 into the stored weight at conversion time, so this
 // never adds one itself — see model.Config.
 func RMSNorm(y, x, w []float64, eps float64) {
@@ -127,55 +127,8 @@ func LayerNorm(y, x, w, b []float64, eps float64) {
 // SiLU is x * sigmoid(x), the SwiGLU gate activation.
 func SiLU(x float64) float64 { return x / (1 + math.Exp(-x)) }
 
-// SwiGLUOAI is gpt-oss's gated activation of one (gate, up) pair: the gate
-// clamped from above at 7, up clamped to [-7, 7], and (up+1) multiplying
-// gate*sigma(1.702*gate). See cpu.ActSwiGLUOAI.
-func SwiGLUOAI(gate, up float64) float64 {
-	x := math.Min(gate, 7)
-	y := math.Max(math.Min(up, 7), -7)
-	return x / (1 + math.Exp(-1.702*x)) * (y + 1)
-}
-
-// SwiGLUClamp is DeepSeek V4's gated activation of one (gate, up) pair: the
-// gate clamped from above at 10, up clamped to [-10, 10], and nothing else
-// changed. See cpu.ActSwiGLUClamp.
-func SwiGLUClamp(gate, up float64) float64 {
-	x := math.Min(gate, 10)
-	return x / (1 + math.Exp(-x)) * math.Max(math.Min(up, 10), -10)
-}
-
-// Situ is Kimi-K3's gated activation of one (gate, up) pair, Moonshot's
-// SituAndMul at the published bounds: 4*tanh(gate/4)*sigma(gate) times
-// 25*tanh(up/25). See cpu.ActSitu.
-func Situ(gate, up float64) float64 {
-	return 4 * math.Tanh(gate/4) / (1 + math.Exp(-gate)) * 25 * math.Tanh(up/25)
-}
-
-// SqrtSoftplus is DeepSeek V4's router gate, sqrt(log(1 + exp(x))), with
-// torch's softplus threshold (x past 20 is x). See cpu.ActSqrtSoftplus.
-func SqrtSoftplus(x float64) float64 {
-	if x > 20 {
-		return math.Sqrt(x)
-	}
-	return math.Sqrt(math.Log1p(math.Exp(x)))
-}
-
-// SqrtSigmoid is Qwen3.8-Flash-Next's n-gram gate,
-// sigmoid(sign(x)*sqrt(max(|x|, 1e-6))), as its reference computes it.
-func SqrtSigmoid(x float64) float64 {
-	m := math.Sqrt(math.Max(math.Abs(x), 1e-6))
-	if x < 0 {
-		m = -m
-	}
-	return 1 / (1 + math.Exp(-m))
-}
-
-// GELUErf is GELU as transformers' GELUActivation and torch compute it,
-// 0.5x(1 + erf(x/sqrt 2)), with Go's erf.
-func GELUErf(x float64) float64 { return 0.5 * x * (1 + math.Erf(x/math.Sqrt2)) }
-
-// GELUTanh is the tanh approximation of GELU, which is what gemma uses and what
-// ggml's GGML_UNARY_OP_GELU computes.
+// GELUTanh is the tanh approximation of GELU, which is what gemma uses
+// (transformers' gelu_pytorch_tanh).
 func GELUTanh(x float64) float64 {
 	const c = 0.7978845608028654 // sqrt(2/pi)
 	return 0.5 * x * (1 + math.Tanh(c*(x+0.044715*x*x*x)))
@@ -192,9 +145,9 @@ func XIELU(x, alphaP, alphaN, beta, eps float64) float64 {
 	return (math.Expm1(math.Min(x, eps))-x)*alphaN + beta*x
 }
 
-// Dot32 and AxpyF32 are the two float32 primitives attention is made of. Both
-// reslice the source to the destination's length so the loop's bounds check
-// is eliminated.
+// Dot32 is the float32 primitive attention is made of. It reslices the
+// source to the destination's length so the loop's bounds check is
+// eliminated.
 
 // Dot32 returns the dot product of a and the first len(a) elements of b.
 func Dot32(a, b []float32) float32 {
@@ -212,14 +165,6 @@ func Dot32(a, b []float32) float32 {
 		s0 += a[i] * b[i]
 	}
 	return (s0 + s1) + (s2 + s3)
-}
-
-// AxpyF32 computes dst += w * src, over len(dst) elements.
-func AxpyF32(dst []float32, w float32, src []float32) {
-	src = src[:len(dst)]
-	for i := range dst {
-		dst[i] += w * src[i]
-	}
 }
 
 // The f32 elementwise ops, matching the engine's f32 residual. The accumulators
@@ -290,14 +235,7 @@ func LogSoftmax32(x []float32) []float64 {
 	return out
 }
 
-// Widen and Narrow convert between the oracle's float64 and the engine's f32.
-func Widen(dst []float64, src []float32) {
-	for i, v := range src {
-		dst[i] = float64(v)
-	}
-}
-
-// Narrow is Widen's inverse.
+// Narrow writes src's values into dst at float32.
 func Narrow(dst []float32, src []float64) {
 	for i, v := range src {
 		dst[i] = float32(v)
@@ -417,22 +355,87 @@ func SoftmaxOnline(x []float64) {
 	}
 }
 
-// RopeApply rotates one head by a table nn.Rope.Table filled: pairs (p,
-// p+len(cs)/2) for NEOX, (2p, 2p+1) otherwise. It is the reference the
-// generated rotary kernels are held to.
-func RopeApply(head []float32, cs []float32, neox bool) {
-	half := len(cs) / 2
-	if half > len(head)/2 {
-		half = len(head) / 2
+// Clamp32 is each of src held to [lo, hi], written to dst: a clipped
+// linear's bound (Gemma 4's vision tower's).
+func Clamp32(dst, src []float32, lo, hi float32) {
+	for i, v := range src {
+		dst[i] = float32(math.Max(math.Min(float64(v), float64(hi)), float64(lo)))
 	}
-	for p := 0; p < half; p++ {
-		c, s := float64(cs[2*p]), float64(cs[2*p+1])
-		i0, i1 := 2*p, 2*p+1
-		if neox {
-			i0, i1 = p, p+half
+}
+
+// DWConv32 is a depthwise convolution of src, an h x w grid of rows of c
+// channels, by filt's k x k taps (tap-major: tap ky*k+kx's row of c) at
+// stride st, TensorFlow's SAME padding (the output ceil(h/st) x
+// ceil(w/st), padded by (out-1)*st + k - in, the smaller half first), zero
+// past the grid's edges, accumulated in float64 and written to dst:
+// MobileNet's depthwise convolution.
+func DWConv32(dst, src []float32, h, w, c, k, st int, filt []float32) {
+	ho, wo := (h+st-1)/st, (w+st-1)/st
+	py, px := max((ho-1)*st+k-h, 0)/2, max((wo-1)*st+k-w, 0)/2
+	for y := range ho {
+		for x := range wo {
+			for ch := range c {
+				var acc float64
+				for ky := range k {
+					for kx := range k {
+						yy, xx := y*st+ky-py, x*st+kx-px
+						if yy < 0 || yy >= h || xx < 0 || xx >= w {
+							continue
+						}
+						acc += float64(src[(yy*w+xx)*c+ch]) * float64(filt[(ky*k+kx)*c+ch])
+					}
+				}
+				dst[(y*wo+x)*c+ch] = float32(acc)
+			}
 		}
-		x0, x1 := float64(head[i0]), float64(head[i1])
-		head[i0] = float32(x0*c - x1*s)
-		head[i1] = float32(x0*s + x1*c)
+	}
+}
+
+// DWConvLine32 is a depthwise convolution of src, a line of r rows of c
+// channels, by k centred taps a channel (filt, tap-major) at stride st,
+// padded as DWConv32 pads a grid one column wide, the rows past either end
+// zero, accumulated in float64 and written to dst.
+func DWConvLine32(dst, src []float32, r, c, k, st int, filt []float32) {
+	ro := (r + st - 1) / st
+	p := max((ro-1)*st+k-r, 0) / 2
+	for y := range ro {
+		for ch := range c {
+			var acc float64
+			for t := range k {
+				if yy := y*st + t - p; yy >= 0 && yy < r {
+					acc += float64(src[yy*c+ch]) * float64(filt[t*c+ch])
+				}
+			}
+			dst[y*c+ch] = float32(acc)
+		}
+	}
+}
+
+// Conv32 is a full convolution of src, an h x w grid of rows of c channels,
+// by wt's cout filters of k x k taps (filter o's row kp wide, tap ky*k+kx's
+// c channels at (ky*k+kx)*c, the rest past k*k*c unread) at stride st,
+// padded as DWConv32 pads, accumulated in float64 and written to dst:
+// MobileNet's full convolution.
+func Conv32(dst, src []float32, h, w, c, k, st int, wt []float32, cout, kp int) {
+	ho, wo := (h+st-1)/st, (w+st-1)/st
+	py, px := max((ho-1)*st+k-h, 0)/2, max((wo-1)*st+k-w, 0)/2
+	for y := range ho {
+		for x := range wo {
+			for o := range cout {
+				var acc float64
+				for ky := range k {
+					for kx := range k {
+						yy, xx := y*st+ky-py, x*st+kx-px
+						if yy < 0 || yy >= h || xx < 0 || xx >= w {
+							continue
+						}
+						for ch := range c {
+							acc += float64(src[(yy*w+xx)*c+ch]) * float64(wt[o*kp+(ky*k+kx)*c+ch])
+						}
+					}
+				}
+				dst[(y*wo+x)*cout+o] = float32(acc)
+			}
+		}
 	}
 }

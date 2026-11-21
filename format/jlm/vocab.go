@@ -81,9 +81,9 @@ const (
 	// pretok.OpDigitTriples. No parameters, so a new code, not a new record
 	// layout; an older reader falls back to its own table row for the name.
 	PreDigitTriples PreOpKind = 6
-	// PrePunctDefault isolates runs of llama.cpp's "[\p{P}\$\+<=>\^~\|]",
+	// PrePunctDefault isolates runs of "[\p{P}\$\+<=>\^~\|]",
 	// the first stage of the pipeline a vocabulary with no pre name gets
-	// (pretok.LlamaCppDefault). No parameters; a new code, as above.
+	// (pretok.DefaultBPE). No parameters; a new code, as above.
 	PrePunctDefault PreOpKind = 7
 	// PreDigitGroups isolates \p{N} in groups of DigitGroup (HuggingFace's
 	// Split on "\p{N}{1,3}", Isolated); PreKanaHanRuns isolates runs of CJK
@@ -96,6 +96,13 @@ const (
 	// PreSparkSplit is Spark-X2.5's variant of it (pretok.OpSparkSplit); a
 	// reader that predates it refuses the stage.
 	PreSparkSplit PreOpKind = 11
+	// PrePattern is a Split as the model's tokenizer.json writes it: its
+	// regex (Pattern), behavior (Behavior) and Invert, run by the tokenizer's
+	// pattern engine. The pattern and the invert flag travel in the vocab
+	// record's last optional tail, after a tool form that is then always
+	// written, empty when the model has none. A reader that predates the kind
+	// refuses the container by its version (v32).
+	PrePattern PreOpKind = 12
 )
 
 // PreOp is one stage, with every parameter the stage takes. A reader runs these
@@ -133,8 +140,12 @@ type PreOp struct {
 	// PreDigits.
 	Individual bool
 
-	// PrePunctuation.
+	// PrePunctuation; PrePattern's split behavior.
 	Behavior string
+
+	// PrePattern.
+	Pattern string
+	Invert  bool
 }
 
 // Merge is one BPE merge rule, as an explicit pair: the source's joined
@@ -161,7 +172,7 @@ type Vocab struct {
 	// Stop is every id besides EOS that the source states ends a generation:
 	// a GGUF's tokenizer.ggml.eot/eom and FIM pad/repo/sep ids, a safetensors
 	// model's generation_config eos_token_id list. The tokenizer adds the ids
-	// llama.cpp recognises by name (tok.Vocab.IsEOG). Absent from a container
+	// it recognises by name (tok.Vocab.IsEOG). Absent from a container
 	// written before it, which then stops on EOS and the names alone.
 	Stop []int32
 
@@ -179,6 +190,10 @@ type Vocab struct {
 	PreName string
 
 	Templates []ChatTemplate
+	// Tools is how the model writes a tool call, stated from the template a
+	// request with tools renders (convert.ToolFormOf). Absent from a
+	// container written before it, which is refused tool calls.
+	Tools ToolForm
 }
 
 // AddedToken is a token introduced after training, which the pre-tokenizer must

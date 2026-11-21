@@ -1,17 +1,21 @@
 package server
 
 import (
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// The orchestrator (docs/design/orchestrator.md): the server moving blocks
+// The orchestrator (.notes/design/orchestrator.md): the server moving blocks
 // itself. When a session starts a generate, its host blocks are offered to
 // its model's devices (promote); when a card declines for lack of room, the
 // least deserving idle sessions on the cards -- other models' first, lowest
-// priority, then idle longest -- bring their blocks home with their history
+// priority, then idle longest -- move their blocks to the CPU with their history
 // (demote), and the offer is made again. A running session is never a victim,
 // a session or model the caller placed is never moved, and nothing is
 // refused: a promotion that does not fit runs where it is.
@@ -45,13 +49,17 @@ type OrchMove struct {
 	At      time.Time
 	Session string
 	Model   string
-	// Blocks moved, ToHost where they went home (else onto the cards), Why,
-	// and For the session room was made for (whyMakeRoom).
+	// Blocks moved, To the devices they went to by name (nn.CPU, or the
+	// cards that took them), Why, and For the session room was made for
+	// (whyMakeRoom).
 	Blocks int
-	ToHost bool
+	To     string
 	Why    orchWhy
 	For    string
 	Millis float64
+	// Err is why the move stopped before every block went, nil when it
+	// did not.
+	Err error
 }
 
 // orchestrator is the Engine's record of what it moved: a ring of the last
@@ -62,8 +70,8 @@ type orchestrator struct {
 	log [orchLogSize]OrchMove
 	n   int // moves logged, of which the ring holds the last orchLogSize
 	// Promotions and demotions made, and the blocks they moved.
-	promotions, demotions int64
-	blocksUp, blocksHome  int64
+	promotions, demotions      int64
+	blocksToCards, blocksToCPU int64
 }
 
 // note records m and counts it.
@@ -72,12 +80,12 @@ func (o *orchestrator) note(m OrchMove) {
 	defer o.mu.Unlock()
 	o.log[o.n%orchLogSize] = m
 	o.n++
-	if m.ToHost {
+	if m.To == nn.CPU {
 		o.demotions++
-		o.blocksHome += int64(m.Blocks)
+		o.blocksToCPU += int64(m.Blocks)
 	} else {
 		o.promotions++
-		o.blocksUp += int64(m.Blocks)
+		o.blocksToCards += int64(m.Blocks)
 	}
 }
 
@@ -95,39 +103,44 @@ func (e *Engine) OrchMoves() []OrchMove {
 }
 
 // OrchCounts is what the orchestrator has done: promotions, demotions, and
-// the blocks they moved up and home.
-func (e *Engine) OrchCounts() (promotions, demotions, blocksUp, blocksHome int64) {
+// the blocks they moved onto the cards and onto the CPU device.
+func (e *Engine) OrchCounts() (promotions, demotions, blocksToCards, blocksToCPU int64) {
 	o := &e.orch
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.promotions, o.demotions, o.blocksUp, o.blocksHome
+	return o.promotions, o.demotions, o.blocksToCards, o.blocksToCPU
 }
 
 // Unpin hands a session's placement back to the orchestrator.
 func (s *Session) Unpin() { s.pinned.Store(false) }
 
-// promote offers s's host blocks to its model's devices, demoting idle
-// sessions to make room when the cards decline. The caller holds s.mu.
+// promote offers the host blocks of the instance s runs on to its model's
+// devices, demoting other models' idle instances to make room when the cards
+// decline. The caller holds s.mu.
 func (e *Engine) promote(s *Session) error {
 	lm := s.lm
 	if e.cfg.NoOrchestrate || s.pinned.Load() || lm.callerPlaced || lm.device() == nil {
 		return nil
 	}
 	n := lm.m.Cfg.NLayer
-	if s.st.GPULayers() >= n {
+	if instBlocks(lm) >= n {
 		return nil
 	}
 	if err := e.bindSessionLocked(s); err != nil {
 		return nil // a session that cannot attach runs where it is
 	}
 	e.place(s, whyGenerating)
-	for s.st.GPULayers() < n {
-		v := e.demotionVictim(s)
-		if v == nil {
+	for instBlocks(lm) < n {
+		if v := e.demotionVictim(s); v != nil {
+			if !e.demote(v, s.id) {
+				continue
+			}
+		} else if o := e.idleVictim(lm); o != nil {
+			if !e.demoteIdle(o, s.id) {
+				break
+			}
+		} else {
 			break
-		}
-		if !e.demote(v, s.id) {
-			continue
 		}
 		if e.place(s, whyRoomMade) == 0 {
 			// The room that victim gave back let no block in: the card's
@@ -139,30 +152,56 @@ func (e *Engine) promote(s *Session) error {
 	return nil
 }
 
-// place offers s's host blocks to the cards and logs what landed.
+// instBlocks is how many blocks lm's instance runs on a device.
+func instBlocks(lm *LoadedModel) int {
+	var n int
+	lm.inst.With(func(in *engine.Instance) { n = in.GPULayers() })
+	return n
+}
+
+// place offers the host blocks of the instance s runs on to the cards and
+// logs what landed.
 func (e *Engine) place(s *Session, why orchWhy) int {
 	start := time.Now()
-	before := s.st.GPULayers()
-	s.st.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
-	got := s.st.GPULayers() - before
+	var got int
+	var to []string
+	s.lm.placeAll(s.in(), func(in *engine.Instance, mirror bool) {
+		if mirror {
+			in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
+			return
+		}
+		before := in.Locations()
+		in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
+		for li, at := range in.Locations() {
+			if li < len(before) && at != before[li] && at != nn.CPU {
+				got++
+				if !slices.Contains(to, at) {
+					to = append(to, at)
+				}
+			}
+		}
+	})
 	if got > 0 {
-		e.orch.note(OrchMove{At: start, Session: s.id, Model: s.lm.id, Blocks: got, Why: why,
+		e.orch.note(OrchMove{At: start, Session: s.id, Model: s.lm.id, Blocks: got, To: strings.Join(to, ","), Why: why,
 			Millis: float64(time.Since(start).Microseconds()) / 1000})
 	}
 	return got
 }
 
 // demotionVictim is the least deserving session holding device blocks that
-// is not s, not running, not pinned and not caller-placed: other models'
-// sessions first, then the lowest priority, then the one idle longest. nil
-// when there is none. One pass, no list.
+// is not s, not running, not pinned, not caller-placed and of a model whose
+// devices list the CPU (the one destination demote moves blocks to): other
+// models' sessions first, then the lowest priority, then the one idle
+// longest. nil when there is none. One pass, no list.
 func (e *Engine) demotionVictim(s *Session) *Session {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	var best *Session
 	for _, v := range e.sessions {
-		if v == s || v.closed.Load() || v.running.Load() || v.pinned.Load() || v.lm.callerPlaced ||
-			v.snapDevBlocks.Load() == 0 {
+		// One instance a model: demoting v's is demoting s's own model's
+		// when they share it.
+		if v == s || v.lm == s.lm || v.closed.Load() || v.running.Load() || v.pinned.Load() || v.lm.callerPlaced ||
+			!v.lm.cpuListed || v.snapDevBlocks.Load() == 0 || v.lm.anyRunning() {
 			continue
 		}
 		if best == nil || lessDeserving(v, best, s.lm) {
@@ -184,8 +223,8 @@ func lessDeserving(a, b *Session, lm *LoadedModel) bool {
 	return a.lastUsed.Load() < b.lastUsed.Load()
 }
 
-// demote brings v's blocks home with their history, for the session named
-// for, when v's lock is free (an idle session; a busy one is skipped, never
+// demote moves v's blocks to the CPU device with their history, for the
+// session named for, when v's lock is free (an idle session; a busy one is skipped, never
 // waited on). It reports whether it moved anything.
 func (e *Engine) demote(v *Session, forID string) bool {
 	if !v.mu.TryLock() {
@@ -193,33 +232,120 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	}
 	defer v.mu.Unlock()
 	start := time.Now()
-	n, _ := v.st.ReleaseBlocks(0, v.lm.m.Cfg.NLayer)
+	n, err := detach(v.lm, v.in())
+	// Every idle session of the instance moves its history to the CPU too, or
+	// its device view would keep the blocks on the card: v's under the lock
+	// held here.
+	e.settle(v.lm, v)
 	v.refresh()
 	if n == 0 {
 		return false
 	}
-	e.orch.note(OrchMove{At: start, Session: v.id, Model: v.lm.id, Blocks: n, ToHost: true, Why: whyMakeRoom, For: forID,
+	e.orch.note(OrchMove{At: start, Session: v.id, Model: v.lm.id, Blocks: n, To: nn.CPU, Why: whyMakeRoom, For: forID, Err: err,
 		Millis: float64(time.Since(start).Microseconds()) / 1000})
 	return true
+}
+
+// detach takes lm's instance in off its card, not only its blocks: its head
+// and the scratch it reserved there go back to the card's pool with them,
+// and a promotion attaches it again (bindSessionLocked), reserving first. It
+// is how many blocks left the card.
+func detach(lm *LoadedModel, in *engine.Instance) (int, error) {
+	var n int
+	var err error
+	in.Place(func(in *engine.Instance) {
+		before := in.GPULayers()
+		if err = in.SetDevice(nil); err == nil {
+			lm.instDev = nil
+		}
+		n = before - in.GPULayers()
+	})
+	return n, err
+}
+
+// idleVictim is another model than lm whose instance holds blocks on a card
+// and no session -- placed at its load and not talked to since -- whose
+// devices list the CPU and whose placement no caller named: a demotion
+// victim when no session is one. nil when there is none.
+func (e *Engine) idleVictim(lm *LoadedModel) *LoadedModel {
+	e.mu.RLock()
+	var cand []*LoadedModel
+	for _, o := range e.models {
+		if o != lm && !o.callerPlaced && o.cpuListed && len(o.sessions) == 0 && o.device() != nil {
+			cand = append(cand, o)
+		}
+	}
+	e.mu.RUnlock()
+	for _, o := range cand {
+		if instBlocks(o) > 0 {
+			return o
+		}
+	}
+	return nil
+}
+
+// demoteIdle detaches the idle model o's instance from its card for the
+// session named for (detach).
+func (e *Engine) demoteIdle(o *LoadedModel, forID string) bool {
+	start := time.Now()
+	n, err := detach(o, o.inst)
+	if n == 0 {
+		return false
+	}
+	e.orch.note(OrchMove{At: start, Model: o.id, Blocks: n, To: nn.CPU, Why: whyMakeRoom, For: forID, Err: err,
+		Millis: float64(time.Since(start).Microseconds()) / 1000})
+	return true
+}
+
+// settle brings every idle session of lm under its instance's placement
+// (engine.Instance.Settle); held is one whose lock the caller holds.
+func (e *Engine) settle(lm *LoadedModel, held *Session) {
+	e.mu.RLock()
+	ss := make([]*Session, 0, len(lm.sessions))
+	for _, s := range lm.sessions {
+		ss = append(ss, s)
+	}
+	e.mu.RUnlock()
+	for _, s := range ss {
+		if s == held {
+			lm.inst.Settle(s.ms)
+			continue
+		}
+		if !s.mu.TryLock() {
+			continue
+		}
+		lm.inst.Settle(s.ms)
+		s.mu.Unlock()
+	}
+}
+
+// anyRunning says some session of lm is generating.
+func (lm *LoadedModel) anyRunning() bool {
+	for _, s := range lm.sessions {
+		if s.running.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 // pbOrchestrator is the orchestrator's counters and recent moves for the
 // stats stream.
 func (e *Engine) pbOrchestrator() *v1.OrchestratorStats {
-	pro, dem, up, home := e.OrchCounts()
+	pro, dem, cards, cpu := e.OrchCounts()
 	moves := e.OrchMoves()
-	out := &v1.OrchestratorStats{Enabled: !e.cfg.NoOrchestrate, Promotions: pro, Demotions: dem, BlocksUp: up,
-		BlocksHome: home, Moves: make([]*v1.OrchestratorMove, len(moves))}
+	out := &v1.OrchestratorStats{Enabled: !e.cfg.NoOrchestrate, Promotions: pro, Demotions: dem, BlocksToCards: cards,
+		BlocksToCpu: cpu, Moves: make([]*v1.OrchestratorMove, len(moves))}
 	for i, m := range moves {
-		to, why := "device", m.Why.String()
-		if m.ToHost {
-			to = "host"
-		}
+		why := m.Why.String()
 		if m.For != "" {
 			why += " for " + m.For
 		}
+		if m.Err != nil {
+			why += " (stopped: " + m.Err.Error() + ")"
+		}
 		out.Moves[i] = &v1.OrchestratorMove{UnixMillis: m.At.UnixMilli(), SessionId: m.Session, ModelId: m.Model,
-			Blocks: int32(m.Blocks), To: to, Why: why, Millis: m.Millis}
+			Blocks: int32(m.Blocks), To: m.To, Why: why, Millis: m.Millis}
 	}
 	return out
 }

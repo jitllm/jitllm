@@ -1,0 +1,164 @@
+package engine
+
+import (
+	"encoding/binary"
+	"math"
+	"os"
+	"path/filepath"
+	"testing"
+	"unsafe"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
+
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
+)
+
+// projectorRows is scripts/visiongold.py's patch_rows: a tower's last hidden
+// state that is no picture, every row and channel distinct.
+func projectorRows(n, width int) []float32 {
+	out := make([]float32, n*width)
+	for p := range n {
+		for c := range width {
+			fp, fc := float64(p), float64(c)
+			out[p*width+c] = float32(math.Sin(0.37*fp+0.11*fc) + 0.5*math.Cos(0.013*fp*fc))
+		}
+	}
+	return out
+}
+
+// readF32 is a little-endian float32 file.
+func readF32(t *testing.T, path string) []float32 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		testmodels.Missing(t, "GOLDEN MISSING: %v (scripts/visiongold.py writes it) -- this gate proved nothing", err)
+	}
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[4*i:]))
+	}
+	return out
+}
+
+// projectorFrom is the tower's head's ops from from up to to (0: its end)
+// -- the projector, where the ops before it are the vision model's own
+// (Gemma 3's post norm) and the ones after it its marker rows -- run on the
+// CPU device over rows, the head's input grid gw x gh.
+func projectorFrom(t *testing.T, s *Instance, from, to int, rows []float32, gw, gh int) []float32 {
+	t.Helper()
+	if err := s.towerReady(); err != nil {
+		t.Fatal(err)
+	}
+	m, tr := s.m, s.tower
+	ts := tr.s
+	h := m.Container.Vision().Tower.Head
+	if to == 0 {
+		to = len(h.Ops)
+	}
+	p := jlm.Program{NIn: 1, Out: uint16(to - from)}
+	for _, op := range h.Ops[from:to] {
+		op.In = append([]uint16(nil), op.In...)
+		for i := range op.In {
+			op.In[i] -= uint16(from)
+		}
+		p.Ops = append(p.Ops, op)
+	}
+	E := int(m.Container.Vision().NEmbd)
+	n := len(rows) / E
+	b := graph.NewBlock(-1)
+	out, err := graph.LowerProgram(b, m.Container.Vision().Tower, &p, []graph.ValueID{b.In("rows", E)}, n, m.TowerFacts(jlm.DenseBlock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Out(out)
+	if err := graph.Verify(b.G, m.TowerFacts(jlm.DenseBlock)); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ts.towerForm(b.G, n, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := execOf(ts).Bindings().Check(f, -1, &ts.dense.TowerDense); err != nil {
+		t.Fatalf("the projector's weights: %v", err)
+	}
+	outRows := b.G.Values[out].Rows
+	if outRows == 0 {
+		outRows = n
+	}
+	tr.size(n, E)
+	copy(tr.blk, rows)
+	tr.req[composer.RequestGrid], tr.req[composer.RequestGridH] = uint32(gw), uint32(gh)
+	got := make([]float32, outRows*b.G.Values[out].Width)
+	bd := new(cpudev.Bound)
+	*bd = cpudev.Bound{Li: -1, Own: execOf(ts).Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab,
+		IO: make([]unsafe.Pointer, f.Places)}
+	bd.Weights, _ = execOf(ts).Bindings().Bind(f, -1, &ts.dense.TowerDense)
+	bd.IO[0], bd.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&got[0])
+	execOf(ts).Runner().Run(bd, f)
+	return got
+}
+
+// TestProjectorMatchesTransformers holds the stated projector ALONE to
+// transformers' on rows that are no picture (scripts/visiongold.py): Gemma
+// 3's pool, RMSNorm and matrix, InternVL's shuffle, LayerNorm and MLP. With
+// the tower out of it the only error is the projector's own, so a pool or a
+// shuffle in the wrong order -- which a picture barely shows, its
+// neighbouring patches alike after the blocks -- cannot hide: the rows'
+// grid transposed is the violation.
+func TestProjectorMatchesTransformers(t *testing.T) {
+	fams := []struct {
+		name, text, mm string
+		// from is the first op of the head that is the projector's; lead
+		// the class rows the head drops first.
+		from, lead int
+	}{
+		{"gemma3", "gemma-3-4b-it-Q4_K_M.gguf", "vlm/mmproj-gemma-3-4b-it-f16.gguf", 1, 0},
+		{"internvl", "vlm/InternVL3-1B-Instruct-Q8_0.gguf", "vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf", 0, 1},
+	}
+	for _, fam := range fams {
+		t.Run(fam.name, func(t *testing.T) {
+			text, mm := testmodels.Path(fam.text), testmodels.Path(fam.mm)
+			if !sourcePresent(text, mm) {
+				testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+			}
+			want := readF32(t, testmodels.Path(filepath.Join("vlm", "goldens", fam.name, "projector.features.f32")))
+			m, err := model.Open(jlmOfPair(t, text, mm))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			s := testInstance(t, m, 64)
+			defer s.Close()
+			side, E := m.Tower.Side, int(m.Container.Vision().NEmbd)
+			x := projectorRows(side*side, E)
+			run := func(x []float32) []float32 {
+				return projectorFrom(t, s, fam.from, 0, append(make([]float32, fam.lead*E), x...), side, side)
+			}
+			got := run(x)
+			if len(got) != len(want) {
+				t.Fatalf("%d values, transformers %d", len(got), len(want))
+			}
+			clean, worst := nmseOf(got, want)
+			t.Logf("projector alone: NMSE %.3e against transformers, max|d| %.3g", clean, worst)
+			if !(clean < 1e-3) {
+				t.Fatalf("the projector alone reads NMSE %.3e (bound 1e-3)", clean)
+			}
+			tx := make([]float32, len(x))
+			for y := range side {
+				for c := range side {
+					copy(tx[(y*side+c)*E:][:E], x[(c*side+y)*E:][:E])
+				}
+			}
+			v, _ := nmseOf(run(tx), want)
+			t.Logf("violation (the grid transposed): NMSE %.3e", v)
+			if !(v > 100*clean) {
+				t.Fatalf("VIOLATION: the grid transposed reads NMSE %.3e against a clean %.3e: the gate cannot see it", v, clean)
+			}
+		})
+	}
+}

@@ -9,8 +9,8 @@ import "fmt"
 // flag nor a container written before this check reaches a tier.
 func (c *Config) CheckQKNorm(nBlocks int, has func(r Role, block int32) bool) error {
 	for b := 0; b < nBlocks; b++ {
-		// A decision head's blocks (after the trunk's) norm nothing.
-		want := c.QKNormAt(b) && !(c.Decision != DecisionNone && b >= int(c.NLayer))
+		// A marker head's blocks (after the trunk's) norm nothing.
+		want := c.QKNormAt(b) && !(b >= int(c.NLayer) && b < int(c.NLayer+c.HeadBlocks()))
 		for _, r := range [2]Role{RoleAttnQNorm, RoleAttnKNorm} {
 			// A KV-sharing block caches nothing and so norms q alone.
 			want := want && !(r == RoleAttnKNorm && c.KVShared(b))

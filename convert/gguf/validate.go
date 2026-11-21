@@ -17,7 +17,7 @@ import (
 const (
 	maxTensors = 1 << 16
 	maxKV      = 1 << 12
-	maxDims    = 4 // ggml's GGML_MAX_DIMS
+	maxDims    = 4 // the GGUF format's dimension limit
 )
 
 // The smallest possible on-disk encoding of one entry, used to reject header
@@ -66,7 +66,7 @@ func sizeTensor(t *meta.Tensor) error {
 		return fmt.Errorf("type %d is one of this engine's own formats, which no GGUF carries", uint32(t.Type))
 	}
 	if !t.Type.Known() {
-		return fmt.Errorf("unknown ggml type %d", uint32(t.Type))
+		return fmt.Errorf("unknown GGUF tensor type %d", uint32(t.Type))
 	}
 	if len(t.Dims) == 0 {
 		return fmt.Errorf("tensor has no dimensions")
@@ -130,7 +130,7 @@ func validateTensorData(f *meta.File) error {
 	return nil
 }
 
-// sizeI2S sizes bitnet.cpp's I2_S, which has no block: the codes of the whole
+// sizeI2S sizes I2_S (BitNet's published GGUFs), which has no block: the codes of the whole
 // tensor, four to a byte in 128-element groups, then a 32-byte tail holding
 // its f32 scale (quant.I2SBytes).
 func sizeI2S(t *meta.Tensor) error {

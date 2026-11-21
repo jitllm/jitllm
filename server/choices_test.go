@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // TestGenerateLogprobsAreTheModelsRawDistribution: the logprobs a generate
 // reports at every sampled token are the oracle's log-softmax of the logits
-// the model produced there, before temperature -- replayed on a fresh State of
+// the model produced there, before temperature -- replayed on a fresh instance of
 // the same model from the token ids the generate returned.
 func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	e, lm, _ := loadedEngine(t, smallModel, "small", LoadOptions{})
@@ -29,7 +29,7 @@ func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	var prompt int
 	err := e.Generate(context.Background(), GenerateOptions{
 		ModelID: "small", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 12,
-		Sampling: &model.Sampler{Temp: 0.9, Seed: 5}, Logprobs: true, TopLogprobs: 4,
+		Sampling: &engine.Sampler{Temp: 0.9, Seed: 5}, Logprobs: true, TopLogprobs: 4,
 	}, func(ev Event) error {
 		switch ev.Kind {
 		case EventStarted:
@@ -51,7 +51,7 @@ func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	if len(ids) != prompt {
 		t.Fatalf("the prompt encodes to %d tokens here and %d in the generate", len(ids), prompt)
 	}
-	st := lm.m.NewState(len(ids) + len(steps) + 1)
+	st := testInstance(t, lm.m, len(ids)+len(steps)+1)
 	defer st.Close()
 	logits, err := st.Prefill(ids)
 	if err != nil {
@@ -194,7 +194,6 @@ func TestCompletionsLogprobsShape(t *testing.T) {
 	// Refused as the API refuses them.
 	for _, bad := range []string{
 		`{"model":"small","prompt":"x","logprobs":21}`,
-		`{"model":"small","prompt":"x","logprobs":2,"echo":true}`,
 		`{"model":"small","prompt":"x","n":0}`,
 	} {
 		if code := postJSON(t, c.url, "/v1/completions", bad, nil); code != 400 {

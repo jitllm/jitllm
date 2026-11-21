@@ -34,7 +34,7 @@ const Ext = ".jlm"
 // The version is a separate field, not part of the magic: "is this ours" and
 // "can we read it" are different questions, and a magic that changed per
 // revision reported a real container as "not a jlm container".
-var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
+const Magic = "JITLLM\x00\x00"
 
 // Version is the container revision, stored as a u32 at offset 8. Bump it for
 // any layout change, and add the migration from the version before it
@@ -46,11 +46,22 @@ var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
 //
 // Revisions, newest first, each of which a previous reader would misread:
 //
+//	v34  the config record may state the parts outside the blocks (Front):
+//	     the head, the input rows, the readout, the prediction blocks' entry
+//	     and head, each a graph the engine decodes
+//	v33  the config record keeps no count of prediction blocks, which are
+//	     the blocks the graph statement states past the trunk
+//	     (PredictionBlocks)
+//	v32  a pre-tokenizer stage may be its Split's own pattern (PrePattern),
+//	     the regex and its invert flag in the vocab record's last tail
+//	v31  the config record names no architecture: its first two bytes are
+//	     zero, and what a block does is what the record and the tensors state
 //	v30  the audio tower's depthwise bias folded into RoleABNShift
 //	v29  a row table (RowTable) after the page arrays, read a row at a time,
 //	     and TypeIQ4NL
-//	v28  multi-token-prediction blocks kept after the trunk (Config.NMTP) and
-//	     the roles that make one (RoleNextnEHProj and its siblings)
+//	v28  multi-token-prediction blocks kept after the trunk, counted in the
+//	     config record until v33, and the roles that make one (role codes
+//	     124 to 129, RolePredictProj and its siblings)
 //	v27  Q4_K/Q5_K sub-block scales and minima packed as a 96-bit stream, the
 //	     GGUF's own 12 bytes (kernels.ScStream)
 //	v26  a mixture's experts split out of the block page into a third page
@@ -70,7 +81,7 @@ var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
 //	     block, index) identity, a typed config and pre-tokenizer stages
 //	v5   Q6_K's payload is a 4-bit plus a 2-bit plane
 //	v3   no tensor is in GGUF layout
-const Version = 30
+const Version = 34
 
 // HeaderBytes is the fixed header. Everything after it is located by offset.
 // It is 192 because every offset in this header is u64; squeezing offsets
@@ -214,7 +225,7 @@ func (e *Entry) K() int { return int(e.Dims[0]) }
 //	12  4   reserved, zero
 //	16  8   page size ... and so on to HeaderBytes
 func (h *Header) encode(b []byte) {
-	copy(b[0:8], Magic[:])
+	copy(b[0:8], Magic)
 	le := binary.LittleEndian
 	le.PutUint32(b[8:], Version)
 	le.PutUint32(b[12:], 0)
@@ -244,6 +255,23 @@ func (h *Header) encode(b []byte) {
 	le.PutUint64(b[184:], h.ExpPageSize)
 }
 
+// VersionError is a container of another version than this build reads:
+// Upgradable where a chain of migrations reaches it in place (jitllm
+// upgrade), else only a conversion from its source does.
+type VersionError struct {
+	Have, Want uint32
+	Upgradable bool
+}
+
+func (e *VersionError) Error() string {
+	if e.Upgradable {
+		return fmt.Sprintf("jlm: container is version %d and this build reads %d; "+
+			"upgrade it in place: jitllm upgrade <file.jlm>", e.Have, e.Want)
+	}
+	return fmt.Sprintf("jlm: container is version %d and this build reads %d; "+
+		"re-run `jitllm convert` (no migration reaches it)", e.Have, e.Want)
+}
+
 // decodeHeader reads and validates the header. A container is untrusted input
 // (RULE 9), so every offset and length is checked against the file size
 // before anything slices with it: a malformed container is an error, never a
@@ -252,16 +280,11 @@ func decodeHeader(b []byte, size uint64, want uint32) (*Header, error) {
 	if len(b) < HeaderBytes {
 		return nil, fmt.Errorf("jlm: %d bytes is shorter than the %d-byte header", len(b), HeaderBytes)
 	}
-	if [8]byte(b[0:8]) != Magic {
+	if string(b[0:8]) != Magic {
 		return nil, fmt.Errorf("jlm: not a jlm container (magic %q)", b[0:8])
 	}
 	if v := binary.LittleEndian.Uint32(b[8:]); v != want {
-		if want == Version && Upgradable(v) {
-			return nil, fmt.Errorf("jlm: container is version %d and this build reads %d; "+
-				"upgrade it in place: jitllm upgrade <file.jlm>", v, Version)
-		}
-		return nil, fmt.Errorf("jlm: container is version %d and this build reads %d; "+
-			"re-run `jitllm convert` (no migration reaches it)", v, want)
+		return nil, &VersionError{Have: v, Want: want, Upgradable: want == Version && Upgradable(v)}
 	}
 	le := binary.LittleEndian
 	h := &Header{

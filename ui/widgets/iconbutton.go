@@ -31,6 +31,7 @@ type IconButton struct {
 
 // NewIconButton builds a ghost button; label names it for assistive tools.
 func NewIconButton(icon Icon, label string, onClick func(), colors IconButtonColors) *IconButton {
+	var _ widget.Lifecycle = (*IconButton)(nil)
 	b := &IconButton{icon: icon, onClick: onClick, colors: colors, size: 32, a11y: label}
 	b.SetVisible(true)
 	b.SetEnabled(true)
@@ -100,8 +101,6 @@ func (b *IconButton) Mount(ctx widget.Context) {
 
 func (b *IconButton) Unmount() {}
 
-var _ widget.Lifecycle = (*IconButton)(nil)
-
 // Status is what a status pill says: a label and the colour of its dot.
 type Status struct {
 	Label string
@@ -118,6 +117,7 @@ type StatusPill struct {
 
 // NewStatusPill builds a pill bound to sig.
 func NewStatusPill(sig state.ReadonlySignal[Status], text widget.Color, size float32) *StatusPill {
+	var _ widget.Lifecycle = (*StatusPill)(nil)
 	p := &StatusPill{sig: sig, text: text, size: size}
 	p.SetVisible(true)
 	return p
@@ -154,5 +154,3 @@ func (p *StatusPill) Mount(ctx widget.Context) {
 }
 
 func (p *StatusPill) Unmount() {}
-
-var _ widget.Lifecycle = (*StatusPill)(nil)

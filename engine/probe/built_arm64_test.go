@@ -1,0 +1,102 @@
+package probe
+
+import (
+	"github.com/jitllm/jitllm/composer/a64"
+	"github.com/jitllm/jitllm/engine/cost"
+)
+
+// The hand-built kernels the composed rates, delays, mix and call replaced,
+// the control arms of TestComposedHostRatesMatchTheBuilt.
+
+// loop is body run [0] times, the vector and general registers it uses
+// cleared first.
+func (e emitter) loop(a *a64.A64, body func()) ([]byte, error) {
+	a.LDRx(a64.X2, a64.X0, 0)
+	for r := range 16 {
+		a.MOVIzero(a64.V0 + a64.VReg(r))
+	}
+	for r := a64.X3; r <= a64.X7; r++ {
+		a.MOVimm(r, 0)
+	}
+	top := a.Label()
+	a.Bind(top)
+	body()
+	a.SUBimm(a64.X2, a64.X2, 1)
+	a.CBNZ(a64.X2, top)
+	a.RET()
+	return a.Bytes()
+}
+
+// emptyKernel returns at once.
+func (e emitter) emptyKernel() ([]byte, error) {
+	var a a64.A64
+	a.RET()
+	return a.Bytes()
+}
+
+// rateKernel runs [0] trips of eight independent instructions of class cl
+// on registers, nil for a class with no instruction measured alone. The
+// index class adds a register into four general registers.
+func (e emitter) rateKernel(cl cost.Class) ([]byte, error) {
+	var a a64.A64
+	var op func(r int)
+	switch cl {
+	case cost.ClassFloat:
+		op = func(r int) { a.FMLA4s(a64.V0+a64.VReg(r), a64.V14, a64.V15) }
+	case cost.ClassSpecial:
+		op = func(r int) { a.FDIV4s(a64.V0+a64.VReg(r), a64.V14, a64.V15) }
+	case cost.ClassInt:
+		op = func(r int) { a.ADD4s(a64.V0+a64.VReg(r), a64.V0+a64.VReg(r), a64.V15) }
+	case cost.ClassLanes:
+		op = func(r int) { a.FADDP4s(a64.V0+a64.VReg(r), a64.V0+a64.VReg(r), a64.V0+a64.VReg(r)) }
+	case cost.ClassIndex:
+		op = func(r int) { a.ADDreg(a64.X3+a64.XReg(r%4), a64.X3+a64.XReg(r%4), a64.X7) }
+	default:
+		return nil, nil
+	}
+	return e.loop(&a, func() {
+		for r := range 8 {
+			op(r)
+		}
+	})
+}
+
+// chainKernel runs [0] trips of eight instructions of class cl, each using
+// the one before's result, nil for a class rateKernel has none of.
+func (e emitter) chainKernel(cl cost.Class) ([]byte, error) {
+	var a a64.A64
+	var op func()
+	switch cl {
+	case cost.ClassFloat:
+		op = func() { a.FMLA4s(a64.V0, a64.V14, a64.V15) }
+	case cost.ClassSpecial:
+		op = func() { a.FDIV4s(a64.V0, a64.V0, a64.V15) }
+	case cost.ClassInt:
+		op = func() { a.ADD4s(a64.V0, a64.V0, a64.V15) }
+	case cost.ClassLanes:
+		op = func() { a.FADDP4s(a64.V0, a64.V0, a64.V0) }
+	case cost.ClassIndex:
+		op = func() { a.ADDreg(a64.X3, a64.X3, a64.X7) }
+	default:
+		return nil, nil
+	}
+	return e.loop(&a, func() {
+		for range 8 {
+			op()
+		}
+	})
+}
+
+// mixKernel runs [0] trips of twenty-four instructions: eight float
+// chains, eight index adds and eight loads from the argument block, so that
+// the rate is what the core issues a second rather than any class's units.
+func (e emitter) mixKernel() ([]byte, error) {
+	var a a64.A64
+	return e.loop(&a, func() {
+		for j := range 8 {
+			a.FMLA4s(a64.V0+a64.VReg(j), a64.V14, a64.V15)
+			a.ADDreg(a64.X3+a64.XReg(j%4), a64.X3+a64.XReg(j%4), a64.X7)
+			a.LDRq(a64.V16+a64.VReg(j%4), a64.X0, int32(16*(j%4)))
+		}
+	})
+}

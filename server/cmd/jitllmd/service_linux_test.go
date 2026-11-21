@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +25,7 @@ func TestServiceRunsUnderSystemd(t *testing.T) {
 		!strings.Contains(string(out), "degraded") {
 		t.Skipf("no systemd user manager here (%v: %s)", err, out)
 	}
-	bin := filepath.Join(t.TempDir(), "jitllmd")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("building jitllmd: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllmd", ".", ".")
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -37,14 +34,12 @@ func TestServiceRunsUnderSystemd(t *testing.T) {
 	l.Close()
 
 	name := fmt.Sprintf("jitllm-test-%d", os.Getpid())
-	real := thisService
-	thisService = func() (service.Service, error) {
-		s, err := real()
+	cl := cli{thisService: func() (service.Service, error) {
+		s, err := cli{}.service()
 		s.Name = name
 		return s, err
-	}
-	defer func() { thisService = real }()
-	s, err := thisService()
+	}}
+	s, err := cl.service()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +56,7 @@ func TestServiceRunsUnderSystemd(t *testing.T) {
 	models := t.TempDir()
 	do := func(args ...string) string {
 		var out bytes.Buffer
-		if err := cmdService(context.Background(), cli{out: &out, err: &out}, args); err != nil {
+		if err := cmdService(context.Background(), cli{out: &out, err: &out, thisService: cl.thisService}, args); err != nil {
 			j, _ := exec.Command("journalctl", "--user", "-u", name, "-n", "30", "--no-pager").CombinedOutput()
 			t.Fatalf("jitllmd service %v: %v\n%s\njournal:\n%s", args, err, out.String(), j)
 		}

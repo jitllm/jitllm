@@ -10,7 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -171,8 +172,8 @@ type loadOpts struct {
 func loadModel(ctx context.Context, c cli, cn *conn, o loadOpts) error {
 	req := &v1.LoadModelRequest{Path: o.path, ModelId: o.id, DeviceIds: csv(o.devices)}
 	if o.maxmem != "" {
-		// tier.ParseBytes, so -maxmem means what it means to `jitllm run`.
-		b, err := tier.ParseBytes(o.maxmem)
+		// gpu.ParseBytes, so -maxmem means what it means to `jitllm run`.
+		b, err := gpu.ParseBytes(o.maxmem)
 		if err != nil {
 			return usagef("-maxmem: %v", err)
 		}
@@ -206,12 +207,12 @@ func listModels(w io.Writer, m *v1.ListModelsResponse) {
 	loaded := m.GetLoaded()
 	fmt.Fprintf(w, "\nloaded (%d)\n", len(loaded))
 	for _, lm := range loaded {
-		where := "host"
+		where := nn.CPU
 		if ids := lm.GetDefaultDeviceIds(); len(ids) > 0 {
 			where = strings.Join(ids, ",")
 		}
-		fmt.Fprintf(w, "  %-24s %-22s %-10s %3d blocks  %6d ctx  page %-11s  %d session(s)  [%s]\n",
-			lm.GetModelId(), lm.GetName(), lm.GetArchitecture(), lm.GetBlockCount(),
+		fmt.Fprintf(w, "  %-24s %-22s %3d blocks  %6d ctx  page %-11s  %d session(s)  [%s]\n",
+			lm.GetModelId(), lm.GetName(), lm.GetBlockCount(),
 			lm.GetContextLength(), bytesOf(lm.GetPageSize()), lm.GetSessionCount(), where)
 	}
 	files := m.GetFiles()
@@ -256,7 +257,6 @@ func describeModel(w io.Writer, m *v1.ModelInfo) {
 	}
 	fmt.Fprintf(w, "\n%s\n", m.GetModelId())
 	fmt.Fprintf(w, "  path         %s\n", m.GetPath())
-	fmt.Fprintf(w, "  architecture %s\n", m.GetArchitecture())
 	fmt.Fprintf(w, "  geometry     %d block(s), %d embd, %d ctx, %d vocab\n",
 		m.GetBlockCount(), m.GetEmbeddingDim(), m.GetContextLength(), m.GetVocabSize())
 	if m.GetExpertCount() > 0 {
@@ -282,7 +282,7 @@ func describeModel(w io.Writer, m *v1.ModelInfo) {
 		fmt.Fprintf(w, "  chat         NO -- a -chat request against this model is refused rather "+
 			"than run as a raw completion\n")
 	}
-	where := "host"
+	where := nn.CPU
 	if ids := m.GetDefaultDeviceIds(); len(ids) > 0 {
 		where = strings.Join(ids, ",")
 	}

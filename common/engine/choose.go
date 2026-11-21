@@ -28,11 +28,6 @@ type Driver interface {
 	Close()
 }
 
-var (
-	_ Driver = (*Engine)(nil)
-	_ Driver = (*Remote)(nil)
-)
-
 // The engine settings. The zero value is Auto.
 const (
 	// ModeAuto connects to a jitllmd that answers at the address and runs

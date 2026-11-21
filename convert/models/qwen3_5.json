@@ -1,0 +1,351 @@
+{
+  "describe": {"qwen35": "Qwen3.5 dense", "qwen35moe": "Qwen3.5 and Qwen3.6 mixtures", "qwen3next": "Qwen3-Next 80B-A3B", "qwen4exp": "Qwen3.8-Flash-Next (text)", "clef": "Clef-Flash (decision model, /v1/systemone)", "Qwen3_5ForConditionalGeneration": "Qwen3.5 dense and Qwen3.8's text model, by convert/models/qwen3_5.json"},
+  "classes": ["Qwen3_5ForConditionalGeneration"],
+  "gguf": ["qwen35", "qwen35moe", "qwen3next", "qwen4exp", "clef"],
+  "container": {
+    "qwen3next": {"stop": ["<|im_end|>", "<|endoftext|>"], "tensors": {"sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "ff_exp": "expert_feed_forward_length"},
+                  "block": {"attn_qkv.weight": [
+                     {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "attn_qkv.bias": [
+                     {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "ffn_gate_up_exps.weight": [
+                     {"role": "ffn_gate_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "0", "size.ff_exp"]}]},
+                     {"role": "ffn_up_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "size.ff_exp", "size.ff_exp"]}]}]},
+                  "block_linear": {"attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+      "retarget": [
+                 {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
+      "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]},
+    "qwen35": {"stop": ["<|im_end|>", "<|endoftext|>"], "tensors": {"fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]},
+                  "sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))"},
+                  "block": {"attn_qkv.weight": [
+                     {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "attn_qkv.bias": [
+                     {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}]},
+                  "block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight", "attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+      "retarget": [
+                 {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
+      "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]},
+    "qwen35moe": {"stop": ["<|im_end|>", "<|endoftext|>"], "tensors": {"fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]},
+                  "sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "ff_exp": "expert_feed_forward_length"},
+                  "block": {"attn_qkv.weight": [
+                     {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "attn_qkv.bias": [
+                     {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "ffn_gate_up_exps.weight": [
+                     {"role": "ffn_gate_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "0", "size.ff_exp"]}]},
+                     {"role": "ffn_up_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "size.ff_exp", "size.ff_exp"]}]}]},
+                  "block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight", "attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+      "retarget": [
+                 {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
+      "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]},
+    "qwen4exp": {"tensors": {"fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]},
+                  "sizes": {"q": "2 * at(attention.head_count, block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "k": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.key_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "v": "at(attention.head_count_kv ?? (attention.head_count), block) * (attention.value_length ?? (embedding_length / at(attention.head_count, 0)))",
+                            "ff_exp": "expert_feed_forward_length"},
+                  "block": {"attn_qkv.weight": [
+                     {"role": "attn_q.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.weight", "do": [{"reshape": ["size.q + size.k + size.v", "embedding_length"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "attn_qkv.bias": [
+                     {"role": "attn_q.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "0", "size.q"]}]},
+                     {"role": "attn_k.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q", "size.k"]}]},
+                     {"role": "attn_v.bias", "do": [{"reshape": ["size.q + size.k + size.v"]}, {"slice": [0, "size.q + size.k", "size.v"]}]}],
+                            "ffn_gate_up_exps.weight": [
+                     {"role": "ffn_gate_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "0", "size.ff_exp"]}]},
+                     {"role": "ffn_up_exps.weight", "do": [{"reshape": ["expert_count", "2 * size.ff_exp", "embedding_length"]}, {"slice": [1, "size.ff_exp", "size.ff_exp"]}]}]},
+                  "block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight", "attn_qkv.weight": {"role": "attn_qkv.weight"}}},
+      "retarget": [
+                 {"from": "per_layer_token_embd", "to": "ngram_token_embd", "why": "its n-gram table carries Gemma's per-layer table name and is a row table of hashed n-grams"}],
+      "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}],
+      "delta_gate": "sigmoid",
+      "streams": {"count": "src['hyper_connection.count'] | default(0)", "low_rank": "src['hyper_connection.low_rank'] | default(0)"},
+      "indexer": {"heads": "src['attention.indexer.head_count'] | default(0)", "key_width": "src['attention.indexer.key_length'] | default(0)", "top_k": "src['attention.indexer.top_k'] | default(0)"},
+      "qsa_ratios": "src['attention.compress_ratios'] | default(none)", "ngram": true},
+    "clef": {"tensors": {"block_linear": {"ssm_beta.weight": "ssm_ba.weight", "ssm_alpha.weight": "ssm_ba.weight"},
+                  "fuse": {"ssm_ba.weight": ["ssm_beta.weight", "ssm_alpha.weight"]},
+                  "joined": {"ssm_ba.weight": [{"reshape": [2, "ssm.group_count", -1, "embedding_length"]}, {"transpose": [1, 0, 2, 3]}, {"reshape": [-1, "embedding_length"]}]}},
+      "readouts": ["clef"], "retarget": [
+                 {"from": "post_attn_norm", "to": "ffn_norm", "why": "its post_attention_norm is the FFN's input norm, which it ships under no other name"}],
+      "rope_layout": "interleaved", "rope_sections": "src['rope.dimension_sections'] | default([])", "flags": {"rope_neox": "true", "qk_norm": "true", "attention_output_gate": "true", "delta_key_tiled": "(src['ssm.time_step_rank'] | default(0)) > (src['ssm.group_count'] | default(0))"}, "recurrent": {"conv_kernel": "src['ssm.conv_kernel'] | default(0)", "groups": "src['ssm.group_count'] | default(0)", "inner": "src['ssm.inner_size'] | default(0)", "state_size": "src['ssm.state_size'] | default(0)", "heads_v": "src['ssm.time_step_rank'] | default(0)"}, "layers": [{"tensors": ["ssm_conv1d.weight"], "kind": "linear_attention"}]}
+  },
+  "config": {
+    "root": "text_config",
+    "arch": "qwen3next",
+    "keys": {
+      "block_count":                      {"uint": "num_hidden_layers"},
+      "context_length":                   {"uint": "max_position_embeddings ?? 32768"},
+      "embedding_length":                 {"uint": "hidden_size"},
+      "feed_forward_length":              {"uint": "intermediate_size"},
+      "attention.head_count":             {"uint": "num_attention_heads"},
+      "attention.head_count_kv":          {"uint": "num_key_value_heads"},
+      "attention.key_length":             {"uint": "head_dim"},
+      "attention.value_length":           {"uint": "head_dim"},
+      "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
+      "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta"},
+      "rope.dimension_count":             {"uint": "head_dim * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 0.25)"},
+      "rope.dimension_sections":          {"int32s": "rope_parameters.mrope_section ?? [11, 11, 10]"},
+      "ssm.conv_kernel":                  {"uint": "linear_conv_kernel_dim"},
+      "ssm.state_size":                   {"uint": "linear_key_head_dim"},
+      "ssm.group_count":                  {"uint": "linear_num_key_heads"},
+      "ssm.time_step_rank":               {"uint": "linear_num_value_heads"},
+      "ssm.inner_size":                   {"uint": "linear_value_head_dim * linear_num_value_heads"}
+    },
+    "vocab": "vocab_size",
+    "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? $.tie_word_embeddings ?? false"},
+    "layers": {"key": "layer_types", "kinds": {"linear_attention": "recurrent", "full_attention": "attention"}},
+    "activation": "hidden_act ?? 'silu'",
+    "rope_scaling": "rope_parameters ?? rope_scaling",
+    "flags": {"attention_output_gate": "true"}
+  },
+  "tensors": {
+    "block_prefix": "model.language_model.layers.",
+    "model": {
+      "model.language_model.embed_tokens.weight": "token_embd.weight",
+      "model.language_model.norm.weight":         {"role": "output_norm.weight", "do": [{"map": "x + 1"}]},
+      "lm_head.weight":                           "output.weight"
+    },
+    "block": {
+      "input_layernorm.weight":          {"role": "attn_norm.weight", "do": [{"map": "x + 1"}]},
+      "post_attention_layernorm.weight": {"role": "ffn_norm.weight", "do": [{"map": "x + 1"}]},
+      "self_attn.q_proj.weight":         "attn_q.weight",
+      "self_attn.k_proj.weight":         "attn_k.weight",
+      "self_attn.v_proj.weight":         "attn_v.weight",
+      "self_attn.o_proj.weight":         "attn_output.weight",
+      "self_attn.q_norm.weight":         {"role": "attn_q_norm.weight", "do": [{"map": "x + 1"}]},
+      "self_attn.k_norm.weight":         {"role": "attn_k_norm.weight", "do": [{"map": "x + 1"}]},
+      "linear_attn.in_proj_qkv.weight":  "attn_qkv.weight",
+      "linear_attn.in_proj_z.weight":    "attn_gate.weight",
+      "linear_attn.conv1d.weight":       {"role": "ssm_conv1d.weight",
+                                          "do": [{"reshape": [-1, "linear_conv_kernel_dim"]}]},
+      "linear_attn.A_log":               {"role": "ssm_a", "do": [{"map": "-exp(x)"}]},
+      "linear_attn.dt_bias":             "ssm_dt.bias",
+      "linear_attn.norm.weight":         "ssm_norm.weight",
+      "linear_attn.out_proj.weight":     "ssm_out.weight",
+      "mlp.gate_proj.weight":            "ffn_gate.weight",
+      "mlp.up_proj.weight":              "ffn_up.weight",
+      "mlp.down_proj.weight":            "ffn_down.weight"
+    },
+    "gather": [
+      {"role": "ssm_ba.weight", "from": ["linear_attn.in_proj_b.weight", "linear_attn.in_proj_a.weight"],
+       "do": [{"stack": 0}, {"reshape": [2, "linear_num_key_heads", -1]}, {"transpose": [1, 0, 2]},
+              {"reshape": ["2 * linear_num_value_heads", -1]}]}
+    ],
+    "ignore_prefix": ["model.visual.", "mtp."]
+  },
+  "graph": {
+    "block": [
+      {"op": "in",         "out": "x", "width": "embd"},
+      {"op": "streams_in", "if": "streams > 0", "in": "x", "out": "xs"},
+      {"op": "stream_read", "if": "stream_pre", "of": "pre", "streams": "xs", "in": ["x", "x"], "out": "pre"},
+      {"op": "stream_writes", "if": "stream_pre", "of": "pre", "streams": "xs", "in": "pre", "ex": "pre.ex", "out": "xs"},
+      {"op": "stream_at",  "if": "stream_pre", "streams": "xs", "at": "0", "out": "x"},
+      {"op": "stream_read", "if": "streams > 0", "of": "attn", "streams": "xs", "in": ["x", "x"], "out": "ain"},
+      {"op": "let",        "if": "streams == 0", "in": "x", "out": "ain"},
+      {"op": "let",        "if": "not stored('attn_norm')", "in": "ain", "out": "n"},
+      {"op": "norm",       "if": "stored('attn_norm')", "in": "ain", "w": "attn_norm", "out": "n"},
+      {"op": "matvec",     "if": "linear", "in": "n", "w": "attn_qkv", "rows": "chans", "out": "mixed"},
+      {"op": "emit",       "if": "linear", "kind": "state_conv", "in": "mixed", "attr": {"Taps": "conv"}, "advances": ["rec.conv"], "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
+      {"op": "silu",       "if": "linear", "name": "conv.act", "in": "conv", "out": "act"},
+      {"op": "emit",       "if": "linear", "kind": "slice", "in": "act", "attr": {"Offset": "0", "Width": "k_heads * k_dim"}, "outs": [{"name": "q", "width": "k_heads * k_dim"}], "out": "q"},
+      {"op": "emit",       "if": "linear", "kind": "slice", "in": "act", "attr": {"Offset": "k_heads * k_dim", "Width": "k_heads * k_dim"}, "outs": [{"name": "k", "width": "k_heads * k_dim"}], "out": "k"},
+      {"op": "emit",       "if": "linear", "kind": "slice", "in": "act", "attr": {"Offset": "2 * k_heads * k_dim", "Width": "v_heads * v_dim"}, "outs": [{"name": "v", "width": "v_heads * v_dim"}], "out": "v"},
+      {"op": "emit",       "if": "linear", "kind": "head_norm", "in": "k", "attr": {"Eps": "eps / k_dim", "HeadDim": "k_dim"}, "outs": [{"name": "k.unit", "width": "k_heads * k_dim"}], "out": "k"},
+      {"op": "emit",       "if": "linear", "kind": "map", "in": "k", "attr": {"Fn": "'mul'", "Const": "delta_scale"}, "outs": [{"name": "k.unit.scaled", "width": "k_heads * k_dim"}], "out": "k"},
+      {"op": "emit",       "if": "linear", "kind": "head_norm", "in": "q", "attr": {"Eps": "eps / k_dim", "HeadDim": "k_dim"}, "outs": [{"name": "q.unit", "width": "k_heads * k_dim"}], "out": "q"},
+      {"op": "emit",       "if": "linear", "kind": "map", "in": "q", "attr": {"Fn": "'mul'", "Const": "delta_scale"}, "outs": [{"name": "q.unit.scaled", "width": "k_heads * k_dim"}], "out": "q"},
+      {"op": "emit",       "if": "linear", "kind": "map", "in": "q", "attr": {"Fn": "'mul'", "Const": "delta_scale"}, "outs": [{"name": "q.scaled", "width": "k_heads * k_dim"}], "out": "q"},
+      {"op": "matvec",     "if": "linear", "in": "n", "w": "attn_gate", "rows": "v_heads * v_dim", "out": "z"},
+      {"op": "matvec",     "if": "linear", "in": "n", "w": "ssm_ba", "rows": "2 * v_heads", "out": "ba"},
+      {"op": "emit",       "if": "linear", "kind": "slice", "in": "ba", "attr": {"HeadDim": "2 * (v_heads // k_heads)", "Offset": "0", "Width": "v_heads // k_heads"}, "outs": [{"name": "beta.logit", "width": "v_heads"}], "out": "braw"},
+      {"op": "emit",       "if": "linear", "kind": "slice", "in": "ba", "attr": {"HeadDim": "2 * (v_heads // k_heads)", "Offset": "v_heads // k_heads", "Width": "v_heads // k_heads"}, "outs": [{"name": "decay.logit", "width": "v_heads"}], "out": "alpha"},
+      {"op": "stated",     "if": "linear", "of": "delta_decay", "in": "alpha", "out": "decay"},
+      {"op": "emit",       "if": "linear", "kind": "map", "in": "braw", "attr": {"Fn": "'sigmoid'"}, "outs": [{"name": "beta", "width": "v_heads"}], "out": "beta"},
+      {"op": "emit",       "if": "linear", "kind": "state_scan", "in": ["q", "k", "v", "decay", "beta"], "advances": ["rec.state"], "attr": {"NHead": "v_heads", "NKVHead": "k_heads", "HeadDim": "k_dim", "Span": "state_span", "Update": "5"}, "axes": ["'cycle col' if tiled else 'group col'", "'cycle col' if tiled else 'group col'", "'head row'", "'head col' if stored('ssm_f_b') else 'head'", "'head'"], "terms": [{"fn": "mul", "args": [{"state": true}, {"in": 3}]}, {"fn": "mul", "args": [{"term": 0}, {"in": 1}]}, {"fn": "sub", "args": [{"in": 2}, {"sum": 1}]}, {"fn": "mul", "args": [{"term": 2}, {"in": 4}]}, {"fn": "mul", "args": [{"in": 1}, {"term": 3}]}, {"fn": "add", "args": [{"term": 0}, {"term": 4}]}, {"fn": "mul", "args": [{"term": 5}, {"in": 0}]}], "outs": [{"name": "delta", "width": "v_heads * v_dim"}], "out": "o"},
+      {"op": "head_norm",  "if": "linear", "in": "o", "w": "ssm_norm", "width": "v_dim", "out": "o"},
+      {"op": "stated",     "if": "linear", "of": "delta_gate", "in": ["z", "o"], "out": "mix"},
+      {"op": "matvec",     "if": "linear", "in": "mix", "w": ["ssm_out", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "matvec",     "if": "not linear", "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "2 * heads * head_dim", "out": "qq"},
+      {"op": "matvec",     "if": "not linear", "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "kv_heads * head_dim", "out": "k"},
+      {"op": "matvec",     "if": "not linear", "in": "n", "w": ["attn_v", "attn_v.bias?"], "rows": "kv_heads * head_dim", "out": "v"},
+      {"op": "emit",       "if": "not linear", "kind": "slice", "in": "qq", "attr": {"HeadDim": "2 * head_dim", "Offset": "0", "Width": "head_dim"}, "outs": [{"name": "q", "width": "heads * head_dim"}], "out": "q"},
+      {"op": "emit",       "if": "not linear", "kind": "slice", "in": "qq", "attr": {"HeadDim": "2 * head_dim", "Offset": "head_dim", "Width": "head_dim"}, "outs": [{"name": "gate", "width": "heads * head_dim"}], "out": "gate"},
+      {"op": "head_norm",  "if": "not linear", "in": "q", "w": "attn_q_norm", "out": "q"},
+      {"op": "head_norm",  "if": "not linear", "in": "k", "w": "attn_k_norm", "out": "k"},
+      {"op": "rope",       "if": "not linear and rope_at", "in": "q", "name": "q.rope", "out": "q"},
+      {"op": "rope",       "if": "not linear and rope_at", "in": "k", "name": "k.rope", "out": "k"},
+      {"op": "indexer",    "if": "not linear and selects", "in": ["n", "n"], "out": "ix"},
+      {"op": "emit",       "if": "not linear and selects", "kind": "concat", "in": ["k", "ix.key"], "outs": [{"name": "k.row", "width": "kv_heads * head_dim + key_width"}], "out": "k"},
+      {"op": "emit",       "if": "not linear and selects", "kind": "map", "in": "ix.key", "attr": {"Fn": "'mul'"}, "outs": [{"name": "v.pad", "width": "key_width"}], "out": "vpad"},
+      {"op": "emit",       "if": "not linear and selects", "kind": "concat", "in": ["v", "vpad"], "outs": [{"name": "v.row", "width": "kv_heads * head_dim + key_width"}], "out": "v"},
+      {"op": "kv_append",  "if": "not linear", "in": ["k", "v"], "out": "kv"},
+      {"op": "select",     "if": "not linear and selects and select_weighted", "in": ["ix.query", "ix.weight"], "hist": "kv", "attr": {"Offset": "kv_heads * head_dim", "Width": "kv_heads * head_dim + key_width"}, "out": "sel"},
+      {"op": "select",     "if": "not linear and selects and not select_weighted", "in": "ix.query", "hist": "kv", "attr": {"Offset": "kv_heads * head_dim", "Width": "kv_heads * head_dim + key_width"}, "out": "sel"},
+      {"op": "attend",     "if": "not linear and not selects", "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
+      {"op": "attend",     "if": "not linear and selects", "in": ["q", "sel"], "hist": "kv", "w": "attn_sinks?", "attr": {"Width": "kv_heads * head_dim + key_width"}, "out": "att"},
+      {"op": "sigmoid_mul", "if": "not linear", "name": "gated", "in": ["gate", "att"], "out": "att"},
+      {"op": "matvec",     "if": "not linear", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "stream_writes", "if": "attn_writes", "of": "attn", "streams": "xs", "in": "o", "ex": "ain.ex", "out": "cur"},
+      {"op": "add",        "if": "not attn_writes", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
+      {"op": "stream_read", "if": "attn_writes", "of": "ffn", "streams": "cur", "in": ["x", "x"], "out": "fin"},
+      {"op": "let",        "if": "not attn_writes", "in": "h", "out": "fin"},
+      {"op": "let",        "if": "not stored('ffn_norm')", "in": "fin", "out": "m"},
+      {"op": "norm",       "if": "stored('ffn_norm')", "in": "fin", "w": "ffn_norm", "out": "m"},
+      {"op": "matvec",     "if": "not moe", "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
+      {"op": "matvec",     "if": "not moe", "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
+      {"op": "act",        "if": "not moe", "in": ["g", "u"], "width": "ffn", "out": "a"},
+      {"op": "matvec",     "if": "not moe", "in": "a", "w": ["ffn_down", "ffn_down.bias?"], "rows": "embd", "out": "d"},
+      {"op": "mark",       "if": "moe", "out": "routed"},
+      {"op": "matvec",     "if": "moe", "in": "m", "w": ["ffn_gate_inp", "ffn_gate_inp.bias?"], "rows": "experts", "out": "logits"},
+      {"op": "stated",     "if": "moe", "of": "router_score", "name": "router.score", "in": "logits", "width": "experts", "out": "score"},
+      {"op": "let",        "if": "moe", "in": "score", "out": "choose"},
+      {"op": "emit",       "if": "moe", "kind": "top_k", "in": "choose", "attr": {"TopK": "experts_used"}, "outs": [{"name": "router.sel", "width": "experts_used", "elem": "u32", "as": "sel"}, {"name": "router.best", "width": "experts_used"}]},
+      {"op": "emit",       "if": "moe", "kind": "take", "in": ["score", "sel"], "outs": [{"name": "router.w", "width": "experts_used"}], "out": "w"},
+      {"op": "emit",       "if": "moe and expert_norm", "kind": "reduce", "in": "w", "attr": {"Fn": "'add'"}, "outs": [{"name": "router.wsum", "width": "1"}], "out": "ws"},
+      {"op": "emit",       "if": "moe and expert_norm", "kind": "map", "in": "ws", "attr": {"Fn": "'add'", "Const": "1e-20"}, "outs": [{"name": "router.sum", "width": "1"}], "out": "ws"},
+      {"op": "emit",       "if": "moe and expert_norm", "kind": "map", "in": ["w", "ws"], "attr": {"Fn": "'div'"}, "outs": [{"name": "router.wn", "width": "experts_used"}], "out": "w"},
+      {"op": "emit",       "if": "moe", "kind": "tile", "in": "m", "attr": {"Span": "embd"}, "outs": [{"name": "experts.in", "width": "experts_used * embd"}], "out": "ein"},
+      {"op": "emit", "if": "(moe) and stored('ffn_gate_exps')", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.gate", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_gate_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_gate_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eg"},
+      {"op": "emit",       "if": "moe", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.up", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_up_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_up_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eu"},
+      {"op": "act", "if": "(moe) and stored('ffn_gate_exps')", "name": "experts.act", "in": ["eg", "eu"], "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
+      {"op": "act", "if": "(moe) and not stored('ffn_gate_exps')", "name": "experts.act", "in": "eu", "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
+      {"op": "emit",       "if": "moe", "kind": "expert_matvec", "in": ["ea", "sel"], "outs": [{"name": "experts.down", "width": "experts_used * embd"}], "bind": [{"w": "ffn_down_exps", "k": "rows('ffn_up_exps')", "rows": "embd", "sheets": "experts"}, {"w": "ffn_down_exps.bias?", "k": "embd", "rows": "experts"}], "out": "ed"},
+      {"op": "emit",       "if": "moe", "kind": "map", "in": ["ed", "w"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "experts.weighted", "width": "experts_used * embd"}], "out": "ed"},
+      {"op": "split_sum",  "if": "moe", "in": "ed", "parts": "experts_used", "name": "experts.out", "out": "d"},
+      {"op": "routed",     "if": "moe", "from": "routed"},
+      {"op": "matvec",     "if": "moe", "in": "m", "w": "ffn_gate_shexp", "rows": "rows('ffn_up_shexp')", "out": "sg"},
+      {"op": "matvec",     "if": "moe", "in": "m", "w": "ffn_up_shexp", "rows": "rows('ffn_up_shexp')", "out": "su"},
+      {"op": "act",        "if": "moe", "name": "shared.act", "in": ["sg", "su"], "width": "rows('ffn_up_shexp')", "out": "sa"},
+      {"op": "matvec",     "if": "moe", "in": "sa", "w": "ffn_down_shexp", "rows": "embd", "out": "so"},
+      {"op": "emit",       "if": "moe", "kind": "map", "in": "m", "attr": {"Fn": "'mul'"}, "bind": [{"w": "ffn_gate_inp_shexp"}], "outs": [{"name": "shared.gate", "width": "embd"}], "out": "sl"},
+      {"op": "emit",       "if": "moe", "kind": "reduce", "in": "sl", "attr": {"Fn": "'add'"}, "outs": [{"name": "shared.logit", "width": "1"}], "out": "sl"},
+      {"op": "sigmoid_mul", "if": "moe", "name": "shared.gated", "in": ["sl", "so"], "out": "so"},
+      {"op": "add",        "if": "moe", "in": ["d", "so"], "out": "d"},
+      {"op": "stream_writes", "if": "ffn_writes", "of": "ffn", "streams": "cur", "in": "d", "ex": "fin.ex", "out": "fout"},
+      {"op": "add",        "if": "not ffn_writes", "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "out",        "if": "not ffn_writes", "in": "y"},
+      {"op": "out_streams", "if": "ffn_writes", "streams": "fout"}
+    ],
+    "streams": {
+      "if": "hc_rank > 0 and hc_streams > 1",
+      "count": "hc_streams",
+      "defs": {
+        "hyper": [
+          {"op": "concat",   "in": ["@range(inputs)"]},
+          {"op": "rms_norm", "span": "embd", "eps": "eps"},
+          {"op": "scale",    "w": ["$0"], "out": "xn"},
+          {"op": "linear",   "w": ["$1"]},
+          {"op": "stated",   "width": "hc_rank", "expr": "x * (1 / streams)"},
+          {"op": "stated",   "width": "hc_rank", "expr": "x * sigmoid(x)"},
+          {"op": "linear",   "w": ["$2"], "out": "u"},
+          {"op": "stated",   "in": ["u", "xn"], "width": "streams * embd", "expr": "sigmoid(x) * y", "out": "g"},
+          {"op": "slice",    "in": ["g"], "width": "embd", "out": "acc"},
+          {"op": "each", "var": "k", "start": "1", "count": "streams", "ops": [
+            {"op": "slice", "in": ["g"], "offset": "k * embd", "width": "embd", "out": "gk"},
+            {"op": "add",   "in": ["acc", "gk"], "out": "acc"}
+          ]},
+          {"op": "stated",   "in": ["acc"], "width": "embd", "expr": "x * (1 / streams)"}
+        ]
+      },
+      "expand": {"copy": true},
+      "block": {
+        "pre": {
+          "if": "ngram_block > 0 and layer + 1 == ngram_block",
+          "from": ["@range(streams)"],
+          "read": [
+            {"op": "ngram_rows", "in": [], "w": ["ngram_token_embd"], "span": "ngram",
+             "width": "(ngram - 1) * ngram_heads * ngram_row", "out": "emb",
+             "hash": {"eos": "ngram_eos", "image": "ngram_image", "heads_per": "ngram_heads",
+                      "mul": "ngram_mul", "off": "ngram_off", "voc": "ngram_voc"}},
+            {"op": "linear",   "w": ["ple_key"]},
+            {"op": "rms_norm", "span": "embd", "eps": "eps"},
+            {"op": "scale",    "w": ["ple_norm_key"], "out": "kn"},
+            {"op": "linear",   "in": ["emb"], "w": ["ple_value"], "out": "val"},
+            {"op": "concat",   "in": ["@range(inputs)"]},
+            {"op": "rms_norm", "span": "embd", "eps": "eps"},
+            {"op": "scale",    "w": ["ple_norm_query"], "out": "qn"},
+            {"op": "stated",   "in": ["kn", "qn"], "width": "streams * embd", "expr": "x * y"},
+            {"op": "sum",      "span": "embd"},
+            {"op": "stated",   "width": "streams", "expr": "sigmoid(sign * mag)", "out": "gate",
+             "with": [["s", "x * (1 / sqrt(embd))"], ["mag", "sqrt(max(abs(s), 1e-6))"], ["sign", "(0 < s) - (s < 0)"]]},
+            {"op": "each", "var": "k", "count": "streams", "ops": [
+              {"op": "slice",  "in": ["gate"], "offset": "k", "width": "1", "out": "gk"},
+              {"op": "stated", "in": ["gk", "val"], "width": "embd", "expr": "x * y", "out": "gv[k]"}
+            ]},
+            {"op": "concat",    "in": ["gv[range(streams)]"], "out": "gvs"},
+            {"op": "rms_norm",  "span": "embd", "eps": "eps"},
+            {"op": "scale",     "w": ["ple_norm_conv"]},
+            {"op": "tail_conv", "w": ["ple_conv1d"], "span": "ngram_conv", "offset": "ngram", "width": "streams * embd"},
+            {"op": "stated",    "width": "streams * embd", "expr": "x * sigmoid(x)", "out": "act"},
+            {"op": "add",       "in": ["gvs", "act"]}
+          ],
+          "writes": {"var": "k", "ops": [
+            {"op": "slice", "in": ["in1"], "offset": "k * embd", "width": "embd", "out": "p"},
+            {"op": "add",   "in": ["in", "p"]}
+          ]}
+        },
+        "attn": {
+          "from": ["@range(streams)"],
+          "read": [
+            {"op": "call",   "def": "hyper", "w": ["hc_attn_norm", "hc_attn_down", "hc_attn_up"], "out": "h"},
+            {"op": "linear", "in": ["h.xn"], "w": ["hc_attn_inject"]},
+            {"op": "stated", "width": "streams", "expr": "x * (1 / streams)"},
+            {"op": "stated", "width": "streams", "expr": "sigmoid(x)"},
+            {"op": "stated", "width": "streams", "expr": "x * 2", "out": "w"},
+            {"op": "let",    "in": ["h"]}
+          ],
+          "exports": ["w"],
+          "writes": {"var": "k", "ops": [
+            {"op": "slice",  "in": ["in2"], "offset": "k", "width": "1", "out": "wk"},
+            {"op": "stated", "in": ["wk", "in1"], "width": "embd", "expr": "x * y", "out": "o"},
+            {"op": "add",    "in": ["in", "o"]}
+          ]}
+        },
+        "ffn": {
+          "from": ["@range(streams)"],
+          "read": [
+            {"op": "call",   "def": "hyper", "w": ["hc_ffn_norm", "hc_ffn_down", "hc_ffn_up"], "out": "h"},
+            {"op": "linear", "in": ["h.xn"], "w": ["hc_ffn_inject"]},
+            {"op": "stated", "width": "streams", "expr": "x * (1 / streams)"},
+            {"op": "stated", "width": "streams", "expr": "sigmoid(x)"},
+            {"op": "stated", "width": "streams", "expr": "x * 2", "out": "w"},
+            {"op": "let",    "in": ["h"]}
+          ],
+          "exports": ["w"],
+          "writes": {"var": "k", "ops": [
+            {"op": "slice",  "in": ["in2"], "offset": "k", "width": "1", "out": "wk"},
+            {"op": "stated", "in": ["wk", "in1"], "width": "embd", "expr": "x * y", "out": "o"},
+            {"op": "add",    "in": ["in", "o"]}
+          ]}
+        }
+      },
+      "head": {
+        "from": ["@range(streams)"],
+        "read": [{"op": "call", "def": "hyper", "w": ["output_hc_norm", "output_hc_down", "output_hc_up"]}]
+      }
+    }
+  }
+}

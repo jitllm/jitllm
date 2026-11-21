@@ -14,15 +14,15 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 // These gates run the six Connect services against a REAL engine: a container
-// is opened, sessions hold model.States, and tokens are decoded. The fake
+// is opened, sessions hold model.instances, and tokens are decoded. The fake
 // backend in fake_test.go cannot reach any of that -- the services other than
 // InferenceService take an *Engine, not a Backend.
 //
@@ -44,7 +44,7 @@ func modelPath(t *testing.T, name string) string {
 	p := testmodels.Path(name)
 	fresh.Must(t, p)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	return p
 }
@@ -53,7 +53,7 @@ func modelPath(t *testing.T, name string) string {
 // something to report without opening a driver.
 func oneCardProbe() ([]DeviceInfo, error) {
 	return []DeviceInfo{
-		{ID: "cpu", Backend: "cpu", Kind: KindHost, Name: "host", TotalMemory: 32 << 30,
+		{ID: "cpu", Backend: "cpu", Kind: KindCPU, Name: "host", TotalMemory: 32 << 30,
 			CountsTowardHostBudget: true, Available: true},
 		{ID: "cuda:0", Backend: "cuda", Kind: KindDiscrete, Name: "fake card",
 			TotalMemory: 4 << 30, FreeMemory: 3 << 30, Available: true, PhysicalID: "uuid-0"},
@@ -96,7 +96,7 @@ func loadedEngine(t *testing.T, name, id string, o LoadOptions) (*Engine, *Loade
 	// The model directory is the whole test model disk: with on-demand loads
 	// on, a request naming any of its files would load it. These gates are
 	// about the one model they load; library_test.go gates the folder.
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", NoOnDemand: true})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", NoOnDemand: true}))
 	t.Cleanup(e.Close)
 	o.Path, o.ModelID = path, id
 	lm, err := e.LoadModel(o)
@@ -145,9 +145,8 @@ func TestModelServiceDescribesARealContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	mi := got.Msg.GetModel()
-	if mi.GetName() != "stories260K" || mi.GetArchitecture() != "llama" || mi.GetBlockCount() != 5 {
-		t.Fatalf("GetModel says name=%q arch=%q blocks=%d, want stories260K/llama/5",
-			mi.GetName(), mi.GetArchitecture(), mi.GetBlockCount())
+	if mi.GetName() != "stories260K" || mi.GetBlockCount() != 5 {
+		t.Fatalf("GetModel says name=%q blocks=%d, want stories260K, 5 blocks", mi.GetName(), mi.GetBlockCount())
 	}
 	// A plain llama has every block attention and none recurrent.
 	if mi.GetAttentionBlocks() != 5 || mi.GetLinearBlocks() != 0 {
@@ -387,7 +386,7 @@ func TestASessionKeepsItsSequenceAcrossGenerates(t *testing.T) {
 	}
 	s := cr.Msg.GetSession()
 	if s.GetSessionId() != "a" || s.GetMaxSeq() != 128 || s.GetPosition() != 0 ||
-		s.GetHostBlocks() != 5 || s.GetDeviceBlocks() != 0 {
+		s.GetCpuBlocks() != 5 || s.GetDeviceBlocks() != 0 {
 		t.Fatalf("a fresh host session reads %+v", s)
 	}
 	// KV commits as the context grows, so a fresh session is charged nothing
@@ -481,7 +480,7 @@ func TestASessionKeepsItsSequenceAcrossGenerates(t *testing.T) {
 	wantCode(t, "a second CloseSession", err, connect.CodeNotFound)
 }
 
-// TestListSessionsFiltersByModelAndDevice. A host-only session queues on the
+// TestListSessionsFiltersByModelAndDevice. A CPU-only session queues on the
 // host's gate, so it lists under "cpu" and not under a card it never touches.
 func TestListSessionsFiltersByModelAndDevice(t *testing.T) {
 	_, _, c := loadedEngine(t, smallModel, "small", LoadOptions{})
@@ -526,13 +525,13 @@ func TestListSessionsFiltersByModelAndDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No device id is the host's queue, which says how sessions share it.
-	if q.Msg.GetDeviceId() != HostGateID || !strings.Contains(q.Msg.GetNote(), "shared pool") ||
+	if q.Msg.GetDeviceId() != CPUGateID || !strings.Contains(q.Msg.GetNote(), "shared pool") ||
 		q.Msg.GetRunning() || q.Msg.GetWaiting() != 0 {
 		t.Fatalf("the idle host queue reads %+v", q.Msg)
 	}
 }
 
-// TestUnloadingAModelWithALiveSessionNeedsForce: every State must be closed
+// TestUnloadingAModelWithALiveSessionNeedsForce: every instance must be closed
 // before its Model, so an unload that would orphan one is refused, and force
 // closes them first. With the victims check removed the plain unload succeeds
 // and the session is left holding a closed model.
@@ -689,7 +688,7 @@ func TestForceUnloadStopsAStepLoopRowWhileItsClientIsBusy(t *testing.T) {
 // some steps on; TestBatchCancelOneRowLeavesTheOthers gates that path.
 func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 	path := modelPath(t, smallModel)
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", MaxBatchRows: 1}))
 	t.Cleanup(e.Close)
 	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
 		t.Fatal(err)
@@ -889,9 +888,9 @@ func TestTheConnectStreamCarriesTheRealEnginesEvents(t *testing.T) {
 		switch ev := st.Msg().GetEvent().(type) {
 		case *v1.GenerateResponse_Started:
 			kinds = append(kinds, "started")
-			if ev.Started.GetHostBlocks() != 5 || ev.Started.GetDeviceBlocks() != 0 {
-				t.Fatalf("a host-only generate reports %d host / %d device blocks",
-					ev.Started.GetHostBlocks(), ev.Started.GetDeviceBlocks())
+			if ev.Started.GetCpuBlocks() != 5 || ev.Started.GetDeviceBlocks() != 0 {
+				t.Fatalf("a CPU-only generate reports %d host / %d device blocks",
+					ev.Started.GetCpuBlocks(), ev.Started.GetDeviceBlocks())
 			}
 		case *v1.GenerateResponse_Token:
 			kinds = append(kinds, "token")
@@ -945,13 +944,13 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 		t.Fatal(err)
 	}
 	pl := gp.Msg.GetPlacement()
-	if pl.GetHostBlockCount() != 5 || pl.GetDeviceBlockCount() != 0 || len(pl.GetBlocks()) != 5 {
-		t.Fatalf("a host-only placement reads host=%d device=%d over %d blocks",
-			pl.GetHostBlockCount(), pl.GetDeviceBlockCount(), len(pl.GetBlocks()))
+	if pl.GetCpuBlockCount() != 5 || pl.GetDeviceBlockCount() != 0 || len(pl.GetBlocks()) != 5 {
+		t.Fatalf("a CPU-only placement reads host=%d device=%d over %d blocks",
+			pl.GetCpuBlockCount(), pl.GetDeviceBlockCount(), len(pl.GetBlocks()))
 	}
 	for i, b := range pl.GetBlocks() {
-		if b.GetIndex() != int32(i) || b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_HOST ||
-			!b.GetHostResident() || b.GetBytes().GetBytes() != lm.m.PageBytes(i) ||
+		if b.GetIndex() != int32(i) || b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_CPU ||
+			!b.GetCpuResident() || b.GetBytes().GetBytes() != lm.m.PageBytes(i) ||
 			b.GetKind() != v1.BlockKind_BLOCK_KIND_ATTENTION {
 			t.Fatalf("block %d reads %+v", i, b)
 		}
@@ -964,7 +963,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 	if home.Msg.GetPlacement().GetDeviceBlockCount() != 0 {
 		t.Fatal("everything-home left a block on a device")
 	}
-	// A host-only model takes a device that exists (TestAHostLoadedModelRelocatesToADeviceAndBack);
+	// A CPU-only model takes a device that exists (TestAHostLoadedModelRelocatesToADeviceAndBack);
 	// one that does not is a precondition the caller can change.
 	_, err = c.placement.SetPlacement(ctx, req(&v1.SetPlacementRequest{SessionId: "p", DeviceIds: []string{"nosuch:0"}}))
 	wantCode(t, "SetPlacement onto a device that does not exist", err, connect.CodeFailedPrecondition)
@@ -974,17 +973,17 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 		m    *v1.RelocateBlocksRequest
 		want connect.Code
 	}{
-		{"a negative first block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: -1, LastBlock: 0, ToHost: true},
+		{"a negative first block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: -1, LastBlock: 0, ToDeviceId: "cpu"},
 			connect.CodeInvalidArgument},
-		{"a range past the last block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 5, ToHost: true},
+		{"a range past the last block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 5, ToDeviceId: "cpu"},
 			connect.CodeInvalidArgument},
-		{"a reversed range", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 3, LastBlock: 2, ToHost: true},
+		{"a reversed range", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 3, LastBlock: 2, ToDeviceId: "cpu"},
 			connect.CodeInvalidArgument},
 		{"no destination", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 1},
 			connect.CodeInvalidArgument},
 		{"a device that does not exist", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 1, ToDeviceId: "nosuch:0"},
 			connect.CodeFailedPrecondition},
-		{"an unknown session", &v1.RelocateBlocksRequest{SessionId: "nope", ToHost: true}, connect.CodeNotFound},
+		{"an unknown session", &v1.RelocateBlocksRequest{SessionId: "nope", ToDeviceId: "cpu"}, connect.CodeNotFound},
 	} {
 		_, err := c.placement.RelocateBlocks(ctx, req(tc.m))
 		wantCode(t, "RelocateBlocks with "+tc.what, err, tc.want)
@@ -1002,7 +1001,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 		err = ts.Err()
 		ts.Close()
 	}
-	wantCode(t, "TuneSeam on a host-only session", err, connect.CodeFailedPrecondition)
+	wantCode(t, "TuneSeam on a CPU-only session", err, connect.CodeFailedPrecondition)
 
 	for what, call := range map[string]func() error{
 		"GetPlacement": func() error {
@@ -1030,13 +1029,23 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 	}
 }
 
-// refusingDevice is a device that serves nothing. It stands in for a tier so
-// SetPlacement reaches State.SetDeviceLayers on a model loaded host-only.
+// refusingDevice is a device that takes nothing. It stands in for a tier so
+// SetPlacement reaches Instance.SetDeviceLayers on a model loaded CPU-only.
 type refusingDevice struct{}
 
-func (refusingDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int) bool { return false }
+func (refusingDevice) PrepLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
+func (refusingDevice) Layers(int, int, int, int, []float32, nn.RopeTables, *nn.Head) bool {
+	return false
+}
+func (refusingDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
+func (refusingDevice) MigrateKV(int, []float32, []float32, int, bool) bool    { return false }
+func (refusingDevice) MigrateRec(int, []float32, []float32, bool) bool        { return false }
+func (refusingDevice) ReserveKV(int) bool                                     { return false }
+func (refusingDevice) ReleaseLayers(int, int)                                 {}
+func (refusingDevice) PrepHead(*nn.Head) bool                                 { return false }
+func (refusingDevice) Reserve(int, int) bool                                  { return false }
 
-// TestARefusedPlacementLeavesTheSessionUsable: when the State refuses the move
+// TestARefusedPlacementLeavesTheSessionUsable: when the instance refuses the move
 // -- here a binary16 KV cache that already holds history, which cannot migrate
 // -- SetPlacement returns FailedPrecondition, and the session's lock must be
 // released on that path too, or the next call on the session hangs.
@@ -1051,12 +1060,12 @@ func TestARefusedPlacementLeavesTheSessionUsable(t *testing.T) {
 	if _, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{SessionId: "p", Prompt: text(story), MaxTokens: 2})); err != nil {
 		t.Fatal(err)
 	}
-	// The model gains a "tier" after the session was built host-only, so the
+	// The model gains a "tier" after the session was built CPU-only, so the
 	// session's f16 history is what the move has to carry.
 	lm.dev, lm.deviceIDs = refusingDevice{}, []string{"fake:0"}
 	defer func() { lm.dev, lm.deviceIDs = nil, nil }()
 
-	// A binary16 history is converted on its way to a device, so the State no
+	// A binary16 history is converted on its way to a device, so the instance no
 	// longer refuses; the session goes on holding its lock to the end of the call.
 	if _, err = c.placement.SetPlacement(ctx, req(&v1.SetPlacementRequest{SessionId: "p", DeviceIds: []string{"fake:0"}})); err != nil {
 		t.Fatalf("SetPlacement with an f16 history: %v", err)
@@ -1242,9 +1251,9 @@ func TestDevicesAreTheProbesAnswer(t *testing.T) {
 		t.Fatalf("%d devices, want the probe's 2", len(ld.Msg.GetDevices()))
 	}
 	host := ld.Msg.GetDevices()[0]
-	if host.GetRef().GetBackend() != v1.Backend_BACKEND_CPU || host.GetKind() != v1.DeviceKind_DEVICE_KIND_HOST ||
+	if host.GetRef().GetBackend() != v1.Backend_BACKEND_CPU || host.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU ||
 		host.GetAttachedSessions() != 1 {
-		t.Fatalf("the host reads %+v; its one host-only session is attached to it", host)
+		t.Fatalf("the host reads %+v; its one CPU-only session is attached to it", host)
 	}
 
 	gd, err := c.device.GetDevice(ctx, req(&v1.GetDeviceRequest{DeviceId: "cuda:0"}))
@@ -1276,9 +1285,9 @@ func TestDevicesAreTheProbesAnswer(t *testing.T) {
 // TestAProbeFailureIsReportedNotHidden: a probe that cannot enumerate the
 // hardware is an error on every device surface, never an empty machine.
 func TestAProbeFailureIsReportedNotHidden(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: func() ([]DeviceInfo, error) {
+	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: func() ([]DeviceInfo, error) {
 		return nil, errors.New("the driver is wedged")
-	}})
+	}}))
 	defer e.Close()
 	c := serveEngine(t, e)
 	ctx := context.Background()
@@ -1337,7 +1346,7 @@ func TestConvertStreamsItsPhasesAndTheResultLoads(t *testing.T) {
 		t.Fatalf("a scratch directory in the model directory: %v", err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	e := New(Config{ModelDir: dir, Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: dir, Probe: noProbe}))
 	defer e.Close()
 	c := serveEngine(t, e)
 	ctx := context.Background()

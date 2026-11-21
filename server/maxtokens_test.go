@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -60,7 +60,7 @@ func TestNoMaxTokensRunsToTheEndOfTheContext(t *testing.T) {
 // that runs as a row of its model's step loop (batch.go).
 func TestNoMaxTokensRunsToTheEndOfTheContextBatched(t *testing.T) {
 	path := modelPath(t, instructModel)
-	e := New(Config{Probe: oneCardProbe, Version: "test"})
+	e := New(admitConfig(Config{Probe: oneCardProbe, Version: "test"}))
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "inst", DeviceIDs: []string{"gpu:0"}, Sessions: 1})
 	if err != nil {

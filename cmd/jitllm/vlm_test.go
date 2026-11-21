@@ -1,69 +1,68 @@
 package main
 
 import (
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine"
 )
 
-// jlmOfPair converts a text model and its vision tower into one container
-// beside the source and returns it, because the engine reads nothing else; a
-// missing .jlm is built rather than skipped (RULE 11). The two-file mmproj
-// contract is llama.cpp's and dies at conversion.
-func jlmOfPair(t *testing.T, path, mmproj string) string {
-	t.Helper()
-	dst := strings.TrimSuffix(path, filepath.Ext(path)) + jlm.Ext
-	if mmproj != "" {
-		dst = strings.TrimSuffix(path, filepath.Ext(path)) + "-vlm" + jlm.Ext
+// TestImageRunsThroughTheTower runs `jitllm run -image` on SmolVLM-256M, on
+// the CPU device, completed by its chat template, and with a cached prefix:
+// the coloured quadrants and yellow disc are described by the disc's colour,
+// and a blank grey picture is not -- a tower wired to nothing still answers
+// fluently, so the blank is the violation.
+func TestImageRunsThroughTheTower(t *testing.T) {
+	path := modelPath(t, "SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
+	pic := filepath.Join("..", "..", "engine", "testdata", "quad-and-disc.png")
+	if _, err := os.Stat(pic); err != nil {
+		t.Fatalf("IMAGE MISSING: %v", err)
 	}
-	si, err := os.Stat(path)
-	_, merr := os.Stat(mmproj)
-	if err != nil || mmproj != "" && merr != nil {
-		// The container is the model and its source is disposable; see
-		// containerAlone in engine/model/jlm_helper_test.go, which this mirrors.
-		c, oerr := jlm.Open(dst)
-		if oerr != nil {
-			t.Skipf("MODEL MISSING: %s, and its container %s does not open (%v) (set JITLLM_MODELS to the model directory) -- this "+
-				"gate proved nothing", path, dst, oerr)
-		}
-		c.Close()
-		return dst
+	blank := filepath.Join(t.TempDir(), "blank.png")
+	g := image.NewGray(image.Rect(0, 0, 384, 384))
+	for i := range g.Pix {
+		g.Pix[i] = 128
 	}
-	// Newer than its source and readable by this build: a version bump leaves
-	// the first true and the second false.
-	if di, err := os.Stat(dst); err == nil && di.ModTime().After(si.ModTime()) {
-		if c, err := jlm.Open(dst); err == nil {
-			c.Close()
-			return dst
-		}
-	}
-	if _, err := convert.FromGGUFs(path, mmproj, dst, jlm.Fingerprint{Host: "test"}); err != nil {
-		t.Fatalf("convert %s: %v", path, err)
-	}
-	return dst
-}
-
-// TestVLMTowerSizesTheState: the state must be sized for the spliced prompt,
-// not the text one. The marker ids are held by
-// model.TestChatSpansFollowTheTemplate.
-func TestVLMTowerSizesTheState(t *testing.T) {
-	text := testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
-	m2, err := model.Open(jlmOfPair(t, text, testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")))
+	f, err := os.Create(blank)
 	if err != nil {
-		t.Skipf("MODEL MISSING: no VLM at %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", text)
+		t.Fatal(err)
 	}
-	defer m2.Close()
-	tw := m2.Tower()
-	if tw == nil {
-		t.Fatal("the merged container carries no tower")
+	if err := png.Encode(f, g); err != nil {
+		t.Fatal(err)
 	}
-	if got, want := tw.Cfg.Tokens(), 64; got != want {
-		t.Errorf("tower emits %d embeddings, want %d", got, want)
+	f.Close()
+	ask := func(img, cache string) string {
+		t.Helper()
+		out, stderr, err := capture(t, func() error {
+			return run(path, "Describe this image in one sentence.", 32, 0, "cpu", -1, 0, 1<<30, false, false,
+				false, false, &engine.Sampler{}, mediaSpec{image: img}, nil, nil, cache, 0, 0, nil, nil)
+		})
+		if err != nil {
+			t.Fatalf("run -image %s: %v\n%s", img, err, stderr)
+		}
+		return strings.ToLower(out)
+	}
+	got := ask(pic, "")
+	none := ask(blank, "")
+	t.Logf("picture %q", got)
+	t.Logf("blank   %q", none)
+	if !strings.Contains(got, "yellow") {
+		t.Errorf("the description does not name the yellow disc: %q", got)
+	}
+	if strings.Contains(none, "yellow") {
+		t.Errorf("a blank picture is yellow too (%q): the picture is not what answered", none)
+	}
+	// The same through a prompt cache, written by one run and read by the
+	// next: the run restored past the picture answers as the uncached run did.
+	dir := t.TempDir()
+	if first := ask(pic, dir); first != got {
+		t.Errorf("a cached run's first answer %q differs from the uncached %q", first, got)
+	}
+	if again := ask(pic, dir); again != got {
+		t.Errorf("a run restored past the picture answers %q, not %q", again, got)
 	}
 }

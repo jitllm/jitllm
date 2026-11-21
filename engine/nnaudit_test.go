@@ -1,0 +1,1082 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"image"
+	"image/png"
+	"math"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
+
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/convert/library"
+	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/internal/testmodels"
+)
+
+// TestEveryModelRunsGenerated drives every model available through all three
+// transcriptions of the graph -- Forward, Prefill and ForwardBatch -- and an
+// encoder through its embedder. The assertion is that they run: a shape with
+// no kernel is an error, so a model that completes them ran generated code end
+// to end. Kernel gaps are keyed on shapes, which is why every model is swept.
+//
+// "Every model" is the model directory's GGUFs, the GGUFs one directory down
+// (granite/, qwen35/, moefam/, embed/ ...), and the safetensors fixtures the
+// transformers goldens are taken on -- the only models available for deepseek2,
+// kimilinear and the HF mixtures.
+//
+// Each model is a subtest of its own, so one file cannot decide the sweep's
+// fate: an architecture outside RULE 7's list (a fixture another tree is adding,
+// say) is a refusal NAMED in its own subtest, and every other model still runs.
+// A model the converter accepts and the engine then cannot open is a FAILURE,
+// not a silent pass. The sweep itself never reports SKIP: it fails when no model
+// ran.
+func TestEveryModelRunsGenerated(t *testing.T) { everyModelRunsGenerated(t) }
+
+// TestEveryModelRunsOnACard is the card half of every model running: each
+// model the sweep converts places every block on the card the test's
+// devices select and decodes there; a model whose blocks the card does not
+// all take fails by name, with what the card declined.
+func TestEveryModelRunsOnACard(t *testing.T) {
+	g, err := openGPU(t)
+	if err != nil || g == nil {
+		testmodels.Missing(t, "no card to run the models on: %v", err)
+	}
+	defer g.Close()
+	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
+	pick := os.Getenv("JITLLM_AUDIT_MODEL")
+	ran, last, held := 0, "", [2]uint64{}
+	// seen says a relocation has moved an instance's account: the count
+	// composedNothing reads can see a composition.
+	seen := false
+	defer func() { heldAfter(t, g, last, &held) }()
+	shard, shards := auditShard(t)
+	for k, src := range auditModels(t) {
+		if pick != "" && !strings.Contains(src.path, pick) || k%shards != shard {
+			continue
+		}
+		if pick == "" && (!slow && src.size > 2<<30 || only && src.size <= 2<<30) {
+			continue
+		}
+		ran++
+		heldAfter(t, g, last, &held)
+		last = src.name
+		t.Run(src.name, func(t *testing.T) {
+			path := src.path
+			if src.hf {
+				path = jlmOfSafetensors(t, src.path)
+			} else {
+				p, err := convertPair(src.path, src.mmproj)
+				if errors.Is(err, convert.ErrNotImplemented) {
+					t.Skipf("NOT IMPLEMENTED (RULE 7 scope): %v", err)
+				}
+				if errors.Is(err, convert.ErrPart) {
+					t.Skipf("PART OF A MODEL: %v", err)
+				}
+				if errors.Is(err, convert.ErrBadInput) {
+					t.Skipf("A BAD INPUT: %v", err)
+				}
+				if err != nil {
+					t.Fatalf("convert: %v", err)
+				}
+				path = p
+			}
+			m, err := model.Open(path)
+			if err != nil {
+				t.Fatalf("the converter accepted it and Open refused it: %v", err)
+			}
+			defer m.Close()
+			if m.IsEmbedding() {
+				// An embedding model runs through its embedder, every block on
+				// the card.
+				e, err := NewEmbedder(m, WithKVF16(false))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer e.Close()
+				if err := e.SetDeviceLayers(g, -1); err != nil {
+					t.Fatal(err)
+				}
+				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
+					t.Fatalf("the card took %d of %d blocks: %v (%s)", n, m.Cfg.NLayer, e.DeviceDeclines(), g.Err())
+				}
+				formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
+				for i := range 3 {
+					v, err := e.Embed([]int32{1, int32(2 + i), 3})
+					if err != nil {
+						t.Fatalf("Embed on the card: %v (%s)", err, g.Err())
+					}
+					finite(t, "Embed on the card", v)
+				}
+				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
+					t.Fatalf("after the steps the card holds %d of %d blocks: %s", n, m.Cfg.NLayer, g.Err())
+				}
+				if s := g.Stats(); s.UnformedAtStep != formed {
+					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
+						s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
+				}
+				refusedAtStep(t, g, before)
+				return
+			}
+			st := cardInstance(t, m, g)
+			defer st.Close()
+			if m.Cfg.Head != nil {
+				formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
+				for i := range 3 {
+					finite(t, "MarkScores on the card", markerScores(t, st, i))
+				}
+				stayedOnCard(t, st, m, g)
+				if s := g.Stats(); s.UnformedAtStep != formed {
+					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
+						s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
+				}
+				refusedAtStep(t, g, before)
+				return
+			}
+			var img image.Image
+			if m.Tower != nil {
+				img = auditPicture(t)
+				// A chain's blocks run as parts over their own grids, each on
+				// the device chainOn names (nil: the CPU device).
+				n := st.tower.s.GPULayers()
+				if m.Tower.Chain {
+					n = 0
+					for _, d := range st.tower.chainOn {
+						if d != nil {
+							n++
+						}
+					}
+				}
+				if n != len(m.Tower.Blocks) {
+					t.Fatalf("the card took %d of the tower's %d blocks: %v (%s)", n, len(m.Tower.Blocks), st.tower.s.DeviceDeclines(), g.Err())
+				}
+			}
+			formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
+			asked := instanceAsks(st)
+			for i := range 3 {
+				lg, err := st.Forward(int32(1 + i))
+				if err != nil {
+					t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
+				}
+				finite(t, "Forward on the card", lg)
+			}
+			cardAgrees(t, m, g)
+			if img != nil {
+				rows, err := st.EncodePicture(img)
+				if err != nil {
+					t.Fatalf("EncodePicture on the card: %v (%s)", err, g.Err())
+				}
+				finite(t, "EncodePicture on the card", rows)
+			}
+			stayedOnCard(t, st, m, g)
+			composedNothing(t, st, asked)
+			if s := g.Stats(); s.UnformedAtStep != formed {
+				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
+					s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
+			}
+			refusedAtStep(t, g, before)
+			stepsTogetherOnCard(t, st, m, g)
+			// The violation, once: a block moved to the CPU composes there,
+			// and the account composedNothing reads must see it.
+			if !seen {
+				seen = movedComposes(t, st, m)
+			}
+		})
+	}
+	if ran == 0 {
+		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
+	}
+	if seen {
+		t.Logf("a model moved a block to the CPU: composedNothing saw a composition")
+		return
+	}
+	// No model of this run moved a block to the CPU -- a marker head's and
+	// an embedder's return before it, a slice (-run) may hold none -- so
+	// the sweep's own model shows the account composedNothing reads sees
+	// a composition.
+	heldAfter(t, g, last, &held)
+	last = composeWitness
+	cpuSeesAComposition(t, g)
+}
+
+// composeWitness is the model TestEveryModelRunsOnACard moves a block of to
+// the CPU where none of the run did: a small dense model whose every block
+// the card takes beside the CPU.
+const composeWitness = "synth-olmo2.gguf"
+
+// movedComposes moves instance st's last block of m to the CPU and fails t
+// where that asked the CPU for no form: composedNothing could not see a
+// composition. False is a move not made (one block, or the card listed
+// alone).
+func movedComposes(t *testing.T, st *Instance, m *model.Model) bool {
+	t.Helper()
+	was := instanceAsks(st)
+	if m.Cfg.NLayer < 2 || st.SetGPULayers(m.Cfg.NLayer-1) != m.Cfg.NLayer-1 {
+		return false
+	}
+	if instanceAsks(st)[nn.CPU] == was[nn.CPU] {
+		t.Fatalf("moving block %d to the CPU asked it for no form: composedNothing cannot see a composition", m.Cfg.NLayer-1)
+	}
+	return true
+}
+
+// cpuSeesAComposition places composeWitness's every block on card g beside
+// the CPU, steps it, and moves its last block to the CPU (movedComposes).
+func cpuSeesAComposition(t *testing.T, g *gpu.GPU) {
+	t.Helper()
+	src, ok := existingModel(testmodels.Path(composeWitness))
+	if !ok {
+		testmodels.Missing(t, "MODEL MISSING: %s (see docs/testing.md) -- composedNothing was never shown to see a composition", testmodels.Path(composeWitness))
+	}
+	m, err := model.Open(jlmOf(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	st := testInstance(t, m, 16)
+	defer st.Close()
+	if err := st.SetDeviceLayers(g, -1); err != nil {
+		t.Fatalf("%s: placement: %v (%s)", composeWitness, err, g.Err())
+	}
+	if st.GPULayers() != m.Cfg.NLayer {
+		t.Fatalf("%s: the card took %d of %d blocks: %v (%s)", composeWitness, st.GPULayers(), m.Cfg.NLayer, st.DeviceDeclines(), g.Err())
+	}
+	if _, err := st.Forward(1); err != nil {
+		t.Fatalf("%s: Forward on the card: %v (%s)", composeWitness, err, g.Err())
+	}
+	if !movedComposes(t, st, m) {
+		t.Fatalf("%s: its block %d did not move to the CPU: composedNothing was never shown to see a composition", composeWitness, m.Cfg.NLayer-1)
+	}
+	t.Logf("no model of the run moved a block to the CPU; %s's did, and composedNothing saw a composition", composeWitness)
+}
+
+// instanceAsks is how many forms instance s has asked of each device it runs
+// on, the CPU among them, by its account.
+func instanceAsks(s *Instance) map[string]int64 {
+	asks := map[string]int64{nn.CPU: s.Account(nn.CPU).Asks}
+	for _, at := range s.Locations() {
+		if at != "" {
+			asks[at] = s.Account(at).Asks
+		}
+	}
+	return asks
+}
+
+// composedNothing fails t where instance s asked any device for a form since
+// asked was read: tokens and pictures run what placement composed.
+func composedNothing(t *testing.T, s *Instance, asked map[string]int64) {
+	t.Helper()
+	for dev, n := range instanceAsks(s) {
+		if d := n - asked[dev]; d != 0 {
+			t.Errorf("after placement the instance asked %s for %d form(s)", dev, d)
+		}
+	}
+}
+
+// cardBand is how far a model's card logits may part from the composed
+// CPU's over a prompt and two steps: across the census the band of every
+// block on the card reads up to 2.7e-2 (stablelm-2-1.6b's second step),
+// and a block the card computes wrongly reads in tenths (synth-deepseek4's
+// 2.69).
+const cardBand = 5e-2
+
+// cardMixtureWorst bounds a mixture's one point past cardBand. The card
+// multiplies a routed bank on binary16 tiles, and its error can carry the
+// next block's router across a near-tie: one row takes another expert and
+// its logits part in tenths, then the next step agrees again. synth-gptoss's
+// 13-row prompt reads 0.311 there, and 1.8e-4 with its experts on the CPU
+// at float32, the router still on the card. A mixture is held at the median
+// of its points to cardBand and at every point to this; a wrong block reads
+// past it at every point.
+const cardMixtureWorst = 1.0
+
+// cardAgrees holds model m's logits on card g -- a prompt of text through
+// Prefill, then two decode steps of the text -- to the composed CPU's at the
+// card's float32 history, within cardBand at each.
+func cardAgrees(t *testing.T, m *model.Model, g *gpu.GPU) {
+	t.Helper()
+	toks := m.Vocab.Encode("The capital of France is Paris, and the river that runs through it is", true)
+	if len(toks) > 14 {
+		toks = toks[:14]
+	}
+	if len(toks) < 4 {
+		t.Fatalf("the text is %d tokens", len(toks))
+	}
+	st := cardInstance(t, m, g)
+	defer st.Close()
+	ref := testInstance(t, m, 16, WithKVF16(false))
+	defer ref.Close()
+	n := len(toks) - 2
+	got, err := st.Prefill(toks[:n])
+	if err != nil {
+		t.Fatalf("Prefill on the card: %v (%s)", err, g.Err())
+	}
+	want, err := ref.Prefill(toks[:n])
+	if err != nil {
+		t.Fatalf("Prefill on the CPU: %v", err)
+	}
+	var es []float64
+	for i := n; ; i++ {
+		e, _ := nmseOf(got, want)
+		es = append(es, e)
+		switch {
+		case math.IsNaN(e):
+			t.Errorf("position %d: the card's logits are not finite against the CPU's", i-1)
+		case m.Cfg.NExpert <= 1 && !(e < cardBand):
+			t.Errorf("position %d: the card's logits are %.3e NMSE from the CPU's (bound %.0e)", i-1, e, cardBand)
+		case m.Cfg.NExpert > 1 && !(e < cardMixtureWorst):
+			t.Errorf("position %d: the mixture's card logits are %.3e NMSE from the CPU's (bound %.0e at any point)", i-1, e, cardMixtureWorst)
+		}
+		if i == len(toks) {
+			break
+		}
+		if got, err = st.Forward(toks[i]); err != nil {
+			t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
+		}
+		if want, err = ref.Forward(toks[i]); err != nil {
+			t.Fatalf("Forward on the CPU: %v", err)
+		}
+	}
+	if med := median(es); m.Cfg.NExpert > 1 && !(med < cardBand) {
+		t.Errorf("the mixture's card logits are %.3e NMSE from the CPU's at the median of %v (bound %.0e)", med, es, cardBand)
+	}
+}
+
+// heldAfter fails t where card g holds more after model name's subtest closed
+// its instances and the model than it held before it, the bytes charged or
+// allocated: one card serves every model in turn, and what one leaves the
+// next finds (an input table once stayed resident under the entry the next
+// model's took). held is what the card held before.
+func heldAfter(t *testing.T, g *gpu.GPU, name string, held *[2]uint64) {
+	t.Helper()
+	s := g.Stats()
+	now := [2]uint64{uint64(s.BudgetUsed), uint64(s.Allocated)}
+	if name != "" && (now[0] > held[0] || now[1] > held[1]) {
+		t.Errorf("after %s the card holds %d bytes charged and %d allocated, %d and %d before it", name, now[0], now[1], held[0], held[1])
+	}
+	*held = now
+}
+
+// stayedOnCard fails t where the card no longer holds every block after the
+// steps: a device failure moves them to the CPU (demoteAll), and the steps'
+// answers then say nothing about the card.
+func stayedOnCard(t *testing.T, st *Instance, m *model.Model, g *gpu.GPU) {
+	t.Helper()
+	if n := st.GPULayers(); n != m.Cfg.NLayer {
+		t.Fatalf("after the steps the card holds %d of %d blocks: %s", n, m.Cfg.NLayer, g.Err())
+	}
+}
+
+// stepsTogetherOnCard steps two sessions of instance st together on card g,
+// three tokens each, and fails t where the steps asked any device for a
+// form, formed a part, were declined or did not run on the card: a batch
+// runs what placement composed, as a session alone does.
+func stepsTogetherOnCard(t *testing.T, st *Instance, m *model.Model, g *gpu.GPU) {
+	t.Helper()
+	pool := NewPool()
+	if err := pool.Serve(st, 2); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Unserve(st)
+	var sess [2]*Session
+	for i := range sess {
+		s, err := pool.NewSession(16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		sess[i] = s
+	}
+	was, before, asked := g.Stats(), cardDeclines(g), instanceAsks(st)
+	var runs [2]Run
+	for step := range 3 {
+		for i, s := range sess {
+			if err := s.Acquire(context.Background(), PhaseGenerate); err != nil {
+				t.Fatal(err)
+			}
+			runs[i] = Run{Session: s, Tokens: []int32{int32(1 + step + 3*i)}, Logits: true}
+		}
+		lg, err := StepJoint(runs[:], nil)
+		if err != nil {
+			t.Fatalf("two sessions stepped together on the card: %v (%s)", err, g.Err())
+		}
+		for _, l := range lg {
+			finite(t, "two sessions stepped together on the card", l)
+		}
+	}
+	stayedOnCard(t, st, m, g)
+	composedNothing(t, st, asked)
+	now := g.Stats()
+	if now.UnformedAtStep != was.UnformedAtStep {
+		t.Fatalf("two sessions stepped together formed %d part(s) on the card after placement (by part %v): %s",
+			now.UnformedAtStep-was.UnformedAtStep, now.UnformedAtStepParts, g.Err())
+	}
+	refusedAtStep(t, g, before)
+	// The card counts the submissions it emits, not those a recording
+	// replays (gpu.Stats.Steps): every block once, at the least.
+	served, _ := now.Steps.Of(nn.ComposedBlock)
+	if had, _ := was.Steps.Of(nn.ComposedBlock); served-had < m.Cfg.NLayer {
+		t.Fatalf("two sessions stepped together served %d block step(s) on the card, where %d blocks ran",
+			served-had, m.Cfg.NLayer)
+	}
+}
+
+// cardDeclines is the steps card g declined so far, its blocks' and its
+// table, sample and input rows', by reason.
+func cardDeclines(g *gpu.GPU) [nn.NumDeclines]int {
+	s := g.Stats()
+	b, o := s.BlockDeclines(), s.StepDeclines()
+	for i := range b {
+		b[i] += o[i]
+	}
+	return b
+}
+
+// refusedAtStep fails t on every step card g declined since before for a
+// reason that is not a hardware limit: a part placed on the card runs there.
+func refusedAtStep(t *testing.T, g *gpu.GPU, before [nn.NumDeclines]int) {
+	t.Helper()
+	for _, d := range stepDeclines(before, cardDeclines(g)) {
+		t.Errorf("the card declined %s", d)
+	}
+}
+
+// stepDeclines names the steps declined between two counts for a reason that
+// is not a hardware limit: the device not serving the part, holding no room
+// for it, or lacking the ISA.
+func stepDeclines(before, after [nn.NumDeclines]int) []string {
+	var out []string
+	for i := range after {
+		switch nn.Decline(i) {
+		case nn.DeclineServes, nn.DeclineNoRoom, nn.DeclineISA:
+			continue
+		}
+		if n := after[i] - before[i]; n > 0 {
+			out = append(out, fmt.Sprintf("%d step(s): %s", n, nn.DeclineName(i)))
+		}
+	}
+	return out
+}
+
+// TestTheCensusSeesADeclinedStep runs the census's decline check against its
+// violations: a step declined as not formed, or for a table it lacked, is
+// named; the hardware limits, and declines from before the decode, are not.
+func TestTheCensusSeesADeclinedStep(t *testing.T) {
+	var before, after [nn.NumDeclines]int
+	before[nn.DeclineNotFormed] = 4
+	after[nn.DeclineNotFormed] = 4
+	after[nn.DeclineServes], after[nn.DeclineNoRoom], after[nn.DeclineISA] = 2, 3, 1
+	if got := stepDeclines(before, after); len(got) != 0 {
+		t.Fatalf("hardware limits and earlier declines were named: %v", got)
+	}
+	after[nn.DeclineNotFormed]++
+	after[nn.DeclineCaller] = 2
+	if got := stepDeclines(before, after); len(got) != 2 {
+		t.Fatalf("a step declined as not formed and two kept by the caller gave %v, want two findings", got)
+	}
+}
+
+// cardInstance is an instance of m with every block on card g: resident
+// where the card holds them all, and where it has room for only some, an
+// instance listing the card alone, on which the model pages and no block
+// runs on the CPU. Any block off the card fails the test, with what the card
+// declined.
+func cardInstance(t *testing.T, m *model.Model, g *gpu.GPU) *Instance {
+	t.Helper()
+	st := testInstance(t, m, 16)
+	if err := st.SetDeviceLayers(g, -1); err != nil {
+		st.Close()
+		t.Fatalf("placement: %v (%s)", err, g.Err())
+	}
+	if st.GPULayers() == m.Cfg.NLayer {
+		return st
+	}
+	declined := st.DeviceDeclines()
+	st.Close()
+	spec := testdevices.One("cuda:0")
+	card := nn.DeviceName(spec)
+	st = testInstance(t, m, 16, WithDevices(spec))
+	if err := st.SetDevice(g); err != nil {
+		st.Close()
+		t.Fatalf("the card listed alone: %v (%s); declined with the CPU: %v", err, g.Err(), declined)
+	}
+	// A paged block not faulted in yet has no holder to name; none is the
+	// CPU's.
+	for li := range m.Cfg.NLayer {
+		if st.WhereIs(li) == nn.CPU {
+			st.Close()
+			t.Fatalf("the card %s listed alone: block %d runs on the CPU; declined with the CPU: %v", card, li, declined)
+		}
+	}
+	t.Logf("%d blocks paged on %s, which had room for some; declined with the CPU: %v", m.Cfg.NLayer, card, declined)
+	return st
+}
+
+// everyModelRunsGenerated is TestEveryModelRunsGenerated with opts on every model it opens.
+func everyModelRunsGenerated(t *testing.T, opts ...Option) {
+	// JITLLM_AUDIT_MODEL=<substring> audits one file whatever its size (run it
+	// under `scripts/cap 24G` for anything over ~16 GB); JITLLM_SLOW=1 admits
+	// every model over 2 GiB, and JITLLM_SLOW=only sweeps those alone.
+	pick := os.Getenv("JITLLM_AUDIT_MODEL")
+	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
+	var ran, refused, large []string
+	shard, shards := auditShard(t)
+	for k, src := range auditModels(t) {
+		name := src.name
+		if pick != "" && !strings.Contains(src.path, pick) || k%shards != shard {
+			continue
+		}
+		if pick == "" && only && src.size <= 2<<30 {
+			continue
+		}
+		if pick == "" && !slow && src.size > 2<<30 {
+			large = append(large, name)
+			continue
+		}
+		var why error
+		done := false
+		t.Run(name, func(t *testing.T) {
+			path := src.path
+			if src.hf {
+				path = jlmOfSafetensors(t, src.path)
+			} else {
+				p, err := convertPair(src.path, src.mmproj)
+				if errors.Is(err, convert.ErrNotImplemented) {
+					why = err
+					t.Skipf("NOT IMPLEMENTED (RULE 7 scope): %v", err)
+				}
+				if errors.Is(err, convert.ErrPart) {
+					t.Skipf("PART OF A MODEL: %v", err)
+				}
+				if errors.Is(err, convert.ErrBadInput) {
+					t.Skipf("A BAD INPUT: %v", err)
+				}
+				if err != nil {
+					t.Fatalf("convert: %v", err)
+				}
+				path = p
+			}
+			instOpts := opts
+			m, err := model.Open(path)
+			if err != nil {
+				t.Fatalf("the converter accepted it and Open refused it: %v", err)
+			}
+			defer m.Close()
+			auditRun(t, m, instOpts...)
+			done = true
+			t.Run("composed-cpu", func(t *testing.T) { auditComposedCPU(t, name, path, opts...) })
+		})
+		switch {
+		case done:
+			ran = append(ran, name)
+		case why != nil:
+			refused = append(refused, name)
+		}
+	}
+	if len(large) > 0 {
+		t.Logf("over 2 GiB, not swept (JITLLM_SLOW=1 admits them): %s", strings.Join(large, ", "))
+	}
+	if len(refused) > 0 {
+		t.Logf("outside RULE 7's list, refused by the converter: %s", strings.Join(refused, ", "))
+	}
+	if len(ran) == 0 {
+		testmodels.Missing(t, "no model ran on generated code -- this gate proved nothing")
+	}
+	t.Logf("%d models ran on generated code", len(ran))
+}
+
+// markerScores is a marker head's scores for question i of three (its type
+// i, its markers rows 1, 3 and 5 of eight).
+func markerScores(t *testing.T, s *Instance, i int) []float32 {
+	t.Helper()
+	out := make([]float32, 3)
+	if err := s.MarkScores([]int32{1, int32(5 + i), 9, 13, 17, 21, 25, 29}, i, []int{1, 3, 5}, out); err != nil {
+		t.Fatalf("MarkScores: %v", err)
+	}
+	return out
+}
+
+// auditRun is the gate's body for one opened model: the three decoder entry
+// points, and its embedder too when the container carries pooling.
+func auditRun(t *testing.T, m *model.Model, io ...Option) {
+	t.Helper()
+	ids := []int32{1, 2, 3, 4, 5}
+	if m.IsEmbedding() {
+		e, err := NewEmbedder(m, io...)
+		if err != nil {
+			t.Fatalf("NewEmbedder: %v", err)
+		}
+		v, err := e.Embed(ids)
+		e.Close()
+		if err != nil {
+			t.Fatalf("Embed: %v", err)
+		}
+		finite(t, "Embed", v)
+		// An embedding model has no head to decode with: it runs as it is
+		// read, through its embedder.
+		return
+	}
+	if m.Cfg.Head != nil {
+		// A marker head reads out through its scorer: it answers questions.
+		s := testInstance(t, m, 16, io...)
+		finite(t, "MarkScores", markerScores(t, s, 0))
+		s.Close()
+		return
+	}
+	s := testInstance(t, m, 16, io...)
+	logits, err := s.Forward(1)
+	if err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	finite(t, "Forward", logits)
+	if _, err := s.Prefill(ids); err != nil {
+		t.Fatalf("Prefill: %v", err)
+	}
+	s.Close()
+	if m.Tower != nil {
+		ps := testInstance(t, m, 256, io...)
+		rows, err := ps.EncodePicture(auditPicture(t))
+		if err != nil {
+			t.Fatalf("EncodePicture: %v", err)
+		}
+		finite(t, "EncodePicture", rows)
+		ps.Close()
+	}
+	bs := newSessBatch(m, 2, 16, io...)
+	if _, err := bs.ForwardBatch([]int32{1, 2}); err != nil {
+		t.Fatalf("ForwardBatch: %v", err)
+	}
+	bs.Close()
+}
+
+// auditComposedCPU is the gate's composed CPU arm: every entry point again
+// with the CPU's blocks on what the composer forms for it, and a decode whose
+// every block step is counted and served, a decline failing by name.
+// The decode, a prefill, two sessions stepped together, a decision model's
+// questions and a tower's pictures each ask the composer for nothing once the
+// instance is made.
+func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
+	instOpts := opts
+	m, err := model.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	auditRun(t, m, instOpts...)
+	if m.Cfg.Head != nil {
+		s := testInstance(t, m, 16, instOpts...)
+		defer s.Close()
+		asked := s.Account(nn.CPU).Asks
+		for i := range 3 {
+			finite(t, "MarkScores", markerScores(t, s, i))
+		}
+		if n := s.Account(nn.CPU).Asks - asked; n != 0 {
+			t.Fatalf("the questions asked the composer for %d form(s) after the instance was made", n)
+		}
+		return
+	}
+	const steps = 3
+	if m.IsEmbedding() {
+		e, err := NewEmbedder(m, instOpts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer e.Close()
+		asked := e.st.Account(nn.CPU).Asks
+		for i := range steps {
+			v, err := e.Embed([]int32{1, int32(2 + i), 3})
+			if err != nil {
+				t.Fatalf("Embed: %v", err)
+			}
+			finite(t, "Embed", v)
+		}
+		if n := e.st.Account(nn.CPU).Asks - asked; n != 0 {
+			t.Fatalf("the embeddings asked the composer for %d form(s) after the instance was made", n)
+		}
+		served, declined := e.st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
+		for i, n := range declined {
+			if n > 0 {
+				t.Fatalf("%d block steps declined on the composed CPU: %s (%v)", n, nn.DeclineName(i), e.st.Account(nn.CPU).FormErr)
+			}
+		}
+		if served == 0 {
+			t.Fatal("the embeddings served no block step on the composed CPU")
+		}
+		return
+	}
+	s := testInstance(t, m, 16, instOpts...)
+	defer s.Close()
+	asked := s.Account(nn.CPU).Asks
+	for i := range steps {
+		lg, err := s.Forward(int32(1 + i))
+		if err != nil {
+			t.Fatalf("Forward: %v", err)
+		}
+		finite(t, "Forward", lg)
+	}
+	if n := s.Account(nn.CPU).Asks - asked; n != 0 {
+		t.Fatalf("the decode asked the composer for %d form(s) after the instance was made", n)
+	}
+	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
+	total := served
+	var named []string
+	for i, n := range declined {
+		total += n
+		if n > 0 {
+			named = append(named, fmt.Sprintf("%d %s", n, nn.DeclineName(i)))
+		}
+	}
+	if want := steps * m.Cfg.NLayer; total != want {
+		t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, want)
+	}
+	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.Account(nn.CPU).FormErr)
+	if served != total {
+		t.Fatalf("the composed CPU declined %d of %d block steps: %s (%v)", total-served, total, strings.Join(named, ", "), s.Account(nn.CPU).FormErr)
+	}
+	asked = s.Account(nn.CPU).Asks
+	if _, err := s.Prefill([]int32{1, 2, 3, 4, 5}); err != nil {
+		t.Fatalf("Prefill: %v", err)
+	}
+	if n := s.Account(nn.CPU).Asks - asked; n != 0 {
+		t.Fatalf("the prefill asked the composer for %d form(s) after the instance was made", n)
+	}
+	bs := newSessBatch(m, 2, 16, instOpts...)
+	defer bs.Close()
+	asked = bs.Account(nn.CPU).Asks
+	for i := range steps {
+		if _, err := bs.ForwardBatch([]int32{int32(1 + i), int32(4 + i)}); err != nil {
+			t.Fatalf("ForwardBatch: %v", err)
+		}
+	}
+	if n := bs.Account(nn.CPU).Asks - asked; n != 0 {
+		t.Fatalf("two sessions stepped together asked the composer for %d form(s) after the instance was made", n)
+	}
+	if m.Tower != nil {
+		ps := testInstance(t, m, 256, instOpts...)
+		defer ps.Close()
+		asked := ps.Account(nn.CPU).Asks
+		for range 2 {
+			rows, err := ps.EncodePicture(auditPicture(t))
+			if err != nil {
+				t.Fatalf("EncodePicture: %v", err)
+			}
+			finite(t, "EncodePicture", rows)
+		}
+		if n := ps.Account(nn.CPU).Asks - asked; n != 0 {
+			t.Fatalf("the pictures asked the composer for %d form(s) after the instance was made", n)
+		}
+	}
+}
+
+func finite(t *testing.T, what string, v []float32) {
+	t.Helper()
+	for i, x := range v {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			t.Fatalf("%s: element %d is %v", what, i, x)
+		}
+	}
+}
+
+type auditModel struct {
+	name, path string
+	// mmproj is the catalog's projector for a vision model, converted with
+	// it into one container.
+	mmproj string
+	size   int64
+	hf     bool // a safetensors directory
+}
+
+// libraryPath is where the model directory holds a catalog file: at its top,
+// or a directory or two down, a copy with its tower beside it before one
+// without; "" where it holds none. copies is every place it is held, so a
+// box holding a file twice lists it once, under the catalog's name.
+func libraryPath(file string) (p string, copies []string) {
+	if p := testmodels.Path(file); fileExists(p) {
+		copies = append(copies, p)
+	}
+	for _, pat := range []string{filepath.Join("*", file), filepath.Join("*", "*", file)} {
+		ps, _ := filepath.Glob(filepath.Join(testmodels.Dir(), pat))
+		sort.Strings(ps)
+		copies = append(copies, ps...)
+	}
+	for _, c := range copies {
+		if towerOf(c) != "" {
+			return c, copies
+		}
+	}
+	if len(copies) == 0 {
+		return "", nil
+	}
+	return copies[0], copies
+}
+
+// laterShard is the second and later file of a split GGUF; the first names the
+// whole model.
+func laterShard() *regexp.Regexp {
+	return regexp.MustCompile(`-0*([2-9]|[1-9][0-9]+)-of-[0-9]+\.gguf$`)
+}
+
+// auditShard is JITLLM_AUDIT_SHARD's "i/n": a sweep runs the models whose
+// place in auditModels' list is i modulo n, so n runs on n cards cover the
+// list once; every model where it is unset.
+func auditShard(t *testing.T) (int, int) {
+	s := os.Getenv("JITLLM_AUDIT_SHARD")
+	if s == "" {
+		return 0, 1
+	}
+	var i, n int
+	if _, err := fmt.Sscanf(s, "%d/%d", &i, &n); err != nil || n < 1 || i < 0 || i >= n {
+		t.Fatalf("JITLLM_AUDIT_SHARD %q is not i/n with 0 <= i < n", s)
+	}
+	return i, n
+}
+
+// auditModels is everything TestEveryModelRunsGenerated sweeps. On a host
+// holding only containers it is the containers, as languageModels' fallback
+// is.
+func auditModels(t *testing.T) []auditModel {
+	t.Helper()
+	return auditList(t, false)
+}
+
+// auditList is auditModels' list. With towers set a file the box does not
+// hold fails only where it is a catalog model with a projector: the tower
+// gates read no text model and no safetensors fixture.
+func auditList(t *testing.T, towers bool) []auditModel {
+	t.Helper()
+	var out []auditModel
+	add := func(name, p string, hf bool) {
+		var size int64
+		if hf {
+			fs, _ := filepath.Glob(filepath.Join(p, "*.safetensors"))
+			for _, f := range fs {
+				if fi, err := os.Stat(f); err == nil {
+					size += fi.Size()
+				}
+			}
+		} else if fi, err := os.Stat(p); err == nil {
+			size = fi.Size()
+		} else {
+			t.Errorf("%s: %v", name, err)
+			return
+		}
+		out = append(out, auditModel{name: name, path: p, size: size, hf: hf})
+	}
+	// Every catalog model, its projector with it: a file the box does not
+	// hold fails here rather than leaving the list.
+	listed := map[string]bool{}
+	missing := t.Errorf
+	if os.Getenv("JITLLM_AUDIT_MODEL") != "" || testmodels.Free() {
+		missing = t.Logf
+	}
+	for _, lm := range library.Models() {
+		p, copies := libraryPath(lm.File)
+		if p == "" {
+			switch {
+			case lm.Bytes > 2<<30 && os.Getenv("JITLLM_SLOW") == "":
+				t.Logf("%s: over 2 GiB and not on this box, not swept (JITLLM_SLOW=1 admits it)", lm.Name)
+			case !towers || lm.MMProj != "":
+				missing("%s: MODEL MISSING: %s is not in %s (https://huggingface.co/%s)", lm.Name, lm.File, testmodels.Dir(), lm.Repo)
+			}
+			continue
+		}
+		for _, c := range copies {
+			listed[c] = true
+		}
+		mp := towerOf(p)
+		if lm.MMProj != "" {
+			if mp, _ = libraryPath(lm.MMProj); mp == "" {
+				missing("%s: MODEL MISSING: its projector %s is not in %s", lm.Name, lm.MMProj, testmodels.Dir())
+				continue
+			}
+		}
+		if mp != "" {
+			listed[mp] = true
+		}
+		n := len(out)
+		add(lm.Name, p, false)
+		if len(out) > n {
+			out[n].mmproj = mp
+		}
+	}
+	withTower := func(name, p string) {
+		n := len(out)
+		add(name, p, false)
+		if len(out) > n {
+			out[n].mmproj = towerOf(p)
+		}
+	}
+	for _, p := range languageModels(t) {
+		if !listed[p] {
+			withTower(filepath.Base(p), p)
+		}
+	}
+	sub, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "*", "*.gguf"))
+	sort.Strings(sub)
+	for _, p := range sub {
+		if laterShard().MatchString(p) || listed[p] || isProjector(p) {
+			continue
+		}
+		withTower(filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)), p)
+	}
+	golds, _ := filepath.Glob(filepath.Join("..", "testdata", "golden", "hf", "*.json"))
+	for _, g := range golds {
+		name := strings.TrimSuffix(filepath.Base(g), ".json")
+		dir := testmodels.Path(name)
+		switch {
+		case fileExists(filepath.Join(dir, "config.json")):
+			add(name+" (safetensors)", dir, true)
+		case hfGoldLarge(g):
+			t.Logf("%s: over 2 GiB and not on this box, not swept (JITLLM_SLOW=1 admits it)", name)
+		case !towers:
+			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", name, dir)
+		}
+	}
+	// The decision models' files, which sit deeper than one directory down
+	// (laya/gguf/, laya/fixture/) where the glob above does not reach.
+	for _, rel := range auditDecision() {
+		if p := testmodels.Path(rel); fileExists(p) && !listed[p] {
+			add(rel, p, false)
+		}
+	}
+	for _, d := range auditHFDirs() {
+		dir := testmodels.Path(d.rel)
+		switch {
+		case fileExists(filepath.Join(dir, "config.json")):
+			add(d.rel+" (safetensors)", dir, true)
+		case d.bytes > 2<<30 && os.Getenv("JITLLM_SLOW") == "":
+			t.Logf("%s: over 2 GiB and not on this box, not swept (JITLLM_SLOW=1 admits it)", d.rel)
+		case !towers:
+			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", d.rel, dir)
+		}
+	}
+	// The restated fixtures (censusRestated), each with its fixture's tower.
+	if !towers {
+		for _, rel := range censusRestated() {
+			p := testmodels.Path(rel)
+			size, ok := restatedSize(p)
+			if !ok {
+				missing("%s: MODEL MISSING: the fixture it restates is not in %s", rel, testmodels.Dir())
+				continue
+			}
+			src, _, _ := statedSource(p)
+			out = append(out, auditModel{name: rel, path: p, size: size, mmproj: towerOf(src)})
+		}
+	}
+	return out
+}
+
+// towerOf is the projector GGUF converted with text GGUF p: the one the tower
+// gates pair it with, else mmproj-<its file> beside it, else none.
+func towerOf(p string) string {
+	rel := filepath.ToSlash(strings.TrimPrefix(p, testmodels.Dir()+string(filepath.Separator)))
+	if rel, ok := towerPairs()[rel]; ok {
+		if q := testmodels.Path(rel); fileExists(q) {
+			return q
+		}
+	}
+	if q := filepath.Join(filepath.Dir(p), "mmproj-"+filepath.Base(p)); fileExists(q) {
+		return q
+	}
+	return ""
+}
+
+// towerPairs are the text GGUFs, relative to the model directory, whose
+// tower's file is not named mmproj-<file> beside them, as the tower gates pair
+// them.
+func towerPairs() map[string]string {
+	return map[string]string{
+		"gemma-3-4b-it-Q4_K_M.gguf":                           "vlm/mmproj-gemma-3-4b-it-f16.gguf",
+		"llava-phi-3-mini-int4.gguf":                          "llava-phi-3-mini-mmproj-f16.gguf",
+		"minicpmv/MiniCPM-V-4-Q4_K_M.gguf":                    "minicpmv/mmproj-MiniCPM-V-4-f16.gguf",
+		"minicpmv/Janus-Pro-1B-Q4_K_M.gguf":                   "minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf",
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf":                    "mmproj-Qwen2-VL-2B-Instruct-f16.gguf",
+		"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf":                  "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
+		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":                     "mmproj-Qwen3.5-0.8B-f16.gguf",
+		"d1/d1-3B-Q8_0.gguf":                                  "d1/mmproj-d1-3B-F16.gguf",
+		"pixtral/pixtral-12b-Q4_K_M.gguf":                     "pixtral/mmproj-pixtral-12b-Q8_0.gguf",
+		"moondream2/moondream2-text-model-f16_ct-vicuna.gguf": "moondream2/moondream2-mmproj-f16-20250414.gguf",
+	}
+}
+
+// modelConfigs are the GGUFs, relative to the model directory, that convert
+// only with their publisher's config.json (convert.WithModelConfig):
+// convert_hf_to_gguf.py names a LongRoPE it writes no factors of.
+func modelConfigs() map[string]string {
+	return map[string]string{
+		"synth-minicpmv.gguf": "vlmb/fixtures/synth-minicpmv/config.json",
+	}
+}
+
+// keyConfigs are the publisher's config.json files, under testdata, each GGUF
+// by its name converts with because it does not state a key the converter reads
+// (a sliding window) and the GGUF oracle assumes what the config states: the
+// same model as the GGUF oracle's.
+func keyConfigs() map[string]string {
+	return map[string]string{"EXAONE-4.0-1.2B-Q4_K_M.gguf": "testdata/configs/EXAONE-4.0-1.2B/config.json"}
+}
+
+// auditPicture is the picture a towered model encodes in the census: the
+// tower gates' quadrants and disc.
+func auditPicture(t *testing.T) image.Image {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+// auditHFDirs are safetensors inputs held to their reference outside
+// testdata/golden/hf, relative to the model directory, with their
+// safetensors' bytes: a box that does not hold one over 2 GiB names it
+// rather than fails, as it names a catalogue file. A class whose fixtures
+// carry their own goldens appends them (kimik3_test.go).
+func auditHFDirs() []auditHFDir {
+	return []auditHFDir{
+		{"hf/synth-kimik3", 85262304},
+		{"kimik3/Kimi-K3-0.40B-MXFP4-hf", 1472194984},
+		{"realck/Phi-tiny-MoE-instruct-hf", 7510687752},
+	}
+}
+
+// auditHFDir is one of auditHFDirs: where it is and its bytes.
+type auditHFDir struct {
+	rel   string
+	bytes int64
+}
+
+// auditDecision is the decision models' GGUFs two directories down; d1's and
+// lev's one directory down are found by the glob.
+func auditDecision() []string {
+	return []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf",
+		"clef/fixture/clef-fixture.gguf", "clef/fixture-tied/clef-fixture-tied.gguf"}
+}
+
+// isProjector reads general.architecture, as languageModels does: a vision
+// projector is the wrong input, not missing work.
+func isProjector(p string) bool {
+	f, err := gguf.Open(p)
+	if err != nil {
+		return false
+	}
+	arch, _ := f.KV["general.architecture"].String()
+	f.Close()
+	return arch == "clip"
+}

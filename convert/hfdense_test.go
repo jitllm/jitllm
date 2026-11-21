@@ -25,7 +25,7 @@ func c6HFDir() string {
 }
 
 // TestDenseSafetensorsMatchesItsGGUF converts each dense llama-family fixture
-// twice -- the HuggingFace directory directly, and the GGUF llama.cpp's own
+// twice -- the HuggingFace directory directly, and the GGUF
 // convert_hf_to_gguf.py wrote from the same directory -- and demands the same
 // container: every Config field, and every tensor byte for byte (both are F32,
 // so a permutation, a role or a dropped tensor is an inequality, not a
@@ -35,19 +35,28 @@ func c6HFDir() string {
 func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 	compared := 0
 	for _, name := range []string{"synth-smollm3", "synth-arcee", "synth-seedoss", "synth-olmo2",
-		"synth-exaone4", "synth-mistral3", "synth-olmo2-gqa", "synth-olmo3", "synth-apertus"} {
+		"synth-exaone4", "synth-mistral3", "synth-olmo2-gqa", "synth-olmo3", "synth-apertus", "synth-olmo"} {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(c6HFDir(), name)
 			gp := testmodels.Path(name + ".gguf")
 			for _, p := range []string{filepath.Join(dir, "config.json"), gp} {
 				if _, err := os.Stat(p); err != nil {
-					t.Skipf("MODEL MISSING: %v (scripts/c6gold.py %s writes both; JITLLM_C6_HF names "+
+					testmodels.Missing(t, "MODEL MISSING: %v (scripts/c6gold.py %s writes both; JITLLM_C6_HF names "+
 						"its HuggingFace directory) -- this gate proved nothing", err, name)
 				}
 			}
 			a, b := hfSource(t, dir), ggufSource(t, gp)
 			ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
+			// Where one side states no block graphs (its class or
+			// architecture states none yet), the other's are held by its
+			// own gates against its reference, and so are the parts it
+			// states beside them.
+			oneStates := len(a.Config.Blocks.Of) == 0 || len(b.Config.Blocks.Of) == 0
 			for i := 0; i < ca.NumField(); i++ {
+				n := ca.Type().Field(i).Name
+				if !ca.Type().Field(i).IsExported() || (n == "Blocks" || n == "Front") && oneStates {
+					continue
+				}
 				x, y := ca.Field(i).Interface(), cb.Field(i).Interface()
 				if !reflect.DeepEqual(x, y) {
 					t.Errorf("Config.%s: safetensors %v, gguf %v", ca.Type().Field(i).Name, x, y)
@@ -89,7 +98,7 @@ func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 			}
 			compared++
 			if !t.Failed() {
-				t.Logf("%v: every Config field and %d tensors identical", a.Config.Arch, same)
+				t.Logf("every Config field and %d tensors identical", same)
 			}
 		})
 	}
@@ -122,74 +131,90 @@ func TestDenseHFClassDefaults(t *testing.T) {
 		class string
 		extra string
 		names []string
-		check func(c *jlm.Config) string
+		check func(c *Config) string
 	}{
-		{"SmolLM3ForCausalLM", ``, nil, func(c *jlm.Config) string {
+		{"SmolLM3ForCausalLM", ``, nil, func(c *Config) string {
 			// kv 4, base 2e6, eps 1e-6, tied, NoPE every 4th layer.
 			return denseOK(c.NKVHead == 4 && c.RopeBase == 2e6 && c.RMSEps == 1e-6 &&
 				c.Flags.Has(jlm.FlagTiedEmbd) && c.NCtx == 32768 &&
 				c.Flags.Has(jlm.FlagNoPEGlobal) && c.SWAPeriod == 4 && c.SWAWindow == 0)
 		}},
-		{"SmolLM3ForCausalLM", `, "no_rope_layer_interval": 2, "sliding_window": 4096`, nil, func(c *jlm.Config) string {
+		{"SmolLM3ForCausalLM", `, "no_rope_layer_interval": 2, "sliding_window": 4096`, nil, func(c *Config) string {
 			// use_sliding_window defaults to false, so the window is unread.
 			return denseOK(c.SWAPeriod == 2 && c.SWAWindow == 0)
 		}},
-		{"ArceeForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"ArceeForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 4 && c.HeadDim == 16 && c.Flags.Has(jlm.FlagReLU2) && c.NCtx == 4096 &&
 				c.RMSEps == 1e-5 && !c.Flags.Has(jlm.FlagTiedEmbd))
 		}},
-		{"SeedOssForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"ArceeForCausalLM", `, "hidden_act": "silu"`, head, func(c *Config) string {
+			// ArceeMLP applies whatever hidden_act names, ungated: SiLU is
+			// no activation flag, and no gate tensor makes it ungated.
+			return denseOK(!c.Flags.Has(jlm.FlagReLU2) && !c.Flags.Has(jlm.FlagGELU))
+		}},
+		{"SeedOssForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 8 && c.HeadDim == 128 && c.NRot == 128 && c.RMSEps == 1e-6 &&
 				c.NCtx == 524288 && c.Flags.Has(jlm.FlagRopeNeox))
 		}},
-		{"Olmo2ForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"Olmo2ForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 4 && c.HeadDim == 16 && c.RopeBase == 1e4 && c.SWAWindow == 0 &&
 				c.Flags.Has(jlm.FlagQKNormWide))
 		}},
-		{"Olmo3ForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"Olmo3ForCausalLM", ``, head, func(c *Config) string {
 			// Window 4096 on three layers in four, base 5e5 for both kinds.
-			return denseOK(c.Arch == jlm.ArchOLMo3 && c.SWAWindow == 4096 && c.SWAPeriod == 4 &&
+			return denseOK(c.Stated.ropeScaleSWA == 1 && c.SWAWindow == 4096 && c.SWAPeriod == 4 &&
 				c.RopeBase == 5e5 && c.RopeBaseSWA == 5e5 && !c.Flags.Has(jlm.FlagNoPEGlobal))
 		}},
-		{"Olmo3ForCausalLM", `, "rope_theta": 10000.0`, head, func(c *jlm.Config) string {
+		{"Olmo3ForCausalLM", `, "rope_theta": 10000.0`, head, func(c *Config) string {
 			// The class pops rope_theta for the full layers alone: the
 			// sliding ones keep 5e5.
-			return denseOK(c.Arch == jlm.ArchOLMo3 && c.RopeBase == 1e4 && c.RopeBaseSWA == 5e5)
+			return denseOK(c.Stated.ropeScaleSWA == 1 && c.RopeBase == 1e4 && c.RopeBaseSWA == 5e5)
 		}},
 		{"Olmo3ForCausalLM", `, "num_key_value_heads": 2, "rope_scaling": {"rope_type": "yarn", "factor": 8.0,
-			"original_max_position_embeddings": 8192}`, head, func(c *jlm.Config) string {
+			"original_max_position_embeddings": 8192}`, head, func(c *Config) string {
 			// YaRN on the full layers, with its magnitude; the sliding
 			// layers' plain rotary is the arch's (SWARopePlain).
-			return denseOK(c.Arch == jlm.ArchOLMo3 && c.NKVHead == 2 && c.YarnFactor == 8 &&
+			return denseOK(c.Stated.ropeScaleSWA == 1 && c.NKVHead == 2 && c.YarnFactor == 8 &&
 				c.YarnOrigCtx == 8192 && c.AttnFactor > 1.2 && c.AttnFactor < 1.21 && c.RopeBaseSWA == 5e5)
 		}},
-		{"Olmo2ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *jlm.Config) string {
-			return denseOK(c.Arch == jlm.ArchOLMo2 && c.NKVHead == 2 && c.Flags.Has(jlm.FlagQKNormWide))
+		{"Olmo2ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *Config) string {
+			return denseOK(c.Name == "olmo2" && c.NKVHead == 2 && c.Flags.Has(jlm.FlagQKNormWide))
 		}},
-		{"Olmo3ForCausalLM", `, "sliding_window": null`, head, func(c *jlm.Config) string {
+		{"Olmo3ForCausalLM", `, "sliding_window": null`, head, func(c *Config) string {
 			return denseOK(c.SWAWindow == 0 && c.SWAPeriod == 0)
 		}},
-		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *jlm.Config) string {
+		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *Config) string {
 			// Window 4096 on three layers in four, NoPE on the fourth.
 			return denseOK(c.SWAWindow == 4096 && c.SWAPeriod == 4 && c.Flags.Has(jlm.FlagNoPEGlobal) &&
 				!c.Flags.Has(jlm.FlagQKNormWide) && c.NCtx == 2048)
 		}},
 		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "sliding_window": null,
 			"layer_types": ["full_attention", "full_attention", "full_attention", "full_attention"]`, head,
-			func(c *jlm.Config) string {
+			func(c *Config) string {
 				return denseOK(c.SWAWindow == 0 && !c.Flags.Has(jlm.FlagNoPEGlobal))
 			}},
-		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 5.0`, head, func(c *jlm.Config) string {
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 5.0`, head, func(c *Config) string {
 			// No rope_parameters: the class's own YaRN dict, whose base is
 			// 1e6 whatever rope_theta says; head_dim 128.
 			return denseOK(c.HeadDim == 128 && c.RopeBase == 1e6 && c.YarnFactor == 16 &&
 				c.YarnOrigCtx == 16384 && c.AttnTempScale == float32(0.1) && c.AttnTempFloor == 16384 &&
 				c.AttnFactor == 1 && c.YarnLogMul == 0 && c.NCtx == 262144)
 		}},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 7.0, "rope_parameters": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384}`, head, func(c *Config) string {
+			// A rope_parameters object that states no base leaves the
+			// top-level rope_theta, which the class's own default dict never
+			// reaches.
+			return denseOK(c.RopeBase == 7 && c.YarnFactor == 0)
+		}},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384}`, head, func(c *Config) string {
+			return denseOK(c.RopeBase == 1e4 && c.YarnFactor == 0)
+		}},
 	} {
 		t.Run(tc.class, func(t *testing.T) {
 			c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], %s%s}`, tc.class, base, tc.extra))
-			ha, err := hfArchOf(c)
+			ha, err := hfArchFor(hfDir{fstest.MapFS{}, "test"}, c, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,6 +226,75 @@ func TestDenseHFClassDefaults(t *testing.T) {
 				t.Errorf("%s%s: %+v", tc.class, tc.extra, *cfg)
 			}
 		})
+	}
+}
+
+// TestDenseLibraryRefusesWhatItDoesNotName: an MLP bias (mlp_bias) and a gate
+// on Arcee's ungated FFN are tensors no file names, refused by name where the
+// checkpoint carries them.
+func TestDenseLibraryRefusesWhatItDoesNotName(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ class, name string }{
+		{"SeedOssForCausalLM", "model.layers.0.mlp.up_proj.bias"},
+		{"Olmo2ForCausalLM", "model.layers.0.mlp.down_proj.bias"},
+		{"ArceeForCausalLM", "model.layers.0.mlp.up_proj.bias"},
+		{"ArceeForCausalLM", "model.layers.0.mlp.gate_proj.weight"},
+	} {
+		mj := lib[tc.class]
+		if mj == nil {
+			t.Fatalf("no %s in the library", tc.class)
+		}
+		a, err := mj.hfArch()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, ignored, err := a.identify(tc.name, nil); err == nil || ignored {
+			t.Errorf("%s: %s is not refused (ignored %v)", tc.class, tc.name, ignored)
+		}
+		// The control: the same block's names the file states are read.
+		if _, _, _, _, err := a.identify("model.layers.0.mlp.up_proj.weight", nil); err != nil {
+			t.Errorf("%s: the control is refused: %v", tc.class, err)
+		}
+	}
+}
+
+// TestDenseRotaryOrderNeedsTheWholeHead: the files that reorder q and k into
+// adjacent rotary pairs reorder the whole head, as their classes rotate all of
+// it; a partial_rotary_factor, which those classes do not read, is refused at
+// the config (mjGraphKeys), never reordered part-way.
+func TestDenseRotaryOrderNeedsTheWholeHead(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range []string{"ArceeForCausalLM", "SmolLM3ForCausalLM"} {
+		for _, partial := range []string{"", `, "partial_rotary_factor": 0.5`} {
+			c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], "vocab_size": 100, "hidden_size": 64,
+			  "intermediate_size": 96, "num_hidden_layers": 4, "num_attention_heads": 4, "num_key_value_heads": 2,
+			  "head_dim": 16, "tie_word_embeddings": false%s}`, class, partial))
+			a, err := lib[class].hfArch()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = a.config(c, []string{"lm_head.weight"})
+			if partial != "" {
+				if err == nil || !strings.Contains(err.Error(), "does not read it") {
+					t.Errorf("%s%s: %v, want the unread factor refused", class, partial, err)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", class, err)
+			}
+			e := jlm.Tensor{Name: "model.layers.0.self_attn.q_proj.weight", NDim: 2, Type: jlm.TypeF32}
+			e.Dims[0], e.Dims[1] = 64, 64
+			if err := a.shape(&e); err != nil {
+				t.Errorf("%s: the whole head's reorder is refused: %v", class, err)
+			}
+		}
 	}
 }
 
@@ -223,16 +317,35 @@ func TestDenseHFRefusals(t *testing.T) {
 			"original_max_position_embeddings": 8192, "rope_theta": 5e5}}`, "rotary scaling on its sliding_attention"},
 		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_scaling": {"rope_type": "linear", "factor": 8.0}`,
 			"rotary scaling on its full_attention"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_parameters": {"full_attention":
+			{"rope_type": "default", "rope_theta": 5e5, "partial_rotary_factor": 0.5},
+			"sliding_attention": {"rope_type": "default", "rope_theta": 5e5}}`, "partial_rotary_factor is 0.5"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_parameters": {"full_attention":
+			{"rope_type": "default", "rope_theta": 5e5},
+			"sliding_attention": {"rope_type": "default", "rope_theta": 5e5, "partial_rotary_factor": 0.5}}`,
+			"partial_rotary_factor is 0.5"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_scaling": {"rope_type": "yarn", "factor": 8.0,
+			"original_max_position_embeddings": 8192, "partial_rotary_factor": 0.5}`, "partial_rotary_factor is 0.5"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "layer_types": ["sliding_attention", "chunked_attention",
+			"sliding_attention", "full_attention"]`, "chunked_attention"},
+		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention", "chunked_attention",
+			"sliding_attention", "full_attention"]`, "chunked_attention"},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384, "partial_rotary_factor": 0.5}`,
+			"partial_rotary_factor is 0.5"},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_scaling": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384, "partial_rotary_factor": 0.5}`,
+			"partial_rotary_factor is 0.5"},
 		{"SmolLM3ForCausalLM", `, "no_rope_layers": [1, 0, 1, 1], "tie_word_embeddings": false`, "not every"},
 		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention",
-			"full_attention", "full_attention", "sliding_attention"]`, "not periodic"},
+			"full_attention", "full_attention", "sliding_attention"]`, "no period"},
 		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default"}`,
 			"llama_4_scaling_beta"},
-		{"ArceeForCausalLM", `, "hidden_act": "silu"`, "hidden_act"},
-		{"SeedOssForCausalLM", `, "mlp_bias": true`, "mlp_bias"},
+		{"ArceeForCausalLM", `, "hidden_act": "gelu"`, "activation gelu"},
+		{"SeedOssForCausalLM", `, "rope_parameters": {"rope_type": "dynamic", "factor": 4.0}`, "dynamic"},
 	} {
 		c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], %s%s}`, tc.class, base, tc.extra))
-		ha, err := hfArchOf(c)
+		ha, err := hfArchFor(hfDir{fstest.MapFS{}, "test"}, c, "")
 		if err != nil {
 			t.Fatal(err)
 		}

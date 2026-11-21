@@ -30,14 +30,14 @@ func Tuning(sh *app.Shell) widget.Widget {
 }
 
 func sampling(sh *app.Shell) widget.Widget {
-	// The knobs are [session.SamplingKnobs], the terminal's too, in the
+	// The knobs are [session.SamplingKnobs()], the terminal's too, in the
 	// sampler's order; their comment says why that order.
-	rows := make([]widget.Widget, 0, len(session.SamplingKnobs)+2)
-	for _, k := range session.SamplingKnobs {
+	rows := make([]widget.Widget, 0, len(session.SamplingKnobs())+2)
+	for _, k := range session.SamplingKnobs() {
 		rows = append(rows, knob(sh, k.Name, k.Min, k.Max, k.Step, k.Get, k.Set, k.Caption))
 	}
 	rows = append(rows, seedField(sh),
-		note(sh, "Applied in llama.cpp's order, so a prompt samples the same in both."))
+		note(sh, "Applied in the sampler chain's fixed order."))
 
 	return primitives.VBox(rows...).Gap(2)
 }
@@ -106,11 +106,13 @@ func knob(
 ) widget.Widget {
 	// The slider owns its signal and writes through on change: a
 	// Signal[Sampling] is replaced wholesale on every Set, so sliders bound to
-	// its fields would clobber each other.
-	val := state.NewSignal(get(sh.Store.Sampling.Get()))
-	cap := reactive(sh, sh.Store.Sampling.AsReadonly(), func() string {
-		return caption(sh.Store.Sampling.Get())
-	})
+	// its fields would clobber each other. It reads and edits the settings as
+	// shown, so a knob moved off the model's own keeps the model's other
+	// values.
+	shown := func() app.Sampling { return sh.Store.Sampling.Get().Shown(sh.Store.Own.Get()) }
+	val := state.NewSignal(get(shown()))
+	cap := state.NewComputed(func() string { return caption(shown()) },
+		sh.Store.Sampling.AsReadonly(), sh.Store.Own.AsReadonly())
 	return primitives.VBox(
 		primitives.HBox(
 			// The caption shrinks, not the label; see above.
@@ -120,7 +122,9 @@ func knob(
 		slider.New(
 			slider.ValueSignal(val),
 			slider.Min(min), slider.Max(max), slider.Step(step),
-			slider.OnChange(func(v float32) { set(sh, func(s *app.Sampling) { put(s, v) }) }),
+			slider.OnChange(func(v float32) {
+				set(sh, func(s *app.Sampling) { *s = s.Shown(sh.Store.Own.Get()); put(s, v) })
+			}),
 			slider.PainterOpt(sh.P.Slider),
 		),
 	).Gap(sh.P.Space.XS).PaddingXY(0, sh.P.Space.XS)

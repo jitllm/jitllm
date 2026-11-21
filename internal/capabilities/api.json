@@ -16,7 +16,7 @@
         {
           "name": "messages",
           "type": "array",
-          "note": "role and content; content is a string or content parts: text, and image_url (a data: URL in base64, or an https URL when the server lists hosts it may fetch from); PNG, JPEG, WebP or GIF, at most 20 MiB each, 64 MiB and 8 pictures a request, 16777216 pixels each, on a model with a vision tower; audio and file parts are refused. tool_calls and tool_call_id carry a tool turn"
+          "note": "role and content; content is a string or content parts: text, image_url (a data: URL in base64, or an https URL when the server lists hosts it may fetch from) and video (its frames' image URLs as a list, or as {\"frames\": [...], \"fps\": rate}, the frames' pixels together bounded as /v1/systemone's are, on a model whose tower reads a video); PNG, JPEG, WebP, GIF, BMP or TIFF, at most 20 MiB each, 64 MiB and 8 pictures a request, 16777216 pixels each, on a model with a vision tower; file parts of text are the turn's text, audio parts are refused. tool_calls and tool_call_id carry a tool turn"
         },
         {
           "name": "max_tokens",
@@ -66,12 +66,12 @@
         {
           "name": "presence_penalty",
           "type": "number",
-          "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+          "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
         },
         {
           "name": "frequency_penalty",
           "type": "number",
-          "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+          "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
         },
         {
           "name": "seed",
@@ -92,6 +92,11 @@
           "name": "top_logprobs",
           "type": "integer",
           "note": "0..20, only with logprobs"
+        },
+        {
+          "name": "logit_bias",
+          "type": "object",
+          "note": "token id to a bias in [-100, 100], added before the penalties; the generate decodes alone"
         },
         {
           "name": "tools",
@@ -116,7 +121,7 @@
         {
           "name": "ignore_eos",
           "type": "bool",
-          "note": "generate past an end-of-generation token up to max_tokens; refused with a forced tool call or a grammar"
+          "note": "generate past an end-of-generation token up to max_tokens; under a forced tool call or a grammar, until the grammar can go no further"
         },
         {
           "name": "jitllm_session",
@@ -132,6 +137,11 @@
           "name": "jitllm_speculate",
           "type": "bool",
           "note": "speculative decoding on or off for this request; absent takes the session's"
+        },
+        {
+          "name": "jitllm_decode_groups",
+          "type": "integer",
+          "note": "at most this many decode groups while the request decodes on a model over several cards; 1 keeps every row in one step"
         },
         {
           "name": "response_format",
@@ -156,7 +166,7 @@
         {
           "name": "prompt",
           "type": "array",
-          "note": "a string, an array of strings, token ids, or arrays of token ids; a list cannot stream"
+          "note": "a string, an array of strings, token ids, or arrays of token ids; a list's prompts run in order, prompt p's choices p*n to p*n+n-1"
         },
         {
           "name": "max_tokens",
@@ -166,7 +176,7 @@
         {
           "name": "stream",
           "type": "bool",
-          "note": "SSE frames as the API sends them; one prompt only"
+          "note": "SSE frames as the API sends them"
         },
         {
           "name": "stop",
@@ -176,12 +186,12 @@
         {
           "name": "echo",
           "type": "bool",
-          "note": "prepend the prompt to the text; refused with logprobs"
+          "note": "prepend the prompt to the text; with logprobs, its tokens' log-probabilities first, the first null"
         },
         {
           "name": "ignore_eos",
           "type": "bool",
-          "note": "generate past an end-of-generation token up to max_tokens; refused with a grammar"
+          "note": "generate past an end-of-generation token up to max_tokens; under a grammar, until the grammar can go no further"
         },
         {
           "name": "temperature",
@@ -211,12 +221,12 @@
         {
           "name": "presence_penalty",
           "type": "number",
-          "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+          "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
         },
         {
           "name": "frequency_penalty",
           "type": "number",
-          "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+          "note": "[-2, 2]; 0 disables; over repetition_penalty's window"
         },
         {
           "name": "seed",
@@ -239,6 +249,11 @@
           "note": "not read on this route; logprobs is the count"
         },
         {
+          "name": "logit_bias",
+          "type": "object",
+          "note": "token id to a bias in [-100, 100], added before the penalties; the generate decodes alone"
+        },
+        {
           "name": "jitllm_session",
           "type": "string",
           "note": "a server session id: the request continues its KV history"
@@ -252,6 +267,11 @@
           "name": "jitllm_speculate",
           "type": "bool",
           "note": "speculative decoding on or off for this request; absent takes the session's"
+        },
+        {
+          "name": "jitllm_decode_groups",
+          "type": "integer",
+          "note": "at most this many decode groups while the request decodes on a model over several cards; 1 keeps every row in one step"
         },
         {
           "name": "response_format",
@@ -302,6 +322,14 @@
           "note": "accepted and ignored"
         }
       ]
+    },
+    {
+      "path": "/v1/systemone",
+      "methods": [
+        "POST"
+      ],
+      "surface": "jitllm",
+      "note": "a decision model's answers: a JSON object with state and questions, at most 16 MiB"
     },
     {
       "path": "/v1/files",
@@ -362,20 +390,12 @@
       "note": "/v1/batches/{id} and POST /v1/batches/{id}/cancel"
     },
     {
-      "path": "/v1/systemone",
-      "methods": [
-        "POST"
-      ],
-      "surface": "jitllm",
-      "note": "a decision model's answers: a JSON object with state and questions, at most 16 MiB"
-    },
-    {
       "path": "/completion",
       "methods": [
         "POST"
       ],
       "surface": "llamacpp",
-      "note": "llama.cpp's /completion: prompt as a string, token ids or both mixed; streams with stream:true; fields the sampler lacks are refused by name"
+      "note": "prompt as a string, token ids or both mixed; streams with stream:true; fields the sampler lacks are refused by name"
     },
     {
       "path": "/infill",
@@ -383,7 +403,7 @@
         "POST"
       ],
       "surface": "llamacpp",
-      "note": "llama.cpp's /infill, for a model with fill-in-the-middle tokens"
+      "note": "for a model with fill-in-the-middle tokens"
     },
     {
       "path": "/tokenize",
@@ -415,7 +435,23 @@
         "POST"
       ],
       "surface": "llamacpp",
-      "note": "an embedding model only; llama.cpp's reply shape, L2-normalised"
+      "note": "an embedding model only; the surface's reply shape, normalised as embd_normalize asks (L2 by default)"
+    },
+    {
+      "path": "/embeddings",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "/embedding's handler under its second path"
+    },
+    {
+      "path": "/models",
+      "methods": [
+        "GET"
+      ],
+      "surface": "llamacpp",
+      "note": "/v1/models' list under the surface's path"
     },
     {
       "path": "/props",
@@ -424,7 +460,7 @@
         "POST"
       ],
       "surface": "llamacpp",
-      "note": "read only; POST answers 501 as llama-server does without --props"
+      "note": "read only; POST answers 501"
     },
     {
       "path": "/slots",
@@ -531,7 +567,7 @@
         "GET"
       ],
       "surface": "jitllm",
-      "note": "llama-server's shape: {\"status\": \"ok\"}"
+      "note": "{\"status\": \"ok\"}"
     },
     {
       "path": "/v1/health",
@@ -552,22 +588,22 @@
   ],
   "refusals": [
     {
-      "id": "presence-penalty",
+      "id": "presence-penalty-range",
       "endpoints": [
         "/v1/chat/completions",
         "/v1/completions"
       ],
-      "when": "presence_penalty is non-zero",
-      "message": "presence_penalty is not supported"
+      "when": "presence_penalty is outside [-2, 2]",
+      "message": "presence_penalty 3 is outside [-2, 2]"
     },
     {
-      "id": "frequency-penalty",
+      "id": "frequency-penalty-range",
       "endpoints": [
         "/v1/chat/completions",
         "/v1/completions"
       ],
-      "when": "frequency_penalty is non-zero",
-      "message": "frequency_penalty is not supported"
+      "when": "frequency_penalty is outside [-2, 2]",
+      "message": "frequency_penalty 3 is outside [-2, 2]"
     },
     {
       "id": "n-range",
@@ -604,30 +640,6 @@
       "message": "which is not among the request's tools"
     },
     {
-      "id": "completions-list-stream",
-      "endpoints": [
-        "/v1/completions"
-      ],
-      "when": "a list of prompts with stream",
-      "message": "a list of prompts cannot be streamed"
-    },
-    {
-      "id": "completions-logprobs-echo",
-      "endpoints": [
-        "/v1/completions"
-      ],
-      "when": "logprobs with echo",
-      "message": "logprobs with echo would need the prompt's own"
-    },
-    {
-      "id": "completions-list-logprobs-n",
-      "endpoints": [
-        "/v1/completions"
-      ],
-      "when": "logprobs or n with a list of prompts",
-      "message": "logprobs and n with a list of prompts are not built"
-    },
-    {
       "id": "embedding-format",
       "endpoints": [
         "/v1/embeddings"
@@ -652,51 +664,6 @@
       "message": "max_tokens is required and must be positive"
     },
     {
-      "id": "speculation-logprobs",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/completions"
-      ],
-      "when": "speculative decoding with logprobs",
-      "message": "speculation with logprobs is not built"
-    },
-    {
-      "id": "speculation-n",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/completions"
-      ],
-      "when": "speculative decoding with n above 1",
-      "message": "speculation with several choices is not built"
-    },
-    {
-      "id": "n-session",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/completions"
-      ],
-      "when": "n above 1 with jitllm_session",
-      "message": "several choices run on fresh sessions of a model"
-    },
-    {
-      "id": "forced-tool-ignore-eos",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/messages"
-      ],
-      "when": "a forced tool call (tool_choice required, any or named) with ignore_eos",
-      "message": "a forced tool call ends its reply with an end-of-generation token"
-    },
-    {
-      "id": "grammar-ignore-eos",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/completions"
-      ],
-      "when": "response_format json_object or json_schema with ignore_eos",
-      "message": "a grammar ends its reply with an end-of-generation token"
-    },
-    {
       "id": "embedding-non-embedder",
       "endpoints": [
         "/v1/embeddings"
@@ -709,16 +676,24 @@
       "endpoints": [
         "/v1/chat/completions"
       ],
-      "when": "a content part of type input_audio, file or input_file",
+      "when": "a content part of type input_audio",
       "message": "which this server does not take"
+    },
+    {
+      "id": "file-part-not-text",
+      "endpoints": [
+        "/v1/chat/completions"
+      ],
+      "when": "a file or input_file content part whose data is not text (a data URL not of text/* or application/json, or a stored file that is a PDF or not UTF-8)",
+      "message": "and this server reads no PDF"
     },
     {
       "id": "document-block",
       "endpoints": [
         "/v1/messages"
       ],
-      "when": "a document content block",
-      "message": "is a document block, which this server does not take"
+      "when": "a document content block whose source is a PDF or a file",
+      "message": "this server reads no PDF"
     },
     {
       "id": "image-non-vision",
@@ -757,21 +732,53 @@
       "message": "over the limit of"
     },
     {
-      "id": "image-format",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/messages"
-      ],
-      "when": "a picture that is not PNG, JPEG, WebP or GIF",
-      "message": "the pictures accepted are"
-    },
-    {
       "id": "decision-non-decider",
       "endpoints": [
         "/v1/systemone"
       ],
       "when": "the model is not a decision model",
       "message": "is not a decision model"
+    },
+    {
+      "id": "decision-no-audio",
+      "endpoints": [
+        "/v1/systemone"
+      ],
+      "when": "a voice clip for a model whose container carries no audio tower",
+      "message": "does not accept audio"
+    },
+    {
+      "id": "decision-no-video",
+      "endpoints": [
+        "/v1/systemone"
+      ],
+      "when": "a video for a model whose container states no tower that reads one",
+      "message": "does not accept video"
+    },
+    {
+      "id": "decision-video-oversize",
+      "endpoints": [
+        "/v1/systemone"
+      ],
+      "when": "a request's video frames over the pixel limit (default 8 pictures of the picture limit)",
+      "message": "over the limit of"
+    },
+    {
+      "id": "decision-audio-format",
+      "endpoints": [
+        "/v1/systemone"
+      ],
+      "when": "a file that is not a base64 data URL of a WAV of PCM (8, 16, 24 or 32 bits) or IEEE float (32 or 64 bits)",
+      "message": "audio"
+    },
+    {
+      "id": "image-format",
+      "endpoints": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "when": "a picture that is not PNG, JPEG, WebP, GIF, BMP or TIFF",
+      "message": "the pictures accepted are"
     }
   ],
   "control": [

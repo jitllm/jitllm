@@ -42,8 +42,7 @@ func ParsePreTokenizer(r io.Reader) ([]Op, error) {
 		return nil, fmt.Errorf("tok: pre_tokenizer has no recognised stages")
 	}
 	// Validate here so the refusal lands at the parse, not at the first
-	// Encode. It fires on a digit-triple Split in a form other than Isolated
-	// (TestTheDigitTripleSplitIsReadOnlyIsolated).
+	// Encode: a split with an unknown behavior is refused by name.
 	if err := Validate(ops); err != nil {
 		return nil, err
 	}
@@ -122,32 +121,28 @@ func flattenPreTokenizer(node any) []Op {
 		}
 		return out
 	case "Split":
+		// A Split is its pattern, as the file writes it, with its behavior and
+		// whether it is inverted: the tokenizer runs the text through it
+		// (tok's pattern engine) rather than a splitter recognised from it.
 		pat := ""
 		if p, ok := n["pattern"].(map[string]any); ok {
 			if r, ok := p["Regex"].(string); ok {
 				pat = r
+			} else if r, ok := p["String"].(string); ok {
+				pat = regexpQuote(r)
 			}
 		}
 		if pat == "" {
 			return nil // a Split we cannot read is not a Split we may guess at
 		}
-		// The digit-triple Split is its own stage, and only in the form the
-		// artefacts carry it: isolated, not inverted.
-		if pat == "[0-9][0-9][0-9]" {
-			if n["behavior"] == "Isolated" && n["invert"] != true {
-				return []Op{{Kind: OpDigitTriples}}
-			}
-			return []Op{{Kind: opUnreadable}}
+		op := Op{Kind: OpPattern, Pattern: pat, Behavior: "Isolated"}
+		if v, ok := n["behavior"].(string); ok {
+			op.Behavior = v
 		}
-		// The whole-pattern stages, recognised by their exact text: each is
-		// not the alternation skeleton parseSplit reads parameters off.
-		if op, ok := isolatedSplits[pat]; ok {
-			if n["behavior"] == "Isolated" && n["invert"] != true {
-				return []Op{op}
-			}
-			return []Op{{Kind: opUnreadable}}
+		if v, ok := n["invert"].(bool); ok {
+			op.Invert = v
 		}
-		return []Op{{Kind: OpSplit, Split: parseSplit(pat)}}
+		return []Op{op}
 	case "ByteLevel":
 		op := Op{Kind: OpByteLevel, UseRegex: true}
 		if v, ok := n["use_regex"].(bool); ok {
@@ -164,11 +159,17 @@ func flattenPreTokenizer(node any) []Op {
 		}
 		return []Op{op}
 	case "Punctuation":
-		op := Op{Kind: OpPunctuation, Behavior: "Isolated"}
-		if v, ok := n["behavior"].(string); ok {
-			op.Behavior = v
+		v, ok := n["behavior"].(string)
+		if !ok {
+			v = "Isolated"
 		}
-		return []Op{op}
+		// OpPunctuation runs Isolated and Contiguous; any other behavior is
+		// its class as a pattern stage, which runs every behavior the library
+		// defines.
+		if v == "Isolated" || v == "Contiguous" {
+			return []Op{{Kind: OpPunctuation, Behavior: v}}
+		}
+		return []Op{{Kind: OpPattern, Pattern: PunctuationPattern, Behavior: v}}
 	}
 	return nil
 }
@@ -187,56 +188,17 @@ const SparkWords = "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+" +
 	"| ?[\\p{P}\\p{S}]+" +
 	"|[\r\n]|\\s+(?!\\S)|\\s+"
 
-// isolatedSplits are the Split patterns that are a stage of their own rather
-// than the alternation skeleton, keyed by their exact text.
-var isolatedSplits = map[string]Op{
-	`\p{N}{1,3}`: {Kind: OpDigitGroups, Split: SplitParams{DigitGroup: 3}},
-	"[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+": {Kind: OpKanaHanRuns},
-	HunyuanWords: {Kind: OpHunyuanSplit},
-	SparkWords:   {Kind: OpSparkSplit},
-}
-
-// parseSplit reads the parameters out of a Split pattern.
-//
-// It recognises, it does not interpret: the patterns in the wild are one
-// alternation skeleton with different quantifiers and classes. An unrecognised
-// shape must end up as a refusal, never as a default.
-func parseSplit(pat string) SplitParams {
-	sp := SplitParams{DigitGroup: 1}
-	if strings.Contains(pat, `(?i:'s`) || strings.Contains(pat, `'(?i:[sdmt]`) {
-		sp.Contractions, sp.CaseFold = true, true
-	} else if strings.Contains(pat, `'[sS]`) {
-		sp.Contractions = true // an already-adapted alternation: case-exact
-	}
-	if strings.Contains(pat, `\p{N}{1,3}`) {
-		sp.DigitGroup = 3
-	}
-	if strings.Contains(pat, `[\p{L}\p{M}]`) {
-		sp.LetterMarks = true
-	}
-	// o200k's shape, read off the pattern rather than the name. These select a
-	// different algorithm, so each keys on a construct only it has (gpt-4o
-	// also contains `(?i:'s`).
-	if strings.Contains(pat, `[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]`) {
-		sp.CaseRuns = true
-	}
-	// The contraction group followed by `?` is the suffix form; llama3's stands
-	// alone and is followed by `|`.
-	if strings.Contains(pat, `'d)?`) || strings.Contains(pat, `'D)?`) {
-		sp.SuffixContract = true
-	}
-	if strings.Contains(pat, `[\r\n/]*`) {
-		sp.PunctSlash = true
-	}
-	// The punctuation alternative with no tail. The artefact spells the
-	// newlines either escaped or, after JSON decoding, as the characters
-	// themselves; both are read, and the tail's absence is what is keyed on.
-	for _, nl := range []string{`\r\n`, "\r\n"} {
-		if strings.Contains(pat, ` ?[^\s\p{L}\p{N}`+nl+`]+|`) {
-			sp.PunctNoNewline = true
+// regexpQuote is a literal String pattern as a regex that matches it: every
+// character the pattern syntax gives a meaning, escaped.
+func regexpQuote(lit string) string {
+	var b strings.Builder
+	for _, r := range lit {
+		if strings.ContainsRune(`\.+*?()|[]{}^$-&#`, r) {
+			b.WriteByte('\\')
 		}
+		b.WriteRune(r)
 	}
-	return sp
+	return b.String()
 }
 
 // GoSource renders the op as a Go composite literal for the generated table.
@@ -248,6 +210,8 @@ func parseSplit(pat string) SplitParams {
 // at load, so a new kind cannot become a silently valid table entry.
 func (op Op) GoSource() string {
 	switch op.Kind {
+	case OpPattern:
+		return fmt.Sprintf("{Kind: OpPattern, Pattern: %q, Behavior: %q, Invert: %v}", op.Pattern, op.Behavior, op.Invert)
 	case OpSplit:
 		// PunctNoNewline prints only when set, so other rows are unchanged.
 		tail := ""
@@ -282,16 +246,23 @@ func (op Op) GoSource() string {
 // Validate reports whether every stage is one a pipeline can be built from.
 //
 // It is the half of buildPipeline that belongs to the model: whether a stage
-// is well formed, as opposed to whether it can be compiled into a splitter. The
-// parser asks it so a refusal lands at the parse. Only opUnreadable
-// reaches an error; the other checks guard kinds a future flattener may emit.
+// is well formed, as opposed to whether its pattern compiles, which the
+// tokenizer decides when it builds the pipeline. The parser asks it so a
+// refusal lands at the parse.
 func Validate(ops []Op) error {
 	for _, o := range ops {
 		switch o.Kind {
+		case OpPattern:
+			if o.Pattern == "" {
+				return fmt.Errorf("pretok: a split stage with no pattern")
+			}
+			switch o.Behavior {
+			case "Isolated", "Removed", "MergedWithPrevious", "MergedWithNext", "Contiguous":
+			default:
+				return fmt.Errorf("pretok: split behavior %q is not one the tokenizers library defines", o.Behavior)
+			}
 		case OpSplit, OpByteLevel, OpDigits, OpPunctuation, OpDigitTriples, OpPunctDefault,
 			OpDigitGroups, OpKanaHanRuns, OpHunyuanSplit, OpSparkSplit:
-		case opUnreadable:
-			return fmt.Errorf("pretok: a digit-triple Split that is not Isolated and uninverted")
 		default:
 			return fmt.Errorf("pretok: stage kind %d is not one this model defines", o.Kind)
 		}

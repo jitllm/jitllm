@@ -32,19 +32,34 @@ type Client struct {
 	// this client opened; 0 is DefaultConns.
 	Conns int
 
+	// The remaining fields tune the range reads; zero takes the default. A
+	// gate sets them to split a small file and to fail without waiting.
+	RangeChunk      int           // bytes a range read is split into; 16 MiB
+	BackoffBase     time.Duration // the first retry's wait, doubling; a second
+	StallAfter      time.Duration // silence that abandons a request; a minute
+	AttemptDeadline time.Duration // all one request may take; ten minutes
+	CDNFresh        time.Duration // how long a learned CDN address is used; 20 minutes
+	MaxRetryAfter   time.Duration // the longest a server may ask a range to wait; 5 minutes
+
 	connsOnce sync.Once
 	conns     chan struct{}
+	httpOnce  sync.Once
+	shared    *http.Client // used when HTTP is nil: no whole-request timeout
+	ranges    *http.Client // range reads' client when HTTP is nil
 }
 
 // ErrAccess is what a 401 or 403 wraps: the repository is private, gated, or
 // does not exist -- the Hub answers the same way to all three. errors.Is it to
 // tell a missing token from every other failure.
-var ErrAccess = errors.New("the Hub refused access")
+const ErrAccess accessError = "the Hub refused access"
+
+type accessError string
+
+func (e accessError) Error() string { return string(e) }
 
 // No Client.Timeout: it covers the whole exchange including the body, so no
 // single value suits both a small file and a 40 GB one. The timeouts here are
 // per-stall: a connection that produces no header, or a read that stops.
-var shared = &http.Client{Transport: sharedTransport()}
 
 func sharedTransport() http.RoundTripper {
 	t := http.DefaultTransport.(*http.Transport).Clone()
@@ -65,7 +80,13 @@ func (c *Client) client() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return shared
+	c.httpOnce.Do(c.buildHTTP)
+	return c.shared
+}
+
+func (c *Client) buildHTTP() {
+	c.shared = &http.Client{Transport: sharedTransport()}
+	c.ranges = &http.Client{Transport: rangeTransport()}
 }
 
 func (c *Client) req(method, u string) (*http.Request, error) {
@@ -398,7 +419,7 @@ func (c *Client) bodyRetrying(r Ref, have *int64, h io.Writer, f io.Writer, in I
 			return err
 		}
 		c.notef("retry    %s at %s: %v\n", filepath.Base(r.File), size(*have), t.error)
-		time.Sleep(backoff(attempt))
+		time.Sleep(c.backoff(attempt))
 	}
 }
 

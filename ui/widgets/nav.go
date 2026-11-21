@@ -28,6 +28,7 @@ type NavItem struct {
 
 // NewNavItem builds a row. selected may be nil for an action row.
 func NewNavItem(icon Icon, label string, selected state.ReadonlySignal[bool], onClick func(), colors NavColors, size float32) *NavItem {
+	var _ widget.Lifecycle = (*NavItem)(nil)
 	n := &NavItem{icon: icon, label: label, selected: selected, onClick: onClick, colors: colors, size: size}
 	n.SetVisible(true)
 	n.SetEnabled(true)
@@ -99,8 +100,6 @@ func (n *NavItem) Mount(ctx widget.Context) {
 // Unmount has nothing to release; see MemoryMap.Unmount for why it exists.
 func (n *NavItem) Unmount() {}
 
-var _ widget.Lifecycle = (*NavItem)(nil)
-
 // ChatRow is one conversation in the sidebar: its title, highlighted while it
 // is the one on screen. A rail too narrow for a title has no room for the
 // list at all, so there the row takes no space.
@@ -117,6 +116,7 @@ type ChatRow struct {
 
 // NewChatRow builds a row.
 func NewChatRow(label state.ReadonlySignal[string], selected state.ReadonlySignal[bool], onClick func(), colors NavColors, size float32) *ChatRow {
+	var _ widget.Lifecycle = (*ChatRow)(nil)
 	r := &ChatRow{label: label, selected: selected, onClick: onClick, colors: colors, size: size}
 	r.SetVisible(true)
 	r.SetEnabled(true)
@@ -195,8 +195,6 @@ func (r *ChatRow) Mount(ctx widget.Context) {
 }
 
 func (r *ChatRow) Unmount() {}
-
-var _ widget.Lifecycle = (*ChatRow)(nil)
 
 // NavHeading is a small muted label over a group of rows, absent in a rail.
 type NavHeading struct {

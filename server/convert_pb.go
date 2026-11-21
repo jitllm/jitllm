@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -49,8 +51,8 @@ func pbBackend(name string) v1.Backend {
 
 func pbKind(k DeviceKind) v1.DeviceKind {
 	switch k {
-	case KindHost:
-		return v1.DeviceKind_DEVICE_KIND_HOST
+	case KindCPU:
+		return v1.DeviceKind_DEVICE_KIND_CPU
 	case KindDiscrete:
 		return v1.DeviceKind_DEVICE_KIND_DISCRETE
 	case KindIntegrated:
@@ -153,10 +155,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 			names = append(names, "default")
 		}
 	}
-	visBlocks := 0
-	if t := lm.m.Tower(); t != nil {
-		visBlocks = t.Cfg.NLayer
-	}
 
 	pooling := ""
 	if lm.m.IsEmbedding() {
@@ -169,7 +167,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		ModelId:           lm.id,
 		Path:              lm.path,
 		Name:              lm.name,
-		Architecture:      c.Arch,
 		BlockCount:        int32(c.NLayer),
 		EmbeddingDim:      int32(c.NEmbd),
 		ContextLength:     int32(c.NCtx),
@@ -178,8 +175,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		ExpertsUsed:       int32(c.NExpertUsed),
 		AttentionBlocks:   int32(attn),
 		LinearBlocks:      int32(lin),
-		HasVisionTower:    lm.m.Tower() != nil,
-		VisionBlockCount:  int32(visBlocks),
 		ChatCapable:       lm.m.ChatCapable(),
 		ChatTemplateNames: names,
 		PageSize:          pbBytes(lm.m.PageSize()),
@@ -187,15 +182,16 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		SessionCount:      int32(sessions),
 		DefaultDeviceIds:  lm.devIDs(),
 		Pooling:           pooling,
-		Encoder:           lm.m.IsEncoder(),
+		Encoder:           c.NonCausal,
 		Aliases:           e.aliasesOf(lm.path),
 		DefaultMaxSeq:     int32(e.defaultMaxSeq(lm)),
-		Capabilities: modelCapabilities(lm.m.ChatCapable(), lm.m.Tower() != nil,
-			lm.m.IsEmbedding(), lm.m.IsEncoder()),
+		StatedSampling:    pbStatedSampling(lm, e.defaultMaxSeq(lm)),
+		Capabilities: modelCapabilities(lm.m.ChatCapable(), lm.m.Tower != nil,
+			lm.m.IsEmbedding(), c.NonCausal),
 	}
 }
 
-// pbSession reads only the published snapshot and the atomics: model.State is
+// pbSession reads only the published snapshot and the atomics: engine.Instance is
 // one sequence written by Forward with no lock, so a stats handler must never
 // touch it while a generate is in flight. See the snap* fields on session.
 func (e *Engine) pbSession(s *Session) *v1.Session {
@@ -207,7 +203,7 @@ func (e *Engine) pbSession(s *Session) *v1.Session {
 		Position:           s.snapPos.Load(),
 		DeviceIds:          s.lm.devIDs(),
 		DeviceBlocks:       devBlocks,
-		HostBlocks:         int32(s.lm.m.Cfg.NLayer) - devBlocks,
+		CpuBlocks:          int32(s.lm.m.Cfg.NLayer) - devBlocks,
 		KvBytes:            pbBytes(s.snapKV.Load()),
 		Execution:          pbExecution(sessionMode(s)),
 		QueuePosition:      s.queuePos.Load(),
@@ -260,7 +256,7 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 			onDev[i] = true
 		}
 	}
-	// The tier names the device each block is on (model.State.DeviceOf);
+	// The tier names the device each block is on (engine.Instance.DeviceOf);
 	// with one device the id is the one the model was loaded with, which
 	// is also what an unnamed device reports.
 	single := ""
@@ -272,11 +268,11 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 	devCount := 0
 	for i := 0; i < c.NLayer; i++ {
 		bp := &v1.BlockPlacement{
-			Index:        int32(i),
-			Kind:         pbBlockKind(c, i),
-			Location:     v1.BlockLocation_BLOCK_LOCATION_HOST,
-			Bytes:        pbBytes(lm.m.PageBytes(i)),
-			HostResident: true,
+			Index:       int32(i),
+			Kind:        pbBlockKind(c, i),
+			Location:    v1.BlockLocation_BLOCK_LOCATION_CPU,
+			Bytes:       pbBytes(lm.m.PageBytes(i)),
+			CpuResident: true,
 		}
 		if i < len(snap.hist) {
 			h := snap.hist[i]
@@ -288,7 +284,7 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 			if i < len(snap.on) && snap.on[i] != "" {
 				bp.DeviceId = snap.on[i]
 			}
-			bp.HostResident = false
+			bp.CpuResident = false
 			devCount++
 		}
 		blocks = append(blocks, bp)
@@ -310,7 +306,7 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 		ModelId:          lm.id,
 		Blocks:           blocks,
 		Declines:         declines,
-		HostBlockCount:   int32(c.NLayer - devCount),
+		CpuBlockCount:    int32(c.NLayer - devCount),
 		DeviceBlockCount: int32(devCount),
 		HeadOnDevice:     snap.headOnDev,
 		Demotions:        int64(snap.demotions),
@@ -330,23 +326,20 @@ func isCapacityDecline(why string) bool {
 }
 
 func pbResidency(lm *LoadedModel) *v1.Residency {
-	m := lm.m
-	frames, in, out := m.PageStats()
-	resident := m.HostResidentBlocks()
+	m, fr := lm.m, lm.frames()
+	frames, in, out := m.PageStats(fr)
+	resident := m.CPUResidentBlocks(fr)
 	blocks := m.Cfg.NLayer
-	if t := m.Tower(); t != nil {
-		blocks += t.Cfg.NLayer
-	}
-	budget := m.PageBudget()
+	budget := m.PageBudget(fr)
 	// fits is a boolean because the step is a cliff: one block short of
 	// resident is one eviction and one page read every token. It is the
 	// budget's answer, not a count of frames: a model that fits has none
 	// resident until its first token, and one under a tiny budget has none
 	// resident right after the re-budget evicted them.
-	fits := m.PagesFit()
+	fits := m.PagesFit(fr)
 	return &v1.Residency{
 		ModelId:        lm.id,
-		Resident:       pbBytes(m.HostBytes()),
+		Resident:       pbBytes(m.HostBytes(fr)),
 		Budget:         pbBytes(budget),
 		Frames:         int32(frames),
 		Blocks:         int32(blocks),
@@ -354,7 +347,7 @@ func pbResidency(lm *LoadedModel) *v1.Residency {
 		Fits:           fits,
 		PageIns:        in,
 		Evictions:      out,
-		BytesRead:      pbBytes(m.BytesRead()),
+		BytesRead:      pbBytes(m.PagedBytes()),
 		ReadRequests:   m.PagerReads(),
 	}
 }
@@ -367,11 +360,11 @@ func pbSpeculation(p *v1.SpeculationParams) *Speculation {
 	return &Speculation{Enabled: p.Enabled, Draft: max(int(p.DraftTokens), 0)}
 }
 
-func pbSampling(p *v1.SamplingParams) *model.Sampler {
+func pbSampling(p *v1.SamplingParams) *engine.Sampler {
 	if p == nil {
 		return nil
 	}
-	s := &model.Sampler{}
+	s := &engine.Sampler{}
 	if p.Temperature != nil {
 		s.Temp = float64(*p.Temperature)
 	}
@@ -385,6 +378,9 @@ func pbSampling(p *v1.SamplingParams) *model.Sampler {
 	if p.MinP != nil {
 		s.MinP = float64(*p.MinP)
 	}
+	if p.TypicalP != nil {
+		s.TypicalP = float64(*p.TypicalP)
+	}
 	if p.Seed != nil {
 		s.Seed = int64(*p.Seed)
 	}
@@ -393,6 +389,12 @@ func pbSampling(p *v1.SamplingParams) *model.Sampler {
 	}
 	if p.RepeatLastN != nil {
 		s.RepeatLastN = int(*p.RepeatLastN)
+	}
+	if p.PresencePenalty != nil {
+		s.PresencePen = float64(*p.PresencePenalty)
+	}
+	if p.FrequencyPenalty != nil {
+		s.FreqPen = float64(*p.FrequencyPenalty)
 	}
 	return s
 }

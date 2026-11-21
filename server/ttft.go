@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,24 +11,25 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/model"
 )
 
 // What a request pays before its first token, and the four things here that
 // cut it:
 //
-//   - The memory cache. Every loaded model keeps one bounded model.MemStore,
+//   - The memory cache. Every loaded model keeps one bounded engine.MemStore,
 //     and every generate that starts its sequence prefills through it
-//     (State.PrefillCached), so a chat's second turn or a system prompt
+//     (Instance.PrefillCached), so a chat's second turn or a system prompt
 //     another request already ran restores its prefix instead of computing
 //     it. The store is a share of the model's host budget, taken out of
 //     what the pager may hold (applyPageBudget).
-//   - The State pool. A model_id request ran on a State built for it and
+//   - The instance pool. A model_id request ran on an instance built for it and
 //     closed after it; Close quiesces the device and retires its recordings,
-//     and a fresh State grows its batch scratch again. A finished request's
-//     State is reset and kept for the next, up to a bound.
+//     and a fresh instance grows its batch scratch again. A finished request's
+//     instance is reset and kept for the next, up to a bound.
 //   - Warm-up at load (LoadOptions.Warm): a short prefill and a decode step
-//     on a pooled State, so the first request does not pay the JIT's
+//     on a pooled instance, so the first request does not pay the JIT's
 //     emission and the device's first recordings.
 //   - Admission: a bounded count of requests per model, past which a request
 //     is refused with ErrOverloaded (429 and Retry-After over HTTP) rather
@@ -37,7 +39,7 @@ import (
 // ErrOverloaded is a request refused because its model already holds as many
 // as Config.MaxQueue allows. Nothing was run; retrying later is correct. The
 // error returned wraps it in an *OverloadedError carrying how long to wait.
-var ErrOverloaded = errors.New("server: the model's request queue is full")
+const ErrOverloaded serverError = "server: the model's request queue is full"
 
 // OverloadedError is ErrOverloaded with the wait an HTTP refusal names in
 // Retry-After.
@@ -98,15 +100,21 @@ func (e *Engine) modelOf(o GenerateOptions) *LoadedModel {
 }
 
 // CheckAdmission reports the ErrOverloaded a generate of o would get now,
-// and the refusal of a picture by a model with no vision tower.
+// the refusal of a picture for a model with no tower, and of a system prompt
+// for a chat template with no system role.
 func (e *Engine) CheckAdmission(o GenerateOptions) error {
 	lm := e.modelOf(o)
 	if lm == nil {
 		return nil
 	}
-	if o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 {
-		if err := acceptsImages(lm); err != nil {
-			return err
+	ch := o.Prompt.Chat
+	if ch.carriesMedia() && !lm.m.SeesPictures() {
+		return fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid, lm.id)
+	}
+	if o.Prompt.Kind == PromptChat && ch.carriesSystem() {
+		_, err := lm.m.ChatPromptToolChoice(ch.messages(), ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
+		if errors.As(err, new(*model.SystemRoleError)) {
+			return chatErr(ch.named(err))
 		}
 	}
 	if t := &lm.ttft; t.queueCap > 0 && int(t.inflight.Load()) >= t.queueCap {
@@ -132,16 +140,15 @@ const defaultMaxQueue = 64
 // a backgrounded model keeps (backgroundShare).
 const storeShare = 8
 
-// MemCacheStats is a model's memory cache and State pool, as counted.
+// MemCacheStats is a model's memory cache and its sessions, as counted.
 type MemCacheStats struct {
-	Store model.MemStoreStats
+	Store engine.MemStoreStats
 	// Restored and Computed are prompt positions taken from the store and
 	// prefilled, over every generate that started its sequence.
 	Restored, Computed int64
-	// StatesCreated, StatesReused and StatesClosed count model.States built,
-	// handed out again from the pool, and closed.
-	StatesCreated, StatesReused, StatesClosed int64
-	Pooled                                    int
+	// SessionsOpened and SessionsClosed count the model.Sessions opened on
+	// the model's instance and closed.
+	SessionsOpened, SessionsClosed int64
 	// Warmed says a warm-up ran at load.
 	Warmed bool
 	// Refused counts requests turned away with ErrOverloaded.
@@ -150,35 +157,30 @@ type MemCacheStats struct {
 
 // ttft is a LoadedModel's share of the above.
 type ttft struct {
-	store *model.MemStore // nil with Config.NoMemCache
-	// shared is the model's pages held once (model.SharedStore), which its
+	store *engine.MemStore // nil with Config.NoMemCache
+	// shared is the model's pages held once (engine.SharedStore), which its
 	// Deciders share through: nil with Config.NoMemCache.
-	shared *model.SharedStore
-	// kv is what a State is pointed at: the memory cache, or the memory cache
+	shared *engine.SharedStore
+	// kv is what an instance is pointed at: the memory cache, or the memory cache
 	// over Config.PromptStore (layered) when the server has one.
-	kv model.KVStore
+	kv engine.KVStore
 	ns string
-
-	// idle is the pool: reset States waiting for a request. Guarded by the
-	// Engine's mu, as lm.sessions is.
-	idle    []*model.State
-	poolCap int
 
 	inflight atomic.Int32
 	queueCap int
 
-	restored, computed                        atomic.Int64
-	statesCreated, statesReused, statesClosed atomic.Int64
-	refused                                   atomic.Int64
-	warmed                                    atomic.Bool
+	restored, computed             atomic.Int64
+	sessionsOpened, sessionsClosed atomic.Int64
+	refused                        atomic.Int64
+	warmed                         atomic.Bool
 }
 
-// initTTFT sets lm's memory cache, pool and queue bound from the config.
+// initTTFT sets lm's memory cache and queue bound from the config.
 func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 	t := &lm.ttft
-	if !e.cfg.NoMemCache && !lm.m.IsEncoder() {
-		t.store = model.NewBoundedMemStore(1)
-		t.shared = model.NewSharedStore()
+	if !e.cfg.NoMemCache {
+		t.store = engine.NewBoundedMemStore(1)
+		t.shared = engine.NewSharedStore()
 		// The namespace names this load: the store is the model's own, and
 		// the KV width and page geometry are fixed for its life.
 		t.ns = fmt.Sprintf("jitllmd/%s/%d", lm.id, lm.loadedAt.UnixNano())
@@ -186,16 +188,6 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 		if e.cfg.PromptStore != nil {
 			t.kv = &layered{mem: t.store, disk: e.cfg.PromptStore}
 		}
-	}
-	switch {
-	case e.cfg.SessionPool < 0:
-		t.poolCap = 0
-	case e.cfg.SessionPool > 0:
-		t.poolCap = e.cfg.SessionPool
-	default:
-		// As many as the device reserved a history for: one more pooled
-		// State would take its history on the host.
-		t.poolCap = max(o.Sessions, 1)
 	}
 	switch {
 	case e.cfg.MaxQueue < 0:
@@ -246,41 +238,23 @@ func (e *Engine) admitQueue(lm *LoadedModel) (func(), error) {
 // PromptCache reports the model's memory cache, pool and admission counters.
 func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 	t := &lm.ttft
-	var st model.MemStoreStats
+	var st engine.MemStoreStats
 	if t.store != nil {
 		st = t.store.Stats()
 	}
-	e.mu.RLock()
-	pooled := len(t.idle)
-	e.mu.RUnlock()
 	return MemCacheStats{
-		Store:         st,
-		Restored:      t.restored.Load(),
-		Computed:      t.computed.Load(),
-		StatesCreated: t.statesCreated.Load(),
-		StatesReused:  t.statesReused.Load(),
-		StatesClosed:  t.statesClosed.Load(),
-		Pooled:        pooled,
-		Warmed:        t.warmed.Load(),
-		Refused:       t.refused.Load(),
+		Store:          st,
+		Restored:       t.restored.Load(),
+		Computed:       t.computed.Load(),
+		SessionsOpened: t.sessionsOpened.Load(),
+		SessionsClosed: t.sessionsClosed.Load(),
+		Warmed:         t.warmed.Load(),
+		Refused:        t.refused.Load(),
 	}
-}
-
-// takeIdle pops a pooled State, or nil.
-func (e *Engine) takeIdle(lm *LoadedModel) *model.State {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	n := len(lm.ttft.idle)
-	if n == 0 {
-		return nil
-	}
-	st := lm.ttft.idle[n-1]
-	lm.ttft.idle = lm.ttft.idle[:n-1]
-	return st
 }
 
 // releaseEphemeral ends a model_id request's session: unregistered as
-// CloseSession does, and its State reset into the pool when there is room
+// CloseSession does, and its instance reset into the pool when there is room
 // and the model is still loaded, closed otherwise.
 func (e *Engine) releaseEphemeral(s *Session) {
 	e.mu.Lock()
@@ -296,72 +270,17 @@ func (e *Engine) releaseEphemeral(s *Session) {
 		s.parkView.Release()
 		s.parkView = nil
 	}
-	ok := e.pool(s.lm, s.st)
+	s.ms.Close()
 	s.mu.Unlock()
-	if !ok {
-		s.lm.ttft.statesClosed.Add(1)
-		s.st.Close()
-	}
+	s.lm.ttft.sessionsClosed.Add(1)
 	e.applyPageBudget(s.lm, nil)
 }
 
-// pool resets st and keeps it for the next request, reporting false when the
-// pool is full or the model is gone (the caller closes it then). A State
-// whose blocks a placement call moved is not kept: the next request must get
-// the model's default placement, as a fresh State would.
-func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
-	// A parked State is not pooled: its history is in a store, not reset.
-	if lm.ttft.poolCap == 0 || st.Parked() || !stepsJointly(st) && lm.loop != nil {
-		return false
-	}
-	st.SetPrefillInterrupt(nil)
-	st.Reset()
-	// The store is attached per request (useStore); an idle State holds none.
-	st.SetKVStore(nil)
-	st.SetCacheKey("")
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.models[lm.id] != lm || len(lm.ttft.idle) >= lm.ttft.poolCap {
-		return false
-	}
-	lm.ttft.idle = append(lm.ttft.idle, st)
-	return true
-}
-
-// closeIdle closes every pooled State and the memory cache. The model is
-// already unpublished, so nothing returns a State to the pool after it.
+// closeIdle closes the memory cache. The model is already unpublished.
 func (e *Engine) closeIdle(lm *LoadedModel) {
-	e.dropIdle(lm)
 	if lm.ttft.store != nil {
 		lm.ttft.store.Close()
 	}
-}
-
-// dropIdle closes every pooled State. A pooled State is reset and holds no
-// sequence, but it is still a session of the tier on every block it was
-// placed on, and the tier moves a block between devices only when no other
-// session is on it (its history would be freed with the source's copy): left
-// in the pool, the warm-up's State alone kept every move from running. The
-// pool fills again from the next model_id requests, placed where the blocks
-// are then.
-func (e *Engine) dropIdle(lm *LoadedModel) {
-	e.mu.Lock()
-	idle := lm.ttft.idle
-	lm.ttft.idle = nil
-	e.mu.Unlock()
-	for _, st := range idle {
-		lm.ttft.statesClosed.Add(1)
-		st.Close()
-	}
-}
-
-// idleKV is the history the pooled States hold. e.mu held.
-func (lm *LoadedModel) idleKV() uint64 {
-	var kv uint64
-	for _, st := range lm.ttft.idle {
-		kv += st.KVBytes()
-	}
-	return kv
 }
 
 // useStore says whether this generate prefills through the model's prompt
@@ -373,33 +292,33 @@ func (e *Engine) useStore(s *Session, o GenerateOptions) bool {
 	return s.lm.ttft.store != nil && !o.Continue && !s.cached
 }
 
-// attachStore points s's State at the model's store for one generate, or
-// takes it away. The State is at position 0 (the caller reset it).
+// attachStore points s's instance at the model's store for one generate, or
+// takes it away. The instance is at position 0 (the caller reset it).
 func (s *Session) attachStore(on bool) error {
 	if !on {
 		if s.storeOn {
-			s.st.SetKVStore(nil)
-			if err := s.st.SetCacheKey(""); err != nil {
+			s.ms.SetKVStore(nil)
+			if err := s.ms.SetCacheKey(""); err != nil {
 				return err
 			}
 			s.storeOn = false
 		}
 		return nil
 	}
-	s.st.SetKVStore(s.lm.ttft.kv)
-	if err := s.st.SetCacheKey(s.lm.ttft.ns); err != nil {
+	s.ms.SetKVStore(s.lm.ttft.kv)
+	if err := s.ms.SetCacheKey(s.lm.ttft.ns); err != nil {
 		return err
 	}
 	s.storeOn = true
 	return nil
 }
 
-// warm runs what a first request would on a pooled State: a short prefill and
+// warm runs what a first request would on a pooled instance: a short prefill and
 // one decode step, so the JIT's kernels for those shapes are emitted and the
 // device's first recordings made before a request waits on them. Nothing is
 // counted as served and nothing goes into the memory cache.
 func (e *Engine) warm(lm *LoadedModel) error {
-	if lm.m.IsEncoder() || lm.m.Vocab == nil {
+	if lm.m.Vocab == nil {
 		return nil
 	}
 	s, err := e.CreateSession(SessionOptions{ModelID: lm.id})
@@ -414,11 +333,22 @@ func (e *Engine) warm(lm *LoadedModel) error {
 		return nil
 	}
 	start := time.Now()
-	lg, err := s.st.Prefill(ids)
-	if err != nil {
+	ctx := context.Background()
+	var next int32
+	if err := s.ms.Run(ctx, engine.PhasePrefill, func(in *engine.Instance) error {
+		lg, err := in.Prefill(ids)
+		if err != nil {
+			return err
+		}
+		next, err = in.Sample(nil, lg)
+		return err
+	}); err != nil {
 		return fmt.Errorf("server: warming %q: %w", lm.id, err)
 	}
-	if _, err := s.st.Forward(model.Greedy(lg)); err != nil {
+	if err := s.ms.Run(ctx, engine.PhaseGenerate, func(in *engine.Instance) error {
+		_, err := in.Forward(next)
+		return err
+	}); err != nil {
 		return fmt.Errorf("server: warming %q: %w", lm.id, err)
 	}
 	lm.ttft.warmed.Store(true)
@@ -436,13 +366,13 @@ func (e *Engine) warm(lm *LoadedModel) error {
 // on disk serves this process only; a session created with prompt_cache names
 // its own, and its pages outlive the process as the disk store's always did.
 type layered struct {
-	mem  *model.MemStore
-	disk model.KVStore
+	mem  *engine.MemStore
+	disk engine.KVStore
 }
 
 func (l *layered) Get(cacheId string, layer, index int, page io.Writer) error {
 	err := l.mem.Get(cacheId, layer, index, page)
-	if !errors.Is(err, model.ErrNoPage) {
+	if !errors.Is(err, engine.ErrNoPage) {
 		return err
 	}
 	var b bytes.Buffer

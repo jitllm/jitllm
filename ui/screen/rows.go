@@ -21,7 +21,7 @@ func pageHead(sh *app.Shell, title, sub string, actions ...widget.Widget) widget
 	p := sh.P
 	text := primitives.VBox(
 		p.Role(primitives.Text(title).Color(p.Text()), p.Type.HeadlineSmall).Bold(),
-		widgets.NewParagraph(sub).FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose),
+		widgets.NewParagraph(sub).FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(sh.P.Prose()),
 	).Gap(p.Space.XS).CrossAlign(primitives.CrossAxisStretch)
 	row := append([]widget.Widget{primitives.Expanded(text)}, actions...)
 	return primitives.HBox(row...).Gap(p.Space.S)
@@ -55,15 +55,15 @@ func listRow(sh *app.Shell, look state.ReadonlySignal[widgets.TileLook], title, 
 		widgets.NewLetterTile("", 36, p.Colors.Primary, p.Colors.OnPrimary).Bind(look),
 		primitives.Expanded(primitives.VBox(
 			widgets.NewParagraph("").ContentSignal(title).FontSize(p.Type.BodyLarge.FontSize).
-				Color(p.Text()).MaxLines(1).Font(app.Prose).Bold(),
+				Color(p.Text()).MaxLines(1).Font(sh.P.Prose()).Bold(),
 			widgets.NewParagraph("").ContentSignal(meta).FontSize(small).
-				Color(p.Muted()).MaxLines(1).Font(app.Prose),
+				Color(p.Muted()).MaxLines(1).Font(sh.P.Prose()),
 		).Gap(2)),
 		primitives.Box(primitives.VBox(
 			widgets.NewParagraph("").ContentSignal(right).FontSize(small).Color(p.Text()).
-				MaxLines(1).Font(app.Prose).Align(widget.TextAlignRight),
+				MaxLines(1).Font(sh.P.Prose()).Align(widget.TextAlignRight),
 			widgets.NewParagraph("").ContentSignal(rightNote).FontSize(small).Color(p.Muted()).
-				MaxLines(1).Font(app.Prose).Align(widget.TextAlignRight),
+				MaxLines(1).Font(sh.P.Prose()).Align(widget.TextAlignRight),
 		).Gap(2)).Width(rowSideWidth),
 	).Gap(p.Space.S+p.Space.XS)).PaddingXY(p.Space.S+p.Space.XS, p.Space.S+p.Space.XS)
 	return widgets.NewClickable(row, selected, onClick,
@@ -90,7 +90,7 @@ func metric(sh *app.Shell, label string, value state.ReadonlySignal[string]) wid
 	return primitives.VBox(
 		p.Role(primitives.Text(label).Color(p.Muted()), p.Type.LabelMedium),
 		widgets.NewParagraph("").ContentSignal(value).FontSize(p.Type.BodyMedium.FontSize).
-			Color(p.Text()).Font(app.Prose).Bold().MaxLines(2),
+			Color(p.Text()).Font(sh.P.Prose()).Bold().MaxLines(2),
 	).Gap(2)
 }
 

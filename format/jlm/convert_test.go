@@ -11,8 +11,8 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -22,7 +22,7 @@ func model(t *testing.T, name string) string {
 	t.Helper()
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", p, err)
+		testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", p, err)
 	}
 	return p
 }
@@ -43,9 +43,10 @@ func TestConvertedBytesEqualThePacker(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
+			cf := framesOf(t, c)
 			defer c.Close()
 			// Open reads no page, so a span is nil until the block is in.
-			if err := c.LoadAll(); err != nil {
+			if err := cf.LoadAll(); err != nil {
 				t.Fatalf("load: %v", err)
 			}
 			g, err := gguf.Open(src)
@@ -61,7 +62,7 @@ func TestConvertedBytesEqualThePacker(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s: in the container, not in the source", e.Name)
 				}
-				qs, d, sc := c.Span(e)
+				qs, d, sc := cf.Span(e)
 				want := g.Bytes(gt)
 				// Nothing is exempt: token_embd and output are packed like every
 				// other quantised tensor.
@@ -77,7 +78,7 @@ func TestConvertedBytesEqualThePacker(t *testing.T) {
 				for dd := 2; dd < int(e.NDim); dd++ {
 					rows *= int(e.Dims[dd])
 				}
-				wq, wd, wsc, err := kernels.PackWeights(q, want, rows, e.K())
+				wq, wd, wsc, err := layout.PackWeights(q, want, rows, e.K())
 				if err != nil {
 					t.Fatalf("%s: pack: %v", e.Name, err)
 				}
@@ -124,8 +125,9 @@ func TestEveryBlockFitsItsPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
-	if err := c.LoadAll(); err != nil {
+	if err := cf.LoadAll(); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -145,7 +147,7 @@ func TestEveryBlockFitsItsPage(t *testing.T) {
 			lo, hi = c.H.DenseOff, c.H.DenseOff+c.H.DenseLen
 			dense++
 		}
-		qs, d, sc := c.Span(e)
+		qs, d, sc := cf.Span(e)
 		for _, s := range []struct {
 			what string
 			off  uint64
@@ -233,9 +235,6 @@ func TestContainerCarriesTheTokenizer(t *testing.T) {
 			t.Fatal("the source has a chat template and the container does not -- " +
 				"a caller who deletes the source loses it")
 		}
-	}
-	if c.Config().Arch == jlm.ArchNone {
-		t.Fatal("the container carries no architecture")
 	}
 	v := c.Vocab()
 	t.Logf("tokenizer round-tripped over %d probes; %d tokens, %d merges, %d pre stages, %d templates",
@@ -407,7 +406,7 @@ func TestWeightsStayRelocatable(t *testing.T) {
 		}
 	}
 	if src == "" {
-		t.Skip("MODEL MISSING: no mixture in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no mixture in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	dst := filepath.Join(t.TempDir(), "m"+jlm.Ext)
 	if _, err := convert.FromGGUF(src, dst, jlm.Fingerprint{}); err != nil {

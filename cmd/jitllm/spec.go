@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // specFlags are -spec and its knobs, shared by run and speed.
@@ -33,41 +33,41 @@ func addSpecFlags(fs *flag.FlagSet) specFlags {
 }
 
 // options turns the flags into the Speculator's options; nil without -spec.
-func (f specFlags) options() ([]model.SpecOption, error) {
-	var dr model.SpecDrafter
+func (f specFlags) options() ([]engine.SpecOption, error) {
+	var dr engine.SpecDrafter
 	switch *f.kind {
 	case "":
 		return nil, nil
 	case "mtp":
-		dr = model.SpecDraftMTP
+		dr = engine.SpecDraftMTP
 	case "lookup":
-		dr = model.SpecDraftLookup
+		dr = engine.SpecDraftLookup
 	case "auto":
-		dr = model.SpecDraftAuto
+		dr = engine.SpecDraftAuto
 	default:
 		return nil, fmt.Errorf("-spec %q: mtp, lookup or auto", *f.kind)
 	}
-	var rb model.SpecRollback
+	var rb engine.SpecRollback
 	switch *f.rollback {
 	case "auto":
-		rb = model.SpecRollbackAuto
+		rb = engine.SpecRollbackAuto
 	case "rows":
-		rb = model.SpecRollbackRows
+		rb = engine.SpecRollbackRows
 	case "replay":
-		rb = model.SpecRollbackReplay
+		rb = engine.SpecRollbackReplay
 	default:
 		return nil, fmt.Errorf("-spec-rollback %q: auto, rows or replay", *f.rollback)
 	}
 	if *f.k < 0 || *f.minP < 0 || *f.minP > 1 {
 		return nil, fmt.Errorf("-spec-k %d, -spec-min-p %g: a count and a probability", *f.k, *f.minP)
 	}
-	return []model.SpecOption{model.WithSpecDrafter(dr), model.WithSpecDraft(*f.k), model.WithSpecMinP(*f.minP),
-		model.WithSpecRollback(rb)}, nil
+	return []engine.SpecOption{engine.WithSpecDrafter(dr), engine.WithSpecDraft(*f.k), engine.WithSpecMinP(*f.minP),
+		engine.WithSpecRollback(rb)}, nil
 }
 
 // printSpec reports what a Speculator did: how many tokens a verification
 // pass yielded is the number speculation exists to raise.
-func printSpec(w io.Writer, sp *model.Speculator) {
+func printSpec(w io.Writer, sp *engine.Speculator) {
 	s := sp.Stats()
 	pct := 0.0
 	if s.Drafted > 0 {

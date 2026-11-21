@@ -10,8 +10,10 @@ import (
 // emits for a call, split mid-opener so the holdback has to work, then what a
 // client of each API receives.
 
-var toolScript = []string{"Let me check. <tool", "_call>\n{\"name\": \"get_weather\", ",
-	"\"arguments\": {\"location\": \"Paris\"}}\n</tool_call>"}
+func toolScript() []string {
+	return []string{"Let me check. <tool", "_call>\n{\"name\": \"get_weather\", ",
+		"\"arguments\": {\"location\": \"Paris\"}}\n</tool_call>"}
+}
 
 const oaToolReq = `{"model":"m-1","messages":[` +
 	`{"role":"user","content":"weather?"},` +
@@ -62,7 +64,7 @@ func TestToolRequestsReachTheTemplate(t *testing.T) {
 }
 
 func TestOpenAIToolCallNonStreaming(t *testing.T) {
-	f := &fakeBackend{tokens: toolScript, reason: FinishEOS}
+	f := &fakeBackend{tokens: toolScript(), reason: FinishEOS}
 	r := post(t, serve(t, f), "/v1/chat/completions", strings.Replace(oaToolReq, "%s", "", 1))
 	defer r.Body.Close()
 	var oa oaChatResponse
@@ -84,7 +86,7 @@ func TestOpenAIToolCallNonStreaming(t *testing.T) {
 }
 
 func TestOpenAIToolCallStreams(t *testing.T) {
-	f := &fakeBackend{tokens: toolScript, reason: FinishEOS}
+	f := &fakeBackend{tokens: toolScript(), reason: FinishEOS}
 	r := post(t, serve(t, f), "/v1/chat/completions",
 		strings.Replace(oaToolReq, "%s", `,"stream":true`, 1))
 	defer r.Body.Close()
@@ -119,7 +121,7 @@ func TestOpenAIToolCallStreams(t *testing.T) {
 }
 
 func TestAnthropicToolUse(t *testing.T) {
-	f := &fakeBackend{tokens: toolScript, reason: FinishEOS}
+	f := &fakeBackend{tokens: toolScript(), reason: FinishEOS}
 	r := post(t, serve(t, f), "/v1/messages", strings.Replace(anToolReq, "%s", "", 1))
 	defer r.Body.Close()
 	var an anResponse
@@ -135,7 +137,7 @@ func TestAnthropicToolUse(t *testing.T) {
 
 	// Streamed: the text block, then a tool_use block assembled from one
 	// input_json_delta.
-	f = &fakeBackend{tokens: toolScript, reason: FinishEOS}
+	f = &fakeBackend{tokens: toolScript(), reason: FinishEOS}
 	r2 := post(t, serve(t, f), "/v1/messages", strings.Replace(anToolReq, "%s", `,"stream":true`, 1))
 	defer r2.Body.Close()
 	fr := newFrameReader(r2.Body)

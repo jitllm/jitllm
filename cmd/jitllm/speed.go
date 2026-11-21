@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"flag"
 	"fmt"
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"maps"
 	"os"
 	"runtime"
@@ -13,22 +13,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
-// speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a
-// greedy decode of -n, each timed on its own, -r times on fresh States after
+// speedCmd is the pp/tg measurement: a prompt of -p tokens and a
+// greedy decode of -n, each timed on its own, -r times on fresh instances after
 // one untimed warm-up of both.
 //
 // run's "prompt" figure is not a prefill rate: the first prompt of a process
-// compiles and loads the batched kernels, which llama-bench excludes as
-// warm-up.
-func speedCmd(args []string) error {
-	backend.SetCUDATiming(os.Getenv("JITLLM_CUDA_TIMING") == "1")
-	backend.SetCUDAKernelTiming(os.Getenv("JITLLM_CUDA_KERNEL_TIMING") == "1")
+// compiles and loads the batched kernels, which speed's untimed warm-up
+// excludes.
+func speedCmd(procStart time.Time, args []string) error {
 	fs := flag.NewFlagSet("speed", flag.ExitOnError)
 	dev := fs.String("devices", "auto", "where to run the blocks, as run's -devices")
 	p := fs.Int("p", 512, "prompt tokens")
@@ -73,12 +72,33 @@ func speedCmd(args []string) error {
 			return err
 		}
 	}
-	m, err := model.Open(fs.Arg(0), loadOpts(nil, 0)...)
+	mo, io := loadOpts(nil, 0)
+	m, err := model.Open(fs.Arg(0), mo...)
 	if err != nil {
 		return err
 	}
 	defer m.Close()
-	if err := preloadWait(m); err != nil {
+	// One CPU device for the run: every instance it makes takes turns on its
+	// workers and shares the model's forms.
+	cd, err := engine.OpenCPU(io...)
+	if err != nil {
+		return err
+	}
+	defer cd.Close()
+	io = append(io, engine.WithCPU(cd))
+	// The CPU device keeps the model's forms and frames for the run: the
+	// instances below come and go, and the last of them to close would
+	// otherwise take them along. The first one makes the frames, under its
+	// page quota, and a preload is waited for there.
+	cd.HoldModel(m.Id)
+	defer cd.ReleaseModel(m.Id)
+	first, err := engine.NewInstance(m, 1, io...)
+	if err != nil {
+		return err
+	}
+	err = preloadWait(first.FramesOn(nn.CPU))
+	first.Close()
+	if err != nil {
 		return err
 	}
 	tOpen := time.Since(t00)
@@ -90,14 +110,20 @@ func speedCmd(args []string) error {
 	if closeDev != nil {
 		defer closeDev()
 	}
+	ctr := tierCounters(d)
+	ctr.SetCUDATiming(os.Getenv("JITLLM_CUDA_TIMING") == "1")
+	ctr.SetCUDAKernelTiming(os.Getenv("JITLLM_CUDA_KERNEL_TIMING") == "1")
 	seed := m.Vocab.Encode("The capital of France is", true)
 	prompt := make([]int32, *p)
 	for i := range prompt {
 		prompt[i] = seed[i%len(seed)]
 	}
-	// attach puts a fresh State of n positions on the device.
-	attach := func(n int) (*model.State, error) {
-		st := m.NewState(n)
+	// attach puts a fresh instance of n positions on the device.
+	attach := func(n int) (*engine.Instance, error) {
+		st, err := engine.NewInstance(m, n, io...)
+		if err != nil {
+			return nil, err
+		}
 		if d != nil {
 			if err := st.SetDevice(d); err != nil {
 				st.Close()
@@ -107,9 +133,9 @@ func speedCmd(args []string) error {
 		return st, nil
 	}
 	one := func(timed bool) (pp, tg time.Duration, err error) {
-		// The prompt's State is closed before the decode's is opened: two
+		// The prompt's instance is closed before the decode's is opened: two
 		// live sessions each hold a KV cache on every card, and the tier does
-		// not budget a second one. llama-bench's pp and tg are separate runs.
+		// not budget a second one. pp and tg are separate runs.
 		st, err := attach(*p + 1)
 		if err != nil {
 			return 0, 0, err
@@ -123,7 +149,7 @@ func speedCmd(args []string) error {
 			// 2 kHz: a prompt is a few hundred ms, and the host's share of it
 			// sits in gaps of a few ms that 100 Hz samples cannot see.
 			runtime.SetCPUProfileRate(2000)
-			sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
+			cpudev.PoolOf(st.Devices()).SetRegionLabels(true) // attribution for generated code; see sched.WithRegionLabels
 			if perr := pprof.StartCPUProfile(f); perr != nil {
 				return 0, 0, perr
 			}
@@ -133,12 +159,12 @@ func speedCmd(args []string) error {
 				return 0, 0, perr
 			}
 		}
-		backend.CUDAKernelTimes() // clear: only the timed prompt is reported
+		ctr.CUDAKernelTimes() // clear: only the timed prompt is reported
 		g0 := readGC()
 		t0 := time.Now()
 		// The timer stops when Prefill returns: it hands back the last row's
 		// logits read from the device, so the device has finished; that is
-		// llama-bench's pp boundary (decode of the batch with the last row's
+		// the pp boundary (decode of the batch with the last row's
 		// logits, then a synchronize), with no sampling and no tokenizing.
 		lg, err := st.Prefill(prompt)
 		pp = time.Since(t0)
@@ -157,7 +183,7 @@ func speedCmd(args []string) error {
 			pprof.StopCPUProfile()
 		}
 		if timed && err == nil {
-			printKernelTimes("a prompt", 1)
+			printKernelTimes(ctr, "a prompt", 1)
 		}
 		ppOn, spills, fails, tails := st.GPULayers(), st.Spills(), st.DeviceDemotions(), st.TailRowChunks()
 		moves := st.Relocations() + st.Reclaims()
@@ -165,17 +191,17 @@ func speedCmd(args []string) error {
 		if err != nil {
 			return 0, 0, err
 		}
-		// The decode starts on a fresh State at position 1, as llama-bench's
-		// tg does, so it is not a decode at the prompt's depth. Speculation
-		// starts from the seed sentence instead: a prediction block's
-		// acceptance is a property of the text, and a one-token prompt has
-		// none to speak of.
+		// The decode starts on a fresh instance at position 1, so its boundary
+		// is the baseline row's (RULE 1) and it is not a decode at the
+		// prompt's depth. Speculation starts from the seed
+		// sentence instead: a prediction block's acceptance is a property of
+		// the text, and a one-token prompt has none to speak of.
 		st2, err := attach(*n + len(seed) + 2)
 		if err != nil {
 			return 0, 0, err
 		}
 		defer st2.Close()
-		var sp *model.Speculator
+		var sp *engine.Speculator
 		var next int32
 		if specOpts != nil {
 			if sp, err = st2.Speculate(specOpts...); err != nil {
@@ -194,14 +220,14 @@ func speedCmd(args []string) error {
 				return 0, 0, perr
 			}
 			defer f.Close()
-			sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
+			cpudev.PoolOf(st2.Devices()).SetRegionLabels(true) // attribution for generated code; see sched.WithRegionLabels
 			if perr := pprof.StartCPUProfile(f); perr != nil {
 				return 0, 0, perr
 			}
 			defer pprof.StopCPUProfile()
 		}
-		backend.CUDAGraphTimes() // clear: only the timed decode is reported
-		backend.CUDAKernelTimes()
+		ctr.CUDAGraphTimes() // clear: only the timed decode is reported
+		ctr.CUDAKernelTimes()
 		if timed && *memProf != "" {
 			if perr := writeAllocProfile(*memProf + ".tg0"); perr != nil {
 				return 0, 0, perr
@@ -237,11 +263,11 @@ func speedCmd(args []string) error {
 			}
 		}
 		if timed {
-			printKernelTimes("a token", *n)
+			printKernelTimes(ctr, "a token", *n)
 		} else {
-			backend.CUDAKernelTimes()
+			ctr.CUDAKernelTimes()
 		}
-		if busy, gap := backend.CUDAGraphTimes(); timed && len(busy) > 0 {
+		if busy, gap := ctr.CUDAGraphTimes(); timed && len(busy) > 0 {
 			// JITLLM_CUDA_TIMING=1: the device clock's view of the decode.
 			fmt.Printf("cuda graph timing: %d replays, device %.1f us, gap before %.1f us (medians); wall %.1f us/token\n",
 				len(busy), medianF32(busy), medianF32(gap), float64(tg.Microseconds())/float64(*n))
@@ -253,7 +279,7 @@ func speedCmd(args []string) error {
 			// JITLLM_SPEED_WALL=1: the decode as a fraction of the card's read
 			// wall, measured here (RULE 1). The bytes are the resident
 			// weights, each read once a token by a dense decode.
-			if g, ok := d.(*tier.GPU); ok && os.Getenv("JITLLM_SPEED_WALL") == "1" {
+			if g, ok := d.(*gpu.GPU); ok && os.Getenv("JITLLM_SPEED_WALL") == "1" {
 				if wall, wname, werr := deviceReadWall("ptx", 2048, 21); werr != nil {
 					fmt.Printf("read wall: %v\n", werr)
 				} else {
@@ -276,10 +302,10 @@ func speedCmd(args []string) error {
 		return pp, tg, nil
 	}
 	if *ttft {
-		return ttftRun(m, attach, *p, *reps, t00, tOpen, tDev)
+		return ttftRun(m, attach, *p, *reps, procStart, t00, tOpen, tDev, ctr)
 	}
 	if *sessions > 0 {
-		return sessionsRun(attach, prompt, *sessions, *n, *reps)
+		return sessionsRun(attach, prompt, *sessions, *n, *reps, ctr)
 	}
 	if _, _, err := one(false); err != nil {
 		return err
@@ -331,13 +357,13 @@ func medianF32(v []float32) float32 {
 
 // sessionsRun is speed -sessions: k sessions on the device, each prefilled
 // with prompt, decode n tokens a round, alternately one session after another
-// and all together through model.Step. Each arm's rate is the k sessions'
+// and all together through engine.Step. Each arm's rate is the k sessions'
 // tokens over its wall.
-func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, reps int) error {
+func sessionsRun(attach func(int) (*engine.Instance, error), prompt []int32, k, n, reps int, ctr *backend.Counters) error {
 	var alone, together []float64
 	for r := 0; r < 2*reps; r++ {
 		joint := r%2 == 1
-		sts := make([]*model.State, k)
+		sts := make([]*engine.Instance, k)
 		toks := make([]int32, k)
 		for i := range sts {
 			// Closed at the end of the round; an error ends the process.
@@ -349,18 +375,24 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 			if err != nil {
 				return err
 			}
-			sts[i], toks[i] = st, model.Greedy(lg)
+			tok, err := st.Sample(nil, lg)
+			if err != nil {
+				return err
+			}
+			sts[i], toks[i] = st, tok
 		}
-		backend.CUDAKernelTimes() // clear: only this arm's steps are reported
+		ctr.CUDAKernelTimes() // clear: only this arm's steps are reported
 		t0 := time.Now()
 		for range n {
 			if joint {
-				lgs, err := model.Step(sts, toks)
+				lgs, err := engine.Step(sts, toks)
 				if err != nil {
 					return err
 				}
 				for i, lg := range lgs {
-					toks[i] = model.Greedy(lg)
+					if toks[i], err = sts[i].Sample(nil, lg); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -369,7 +401,9 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 				if err != nil {
 					return err
 				}
-				toks[i] = model.Greedy(lg)
+				if toks[i], err = st.Sample(nil, lg); err != nil {
+					return err
+				}
 			}
 		}
 		rate, err := perSecond(fmt.Sprintf("%d sessions x tg%d", k, n), k*n, time.Since(t0))
@@ -377,9 +411,9 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 			return err
 		}
 		if joint {
-			printKernelTimes(fmt.Sprintf("a step of %d sessions together", k), n)
+			printKernelTimes(ctr, fmt.Sprintf("a step of %d sessions together", k), n)
 		} else {
-			printKernelTimes(fmt.Sprintf("a step of %d sessions one after another", k), n)
+			printKernelTimes(ctr, fmt.Sprintf("a step of %d sessions one after another", k), n)
 		}
 		if joint {
 			together = append(together, rate)
@@ -397,14 +431,23 @@ func sessionsRun(attach func(int) (*model.State, error), prompt []int32, k, n, r
 	return nil
 }
 
+// tierCounters is what the device tier d counts into, or Counters of their
+// own, which nothing feeds, when the blocks run on the CPU alone.
+func tierCounters(d nn.LayerDevice) *backend.Counters {
+	if g, ok := d.(*gpu.GPU); ok {
+		return g.Counters()
+	}
+	return &backend.Counters{}
+}
+
 // printKernelTimes prints and clears the per-kernel device time CUDA recorded
 // (JITLLM_CUDA_KERNEL_TIMING=1), per unit over steps units; it prints nothing
 // when nothing was recorded. A decode token's are event nodes inside its
 // captured graph; a prompt's are an event pair around each launch, since a
 // prompt chunk is not captured (scripts/kshim.c with KSHIM_DIRECT=1 takes the
-// same of llama.cpp's prompt).
-func printKernelTimes(unit string, steps int) {
-	us, cnt := backend.CUDAKernelTimes()
+// same of the baseline's prompt).
+func printKernelTimes(ctr *backend.Counters, unit string, steps int) {
+	us, cnt := ctr.CUDAKernelTimes()
 	if len(us) == 0 {
 		return
 	}
@@ -454,8 +497,8 @@ func rates(v []float64) string {
 }
 
 // deviceErr is the tier's last refusal, or "" for a device that has none.
-func deviceErr(d nn.Device) string {
-	if g, ok := d.(*tier.GPU); ok {
+func deviceErr(d nn.LayerDevice) string {
+	if g, ok := d.(*gpu.GPU); ok {
 		return g.Err()
 	}
 	return ""
@@ -477,10 +520,11 @@ func ttftText(m *model.Model, p int) string {
 // the process's -- the container opened, the blocks placed and uploaded, the
 // kernels compiled -- and each after it is a fresh session on the loaded
 // model: tokenize, take pages, prefill, sample.
-func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
+func ttftRun(m *model.Model, attach func(int) (*engine.Instance, error), p, reps int, procStart, t00 time.Time,
+	tOpen, tDev time.Duration, ctr *backend.Counters) error {
 	text := ttftText(m, p)
 	var tAttach time.Duration
-	var compiled, tuned int64
+	var compiled int64
 	first := func() (time.Duration, int, error) {
 		t0 := time.Now()
 		ids := m.Vocab.Encode(text, true)
@@ -492,13 +536,13 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 		defer st.Close()
 		// Ready: the blocks are placed, every kernel compiled and the tuners
 		// done. What follows, to the first token, must do none of either.
-		c0, u0 := backend.Compiles(), tier.TuneTrials()
+		c0 := ctr.Compiles()
 		lg, err := st.Prefill(ids)
 		if err != nil {
 			return 0, 0, err
 		}
-		model.Greedy(lg)
-		compiled, tuned = backend.Compiles()-c0, tier.TuneTrials()-u0
+		st.Sample(nil, lg)
+		compiled = ctr.Compiles() - c0
 		return time.Since(t0), len(ids), nil
 	}
 	el, _, err := first()
@@ -513,14 +557,14 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 	// The two rows vs-llamacpp.sh reads: load is open to ready (the container
 	// opened, the devices up, the kernels compiled, the tuners run, the blocks
 	// placed and uploaded); ttft (model loaded) is ready to the first token of
-	// the process's first prompt, tokenizing excluded as llama.cpp's prompt
-	// eval excludes it.
-	if err := readyHonest(compiled, tuned); err != nil {
+	// the process's first prompt, tokenizing excluded as the baseline's
+	// prompt row excludes it.
+	if err := readyHonest(compiled); err != nil {
 		return err
 	}
 	tStart := t00.Sub(procStart)
-	fmt.Printf("load %.1f ms (start %.0f + open %.0f + devices %.0f + attach %.0f)   ttft-loaded %.1f ms (ready to the first token; %d compiles, %d tuner trials after ready; %d background tuner trials so far)\n",
-		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled, tuned, tier.BackgroundTuneTrials())
+	fmt.Printf("load %.1f ms (start %.0f + open %.0f + devices %.0f + attach %.0f)   ttft-loaded %.1f ms (ready to the first token; %d compiles after ready)\n",
+		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled)
 	var warm []float64
 	ntok := 0
 	for r := 0; r < reps; r++ {
@@ -537,10 +581,10 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 }
 
 // warmHonest refuses a timed prompt that was not the whole prompt computed
-// from nothing: a fresh State at position 0 that ran every row through its
+// from nothing: a fresh instance at position 0 that ran every row through its
 // blocks (none restored from a prefix cache) and handed back the last row's
 // logits, which the device must have finished to return.
-func warmHonest(st *model.State, n int, logits []float32, vocab int) error {
+func warmHonest(st *engine.Instance, n int, logits []float32, vocab int) error {
 	switch {
 	case st.KVRestored() != 0:
 		return fmt.Errorf("speed: the timed prompt restored %d position(s) from a prefix cache", st.KVRestored())
@@ -552,12 +596,11 @@ func warmHonest(st *model.State, n int, logits []float32, vocab int) error {
 	return nil
 }
 
-// readyHonest refuses a ready mark that came too early: a kernel compiled or
-// a tuner trial timed between ready and the first token would put load work
-// inside the ttft row.
-func readyHonest(compiled, tuned int64) error {
-	if compiled != 0 || tuned != 0 {
-		return fmt.Errorf("speed: %d kernel compile(s) and %d tuner trial(s) ran after the model was ready", compiled, tuned)
+// readyHonest refuses a ready mark that came too early: a kernel compiled
+// between ready and the first token would put load work inside the ttft row.
+func readyHonest(compiled int64) error {
+	if compiled != 0 {
+		return fmt.Errorf("speed: %d kernel compile(s) ran after the model was ready", compiled)
 	}
 	return nil
 }

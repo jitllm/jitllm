@@ -3,7 +3,7 @@ title: Benchmarks
 description: jitllm against llama.cpp, vLLM, mistral.rs and ZML on V100s, a Xeon and an M4 (with MLX on the M4), with the method behind every number.
 ---
 
-Every figure here names its host, its backend and the engine it is compared with, and every comparison was taken in the same pass on the same machine. Ratios are jitllm divided by the other engine, so above 1 means jitllm is faster. The full record, including every row below parity and what was measured about it, is [`docs/perf/current.md`](https://github.com/jitllm/jitllm/blob/main/docs/perf/current.md) in the repository.
+Every figure here names its host, its backend and the engine it is compared with, and every comparison was taken in the same pass on the same machine. Ratios are jitllm divided by the other engine, so above 1 means jitllm is faster. The full record, including every row below parity and what was measured about it, is [`.notes/perf/current.md`](https://github.com/jitllm/jitllm/blob/main/.notes/perf/current.md) in the repository.
 
 ## Method
 

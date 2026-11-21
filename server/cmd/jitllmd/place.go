@@ -11,14 +11,15 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // cmdPlace is PlacementService, whole: the seam, relocation, seam tuning and
 // the pager, forcible from outside the process.
 //
-// Placement is per session (SetDeviceLayers is a method on model.State), so
+// Placement is per session (SetDeviceLayers is a method on engine.Instance), so
 // -session is the usual argument; a model's default does not move a running
 // session. -model addresses the pager, which is per model.
 func cmdPlace(ctx context.Context, c cli, args []string) error {
@@ -112,19 +113,16 @@ func relocateBlocks(ctx context.Context, c cli, cn *conn, session, spec, to stri
 	if err != nil {
 		return err
 	}
-	req := &v1.RelocateBlocksRequest{
-		SessionId: session, FirstBlock: first, LastBlock: last,
+	if to == "" {
+		to = nn.CPU
 	}
-	switch {
-	case to == "" || to == "host" || to == "cpu":
-		req.ToHost = true
-	default:
-		req.ToDeviceId = to
+	req := &v1.RelocateBlocksRequest{
+		SessionId: session, FirstBlock: first, LastBlock: last, ToDeviceId: to,
 	}
 	resp, err := cn.Placement.RelocateBlocks(ctx, connect.NewRequest(req))
 	if err != nil {
 		// A hole in the seam, a device the session was not loaded with and a
-		// host-only model are declined by name; print the server's reason.
+		// CPU-only model are declined by name; print the server's reason.
 		return clientError("relocating blocks", cn.base, err)
 	}
 	m := resp.Msg
@@ -157,7 +155,7 @@ func relocateBlocks(ctx context.Context, c cli, cn *conn, session, spec, to stri
 // relocationPath names a RelocationPath for a person.
 func relocationPath(p v1.RelocationPath) string {
 	switch p {
-	case v1.RelocationPath_RELOCATION_PATH_HOST:
+	case v1.RelocationPath_RELOCATION_PATH_CPU:
 		return "the host"
 	case v1.RelocationPath_RELOCATION_PATH_STAGED:
 		return "a host buffer"
@@ -219,7 +217,7 @@ func pagerBudget(ctx context.Context, c cli, cn *conn, modelID, maxmem string) e
 		printResidency(c.out, "  ", resp.Msg.GetResidency())
 		return nil
 	}
-	b, err := tier.ParseBytes(maxmem)
+	b, err := gpu.ParseBytes(maxmem)
 	if err != nil {
 		return usagef("-maxmem: %v", err)
 	}
@@ -244,7 +242,7 @@ func pagerBudget(ctx context.Context, c cli, cn *conn, modelID, maxmem string) e
 // blockRange parses FIRST:LAST, or a single index.
 func blockRange(spec string) (int32, int32, error) {
 	parse1 := func(s string) (int32, error) {
-		n, err := strconv.Atoi(strings.TrimSpace(s))
+		n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 32)
 		if err != nil {
 			return 0, usagef("-move %q: %q is not a block index", spec, s)
 		}
@@ -287,7 +285,7 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 	}
 	var runs []run
 	for _, b := range blocks {
-		where := "host"
+		where := nn.CPU
 		if b.GetLocation() == v1.BlockLocation_BLOCK_LOCATION_DEVICE {
 			where = b.GetDeviceId()
 			if where == "" {
@@ -296,7 +294,7 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 		}
 		kind := kindName(b.GetKind())
 		res := 0
-		if b.GetHostResident() {
+		if b.GetCpuResident() {
 			res = 1
 		}
 		if n := len(runs); n > 0 && runs[n-1].where == where && runs[n-1].kind == kind &&
@@ -319,12 +317,12 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 		fmt.Fprintf(w, "  blocks %-9s %-10s %-10s %s each   %d of %d page(s) resident on the host\n",
 			span, r.where, r.kind, r.bytes, r.resident, r.total)
 	}
-	head := "host"
+	head := nn.CPU
 	if p.GetHeadOnDevice() {
 		head = "device"
 	}
 	fmt.Fprintf(w, "  %d device / %d host block(s), output projection on the %s\n",
-		p.GetDeviceBlockCount(), p.GetHostBlockCount(), head)
+		p.GetDeviceBlockCount(), p.GetCpuBlockCount(), head)
 	fmt.Fprintf(w, "  counters: %d demotion(s), %d relocation(s), %d reclaim(s), relocating=%v\n",
 		p.GetDemotions(), p.GetRelocations(), p.GetReclaims(), p.GetRelocating())
 

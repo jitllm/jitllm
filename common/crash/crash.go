@@ -47,29 +47,32 @@ type Info struct {
 	GPU     string
 }
 
-var (
-	mu      sync.Mutex
-	info    Info
-	dir     string
-	handler func(Report)
-)
+// Guard is one program's crash reporting: what its reports say, where they
+// are saved, and who is shown them. The zero Guard reports into nothing.
+type Guard struct {
+	mu       sync.Mutex
+	info     Info
+	dir      string
+	handler  func(Report)
+	fatalOut *os.File
+}
 
 // SetInfo records what a report says about the program.
-func SetInfo(i Info) {
-	mu.Lock()
-	info = i
-	mu.Unlock()
+func (g *Guard) SetInfo(i Info) {
+	g.mu.Lock()
+	g.info = i
+	g.mu.Unlock()
 }
 
 // SetGPU records the GPU a report names.
 // The GPU is also written beside crash.log, so the report of a fatal error,
 // built by the next launch before it has a window, names the GPU the crashed
 // run had.
-func SetGPU(gpu string) {
-	mu.Lock()
-	info.GPU = gpu
-	d := dir
-	mu.Unlock()
+func (g *Guard) SetGPU(gpu string) {
+	g.mu.Lock()
+	g.info.GPU = gpu
+	d := g.dir
+	g.mu.Unlock()
 	if d != "" {
 		// A report without the GPU is still a report; nothing to do on failure.
 		os.WriteFile(filepath.Join(d, gpuFile), []byte(gpu), 0o644)
@@ -77,18 +80,18 @@ func SetGPU(gpu string) {
 }
 
 // GPU is the GPU a report of this run names.
-func GPU() string {
-	mu.Lock()
-	defer mu.Unlock()
-	return info.GPU
+func (g *Guard) GPU() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.info.GPU
 }
 
 // OnReport sets the function a recovered panic's report is handed to, on the
 // goroutine that panicked. A front end shows it.
-func OnReport(fn func(Report)) {
-	mu.Lock()
-	handler = fn
-	mu.Unlock()
+func (g *Guard) OnReport(fn func(Report)) {
+	g.mu.Lock()
+	g.handler = fn
+	g.mu.Unlock()
 }
 
 // The files in the crash directory.
@@ -113,14 +116,14 @@ const (
 // not to the crash output, so then standard error itself is pointed at
 // d/crash.log. With a console it stays where it is, and the file gets the
 // traceback alone.
-func Arm(d string, logTail []string, noConsole bool) (*Report, error) {
+func (g *Guard) Arm(d string, logTail []string, noConsole bool) (*Report, error) {
 	debug.SetTraceback("all")
 	if err := os.MkdirAll(d, 0o755); err != nil {
 		return nil, err
 	}
-	mu.Lock()
-	dir = d
-	mu.Unlock()
+	g.mu.Lock()
+	g.dir = d
+	g.mu.Unlock()
 
 	fatal := filepath.Join(d, fatalFile)
 	var rep *Report
@@ -129,9 +132,9 @@ func Arm(d string, logTail []string, noConsole bool) (*Report, error) {
 		if err != nil {
 			prevGPU = nil
 		}
-		r := build("the previous run", string(b), logTail, string(prevGPU))
+		r := g.build("the previous run", string(b), logTail, string(prevGPU))
 		rep = &r
-		rep.Path = save(r.Text)
+		rep.Path = g.save(r.Text)
 	}
 	// Truncated: what is there was just reported, and the next fatal error
 	// must be the only thing in it.
@@ -143,9 +146,9 @@ func Arm(d string, logTail []string, noConsole bool) (*Report, error) {
 		if err := redirectStderr(f); err == nil {
 			// Kept open for the life of the process: on Windows the standard
 			// handle is f's own, not a duplicate.
-			mu.Lock()
-			fatalOut = f
-			mu.Unlock()
+			g.mu.Lock()
+			g.fatalOut = f
+			g.mu.Unlock()
 			return rep, nil
 		}
 	}
@@ -163,29 +166,26 @@ func crashed(b []byte) bool {
 		bytes.Contains(b, []byte("fatal error:")) || bytes.Contains(b, []byte("panic:"))
 }
 
-// fatalOut is crash.log while it is the process's standard error.
-var fatalOut *os.File
-
 // Recover reports a panic on the calling goroutine and lets the goroutine end
 // rather than the process. Defer it first thing in every goroutine the app
 // starts: `defer crash.Recover("model scan")`.
-func Recover(where string) {
+func (g *Guard) Recover(where string) {
 	r := recover()
 	if r == nil {
 		return
 	}
-	Handle(where, r, debug.Stack())
+	g.Handle(where, r, debug.Stack())
 }
 
 // Handle reports a recovered panic: it builds the report, saves it and hands
 // it to the [OnReport] handler.
-func Handle(where string, r any, stack []byte) Report {
+func (g *Guard) Handle(where string, r any, stack []byte) Report {
 	body := fmt.Sprintf("panic: %v [recovered in %s]\n\n%s", r, where, stack)
-	rep := build(where, body, nil, GPU())
-	rep.Path = save(rep.Text)
-	mu.Lock()
-	h := handler
-	mu.Unlock()
+	rep := g.build(where, body, nil, g.GPU())
+	rep.Path = g.save(rep.Text)
+	g.mu.Lock()
+	h := g.handler
+	g.mu.Unlock()
 	if h != nil {
 		h(rep)
 	}
@@ -193,10 +193,10 @@ func Handle(where string, r any, stack []byte) Report {
 }
 
 // build is the report's text: a header, the traceback, the log tail.
-func build(where, trace string, logTail []string, gpu string) Report {
-	mu.Lock()
-	in := info
-	mu.Unlock()
+func (g *Guard) build(where, trace string, logTail []string, gpu string) Report {
+	g.mu.Lock()
+	in := g.info
+	g.mu.Unlock()
 	if gpu == "" {
 		gpu = "unknown"
 	}
@@ -237,10 +237,10 @@ func title(app, trace string) string {
 }
 
 // save writes the report beside the fatal file and returns where.
-func save(text string) string {
-	mu.Lock()
-	d := dir
-	mu.Unlock()
+func (g *Guard) save(text string) string {
+	g.mu.Lock()
+	d := g.dir
+	g.mu.Unlock()
 	if d == "" {
 		return ""
 	}

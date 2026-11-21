@@ -128,18 +128,13 @@ def quantize_vision(m):
 
 def features(m, pv, a8=False):
     # a8: every matmul's input at int8 per block of 32 (the unfold's rows are
-    # the patch matmul's, (c, ky, kx) as the engine gathers them), and the
-    # GELUs in their tanh form, which the engine runs (llama.cpp's ggml_gelu;
-    # the reference's nn.GELU is erf, and embd is held to it).
-    hs, acts = [], []
+    # the patch matmul's, (c, ky, kx) as the engine gathers them); the GELUs
+    # the reference's own, exact.
+    hs = []
     if a8:
         for n, mod in m.named_modules():
             if ("vision_model" in n or "multi_modal_projector" in n) and isinstance(mod, torch.nn.Linear):
                 hs.append(mod.register_forward_pre_hook(lambda mod, inp: (qact(inp[0]),)))
-            if "vision_model" in n and isinstance(mod, torch.nn.GELU):
-                acts.append(mod)
-        for a in acts:
-            a.approximate = "tanh"
     try:
         with torch.no_grad():
             f = m.get_image_features(pv, vision_feature_select_strategy="default")
@@ -147,8 +142,6 @@ def features(m, pv, a8=False):
         f = m.multi_modal_projector(f.reshape(-1, f.shape[-1]))
         return f
     finally:
-        for a in acts:
-            a.approximate = "none"
         for h in hs:
             h.remove()
 

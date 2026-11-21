@@ -20,7 +20,8 @@ import (
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
-var updateGolden = flag.Bool("update", false, "rewrite the demo's golden text from what it renders now")
+// updateGolden is the -update flag TestMain registers.
+func updateGolden() bool { return flag.Lookup("update").Value.String() == "true" }
 
 // fixturePlacement is eight blocks of a model loaded on two cards: blocks 0-3
 // on cuda:0, 4-5 on vulkan:1, 6-7 on the host. Each block holds 4 KiB a
@@ -31,7 +32,7 @@ func fixturePlacement() *v1.Placement {
 	for i, dev := range where {
 		b := &v1.BlockPlacement{
 			Index:              int32(i),
-			Location:           v1.BlockLocation_BLOCK_LOCATION_HOST,
+			Location:           v1.BlockLocation_BLOCK_LOCATION_CPU,
 			HistoryPerPosition: &v1.ByteSize{Bytes: 4096},
 		}
 		if dev != "" {
@@ -57,7 +58,7 @@ func golden(t *testing.T, name, got string) {
 	t.Helper()
 	got = stripANSI(got) + "\n"
 	path := filepath.Join("testdata", name)
-	if *updateGolden {
+	if updateGolden() {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -236,18 +237,17 @@ func TestKeysAskForTheMoves(t *testing.T) {
 		first int32
 		last  int32
 		to    string
-		home  bool
 	}{
-		{"m", 0, 5, "vulkan:1", false},
-		{"h", 0, 5, "", true},
-		{"5", 4, 4, "cuda:0", false},
+		{"m", 0, 5, "vulkan:1"},
+		{"h", 0, 5, "cpu"},
+		{"5", 4, 4, "cuda:0"},
 	} {
 		if press(c.key) == nil {
 			t.Fatalf("%q sent no move", c.key)
 		}
 		got := f.relocates[len(f.relocates)-1]
 		if got.GetSessionId() != "s-1" || got.GetFirstBlock() != c.first || got.GetLastBlock() != c.last ||
-			got.GetToDeviceId() != c.to || got.GetToHost() != c.home {
+			got.GetToDeviceId() != c.to {
 			t.Errorf("%q asked for %+v", c.key, got)
 		}
 	}

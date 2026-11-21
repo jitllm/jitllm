@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // serveModel is the 1B model jitllmd served when four of them on one NUMA
@@ -20,45 +18,41 @@ const serveModel = "Llama-3.2-1B-Instruct-Q4_K_M.jlm"
 // than by RSS (AGENTS.md RULE 2f: a gate that measures RSS measures the
 // allocator).
 type ledger struct {
-	heap, offHeap, store, storeLimit, idleKV uint64
-	pooled                                   int
+	heap, offHeap, store, storeLimit uint64
 }
 
 func (l ledger) String() string {
 	mib := func(b uint64) float64 { return float64(b) / (1 << 20) }
-	return fmt.Sprintf("live heap %.1f MiB, off-heap weights %.1f MiB, memory cache %.1f MiB (bound %.1f MiB), pooled States %d holding %.1f MiB of history",
-		mib(l.heap), mib(l.offHeap), mib(l.store), mib(l.storeLimit), l.pooled, mib(l.idleKV))
+	return fmt.Sprintf("live heap %.1f MiB, off-heap weights %.1f MiB, memory cache %.1f MiB (bound %.1f MiB)",
+		mib(l.heap), mib(l.offHeap), mib(l.store), mib(l.storeLimit))
 }
 
-func (l ledger) total() uint64 { return l.heap + l.offHeap + l.store + l.idleKV }
+func (l ledger) total() uint64 { return l.heap + l.offHeap + l.store }
 
 func readLedger(e *Engine, lm *LoadedModel) ledger {
 	runtime.GC()
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	st := e.MemCacheStats(lm)
-	e.mu.RLock()
-	idle := lm.idleKV()
-	e.mu.RUnlock()
-	return ledger{heap: ms.HeapAlloc, offHeap: uint64(jlm.OffHeapBytes()), store: st.Store.Bytes,
-		storeLimit: st.Store.Limit, idleKV: idle, pooled: st.Pooled}
+	return ledger{heap: ms.HeapAlloc, offHeap: lm.m.MappedBytes(lm.frames()), store: st.Store.Bytes,
+		storeLimit: st.Store.Limit}
 }
 
 // TestAServerUnderLoadStaysUnderItsBound serves the 1B model as jitllmd did on
-// the two-socket Xeon -- the default context, the memory cache, the State pool
+// the two-socket Xeon -- the default context, the memory cache, the instance pool
 // and a warm load, a host share of 190 GiB (eight tenths of that box's free
 // memory) -- to sixteen distinct 170-token prompts, four at a time, while the
 // host reports 512 MiB available: the NUMA node filling under the other servers.
 //
 // The memory cache may hold an eighth of what it holds plus what is
-// available, so at most 512 MiB/7; the State's score rows are sized by the keys
+// available, so at most 512 MiB/7; the instance's score rows are sized by the keys
 // a prompt reaches. The ledger's total stays under the weights plus that
 // bound plus 320 MiB of heap.
 //
 // The violations: an eighth of the share alone lets the cache take every
 // prompt (about 6 MB each, the fills of a prompt's last page being held over one
 // copy; past the bound by the thirteenth); the score rows sized at
-// the context hold 89 MB per State.
+// the context hold 89 MB per Instance.
 func TestAServerUnderLoadStaysUnderItsBound(t *testing.T) {
 	path := modelPath(t, serveModel)
 	fi, err := os.Stat(path)
@@ -66,8 +60,8 @@ func TestAServerUnderLoadStaysUnderItsBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	const avail = 512 << 20
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
-		HostBudget: 190 << 30, MaxBatchRows: 64, WarmLoads: true})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
+		HostBudget: 190 << 30, MaxBatchRows: 64, WarmLoads: true}))
 	e.hostAvail = func() uint64 { return avail }
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m"})

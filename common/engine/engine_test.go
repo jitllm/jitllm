@@ -16,9 +16,11 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
-// modelPath is a real container, because the one thing this gate exists to
+// modelPath() is a real container, because the one thing this gate exists to
 // prove is that the app can drive the real engine.
-var modelPath = testmodels.Path("stories260K.jlm")
+func modelPath() string {
+	return testmodels.Path("stories260K.jlm")
+}
 
 // pump drains the UI queue the way gogpu's OnUpdate does, until want is true.
 //
@@ -46,9 +48,9 @@ func pump(t *testing.T, sh *testShell, d time.Duration, what string, want func()
 // It guards the app reaching the engine at all: the window's screen.Engine must be
 // attached, or clicking a model says "No engine wired".
 func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
-	fresh.Must(t, modelPath)
-	if _, err := os.Stat(modelPath); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	fresh.Must(t, modelPath())
+	if _, err := os.Stat(modelPath()); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	sh := newTestShell()
 	st := sh.Store
@@ -56,8 +58,8 @@ func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
 	e := New(sh, sh.state())
 	defer e.Close()
 
-	e.Load(modelPath)
-	if l, ok := st.LoadingOf(modelPath); !ok || l.Stage == "" {
+	e.Load(modelPath())
+	if l, ok := st.LoadingOf(modelPath()); !ok || l.Stage == "" {
 		t.Fatalf("a load in progress is not shown: %+v", l)
 	}
 	pump(t, sh, 90*time.Second, "the model to load", func() bool { return st.Loaded.Get() })
@@ -167,16 +169,16 @@ func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
 
 // Stop must cancel a generation and keep the model loaded.
 func TestStopCancelsAndKeepsTheModel(t *testing.T) {
-	fresh.Must(t, modelPath)
-	if _, err := os.Stat(modelPath); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	fresh.Must(t, modelPath())
+	if _, err := os.Stat(modelPath()); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	sh := newTestShell()
 	st := sh.Store
 	e := New(sh, sh.state())
 	defer e.Close()
 
-	e.Load(modelPath)
+	e.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the model to load", func() bool { return st.Loaded.Get() })
 
 	reply := st.AppendTurn(session.Turn{Role: session.RoleAssistant})
@@ -215,9 +217,9 @@ func trunc(s string, n int) string {
 // assertion is the reuse count (KVRestored), not the time, which on a tiny
 // model measures the harness.
 func TestASecondTurnReusesTheSharedPrefix(t *testing.T) {
-	fresh.Must(t, modelPath)
-	if _, err := os.Stat(modelPath); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	fresh.Must(t, modelPath())
+	if _, err := os.Stat(modelPath()); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	// A private cache dir, so the gate cannot pass on a page another run left.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
@@ -227,7 +229,7 @@ func TestASecondTurnReusesTheSharedPrefix(t *testing.T) {
 	e := New(sh, sh.state())
 	defer e.Close()
 
-	e.Load(modelPath)
+	e.Load(modelPath())
 	pump(t, sh, 90*time.Second, "the model to load", func() bool { return st.Loaded.Get() })
 
 	send := func(prompt string) int {

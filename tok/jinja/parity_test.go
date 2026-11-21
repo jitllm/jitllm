@@ -28,6 +28,30 @@ func TestFormatFilter(t *testing.T) {
 	}
 }
 
+// TestMembershipIsEquality: in compares a list's items as == does, so a
+// float is in a list of the integer it equals; each want is jinja2's.
+func TestMembershipIsEquality(t *testing.T) {
+	for src, want := range map[string]string{
+		`{{ 1.0 in [0, 1] }}`:     `True`,
+		`{{ 1 in [0.0, 1.0] }}`:   `True`,
+		`{{ 2.0 not in [0, 1] }}`: `True`,
+		`{{ 0.5 in [0, 1] }}`:     `False`,
+		`{{ 'a' in ['a', 1] }}`:   `True`,
+	} {
+		tpl, err := jinja.Compile(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		got, err := tpl.Render(nil)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if got != want {
+			t.Errorf("%s: got %q, want %q", src, got, want)
+		}
+	}
+}
+
 // TestReadingAnUndefinedValueFails: an attribute, item or slice of an
 // undefined value raises in jinja2, where a missing key of a defined value is
 // undefined -- so the first three fail and the last two render.

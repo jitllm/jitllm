@@ -379,7 +379,7 @@ def build(name):
 # position's logits are recorded as the vocabulary's first REAL_HEAD and the
 # reference's REAL_TOP highest. The engine is held to it through llama.cpp's
 # converter's GGUF of the same checkpoint and through this tree's conversion of
-# the checkpoint itself (engine/model's TestKimiK3RealMatchesReference names the
+# the checkpoint itself (the engine's TestKimiK3RealMatchesReference names the
 # files); a compressed-tensors MXFP4 checkpoint is read through real_weights,
 # and needs compressed-tensors in the venv. It writes $K3_OUT/real-<name>.json, the golden's home being
 # testdata/golden/kimik3; run on another host, K3_OUT is where the golden is

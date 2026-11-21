@@ -114,7 +114,7 @@ func TestASharedDeviceSaysItIsNotASecondPool(t *testing.T) {
 // weights separately rather than folding them in, since they never page.
 func TestTheHostRowSeparatesWhatNeverPages(t *testing.T) {
 	got := HostLine(Allocation{
-		NBlocks: 48, HostBlocks: 44, DeviceBlocks: 4,
+		NBlocks: 48, CPUBlocks: 44, DeviceBlocks: 4,
 		HostUsed: 6 << 30, HostBudget: 8 << 30, Dense: 182_100_000,
 	})
 	for _, want := range []string{"44 block(s)", "6.00 GiB", "8.00 GiB", "dense"} {
@@ -136,11 +136,11 @@ func TestPlacementLineCountsEachTierSeparately(t *testing.T) {
 	r := byte(PlaceResident)
 	blocks := []byte{
 		byte(OnDevice(0)), byte(OnDevice(0)), byte(OnDevice(1)) | r,
-		byte(PlaceHost) | r, byte(PlaceHost) | r,
-		byte(PlaceHost),
+		byte(PlaceCPU) | r, byte(PlaceCPU) | r,
+		byte(PlaceCPU),
 	}
 	got := PlacementLine(blocks)
-	for _, want := range []string{"3 of 6 block(s) on a device", "2 on the host", "1 paged out"} {
+	for _, want := range []string{"3 of 6 block(s) on a card", "2 on the CPU", "1 paged out"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PlacementLine = %q, want it to contain %q", got, want)
 		}

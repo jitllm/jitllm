@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -62,7 +62,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 	vocab := []string{"<unk>", "▁a", "▁b", "🙂"}
 	src := &jlm.Source{
 		Config: &jlm.Config{
-			Arch: jlm.ArchLlama, NLayer: nBlock, NEmbd: k, NHead: 1, NKVHead: 1,
+			NLayer: nBlock, NEmbd: k, NHead: 1, NKVHead: 1,
 			HeadDim: k, NRot: k, NFFN: k, NVocab: rows, NCtx: 128,
 			RMSEps: 1e-5, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: jlm.FlagTiedEmbd,
@@ -90,16 +90,14 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
-	if err := c.LoadAll(); err != nil {
+	if err := cf.LoadAll(); err != nil {
 		t.Fatal(err)
 	}
 
 	// The description survives as typed fields, read with the container's own
 	// accessors: no key names, nothing to look up.
-	if got := c.Config().Arch; got != jlm.ArchLlama {
-		t.Errorf("architecture is %v", got)
-	}
 	if got := c.Config().NLayer; got != nBlock {
 		t.Errorf("NLayer is %d, want %d", got, nBlock)
 	}
@@ -118,7 +116,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 	checked := 0
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		qs, d, sc := c.Span(e)
+		qs, d, sc := cf.Span(e)
 		raw := tensors[i].Data
 		q, packed := jlm.Packer(e.Type)
 		if !packed {
@@ -128,7 +126,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 			checked++
 			continue
 		}
-		wq, wd, wsc, err := kernels.PackWeights(q, raw, e.Rows(), e.K())
+		wq, wd, wsc, err := layout.PackWeights(q, raw, e.Rows(), e.K())
 		if err != nil {
 			t.Fatal(err)
 		}

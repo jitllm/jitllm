@@ -1722,7 +1722,7 @@
     let tokens = []
     let nextToken = 0
     // The hero reads the machine it runs on and draws it in the field.
-    let machine = isHero ? SCENES[scene]() : null
+    let machine = isHero ? makeScene() : null
     let stamps = []
     let open = new Float32Array(0) // 0 beside the copy, 1 clear of it
     // warp's stars: a position on the screen plane and a depth.
@@ -2086,7 +2086,7 @@
     })
     if (isHero)
       addEventListener(HERO_EVENT, () => {
-        machine = SCENES[scene]()
+        machine = makeScene()
         if (measure()) redraw()
       })
 
@@ -2120,10 +2120,15 @@
     swarm: () => makeSwarm(MACHINE),
     compile: () => makeCompile(),
   }
+  // The scene named now, built; a name that is not one of SCENES' own builds compile.
+  const makeScene = () => {
+    const make = Object.hasOwn(SCENES, scene) ? SCENES[scene] : null
+    return typeof make === 'function' ? make() : SCENES.compile()
+  }
   const HERO_EVENT = 'jitllm:hero'
   const heroQuery = new URLSearchParams(location.search)
   let scene = heroQuery.get('hero')
-  if (!SCENES[scene]) scene = 'compile'
+  if (!Object.hasOwn(SCENES, scene)) scene = 'compile'
   // The scene and noise switcher is for comparing heroes, not for visitors: it
   // shows only when the URL already names one (?hero=) or asks (?dev).
   if (['hero', 'dev'].some((k) => heroQuery.has(k))) {
@@ -2145,7 +2150,7 @@
     nav.addEventListener('click', (e) => {
       const b = e.target.closest('button')
       if (!b) return
-      if (b.dataset.scene !== scene) (scene = b.dataset.scene), dispatchEvent(new Event(HERO_EVENT))
+      if (Object.hasOwn(SCENES, b.dataset.scene) && b.dataset.scene !== scene) (scene = b.dataset.scene), dispatchEvent(new Event(HERO_EVENT))
       remember()
       mark()
     })

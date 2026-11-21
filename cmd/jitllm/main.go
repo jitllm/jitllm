@@ -4,7 +4,7 @@
 //
 //	jitllm run -devices auto|all|cpu|gpu[:N]|cuda:0|vulkan:1[=BYTES],... [-vram BYTES] model.jlm prompt...
 //
-// jit/gpu is imported unconditionally. The drivers are dlopen'd rather than
+// engine/device/gpu is imported unconditionally. The drivers are dlopen'd rather than
 // linked, which is what keeps the build free of cgo.
 //
 // The verify subcommand decodes the same prompt on both tiers, compares token
@@ -13,12 +13,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
+	"image"
+	_ "image/gif" // a GIF's first frame, which image.Decode returns
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"slices"
 	"sort"
@@ -26,22 +33,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
-
-	"os/exec"
+	"github.com/jitllm/jitllm/sched"
 
 	"github.com/jitllm/jitllm/dev/bench"
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/convert/meta"
-	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -49,8 +55,8 @@ import (
 //
 // sched.DecodeCores picks the physical P-cores and the pool starts one worker
 // each, while GOMAXPROCS defaults to NumCPU. Several places size work off
-// GOMAXPROCS (jlm's reader fan-out, jit/gpu/kernels/pack.go,
-// jit/gpu/tier/tier.go), so the two must agree.
+// GOMAXPROCS (jlm's reader fan-out, composer/kernels/pack.go,
+// engine/device/gpu/tier.go), so the two must agree.
 //
 // It is set here rather than in sched because GOMAXPROCS is process-global and
 // a library must not take that decision from whatever embeds it. An explicit
@@ -59,9 +65,9 @@ func alignGOMAXPROCS() {
 	if os.Getenv("GOMAXPROCS") != "" {
 		return
 	}
-	// The decode pool's width. A prefill pool wider than it (nn's
-	// Config.PrefillCores) raises GOMAXPROCS for its own phase and puts it
-	// back (nn.JIT.BeginPrefill).
+	// The decode pool's width. A prefill pool wider than it
+	// (cpu.WithPrefillCPUs) raises GOMAXPROCS for its own phase and puts it
+	// back (cpu.Pool.BeginPrefill).
 	if n := len(sched.DecodeCores(schedOptions()...)); n > 0 {
 		runtime.GOMAXPROCS(n)
 	}
@@ -81,24 +87,25 @@ func numaNodes() []int {
 	return nil
 }
 
-// version is the release version, set at link time
-// (-ldflags "-X main.version=v0.1.0"; see .goreleaser.yaml).
-var version = "dev"
-
-// procStart is as near process start as Go code runs: package variables are
-// initialised before main. speed -ttft's load row counts from it, as
-// llama.cpp's log timestamps count from its logger's start.
-var procStart = time.Now()
+// buildVersion is the release version the module was built at, "dev" for a
+// build from an untagged tree.
+func buildVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
+	// speed -ttft's load row counts from here, the process's start.
+	procStart := time.Now()
+	// A Vulkan driver held for the process's life keeps the ICDs loaded while
+	// devices open and close (vulkan.Driver); nil where there is no loader.
+	keep, _ := vulkan.NewDriver()
+	defer keep.Close()
 	alignGOMAXPROCS()
-	// Page frames and the dense region live off the Go heap (jlm.SetOffHeap).
-	// JITLLM_OFFHEAP=0 puts them back on it, with the budget's collector
-	// reserve: the control arm for a measurement.
-	if os.Getenv("JITLLM_OFFHEAP") == "0" {
-		jlm.SetOffHeap(false)
-		sched.SetWeightsOffHeap(false)
-	}
+	// Page frames and the dense region live off the Go heap; JITLLM_OFFHEAP=0
+	// puts them back on it (gcPlan).
 	if os.Getenv("JITLLM_GCSTATS") == "1" {
 		defer gcSummary()
 	}
@@ -111,7 +118,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "version":
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 	case "hardware":
 		err = hardware()
 	case "capabilities":
@@ -120,8 +127,6 @@ func main() {
 		os.Exit(doctorCmd(os.Args[2:]))
 	case "info":
 		err = info(os.Args[2], len(os.Args) > 3 && os.Args[3] == "-kv")
-	case "asm":
-		err = dumpAsm(os.Args[2])
 	case "bench":
 		err = benchCmd(os.Args[2:])
 	case "run":
@@ -129,7 +134,7 @@ func main() {
 	case "batch":
 		err = batchCmd(os.Args[2:])
 	case "speed":
-		err = speedCmd(os.Args[2:])
+		err = speedCmd(procStart, os.Args[2:])
 	case "verify":
 		err = verifyCmd(os.Args[2:])
 	case "tokenize":
@@ -163,15 +168,14 @@ func usage() {
   jitllm tokenize [-tokenizer FILE] <model.jlm> <text...>
   jitllm run [flags] <model.jlm> <prompt...>
   jitllm embed [-ids] [-lines] <model.jlm> <text...>   an embedding model's normalised vector
-  jitllm decide [-lines] <model.jlm> <request.json|->   a decision model's /v1/systemone answers
+  jitllm decide [-lines] <model.jlm> <request.json|->       a decision model's answers to a /v1/systemone body
   jitllm bench [-tokenizer FILE] <model.jlm>
-  jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] <model.jlm>   llama-bench's pp/tg, warmed
+  jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] <model.jlm>   prompt and decode rates (pp/tg), warmed
   jitllm batch [-devices SPEC] [-batch N] [-n N] <model.jlm> <prompt...>
   jitllm verify [flags] <model.jlm>
   jitllm upgrade <model.jlm>...   bring containers from an older jitllm to this build's version, in place
-  jitllm convert [-o DIR] [-chat-template FILE] [-head mtp.gguf] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
+  jitllm convert [-o DIR] [-chat-template FILE] [-config FILE] [-head mtp.gguf] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
   jitllm library [-refs]   the models convert fetches by NAME
-  jitllm asm <Q4_0|Q8_0|Q4_K>[x4]
 
 run flags:
   -devices SPEC          where to run the blocks (default auto). SPEC is a comma-separated
@@ -255,6 +259,13 @@ template does). -chat-template stores another in its place:
   jitllm convert -chat-template Mistral-7B-Instruct-v0.3/tokenizer_config.json \
       Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
 
+A GGUF can drop what its model's config.json states: MiniCPM-V's text GGUF
+carries no LongRoPE factors, and LFM2-VL's mmproj names no resampling filter.
+-config reads them from the publisher's files (config.json and
+the preprocessor_config.json beside it); a GGUF that names LongRoPE and carries no
+factors is refused without it:
+  -config FILE           a config.json or the model directory holding one
+
 It also takes a HuggingFace reference, which is downloaded first:
   hf://OWNER/REPO/FILE.gguf            the short form; @REV pins a branch, tag or sha
   hf://OWNER/REPO                      the repo's only GGUF, or a refusal listing them
@@ -266,7 +277,7 @@ is already here and complete. It lands beside the models you already have -- see
   HF_TOKEN               a token for a private or gated repo; HUGGING_FACE_HUB_TOKEN
                          and ~/.cache/huggingface/token are read too
 
-sampling (names match llama.cpp, so a prompt moves between engines):
+sampling:
   -temp F                sampling temperature; 0 = greedy (default)
   -top-k N               keep only the k most likely tokens; 0 = off
   -top-p F               nucleus sampling; 0 or 1 = off
@@ -284,68 +295,6 @@ verify flags:
 	os.Exit(2)
 }
 
-// dumpAsm disassembles a generated kernel, so the machine code jitllm emits can be
-// read rather than taken on faith. Needs objdump; the bytes are real either way.
-func dumpAsm(name string) error {
-	rows := int8(1)
-	if strings.HasSuffix(name, "x4") {
-		rows, name = cpu.Interleave, strings.TrimSuffix(name, "x4")
-	}
-	var t quant.Type
-	switch name {
-	case "Q4_0":
-		t = quant.Q4_0
-	case "Q8_0":
-		t = quant.Q8_0
-	case "Q4_K":
-		t = quant.Q4_K
-	default:
-		return fmt.Errorf("no kernel for %q (Q4_0, Q8_0, Q4_K, optionally +x4)", name)
-	}
-	// Print the kernel this host would run: the host tier's packed kernel,
-	// which is what a container decodes through, not the GGUF row-major one.
-	e := cpu.EmittersFor(cpu.HostTier())
-	kind := "packed fused matvec (what a container decodes through)"
-	emit := func() ([]byte, error) {
-		if e.PackedSupported == nil || !e.PackedSupported(t) || e.PackedFused == nil {
-			return nil, fmt.Errorf("the %s tier has no packed kernel for %s", cpu.HostTier(), t)
-		}
-		return e.PackedFused(t)
-	}
-	if rows == cpu.Interleave {
-		kind = "GGUF row-major matvec, interleaved"
-		emit = func() ([]byte, error) {
-			if !e.RowMajorGGUF || e.RowMajorSupported == nil || !e.RowMajorSupported(t) {
-				return nil, fmt.Errorf("the %s tier has no GGUF row-major kernel for %s "+
-					"(a container does not use one)", cpu.HostTier(), t)
-			}
-			return e.RowMajor(cpu.Spec{W: t, Rows: rows, Accs: 1, Cols: 1})
-		}
-	}
-	code, err := emit()
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp("", "jitllmasm")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(code); err != nil {
-		return err
-	}
-	f.Close()
-	fmt.Printf("// %s %s, tier %s, %d bytes of x86-64\n", t, kind, cpu.HostTier(), len(code))
-	out, err := exec.Command("objdump", "-D", "-b", "binary", "-m", "i386:x86-64",
-		"-M", "intel", f.Name()).Output()
-	if err != nil {
-		fmt.Printf("// objdump unavailable; raw bytes:\n%x\n", code)
-		return nil
-	}
-	fmt.Print(string(out))
-	return nil
-}
-
 // benchmark measures one-core decode on the generated kernels as a fraction of
 // a memory wall measured in this same process (AGENTS.md RULE 1).
 func benchmark(path string, topts []tok.Option) error {
@@ -353,7 +302,8 @@ func benchmark(path string, topts []tok.Option) error {
 		fmt.Fprintf(os.Stderr, "%v\n(set JITLLM_NO_GUARD=1 to measure anyway; the numbers will be wrong)\n", err)
 		return err
 	}
-	m, err := model.Open(path, loadOpts(topts, 0)...)
+	mo, io := loadOpts(topts, 0)
+	m, err := model.Open(path, mo...)
 	if err != nil {
 		return err
 	}
@@ -364,7 +314,10 @@ func benchmark(path string, topts []tok.Option) error {
 
 	// Decode, one token at a time.
 	ids := m.Vocab.Encode("The capital of France is", true)
-	st := m.NewState(len(ids) + 8)
+	st, err := engine.NewInstance(m, len(ids)+8, io...)
+	if err != nil {
+		return err
+	}
 	defer st.Close()
 	var logits []float32
 	for _, id := range ids {
@@ -373,20 +326,23 @@ func benchmark(path string, topts []tok.Option) error {
 		}
 	}
 	threads := st.Workers()
-	tier := fmt.Sprintf("generated %v, %d shape-specialized", st.Accelerated(), st.Shapes())
 	const nTok = 3
 	start := time.Now()
 	for i := 0; i < nTok; i++ {
-		if logits, err = st.Forward(model.Greedy(logits)); err != nil {
+		tok, err := st.Sample(nil, logits)
+		if err != nil {
+			return err
+		}
+		if logits, err = st.Forward(tok); err != nil {
 			return err
 		}
 	}
 	el := time.Since(start)
 
 	perTok := m.BytesPerToken()
-	fmt.Println(bench.Report(fmt.Sprintf("decode, %d core(s), %s", threads, tier), perTok*nTok, el, threads))
+	fmt.Println(bench.Report(fmt.Sprintf("decode, %d core(s), %s", threads, engine.CPUForm()), perTok*nTok, el, threads))
 	fmt.Printf("             %.3f tok/s   %d B/token\n", nTok/el.Seconds(), perTok)
-	if names, ns := model.OpProfile(); ns[0] > 0 {
+	if names, ns := st.OpProfile(); ns[0] > 0 {
 		var tot int64
 		for _, v := range ns {
 			tot += v
@@ -398,11 +354,6 @@ func benchmark(path string, topts []tok.Option) error {
 			}
 		}
 		fmt.Println()
-	}
-	if q, kn, o := nn.ProfileNanos(); q+kn+o > 0 {
-		tot := float64(q + kn + o)
-		fmt.Printf("             serial %.0f%% (quantize %.0f%%, widen %.0f%%)  parallel %.0f%% (kernel)\n",
-			100*float64(q+o)/tot, 100*float64(q)/tot, 100*float64(o)/tot, 100*float64(kn)/tot)
 	}
 	return nil
 }
@@ -417,7 +368,17 @@ type chatSpec struct {
 	repl   bool
 }
 
-func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *model.Sampler, imgPath string, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *model.Placement, specOpts []model.SpecOption) error {
+// systemErr names -system when the model's chat template has no system role,
+// so the refusal points at the flag that sent the message.
+func systemErr(err error) error {
+	var sr *model.SystemRoleError
+	if errors.As(err, &sr) {
+		return fmt.Errorf("-system: %w", err)
+	}
+	return err
+}
+
+func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *engine.Sampler, media mediaSpec, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *engine.Placement, specOpts []engine.SpecOption, open ...engine.Option) error {
 	if v := os.Getenv("JITLLM_N"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			n = p
@@ -429,20 +390,24 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// model that fits.
 	asked := maxmem
 	if maxmem == 0 {
-		maxmem = sched.MemBudget()
+		maxmem = gcPlan().Budget()
 	}
 	goheap.Cap()
-	opts := loadOpts(topts, maxmem)
+	mo, opts := loadOpts(topts, maxmem)
 	if place != nil {
-		opts = append(opts, model.WithPlacement(*place))
+		opts = append(opts, engine.WithPlacement(*place))
 	}
-	m, err := model.Open(path, opts...)
+	// A -devices list without cpu (or auto) keeps every block on its devices,
+	// paging where they do not hold the model.
+	opts = append(opts, engine.WithDevices(perfMapSpec(devSpec)))
+	opts = append(opts, open...)
+	m, err := model.Open(path, mo...)
 	// The meter starts at Open, not after placement: on a streamed model
 	// admission is the largest read, and starting later leaves it uncounted.
-	// See model.PhaseRow.
-	var ph *model.PhaseMeter
+	// See engine.PhaseRow.
+	var ph *engine.PhaseMeter
 	if m != nil {
-		ph = m.NewPhaseMeter()
+		ph = engine.NewPhaseMeter(m)
 	}
 	if err == nil && asked == 0 && m.DirectIO() {
 		// Direct reads leave no page-cache shadow copy, so the budget may
@@ -450,12 +415,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// the KV cache and the pool's scratch are anonymous, and goheap.Cap
 		// keeps the collector a gigabyte under the same ceiling.
 		//
-		// The raise is also capped by sched.GCBudgetCap: page frames are
+		// The raise is also capped by the plan's Cap: page frames are
 		// permanently live, and a budget near the heap goal makes the
 		// collector run back to back (AGENTS.md RULE 2f).
 		if lim := sched.MemLimit(); lim > 0 {
 			raised := lim / 10 * 9
-			if cap := sched.GCBudgetCap(); cap > 0 && cap < raised {
+			if cap := gcPlan().Cap(); cap > 0 && cap < raised {
 				raised = cap
 			}
 			if raised > maxmem {
@@ -467,32 +432,21 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return err
 	}
 	defer m.Close()
-	if err := preloadWait(m); err != nil {
-		return err
-	}
-	goheap.OffHeap(maxmem)
 	c := m.Cfg
-	fmt.Fprintf(os.Stderr, "%s L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
-		c.Arch, c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
-	// The pager's chunk size is stored in the container (jlm.chunkFor). It is
-	// printed at load because the pages line below only appears when frames
-	// are short.
-	if n := m.ChunkBytes(); n > 0 {
-		fmt.Fprintf(os.Stderr, "pager     %d KiB chunks, %d stream group(s)\n",
-			n>>10, m.StreamGroups())
-	}
+	fmt.Fprintf(os.Stderr, "L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
+		c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
 
 	if m.Vocab == nil {
 		return fmt.Errorf("%s: %w", path, m.TokErr)
 	}
 	// The host budget is settled before the devices open: a device whose
-	// memory is the host's is carved out of it (tier.WithHostBudget).
+	// memory is the host's is carved out of it (gpu.WithHostBudget).
 	// A speculating session's verification is a ragged step of a few rows:
 	// its scratch is reserved at placement, or a card the blocks filled
 	// refuses it and the rows run padded to the prompt width.
 	stepRows := 0
 	if specOpts != nil {
-		stepRows = model.SpecRows()
+		stepRows = engine.SpecRows()
 	}
 	dev, closeDev, devName, err := openDevices(devSpec, vram, maxmem, m.StreamGroups(), stepRows)
 	if err != nil {
@@ -503,19 +457,19 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// page-in repacks, which is slower than the upload it schedules. The
 	// arena gets what the host budget has left after the weights; a model too
 	// big for the host lands on zero and repacks. JITLLM_ARENA, when set, wins.
-	if g, ok := dev.(*tier.GPU); ok && place.Streams() && os.Getenv("JITLLM_ARENA") == "" {
+	if g, ok := dev.(*gpu.GPU); ok && place.Streams() && os.Getenv("JITLLM_ARENA") == "" {
 		if maxmem > m.WeightBytes() {
 			g.SetArena(maxmem - m.WeightBytes())
 		}
 	}
 
 	// -chat is opt-in. The default stays raw completion because every board
-	// row and the llama.cpp comparisons are completions of a bare prompt.
-	ids := m.Vocab.Encode(prompt, true)
+	// row and the baseline comparisons are completions of a bare prompt.
+	ids := m.Vocab.EncodeSpecial(prompt, true)
 	replying := chat != nil && chat.repl
 	if replying {
-		if imgPath != "" || specOpts != nil || depth > 0 {
-			return fmt.Errorf("the interactive chat takes neither -image, -spec nor -depth; give a prompt to use them")
+		if media.any() || specOpts != nil || depth > 0 {
+			return fmt.Errorf("the interactive chat takes neither -image, -video, -spec nor -depth; give a prompt to use them")
 		}
 		ids = nil
 	} else if chat != nil {
@@ -532,12 +486,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// wrongly: the rendered text carries its own specials and must be
 		// encoded with addSpecial=false. See model.ChatPrompt.
 		if ids, err = m.ChatIDs(msgs, true); err != nil {
-			return err
+			return systemErr(err)
 		}
 	}
 	// -depth measures decode at a context length, where attention grows with
 	// position and weight traffic does not. The padding repeats the prompt's
-	// own tokens; only the length matters, as with llama-bench's -d.
+	// own tokens; only the length matters.
 	if depth > len(ids) {
 		if len(ids) == 0 {
 			return fmt.Errorf("cannot pad an empty prompt to depth %d", depth)
@@ -547,60 +501,18 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			ids = append(ids, ids[i%base])
 		}
 	}
-	// An image costs positions that are not in ids (it arrives as embeddings),
-	// so the state must be sized for them before it exists. The tower lives in
-	// the same container and shares this model's pager.
-	tw := m.Tower()
+	// A picture is a span of the prompt where the chat template puts its image
+	// part, which the prefill encodes through the model's tower.
 	var spans []model.Span
-	// pic is the picture as the prompt's spans carry it (model.Picture): the
-	// prompt's prefill encodes it, so there is no encode stage here.
-	var pic *picture
 	extra := 0
-	if imgPath != "" {
-		if tw == nil {
-			return fmt.Errorf("-image needs a container with a vision tower in it; "+
-				"re-run `jitllm convert %s <mmproj.gguf> %s`", path, path)
-		}
-		// An image always goes through the model's own chat template, -chat or
-		// not; -system composes with it.
-		msgs := []model.ChatMessage{{Role: "user", Content: prompt, Images: 1}}
-		if chat != nil && chat.system != "" {
-			msgs = append([]model.ChatMessage{{Role: "system", Content: chat.system}}, msgs...)
-		}
-		if pic, err = openPicture(tw, imgPath); err != nil {
-			return err
-		}
-		if pic.tiles != nil {
-			ps, err := m.Llama4Spans(pic.tiles[0], pic.tiles[1], pic.pieces)
-			if err != nil {
-				return err
-			}
-			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
-				return err
-			}
-		} else if pic.lfm2 != nil {
-			ps, err := m.LFM2Spans(pic.lfm2[0], pic.lfm2[1], pic.pieces)
-			if err != nil {
-				return err
-			}
-			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
-				return err
-			}
-		} else if pic.lay != nil {
-			ps, err := m.PictureSpans(*pic.lay, 0, true, pic.pieces)
-			if err != nil {
-				return err
-			}
-			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
-				return err
-			}
-		} else if spans, err = m.ChatSpansImages(msgs, []model.Image{{Picture: pic.pieces[0]}}, true); err != nil {
+	if media.any() {
+		if spans, err = mediaSpans(m, media, prompt, chat); err != nil {
 			return err
 		}
 		extra = model.SpanPositions(spans, m.Cfg.NEmbd) - len(ids)
 	}
 	// Whether the pool spins or parks between regions is decided per token by
-	// the engine, by whether the token paged anything in (model.State.forward);
+	// the engine, by whether the token paged anything in (engine.Instance.forward);
 	// JITLLM_SPIN_US still fixes it.
 	// No -n: generate until the model ends its reply, in a session as long as
 	// the model's context, as the server's sessions are by default. KV pages
@@ -619,18 +531,35 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// prompt's; the session is sized for the longer of the two.
 	var wids []int32
 	if wp := os.Getenv("JITLLM_WARMUP_PROMPT"); wp != "" {
-		wids = m.Vocab.Encode(wp, true)
+		wids = m.Vocab.EncodeSpecial(wp, true)
 	}
-	st := m.NewState(max(len(ids)+extra, len(wids)) + n + 1)
+	st, err := engine.NewInstance(m, max(len(ids)+extra, len(wids))+n+1, opts...)
+	if err != nil {
+		return err
+	}
 	defer st.Close()
-	var kvStore *model.FileStore
+	// The CPU device's frames exist from the instance on: what they map is
+	// off the Go heap, and the preload, when asked, reads into them.
+	cfr := st.FramesOn(nn.CPU)
+	if err := preloadWait(cfr); err != nil {
+		return err
+	}
+	goheap.OffHeap(maxmem, m.MappedBytes(cfr))
+	// The pager's chunk size is stored in the container (jlm.chunkFor). It is
+	// printed at load because the pages line below only appears when frames
+	// are short.
+	if n := m.ChunkBytes(cfr); n > 0 {
+		fmt.Fprintf(os.Stderr, "pager     %d KiB chunks, %d stream group(s)\n",
+			n>>10, m.StreamGroups())
+	}
+	var kvStore *engine.FileStore
 	// The KV store is attached before the device is chosen. The namespace
 	// names the model; everything else that must match (geometry, layout,
 	// element width) is hashed into every page key by the engine.
 	if kvCacheDir != "" {
 		// Bounded by default, because nothing in a KV cache expires;
 		// -kv-cache-max 0 makes it unbounded.
-		fsStore, err := model.NewFileStoreLimit(kvCacheDir, kvCacheMaxBytes)
+		fsStore, err := engine.NewFileStoreLimit(kvCacheDir, kvCacheMaxBytes)
 		if err != nil {
 			return err
 		}
@@ -680,10 +609,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		fmt.Fprintln(os.Stderr)
 		// Over budget on a mixture of experts is the case jitllm can do something
 		// about: keep the experts the router keeps asking for, drop the rest.
-		// The full budget: State.SetMemBudget takes what a device on the host's
+		// The full budget: Instance.SetMemBudget takes what a device on the host's
 		// memory holds off it itself, once the device has placed its blocks and
 		// whenever they move -- so an embedder that never reads HostReserved
-		// still cannot double-spend the machine. See State.hostBudget.
+		// still cannot double-spend the machine. See Instance.systemBudget.
 		st.SetMemBudget(maxmem)
 		if _, bud := st.Resident(); bud > 0 {
 			fmt.Fprintf(os.Stderr, "         managing expert residency: %.2f GiB of expert budget\n",
@@ -715,7 +644,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// With no block placed, print the tier's own reason, so a capability
 		// gap does not read as a memory gap.
 		if st.GPULayers() == 0 {
-			if g, ok := dev.(*tier.GPU); ok {
+			if g, ok := dev.(*gpu.GPU); ok {
 				if why := g.Err(); why != "" {
 					fmt.Fprintf(os.Stderr, " -- %s", why)
 				}
@@ -742,15 +671,15 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// After placement, because the host's page count is NLayer minus what the
 	// devices took. Outside the device branch, so a CPU-only run gets a budget.
 	setPageBudget(m, st, dev, maxmem)
-	// With the device attached, HostBudget has taken off what an integrated GPU
+	// With the device attached, SystemBudget has taken off what an integrated GPU
 	// holds; say what the host works to when that moved it.
-	if maxmem > 0 && st.HostBudget() != maxmem {
+	if maxmem > 0 && st.SystemBudget() != maxmem {
 		fmt.Fprintf(os.Stderr, "memory   host budget in force %.2f GiB: devices on the HOST's own "+
 			"memory hold %.2f GiB of it (an integrated GPU spends the same bytes)\n",
-			float64(st.HostBudget())/(1<<30), float64(hostReserved(dev))/(1<<30))
+			float64(st.SystemBudget())/(1<<30), float64(hostReserved(dev))/(1<<30))
 	}
 
-	phRead(ph, dev, m)
+	phRead(ph, dev, m, cfr)
 	ph.Mark("load")
 	if replying {
 		if err := repl(m, st, sm, chat.system, replyCap, kvCacheDir != "", os.Stdin, os.Stdout); err != nil {
@@ -763,10 +692,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// drafts in one pass. The draft session attaches to the device the trunk
 	// is on. An image arrives as embeddings and a cached prefix skips the
 	// rows the draft must also see, so neither combines with it.
-	var sp *model.Speculator
+	var sp *engine.Speculator
 	if specOpts != nil {
-		if imgPath != "" || kvCacheDir != "" {
-			return fmt.Errorf("-spec combines with neither -image nor -kv-cache: the prediction block " +
+		if media.any() || kvCacheDir != "" {
+			return fmt.Errorf("-spec combines with neither -image, -video nor -kv-cache: the prediction block " +
 				"reads the trunk's hidden state at every prompt position, which an image's embeddings " +
 				"and a restored prefix do not produce")
 		}
@@ -777,10 +706,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 
 	// JITLLM_WARMUP=k runs the prompt and -n greedy tokens k times on this
-	// State, untimed, and resets it before the run that is measured: the
+	// Instance, untimed, and resets it before the run that is measured: the
 	// expert caches fill and the tuners settle as a server's would. The
 	// device's counters printed at the end include the warm-ups.
-	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && imgPath == "" && kvCacheDir == "" {
+	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && !media.any() && kvCacheDir == "" {
 		t0 := time.Now()
 		if wids == nil {
 			wids = ids
@@ -813,10 +742,17 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	var logits []float32
 	restored := 0
 	specFirst := int32(-1)
+	if spans != nil {
+		sm.PrimeSpans(spans)
+	} else {
+		sm.Prime(ids)
+	}
 	switch {
-	case imgPath != "":
-		logits, err = prefillImage(st, m, tw, pic, spans, kvCacheDir != "")
+	case spans != nil && kvCacheDir != "":
+		logits, err = st.PrefillCachedMixed(spans...)
 		restored = st.KVRestored()
+	case spans != nil:
+		logits, err = st.PrefillMixed(spans...)
 	case kvCacheDir != "":
 		logits, err = st.PrefillCached(ids)
 		// A hybrid's recurrent summaries are stored beside its KV pages under
@@ -836,10 +772,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return withDeviceErr(err, dev)
 	}
 	prefill := time.Since(start)
-	phRead(ph, dev, m)
+	phRead(ph, dev, m, cfr)
 	ph.Mark("prefill")
 	// So the profile below describes DECODE, not the prompt that preceded it.
-	model.ResetProfile()
+	st.ResetProfile()
 
 	ignoreEOS := os.Getenv("JITLLM_IGNORE_EOS") == "1"
 	var forced []int32
@@ -898,7 +834,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// a block's weights are, never the ids.
 	shrink := uint64(0)
 	if v := os.Getenv("JITLLM_PAGE_SHRINK"); v != "" {
-		if b, e := tier.ParseBytes(v); e == nil {
+		if b, e := gpu.ParseBytes(v); e == nil {
 			shrink = b
 		}
 	}
@@ -933,7 +869,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	for i := 0; i < n; i++ {
 		if shrink > 0 && i == 1 {
-			if g, ok := dev.(*tier.GPU); ok {
+			if g, ok := dev.(*gpu.GPU); ok {
 				kept, err := g.SetBudget(shrink)
 				if err != nil {
 					return err
@@ -945,7 +881,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		}
 		next := pending
 		if next < 0 {
-			next = sm.Sample(logits)
+			if next, err = st.Sample(sm, logits); err != nil {
+				return err
+			}
 		}
 		// JITLLM_FORCE_IDS decodes the given token ids in place of the
 		// sampled ones (teacher forcing), so two arms of an A/B whose
@@ -956,10 +894,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		sm.Observe(next)
 		if top > 0 {
 			// The margin at each step is the thing to look at when jitllm and
-			// llama.cpp disagree: a near-tie is float reassociation, a wide gap
+			// a reference disagree: a near-tie is float reassociation, a wide gap
 			// is a bug.
 			fmt.Fprintf(os.Stderr, "step %2d:", i)
-			for _, c := range model.TopK(logits, top) {
+			for _, c := range engine.TopK(logits, top) {
 				fmt.Fprintf(os.Stderr, "  %q %.4f", m.Vocab.Text(c.ID), c.Logit)
 			}
 			fmt.Fprintln(os.Stderr)
@@ -989,7 +927,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		<-printing
 	}
 	decode := time.Since(start)
-	phRead(ph, dev, m)
+	phRead(ph, dev, m, cfr)
 	ph.Mark("decode")
 	fmt.Println()
 	if sp != nil {
@@ -997,14 +935,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	if grow && dev != nil {
 		fmt.Fprintf(os.Stderr, "seam grew to %d/%d blocks\n", st.GPULayers(), c.NLayer)
-	}
-	// Say when the per-matvec seam was declined: the non-resident blocks ran
-	// wholly on the host, on purpose. The verdict is measured on the model's
-	// shapes, so it is only known after tokens have run.
-	if g, ok := dev.(*tier.GPU); ok && g.Stats().TooSmall > 0 {
-		fmt.Fprintf(os.Stderr,
-			"%d matvecs stayed on the host: this model does not carry enough weight bytes "+
-				"per host/device crossing to pay for one\n", g.Stats().TooSmall)
 	}
 	if n := 0; n > 0 {
 		fmt.Fprintf(os.Stderr, "%d block(s) moved onto a later device so the context fits there\n", n)
@@ -1016,35 +946,39 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if d := st.DeviceDemotions(); d > 0 {
 		// Include the tier's reason for the demotion.
 		why := ""
-		if g, ok := dev.(*tier.GPU); ok && g.Err() != "" {
+		if g, ok := dev.(*gpu.GPU); ok && g.Err() != "" {
 			why = ": " + g.Err()
 		}
+		ev := st.Evacuations()
 		fmt.Fprintf(os.Stderr,
-			"★ the device failed %d time(s) and its blocks moved to the host%s; this rate is NOT comparable with a run that kept the card\n", d, why)
+			"★ the device refused %d time(s) (%d fault, %d decline) and its blocks moved to the CPU device%s; this rate is NOT comparable with a run that kept the card\n",
+			d, ev.DemotedFault, ev.DemotedDecline, why)
+	}
+	if n := st.Evacuations().BuildRefused; n > 0 {
+		fmt.Fprintf(os.Stderr, "★ %d call(s) ended because a kernel did not build on the device; nothing was moved\n", n)
 	}
 	// Placement is not execution. The load banner says what each device holds;
-	// this says what each device ran and read back (tier.Stats.Blocks counts
+	// this says what each device ran and read back (gpu.Stats.Blocks counts
 	// only submissions whose output came back). It is printed for one device
 	// too, because a pager can place every block and still decline to compute.
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		per := g.DevStats()
 		for i, n := range g.Placed() {
-			fmt.Fprintf(os.Stderr, "device %-44s %d block(s) placed, %d run, %d matvec(s)\n",
-				per[i].Device, n, per[i].Blocks, per[i].Served)
+			served, _ := per[i].ServedPart(nn.EveryPart)
+			fmt.Fprintf(os.Stderr, "device %-44s %d block(s) placed, %d run, %d composed part step(s)\n",
+				per[i].Device, n, per[i].Blocks, served)
 		}
 		fmt.Fprintf(os.Stderr, "device %-44s %d block(s) of %d, whatever no device took\n",
-			"host", c.NLayer-st.GPULayers(), c.NLayer)
+			nn.CPU, c.NLayer-st.GPULayers(), c.NLayer)
 		// The four terms of a page-in, summed over the whole run. TLayer is the
 		// device's own compute: page-in happens in submit(), outside
 		// layersOnce, so TLayer bounds what overlapping a page-in with compute
 		// could buy.
-		if ds := g.Stats(); ds.TPack > 0 || ds.TUpload > 0 || ds.TUnpack > 0 || ds.TLayer > 0 {
+		if ds := g.Stats(); ds.TPack > 0 || ds.TUpload > 0 || ds.TLayer > 0 {
 			sec := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1e6 }
 			fmt.Fprintf(os.Stderr,
-				"device cost: pack %.2f s, upload %.2f s, device unpack %.2f s, block compute %.2f s"+
-					"  (%.2f GiB uploaded raw, %.2f GiB landed on the card)\n",
-				sec(ds.TPack), sec(ds.TUpload), sec(ds.TUnpack), sec(ds.TLayer),
-				float64(ds.UnpackBytes)/(1<<30), float64(ds.PageBytes)/(1<<30))
+				"device cost: pack %.2f s, upload %.2f s, block compute %.2f s  (%.2f GiB landed on the card)\n",
+				sec(ds.TPack), sec(ds.TUpload), sec(ds.TLayer), float64(ds.PageBytes)/(1<<30))
 			// The stream line splits a streamed mixture's suspension by wall
 			// (drain, host read, upload); a CPU profile cannot, because the
 			// reads overlap. The rotary line says which arm built the table.
@@ -1052,10 +986,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				us := func(d time.Duration) float64 { return float64(d.Microseconds()) / float64(ds.Submits) }
 				fmt.Fprintf(os.Stderr, "host per submission: stage %.1f us, launch %.1f us (%.1f of it %d capture(s)), read %.1f us over %d\n",
 					us(ds.TSubStage), us(ds.TSubLaunch), us(ds.TCapture), ds.Captures, us(ds.TSubRead), ds.Submits)
-			}
-			if ds.RopeTables > 0 || ds.RopeTableUploads > 0 {
-				fmt.Fprintf(os.Stderr, "rotary table: %d row(s) built on the device, %d uploaded\n",
-					ds.RopeTables, ds.RopeTableUploads)
 			}
 			if ds.TStreamRead > 0 || ds.TStreamPut > 0 || ds.TStreamWait > 0 {
 				fmt.Fprintf(os.Stderr,
@@ -1065,47 +995,31 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamFills, ds.StreamOverlaps)
 				fmt.Fprintf(os.Stderr,
 					"stream upload: sheet lookup %.2f s, gather %.2f s, host-to-device %.2f s for %.2f GiB (%.2f GiB/s); "+
-						"%d plane(s) direct (%d page-locked), %d gathered; groups %d\n",
+						"%d plane(s) direct (%d from page-locked frames, %d through page-locked halves), %d gathered; groups %d\n",
 					sec(ds.TStreamSheet), sec(ds.TStreamCopy), sec(ds.TStreamH2D),
 					float64(ds.StreamBytes)/(1<<30), float64(ds.StreamBytes)/(1<<30)/max(sec(ds.TStreamH2D), 1e-9),
-					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered, ds.StreamGroupsTuned)
+					ds.StreamDirect, ds.StreamFromFrame, ds.StreamPinned, ds.StreamGathered, ds.StreamGroupsTuned)
 			}
 			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
 				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one (mean base %d B)\n",
 					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
 					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
 			}
-			if ds.HybridRuns > 0 {
-				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
-				if g, ok := dev.(*tier.GPU); ok {
-					if at, tw := g.CacheCoverage(); len(at) > 0 {
-						q := func(v []float64) string {
-							w := append([]float64(nil), v...)
-							slices.Sort(w)
-							return fmt.Sprintf("%.0f/%.0f/%.0f%%", 100*w[0], 100*w[len(w)/2], 100*w[len(w)-1])
-						}
-						fmt.Fprintf(os.Stderr, "cache coverage: the hottest experts a cache holds carry %s of a block's selections (min/median/max over %d blocks); twice the slots %s\n",
-							q(at), len(at), q(tw))
-					}
+			if at, tw := g.CacheCoverage(); len(at) > 0 {
+				q := func(v []float64) string {
+					w := append([]float64(nil), v...)
+					slices.Sort(w)
+					return fmt.Sprintf("%.0f/%.0f/%.0f%%", 100*w[0], 100*w[len(w)/2], 100*w[len(w)-1])
 				}
-				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 || ds.TLateWrite > 0 {
-					fmt.Fprintf(os.Stderr, "split experts: %d block-step(s) split, %d expert(s) run on the card, host %.2f s, %d taken into the caches in %.2f s; host sums written back in %.2f s\n",
-						ds.SplitRuns, ds.SplitHits, sec(ds.TSplitHost), ds.SplitAdmits, sec(ds.TAdmit), sec(ds.TLateWrite))
-				}
-			}
-			if ds.StreamPrefetched > 0 {
-				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) guessed\n", ds.StreamPrefetched)
-			}
-			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
-				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",
-					ds.ProbeHits, ds.ProbeExperts, 100*float64(ds.ProbeHits)/max(float64(ds.ProbeExperts), 1), ds.ProbeFused)
+				fmt.Fprintf(os.Stderr, "cache coverage: the hottest experts a cache holds carry %s of a block's selections (min/median/max over %d blocks); twice the slots %s\n",
+					q(at), len(at), q(tw))
 			}
 		}
 	}
 	// Say whether blocks paged, even when they did not: the slot count and
 	// page-in count separate a model that fits from one streaming through a
 	// few slots, which otherwise look identical from outside.
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		if st := g.Stats(); st.Slots > 0 && (st.PageIns > 0 || st.PageOuts > 0 || st.Blocks > 0) {
 			// Zero page-ins with a streamed block means either the model fits
 			// or the budget is below the slot floor and blocks were declined;
@@ -1132,27 +1046,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					"(JITLLM_ARENA=<bytes> retains packs; %.2f MiB of %.2f used)",
 					as.Hits, st.Packs, float64(as.Bytes)/(1<<20), float64(as.Limit)/(1<<20))
 			}
-			// Tensors unpacked on the device appear in neither number above.
-			// Reported outside the page-in branch so a model that fits shows
-			// the load-time saving too. The bytes are the raw bytes that crossed.
-			if st.Unpacks > 0 || st.NoUnpackKernel > 0 || st.NoUnpackRoom > 0 {
-				why := ""
-				if st.NoUnpackKernel+st.NoUnpackRoom > 0 {
-					why = fmt.Sprintf(" (%d have no device unpack, %d had no room: %s)",
-						st.NoUnpackKernel, st.NoUnpackRoom, st.UnpackWhy)
-				}
-				how += fmt.Sprintf("; %d tensor(s) uploaded RAW and unpacked on the "+
-					"device, %.2f GiB in %s, staging %.2f MiB%s",
-					st.Unpacks, float64(st.UnpackBytes)/(1<<30),
-					st.TUnpack.Round(time.Millisecond),
-					float64(st.StageVRAM)/(1<<20), why)
-			}
 			fmt.Fprintf(os.Stderr,
 				"paging %d block slot(s), %d page-in(s), %d page-out(s), %.2f GiB moved%s\n",
 				st.Slots, st.PageIns, st.PageOuts, float64(st.PageBytes)/(1<<30), how)
 		}
 	}
-	if g, ok := dev.(*tier.GPU); ok {
+	if g, ok := dev.(*gpu.GPU); ok {
 		if as := g.ArenaStats(); as.Limit > 0 || as.Packs > 0 {
 			fmt.Fprintf(os.Stderr,
 				"arena %d packs, %d page-ins served, %.2f MiB retained of %.2f\n",
@@ -1178,13 +1077,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// The prompt is the text ids plus whatever an image spliced in (marker
 	// tokens and one embedding per projected patch group).
 	ptok := len(ids) + extra
-	if n := st.MixtureAffine(); n > 0 {
-		fmt.Fprintf(os.Stderr, "numa     %d host mixture region(s) ran on the nodes holding their experts\n", n)
-	}
 	fmt.Fprintf(os.Stderr, "\nprompt %d tok in %v (%s)   decode %d tok in %v (%s)\n",
 		ptok, prefill.Round(time.Millisecond), rateOf(ptok, prefill),
 		len(out), decode.Round(time.Millisecond), rateOf(len(out), decode))
-	if nodes, aff := st.JIT().NUMA(); nodes > 1 {
+	if nodes, aff := cpudev.PoolOf(st.Devices()).NUMA(); nodes > 1 {
 		fmt.Fprintf(os.Stderr, "numa     %d nodes, %d region(s) read node-affine\n", nodes, aff)
 	}
 	// Report what the KV cache did, including zero: a working cache and a
@@ -1236,11 +1132,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Say whether pages faulted: a run fully resident and one a page short
 	// are different measurements.
 	// evict, not out: `out` is the generated token slice in this scope.
-	if fr, in, evict := m.PageStats(); fr > 0 {
+	if fr, in, evict := m.PageStats(cfr); fr > 0 {
 		// Read requests, not page-ins, are what a partial page-in costs. The
 		// chunk size is the File's own, so this reports what the pager did.
 		fmt.Fprintf(os.Stderr, "pages    %d frame(s), %d page-in(s), %d eviction(s), %d fresh frame(s), %.2f GiB read in %d request(s) at %d KiB chunks\n",
-			fr, in, evict, m.FreshFrames(), float64(m.BytesRead())/(1<<30), m.PagerReads(), m.ChunkBytes()>>10)
+			fr, in, evict, m.FreshFrames(cfr), float64(m.BytesRead(cfr))/(1<<30), m.PagerReads(), m.ChunkBytes(cfr)>>10)
 		// The same total split by phase: the whole-run figure is dominated by
 		// admission on a streamed model. Each phase's rate is over its own
 		// wall, which includes compute, so it is a floor.
@@ -1274,7 +1170,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	fmt.Fprintf(os.Stderr, "ids %v\n", append(append([]int32{}, ids...), out...))
 	// The op split, when asked for; useful at long context, where attention is
 	// the one O(S) op.
-	if names, ns := model.OpProfile(); ns[0] > 0 {
+	if names, ns := st.OpProfile(); ns[0] > 0 {
 		var tot int64
 		for _, v := range ns {
 			tot += v
@@ -1286,31 +1182,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			}
 		}
 		fmt.Fprintln(os.Stderr)
-	}
-	// The serial/parallel split, in absolute milliseconds rather than shares:
-	// on a container the kernel and widen buckets are filled only by the GGUF
-	// row-major path, so a share would read "quantize 100%".
-	if q, kn, o := nn.ProfileNanos(); q+kn+o > 0 {
-		ms := func(v int64) float64 { return float64(v) / 1e6 }
-		fmt.Fprintf(os.Stderr, "quantize %.1f ms (activations, host)", ms(q))
-		if kn+o > 0 {
-			fmt.Fprintf(os.Stderr, "   kernel %.1f ms   widen %.1f ms", ms(kn), ms(o))
-		}
-		fmt.Fprintln(os.Stderr)
-	}
-	// The matvec bucket split into packing, kernel and transpose
-	// (JITLLM_MMPROF).
-	if pk, kn, tr, tot, calls, regions := nn.MatMulProfile(); calls > 0 {
-		ms := func(v int64) float64 { return float64(v) / 1e6 }
-		other := tot - pk - kn - tr
-		fmt.Fprintf(os.Stderr,
-			"MatMul: %d calls, %d pool regions, %.0f ms total"+
-				"  (pack %.0f ms %.1f%%, kernel %.0f ms %.1f%%, transpose %.0f ms %.1f%%, other %.0f ms %.1f%%)\n",
-			calls, regions, ms(tot),
-			ms(pk), 100*float64(pk)/float64(tot),
-			ms(kn), 100*float64(kn)/float64(tot),
-			ms(tr), 100*float64(tr)/float64(tot),
-			ms(other), 100*float64(other)/float64(tot))
 	}
 	return nil
 }
@@ -1328,7 +1199,7 @@ func tokenize(path, text string, topts []tok.Option) error {
 	if err != nil {
 		return err
 	}
-	ids := v.Encode(text, true)
+	ids := v.EncodeSpecial(text, true)
 	fmt.Printf("%d tokens: %v\n", len(ids), ids)
 	for _, id := range ids {
 		fmt.Printf("  %6d -> %q\n", id, strings.ReplaceAll(v.Text(id), "\u2581", " "))
@@ -1517,8 +1388,7 @@ func runCmd(args []string) error {
 	chat := fs.Bool("chat", false, "wrap the prompt in the model's own chat template (instruct models)")
 	system := fs.String("system", "", "a system message, with -chat")
 	depth := fs.Int("depth", 0, "pad the prompt to this many tokens before generating, so decode is measured at that context length")
-	// Sampling, named to match llama.cpp so a prompt moves between engines.
-	// temp 0 is greedy and is the default: every correctness test in the tree
+	// Sampling. temp 0 is greedy and is the default: every correctness test in the tree
 	// compares argmax, and a sampler on by default would make them fail
 	// randomly rather than loudly.
 	temp := fs.Float64("temp", 0, "sampling temperature; 0 = greedy (default)")
@@ -1530,6 +1400,8 @@ func runCmd(args []string) error {
 	seed := fs.Int64("seed", 0, "RNG seed for sampling")
 	// No -mmproj: the vision tower is in the container.
 	imgPath := fs.String("image", "", "image to place in the prompt; the container must carry a vision tower")
+	videoDir := fs.String("video", "", "a directory of a video's frames, in name order, to place in the prompt after -image; the model's tower must read a video")
+	videoFps := fs.Float64("video-fps", 0, "-video's frames a second; 0 is the model's default")
 	tokJSON := fs.String("tokenizer", "", "a HuggingFace tokenizer.json whose pre-tokenizer replaces the one tokenizer.ggml.pre names")
 	// The cache namespace is not a flag: the engine hashes the geometry into
 	// every page key and names the model from the container path.
@@ -1589,7 +1461,7 @@ func runCmd(args []string) error {
 			usage()
 		}
 	}
-	sm := &model.Sampler{Temp: *temp, TopK: *topK, TopP: *topP, MinP: *minP,
+	sm := &engine.Sampler{Temp: *temp, TopK: *topK, TopP: *topP, MinP: *minP,
 		RepeatPen: *repPen, RepeatLastN: *repN, Seed: *seed}
 	var cs *chatSpec
 	if *chat || interactive {
@@ -1597,7 +1469,7 @@ func runCmd(args []string) error {
 	} else if *system != "" {
 		return fmt.Errorf("-system needs -chat: without a template there is no system turn to put it in")
 	}
-	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, remoteFlags), os.Stderr)
+	svc, path, err := runTarget(context.Background(), fs.Arg(0), *addr, keyOf(*apiKey), *embedded, engineFlags(fs, remoteFlags()), os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -1626,15 +1498,14 @@ func runCmd(args []string) error {
 			return err
 		}
 		defer f.Close()
-		sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
 		if err := pprof.StartCPUProfile(f); err != nil {
 			return err
 		}
 		defer pprof.StopCPUProfile()
 	}
-	var place *model.Placement
+	var place *engine.Placement
 	if *placement != "" {
-		p, err := model.ParsePlacement(*placement, *placeStrict)
+		p, err := engine.ParsePlacement(*placement, *placeStrict)
 		if err != nil {
 			return err
 		}
@@ -1642,7 +1513,7 @@ func runCmd(args []string) error {
 	} else if *placeStrict {
 		return fmt.Errorf("-placement-strict needs -placement")
 	}
-	return run(path, prompt, *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, *imgPath, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts)
+	return run(path, prompt, *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, mediaSpec{image: *imgPath, video: *videoDir, fps: *videoFps}, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts, regionLabels(*cpuProf != "")...)
 }
 
 // tokenizerOption turns a -tokenizer path into the tok.Option it names, plus the
@@ -1669,82 +1540,122 @@ func tokenizerOption(path string) ([]tok.Option, func(), error) {
 // when JITLLM_PRELOAD_WAIT=1: a warm measurement whose model fits the budget
 // then faults nothing in, as an engine that copies its weights to RAM before
 // its first token does. Unset, the prompt starts beside the reads.
-func preloadWait(m *model.Model) error {
-	if os.Getenv("JITLLM_PRELOAD_WAIT") != "1" {
+func preloadWait(fr *jlm.Frames) error {
+	if os.Getenv("JITLLM_PRELOAD_WAIT") != "1" || fr == nil {
 		return nil
 	}
 	t0 := time.Now()
-	err := m.WaitPreload()
+	err := fr.WaitPreload()
 	fmt.Fprintf(os.Stderr, "preload   waited %.1fs for every page\n", time.Since(t0).Seconds())
 	return err
 }
 
-func loadOpts(t []tok.Option, budget uint64) []model.Option {
-	o := make([]model.Option, 0, len(t)+2)
+// perfMapSpec is device spec spec with the CPU device writing its perf map
+// when JITLLM_PERFMAP is set: perfmap among the cpu entry's variants, a cpu
+// entry beside auto, and a spec of cards alone left as it is -- the CPU runs
+// nothing there.
+func perfMapSpec(spec string) string {
+	if os.Getenv("JITLLM_PERFMAP") == "" {
+		return spec
+	}
+	es := strings.Split(spec, ",")
+	auto := strings.TrimSpace(spec) == ""
+	for i, e := range es {
+		t := strings.ToLower(strings.TrimSpace(e))
+		switch {
+		case t == "cpu":
+			es[i] = "cpu:perfmap"
+			return strings.Join(es, ",")
+		case strings.HasPrefix(t, "cpu:"):
+			es[i] = strings.TrimSpace(e) + "+perfmap"
+			return strings.Join(es, ",")
+		case t == "auto":
+			auto = true
+		}
+	}
+	if auto {
+		return strings.TrimSpace(spec + ",cpu:perfmap")
+	}
+	return spec
+}
+
+// loadOpts is a command's options: the model's for Open (its vocabulary
+// and where its weights live), and the instances' for every instance it
+// makes (their knobs and devices).
+func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
+	mo := make([]model.Option, 0, len(t)+5)
+	var o []engine.Option
 	for _, x := range t {
-		o = append(o, model.WithTokenizerOption(x))
+		mo = append(mo, model.WithTokenizerOption(x))
 	}
+	mo = append(mo, model.WithGCPlan(gcPlan()))
 	if budget > 0 {
-		o = append(o, model.WithPageBudget(budget))
+		o = append(o, engine.WithPageBudget(budget))
 	}
-	if j := jitOptions(); len(j) > 0 {
-		o = append(o, model.WithJITOptions(j...))
+	if p := poolOptions(); len(p) > 0 {
+		o = append(o, engine.WithPool(p...))
+	}
+	// JITLLM_CHUNK pins a prompt chunk's rows on the CPU device
+	// (engine.WithPrefillChunk).
+	if n, err := strconv.Atoi(os.Getenv("JITLLM_CHUNK")); err == nil && n >= 1 {
+		o = append(o, engine.WithPrefillChunk(n))
+	}
+	// JITLLM_PERFMAP=1 has the CPU device write /tmp/perf-<pid>.map, so perf
+	// resolves generated code by name (cpu:perfmap); a command with a device
+	// spec of its own states it there (perfMapSpec).
+	if os.Getenv("JITLLM_PERFMAP") != "" {
+		o = append(o, engine.WithDevices(perfMapSpec("auto")))
 	}
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {
-		o = append(o, model.WithHugePages(false))
+		mo = append(mo, model.WithHugePages(false))
 	}
 	// JITLLM_SH_OVERLAP=0 runs a mixture's shared experts after its routed
 	// read instead of behind it.
 	// JITLLM_EXPERTS=host|card places every mixture block's routed experts
-	// off the card (model.WithExperts); -placement's %host / %card per block.
+	// off the card (engine.WithExperts); -placement's %cpu / %card per block.
 	if e := os.Getenv("JITLLM_EXPERTS"); e != "" {
-		o = append(o, model.WithExperts(e))
+		o = append(o, engine.WithExperts(e))
 	}
 	// JITLLM_STREAM_TRIAL=0 keeps an auto-streamed placement unmeasured.
 	if os.Getenv("JITLLM_STREAM_TRIAL") == "aa" {
-		o = append(o, model.WithStreamTrialAA(true))
+		o = append(o, engine.WithStreamTrialAA(true))
 	}
 	if os.Getenv("JITLLM_STREAM_TRIAL") == "0" {
-		o = append(o, model.WithStreamTrial(false))
+		o = append(o, engine.WithStreamTrial(false))
 	}
-	// JITLLM_FUSE=0 runs decode one pool region per op (model.WithBlockFusion).
+	// JITLLM_FUSE=0 runs decode one pool region per op (engine.WithBlockFusion).
 	if os.Getenv("JITLLM_FUSE") == "0" {
-		o = append(o, model.WithBlockFusion(false))
+		o = append(o, engine.WithBlockFusion(false))
 	}
 	// JITLLM_SERVING_SPLIT=0 keeps a prefill beside a decoding session on the
-	// P and E cores (model.WithServingSplit).
+	// P and E cores (engine.WithServingSplit).
 	if os.Getenv("JITLLM_SERVING_SPLIT") == "0" {
-		o = append(o, model.WithServingSplit(false))
+		o = append(o, engine.WithServingSplit(false))
 	}
 	// JITLLM_FUSE_GROUPS=0 keeps a fused run's matvecs a phase each
-	// (model.WithMatVecGroups).
+	// (engine.WithMatVecGroups).
 	if os.Getenv("JITLLM_FUSE_GROUPS") == "0" {
-		o = append(o, model.WithMatVecGroups(false))
-	}
-	// JITLLM_LOOKAHEAD=0 turns off the fused runs' weight lookahead
-	// (model.WithLookahead).
-	if os.Getenv("JITLLM_LOOKAHEAD") == "0" {
-		o = append(o, model.WithLookahead(false))
+		o = append(o, engine.WithMatVecGroups(false))
 	}
 	// JITLLM_FUSE_RESID=1 folds the residual add into the o and down groups
-	// (model.WithResidualFold).
+	// (engine.WithResidualFold).
 	if os.Getenv("JITLLM_FUSE_RESID") == "1" {
-		o = append(o, model.WithResidualFold(true))
+		o = append(o, engine.WithResidualFold(true))
 	}
 	if os.Getenv("JITLLM_SH_OVERLAP") == "0" {
-		o = append(o, model.WithSharedOverlap(false))
+		o = append(o, engine.WithSharedOverlap(false))
 	}
 	// JITLLM_TAIL_ROWS=0 runs a prompt's few-row chunk batched rather than as
-	// a ragged step of its rows (model.WithTailRows).
+	// a ragged step of its rows (engine.WithTailRows).
 	if os.Getenv("JITLLM_TAIL_ROWS") == "0" {
-		o = append(o, model.WithTailRows(false))
+		o = append(o, engine.WithTailRows(false))
 	}
 	if n := numaNodes(); n != nil {
-		o = append(o, model.WithInterleave(n))
+		mo = append(mo, model.WithInterleave(n))
 	}
 	if c := pagerChunk(); c > 0 {
-		o = append(o, model.WithChunk(c))
+		mo = append(mo, model.WithChunk(c))
 	}
 	// JITLLM_PRELOAD=n keeps n pages in flight behind Open (model.WithPreload),
 	// 0 reads each page when a token faults it in. 4 when unset.
@@ -1754,75 +1665,85 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 			preload = n
 		}
 	}
-	o = append(o, model.WithPreload(preload))
-	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token's candidates
-	// are selected (model.WithDeviceSample); unset or auto measures.
+	mo = append(mo, model.WithPreload(preload))
+	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token
+	// is drawn (engine.WithDeviceSample); unset or auto draws on the device
+	// wherever it serves.
 	switch os.Getenv("JITLLM_DEVICE_SAMPLE") {
 	case "on":
-		o = append(o, model.WithDeviceSample(model.DeviceSampleOn))
+		o = append(o, engine.WithDeviceSample(engine.DeviceSampleOn))
 	case "off":
-		o = append(o, model.WithDeviceSample(model.DeviceSampleOff))
+		o = append(o, engine.WithDeviceSample(engine.DeviceSampleOff))
 	}
-	return append(o, modelOptions()...)
+	return mo, append(o, modelOptions()...)
+}
+
+// regionLabels labels the model's CPU regions for a CPU profile, which
+// attributes generated code by them (sched.WithRegionLabels); nothing when on
+// is false.
+func regionLabels(on bool) []engine.Option {
+	if !on {
+		return nil
+	}
+	return []engine.Option{engine.WithPool(cpu.WithSched(sched.WithRegionLabels(true)))}
+}
+
+// gcPlan is where the weights live and what their budget leaves the Go
+// collector: JITLLM_OFFHEAP=0 puts them on the heap, the control arm for a
+// measurement, with the collector reserve JITLLM_GC_RESERVE states
+// (goheap.Reserve).
+func gcPlan() sched.GCPlan {
+	return sched.GCPlan{OnHeap: os.Getenv("JITLLM_OFFHEAP") == "0", Reserve: goheap.Reserve()}
 }
 
 // modelOptions turns the graph tier's environment variables into model.Options.
 // They are read here and nowhere else; see jitOptions.
-func modelOptions() []model.Option {
-	var o []model.Option
+func modelOptions() []engine.Option {
+	var o []engine.Option
 	if os.Getenv("JITLLM_PROFILE") != "" {
-		o = append(o, model.WithProfile(true))
+		o = append(o, engine.WithProfile(true))
 	}
 	// JITLLM_PREFILL_FORWARD=n runs a prompt of up to n tokens a token at a
-	// time (model.WithPrefillForwardRows).
+	// time (engine.WithPrefillForwardRows).
 	if v := os.Getenv("JITLLM_PREFILL_FORWARD"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			o = append(o, model.WithPrefillForwardRows(n))
-		}
-	}
-	// JITLLM_HYBRID_SPIN_US sets how long the workers spin between a
-	// device's host expert calls (model.WithHybridSpin); 0 keeps the pool's.
-	if v := os.Getenv("JITLLM_HYBRID_SPIN_US"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			o = append(o, model.WithHybridSpin(time.Duration(n)*time.Microsecond))
+			o = append(o, engine.WithPrefillForwardRows(n))
 		}
 	}
 	if os.Getenv("JITLLM_NO_HEAD_PLACE") != "" {
-		o = append(o, model.WithHeadPlacement(false))
-	}
-	if os.Getenv("JITLLM_KV_HEADMAJOR") != "" {
-		o = append(o, model.WithKVHeadMajor(true))
+		o = append(o, engine.WithHeadPlacement(false))
 	}
 	if v := os.Getenv("JITLLM_KV_F16"); v != "" {
-		o = append(o, model.WithKVF16(v == "1"))
+		o = append(o, engine.WithKVF16(v == "1"))
 	}
-	// The cache's format by name (f32, f16, q8_0); it overrides JITLLM_KV_F16.
+	// The cache's format by name (f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl,
+	// q5_0, q5_1); it overrides JITLLM_KV_F16.
 	if v := os.Getenv("JITLLM_KV_TYPE"); v != "" {
 		t, err := model.ParseKVType(v)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "jitllm: JITLLM_KV_TYPE: %v\n", err)
 			os.Exit(2)
 		}
-		o = append(o, model.WithKVType(t))
+		o = append(o, engine.WithKVType(t))
 	}
 	if v := os.Getenv("JITLLM_ATTN_PAIR"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, model.WithAttnPair(n))
+			o = append(o, engine.WithAttnPair(n))
 		}
 	}
 	if os.Getenv("JITLLM_ELEM_POOL") == "0" {
-		o = append(o, model.WithTowerTiling(false))
+		o = append(o, engine.WithTowerTiling(false))
 	}
 	if v := os.Getenv("JITLLM_TOWER_GPU_LAYERS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, model.WithTowerGPULayers(n))
+			o = append(o, engine.WithTowerGPULayers(n))
 		}
 	}
 	if os.Getenv("JITLLM_GROW_DEBUG") != "" {
-		o = append(o, model.WithGrowDebug(true))
+		o = append(o, engine.WithGrowDebug(true))
 	}
 	if os.Getenv("JITLLM_PREFILL_STREAM_DEBUG") != "" {
-		o = append(o, model.WithPrefillStreamDebug(true))
+		o = append(o, engine.WithPrefillStreamDebug(true))
 	}
 	n := func(k string) int {
 		v, _ := strconv.Atoi(os.Getenv(k))
@@ -1830,155 +1751,26 @@ func modelOptions() []model.Option {
 	}
 	if w, r, q := n("JITLLM_SEAM_WARMUP"), n("JITLLM_SEAM_RUN"), n("JITLLM_SEAM_ROUNDS"); w > 0 || r > 0 || q > 0 ||
 		os.Getenv("JITLLM_SEAM_DEBUG") != "" {
-		o = append(o, model.WithSeamTuneSchedule(w, r, q, os.Getenv("JITLLM_SEAM_DEBUG") != ""))
+		o = append(o, engine.WithSeamTuneSchedule(w, r, q, os.Getenv("JITLLM_SEAM_DEBUG") != ""))
 	}
 	return o
 }
 
-// jitOptions turns the generated tier's environment variables into nn.Options.
-// They are read here and nowhere else: the libraries read no environment, so an
-// embedded caller can set every knob through options.
-func jitOptions() []nn.Option {
-	var o []nn.Option
+// poolOptions turns the CPU device's workers' environment variables into
+// cpu.PoolOptions. They are read here and nowhere else: the libraries read no
+// environment, so an embedded caller can set every knob through options.
+func poolOptions() []cpu.PoolOption {
+	var o []cpu.PoolOption
 	if s := schedOptions(); len(s) > 0 {
-		o = append(o, nn.WithSched(s...))
-	}
-	if os.Getenv("JITLLM_PROFILE") != "" {
-		o = append(o, nn.WithProfile(true))
-	}
-	// The activation quantizer's Go-loop arm (cpu.QuantizeQ8Window), so both
-	// arms of that comparison are reachable from one binary.
-	if os.Getenv("JITLLM_QUANT_GO") != "" {
-		o = append(o, nn.WithQuantActGo(true))
-	}
-	// The rotary table's Go-loop arm, for the same comparison. It only exists
-	// in a jitllmtest build (engine/nn/ropego.go).
-	if os.Getenv("JITLLM_ROPE_GO") != "" {
-		o = append(o, nn.WithRopeGo(true))
-	}
-	if os.Getenv("JITLLM_MMPROF") != "" {
-		o = append(o, nn.WithMatMulProfile(true))
-	}
-	if os.Getenv("JITLLM_TUNE_QUIET") != "" {
-		o = append(o, nn.WithQuietTuner(true))
-	}
-	switch os.Getenv("JITLLM_TUNE") {
-	case "0":
-		o = append(o, nn.WithTune(nn.TuneOff))
-	case "1":
-		o = append(o, nn.WithTune(nn.TuneForce))
-	}
-	if v := os.Getenv("JITLLM_PACK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithPackWidth(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_FPF"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			o = append(o, nn.WithFusedPrefetch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_PREFETCH"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithPrefetch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_A64_PF"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithA64Prefetch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_TILE"); v != "" {
-		o = append(o, nn.WithGEMMTile(v))
-	}
-	if v := os.Getenv("JITLLM_CHUNK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithPrefillChunk(n))
-		}
+		o = append(o, cpu.WithSched(s...))
 	}
 	if v := os.Getenv("JITLLM_PREFILL_CORESET"); v != "" {
-		o = append(o, nn.WithPrefillCoreSet(v))
+		o = append(o, cpu.WithPrefillCPUs(sched.CoreSet(v)))
 	}
-	if v := os.Getenv("JITLLM_PART"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithParticipants(n))
-		}
+	if n, err := strconv.Atoi(os.Getenv("JITLLM_PART")); err == nil && n >= 1 {
+		o = append(o, cpu.WithParticipants(n))
 	}
-	if v := os.Getenv("JITLLM_ACCS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithAccs(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_FUSED_KSLICES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithFusedKSlices(n))
-		}
-	}
-	// JITLLM_MATVEC_PICK: -1 keeps the fixed rule, n > 0 pins the picker's arm n.
-	if v := os.Getenv("JITLLM_MATVEC_PICK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithMatVecPick(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_MOE_BATCH"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithMixtureBatch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_MVPICK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithMatVecPick(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_FUSED_KSPLIT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithFusedKSplit(n))
-		}
-	}
-	if os.Getenv("JITLLM_GEMM_EXACT") == "1" {
-		o = append(o, nn.WithGEMMExact(true))
-	}
-	if v := os.Getenv("JITLLM_GEMM_ROWS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithGEMMRows(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_GEMM_TOK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithGEMMTokens(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_TILE_TOK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithTileTokens(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_CHUNK_BYTES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithChunkBytes(n))
-		}
-	}
-	if os.Getenv("JITLLM_NO_GEMM") != "" {
-		o = append(o, nn.WithoutGEMM(true))
-	}
-	cpuConfigure()
 	return o
-}
-
-// cpuConfigure hands jit/cpu the process-wide knobs that are not per-JIT: a
-// perf map for the profiler, and the probes that deliberately slow a kernel so
-// one class of operation can be priced against another.
-func cpuConfigure() {
-	n := func(k string) int {
-		v, _ := strconv.Atoi(os.Getenv(k))
-		return v
-	}
-	cpu.Configure(cpu.Config{
-		PerfMap:     os.Getenv("JITLLM_PERFMAP") != "",
-		ScalarProbe: n("JITLLM_SCALAR_PROBE"),
-		LoadProbe:   n("JITLLM_LOAD_PROBE"),
-		VectorProbe: n("JITLLM_VECTOR_PROBE"),
-	})
 }
 
 // benchCmd parses bench's flags. It takes -tokenizer for the same reason run
@@ -2025,55 +1817,6 @@ func tokenizeCmd(args []string) error {
 	return tokenize(fs.Arg(0), strings.Join(fs.Args()[1:], " "), topts)
 }
 
-// prefillImage prefills a prompt that holds a picture. The picture is rows of
-// the prompt (model.Picture): the prefill runs the State's vision segment over
-// it -- the tower's blocks through the one runner and placement -- or the
-// model's image cache answers, and with cached set the prefix cache restores
-// past it, since its rows are named by the picture itself.
-func prefillImage(st *model.State, m *model.Model, tw *model.Tower, pic *picture, spans []model.Span,
-	cached bool) ([]float32, error) {
-	if err := pic.preprocess(st); err != nil {
-		return nil, err
-	}
-	c := tw.Cfg
-	if pic.tiles != nil {
-		fmt.Fprintf(os.Stderr, "vision   %s: a %dx%d canvas of tiles and %d piece(s) -> %d x %d embeddings of %d\n",
-			c.Projector, pic.tiles[1], pic.tiles[0], len(pic.pieces), len(pic.pieces), c.Tokens(), c.ProjDim)
-	} else if pic.lfm2 != nil {
-		rows := 0
-		for _, pc := range pic.pieces {
-			rows += pc.Rows
-		}
-		fmt.Fprintf(os.Stderr, "vision   %s: %dx%d tiles and %d piece(s) -> %d embeddings of %d\n",
-			c.Projector, pic.lfm2[0], pic.lfm2[1], len(pic.pieces), rows, c.ProjDim)
-	} else if pic.lay != nil {
-		fmt.Fprintf(os.Stderr, "vision   %s: %dx%d picture, an overview and %d slice(s) (%dx%d) -> "+
-			"%d x %d embeddings of %d\n", c.Projector, pic.lay.W, pic.lay.H, len(pic.lay.Pieces)-1,
-			pic.lay.Cols, pic.lay.Rows, len(pic.lay.Pieces), c.Tokens(), c.ProjDim)
-	} else {
-		p := pic.pieces[0]
-		fmt.Fprintf(os.Stderr, "vision   %s: a %dx%d patch grid -> %d embeddings of %d\n",
-			c.Projector, p.GW, p.GH, p.Rows, c.ProjDim)
-	}
-	t0 := time.Now()
-	h0, _ := m.ImageCacheStats()
-	var lg []float32
-	var err error
-	if cached {
-		lg, err = st.PrefillCachedMixed(spans...)
-	} else {
-		lg, err = st.PrefillMixed(spans...)
-	}
-	if h1, _ := m.ImageCacheStats(); err == nil && h1 > h0 {
-		fmt.Fprintf(os.Stderr, "vision   the image cache held the picture: no tower block ran\n")
-	}
-	if err == nil {
-		fmt.Fprintf(os.Stderr, "vision   prompt with the picture prefilled in %.0f ms\n",
-			float64(time.Since(t0).Microseconds())/1000)
-	}
-	return lg, err
-}
-
 // setPageBudget derives how many block pages fit in HOST memory and hands the
 // container that number.
 //
@@ -2081,7 +1824,8 @@ func prefillImage(st *model.State, m *model.Model, tw *model.Tower, pic *picture
 // the page size, which devices are in play, how many blocks they took, and what
 // an integrated device carved out of the same RAM. A budget that holds every
 // host block is the fully resident configuration; paging simply never fires.
-func setPageBudget(m *model.Model, st *model.State, dev nn.Device, maxmem uint64) {
+func setPageBudget(m *model.Model, st *engine.Instance, dev nn.LayerDevice, maxmem uint64) {
+	cfr := st.FramesOn(nn.CPU)
 	page := m.PageSize()
 	if page == 0 {
 		return // not a container; nothing is paged
@@ -2090,8 +1834,8 @@ func setPageBudget(m *model.Model, st *model.State, dev nn.Device, maxmem uint64
 	// run will commit, less the dense weights, which never page. The vision
 	// tower needs no term of its own: its pages are pages of this container and
 	// come out of this budget like any other. What a device living in host
-	// memory holds is not subtracted here: the model takes it off itself, and
-	// again whenever placement moves it (Model.SetPageBudget).
+	// memory holds is not subtracted here: the instance takes it off its quota,
+	// and again whenever placement moves it (Instance.SetPageBudget).
 	avail := maxmem
 	kv := uint64(st.MaxSeq()) * uint64(m.Cfg.KVDim()) * 4 * 2 * uint64(m.Cfg.NLayer)
 	if kv < avail {
@@ -2118,16 +1862,16 @@ func setPageBudget(m *model.Model, st *model.State, dev nn.Device, maxmem uint64
 	// would be handed, the device's holding off.
 	net := max(avail-min(avail, hostReserved(dev)), 1)
 	frames := int(net / page)
-	pool, _, _ := m.PageStats()
+	pool, _, _ := m.PageStats(cfr)
 	if frames >= host && pool == 0 {
 		return // never budgeted, and the budget holds every host block
 	}
-	m.SetPageBudget(avail)
+	st.SetPageBudget(avail)
 	// What the budget holds, not what is resident now: SetPageBudget's count
 	// is the pages already read, which right after placement is the few the
 	// devices left behind, and printed as a capacity it reported page-ins on
 	// a model whose host blocks all fit.
-	net = m.PageBudget()
+	net = m.PageBudget(cfr)
 	fit := int(net / page)
 	if fit >= host {
 		return // widened back to holding every host block: nothing will evict
@@ -2177,8 +1921,8 @@ func misplacedFlag(fs *flag.FlagSet) error {
 
 // withDeviceErr adds the tier's own reason (for example a CUDA error code) to an
 // error a device run returned.
-func withDeviceErr(err error, dev nn.Device) error {
-	if g, ok := dev.(*tier.GPU); ok {
+func withDeviceErr(err error, dev nn.LayerDevice) error {
+	if g, ok := dev.(*gpu.GPU); ok {
 		if why := g.Err(); why != "" {
 			return fmt.Errorf("%w (the device said: %s)", err, why)
 		}
@@ -2194,4 +1938,82 @@ func rateOf(n int, d time.Duration) string {
 		return "rate under the clock's resolution"
 	}
 	return fmt.Sprintf("%.2f tok/s", float64(n)/d.Seconds())
+}
+
+// mediaSpans is -image's and -video's prompt: the picture and the video's
+// frames where the chat template writes its image and video parts in a user
+// turn of prompt (after chat's system prompt when it gives one), which the
+// prefill encodes through the tower. A completion prompt has no place for a
+// picture, so -image and -video take the template.
+func mediaSpans(m *model.Model, media mediaSpec, prompt string, chat *chatSpec) ([]model.Span, error) {
+	if !m.SeesPictures() {
+		return nil, fmt.Errorf("-image and -video: the model carries no vision tower")
+	}
+	if !m.HasChatTemplate() {
+		return nil, fmt.Errorf("-image and -video: the model carries no chat template, so a picture has no place in the prompt")
+	}
+	var pics []model.Span
+	if media.image != "" {
+		img, err := readPicture(media.image)
+		if err != nil {
+			return nil, fmt.Errorf("-image: %w", err)
+		}
+		pic, err := m.PictureSpan(img)
+		if err != nil {
+			return nil, fmt.Errorf("-image: %s: %w", media.image, err)
+		}
+		pics = append(pics, pic)
+	}
+	var videos []model.VideoParts
+	if media.video != "" {
+		names, err := os.ReadDir(media.video)
+		if err != nil {
+			return nil, fmt.Errorf("-video: %w", err)
+		}
+		var frames []image.Image
+		for _, e := range names {
+			if e.IsDir() {
+				continue
+			}
+			img, err := readPicture(filepath.Join(media.video, e.Name()))
+			if err != nil {
+				return nil, fmt.Errorf("-video: %w", err)
+			}
+			frames = append(frames, img)
+		}
+		sp, err := m.VideoParts(frames, media.fps)
+		if err != nil {
+			return nil, fmt.Errorf("-video: %s: %w", media.video, err)
+		}
+		videos = append(videos, sp)
+	}
+	var msgs []model.ChatMessage
+	if chat != nil && chat.system != "" {
+		msgs = append(msgs, model.ChatMessage{Role: "system", Content: chat.system})
+	}
+	msgs = append(msgs, model.ChatMessage{Role: "user", Content: prompt, Images: len(pics), Videos: len(videos)})
+	sp, err := m.ChatSpansMedia(msgs, pics, videos, nil, model.ToolChoice{}, true)
+	return sp, systemErr(err)
+}
+
+// mediaSpec is what -image, -video and -video-fps place in the prompt.
+type mediaSpec struct {
+	image, video string
+	fps          float64
+}
+
+func (s mediaSpec) any() bool { return s.image != "" || s.video != "" }
+
+// readPicture is the picture the file at path holds.
+func readPicture(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return img, nil
 }

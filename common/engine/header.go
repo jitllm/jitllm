@@ -2,11 +2,12 @@ package engine
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine/model"
 	"regexp"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // header is what the session header says about the running model: its name,
@@ -80,10 +81,12 @@ func thousands(n int) string {
 // deviceLabel is a tier's device name without the ordinal and the API:
 // "0:<card name> [cuda]" reads as the card.
 func deviceLabel(name string) string {
-	return strings.TrimSpace(deviceNoise.ReplaceAllString(name, ""))
+	return strings.TrimSpace(deviceNoise().ReplaceAllString(name, ""))
 }
 
-var deviceNoise = regexp.MustCompile(`^\d+:|\s*\[[^\]]*\]$`)
+func deviceNoise() *regexp.Regexp {
+	return regexp.MustCompile(`^\d+:|\s*\[[^\]]*\]$`)
+}
 
 // headerNow reads the header off the running session. Worker goroutine only.
 func (e *Engine) headerNow() header {
@@ -95,7 +98,6 @@ func (e *Engine) headerNow() header {
 		Context:  e.sessMax,
 		Asked:    e.st.MaxSeq.Get(),
 		Chat:     e.m.ChatCapable(),
-		Vision:   e.m.Tower() != nil,
 	}
 	if e.gpu != nil {
 		h.Device, h.Devices = placedOn(e.gpu)
@@ -104,7 +106,7 @@ func (e *Engine) headerNow() header {
 }
 
 // placedOn names the card holding blocks, and counts the cards that do.
-func placedOn(g *tier.GPU) (string, int) {
+func placedOn(g *gpu.GPU) (string, int) {
 	budgets, placed := g.Budgets(), g.Placed()
 	name, n := "", 0
 	for i, b := range budgets {
@@ -117,6 +119,6 @@ func placedOn(g *tier.GPU) (string, int) {
 
 // deviceBlocks is how many of the chat session's blocks a device holds.
 func (e *Engine) deviceBlocks() (n int) {
-	e.inspect(func(st *model.State) { n = st.GPULayers() })
+	e.inspect(func(st *engine.Instance) { n = st.GPULayers() })
 	return n
 }

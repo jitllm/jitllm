@@ -1,0 +1,889 @@
+package engine
+
+import (
+	"fmt"
+	"io"
+	"sync"
+
+	"github.com/jitllm/jitllm/nn/history"
+
+	"github.com/jitllm/jitllm/nn"
+)
+
+// Prefix sharing: sessions whose prompts share a prefix hold its KV pages
+// once.
+//
+// A sealed page (one the sequence has written past) never changes, and under
+// a namespace it is named by every token up to its end (kvCache.pageKey), so
+// two sessions whose prompts agree that far would compute the same bytes.
+// SharedStore keeps one copy of each such page and hands every session that
+// reaches it the SAME memory: a session's page table (kvPages.k and .v) points
+// at it, refcounted, instead of at a page of its own. Nothing else about the
+// cache changes -- the attention kernels read a page wherever it is.
+//
+// The rules that keep it correct:
+//
+//   - Only sealed, whole pages are shared. The page a session is writing into
+//     is its own; the first page where two prompts diverge is computed by
+//     each (its key covers the diverging tokens, so it never matches).
+//   - A shared page is never written in place. Every write path (the token's
+//     append, a migration scattering rows into the CPU's cache) copies a shared page into a
+//     private one first and drops its reference: copy-on-write.
+//   - A reference is dropped wherever the session lets a page go (eviction, a
+//     restore's truncation, a window's release, Close), never handed to the
+//     session's page pool, which would recycle memory others still read.
+//   - Held once means once per device: on a card the prefix cache names the
+//     card's own pages (engine/device/gpu/kvshare.go), and a block of a
+//     sharing session that moves to a card takes the card's named page for
+//     each sealed page of its prefix, or names the page it moved
+//     (kvCache.nameMoved). The host pages it held stay with their other
+//     holders and are forgotten at the last one's release (SharedStore.idle).
+//   - A recurrent layer's summary is not paged by position: it is kept as a
+//     restore point beside the pages (recpoint.go), a copy of a state that
+//     moves on, through the store's Get and Set. A batch is refused: its
+//     pages hold every row.
+//   - A page a prompt ends inside is held too, named by its fill, and every
+//     page answers to the chunks of history it holds (alias): a prompt that
+//     shares only part of a page aliases it and copies it on its first write.
+//
+// SharedStore is also an ordinary KVStore: Get and Set copy, so a session that
+// does not share (SetKVStore alone) reads and writes it as it would a
+// MemStore, and a sharing session finds the pages it published.
+type SharedStore struct {
+	mu    sync.Mutex
+	pages map[kvStoreKey]*sharedPage
+	held  map[*float32]*sharedPage
+	bytes uint64
+	// order is the held pages oldest first, for Trim; a forgotten one is
+	// passed over there.
+	order []*sharedPage
+}
+
+// sharedPage is one page's single copy: refs sessions alias it. key is the
+// name it was published under; aka are the other names it answers to (the
+// shorter prefixes it holds, alias), forgotten with it.
+type sharedPage struct {
+	key  kvStoreKey
+	aka  []kvStoreKey
+	b    []float32
+	refs int
+	// arena and slot are the arena slot b is, held for the entry, nil where
+	// b is memory of its own.
+	arena *history.Arena
+	slot  int
+	// gone means Drop or Prune took it out of the index: no session can
+	// acquire it again, and it is forgotten once the last holder lets go.
+	gone bool
+	// idle means a card holds the page now: it is retired at the last
+	// holder's release rather than kept for the next prompt (SharedStore.idle).
+	idle bool
+}
+
+// lenReader is a page whose size is known before it is read (bytes.Reader).
+type lenReader interface {
+	io.Reader
+	Len() int
+}
+
+// NewSharedStore returns an empty SharedStore.
+func NewSharedStore() *SharedStore {
+	return &SharedStore{pages: map[kvStoreKey]*sharedPage{}, held: map[*float32]*sharedPage{}}
+}
+
+// Get writes a copy of the held page into page, or returns ErrNoPage.
+func (m *SharedStore) Get(cacheId string, layer, index int, page io.Writer) error {
+	m.mu.Lock()
+	e := m.pages[kvStoreKey{cacheId, layer, index}]
+	m.mu.Unlock()
+	if e == nil {
+		return ErrNoPage
+	}
+	// The bytes of a held page never change (no session writes one in place),
+	// so they are read outside the lock.
+	_, err := page.Write(kvBytesOf(e.b))
+	return err
+}
+
+// Set holds a copy of the page under its key, replacing one no session holds.
+// A key a session aliases keeps its page: those bytes are what it reads.
+func (m *SharedStore) Set(cacheId string, layer, index int, page io.Reader) error {
+	// A page offered again at its size and held by no session is read in
+	// place: a hybrid's restore points, re-stored every prompt, allocate
+	// nothing.
+	if r, ok := page.(lenReader); ok {
+		m.mu.Lock()
+		e := m.pages[kvStoreKey{cacheId, layer, index}]
+		if e != nil && e.refs == 0 && len(e.b)*4 == r.Len() && e.key == (kvStoreKey{cacheId, layer, index}) {
+			defer m.mu.Unlock()
+			_, err := io.ReadFull(r, kvBytesOf(e.b))
+			return err
+		}
+		m.mu.Unlock()
+	}
+	b, err := io.ReadAll(page)
+	if err != nil {
+		return err
+	}
+	if len(b)%4 != 0 {
+		return fmt.Errorf("model: a kv page of %d bytes is not float32 slots", len(b))
+	}
+	f := make([]float32, len(b)/4)
+	copy(kvBytesOf(f), b)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := kvStoreKey{cacheId, layer, index}
+	if e := m.pages[k]; e != nil {
+		if e.refs > 0 {
+			return nil
+		}
+		m.forget(e)
+	}
+	m.add(k, f)
+	return nil
+}
+
+// Drop forgets the pages held under one cache id. A page a session still
+// aliases stays with it until it lets go.
+func (m *SharedStore) Drop(cacheId string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, e := range m.pages {
+		if k.cache == cacheId {
+			m.retire(e)
+		}
+	}
+	return nil
+}
+
+// Prune forgets every page no session holds, which is what bounds the store:
+// a page is kept for the next session to find until Prune (or Drop) lets it
+// go.
+func (m *SharedStore) Prune() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.pages {
+		if e.refs == 0 {
+			m.retire(e)
+		}
+	}
+}
+
+// Bytes is what the store holds: every page once, however many sessions
+// alias it.
+func (m *SharedStore) Bytes() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.bytes
+}
+
+// Refs is how many session references page `index` of `layer` under cacheId
+// has, -1 when the store does not hold it.
+func (m *SharedStore) Refs(cacheId string, layer, index int) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.pages[kvStoreKey{cacheId, layer, index}]; e != nil {
+		return e.refs
+	}
+	return -1
+}
+
+// publish hands the store a sealed page a session computed. When the store
+// already holds that page, the session gets the held copy (and keeps
+// ownership of b, which it gives back to its pool); otherwise b becomes the
+// held copy. Either way the session holds one reference to what is returned.
+func (m *SharedStore) publish(k kvStoreKey, b []float32, a *history.Arena) []float32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.pages[k]; e != nil {
+		if len(e.b) == len(b) {
+			e.refs++
+			return e.b
+		}
+		// Another shape under one key is a stale page from another geometry
+		// (the key digests it, so only a collision): the new one replaces it.
+		m.retire(e)
+	}
+	e := m.add(k, b)
+	// A slot of an arena is held for the entry until it is forgotten.
+	if a != nil {
+		if i, ok := a.SlotOf(b); ok {
+			a.Keep(i)
+			e.arena, e.slot = a, i
+		}
+	}
+	e.refs++
+	return b
+}
+
+// acquire is the held page under k with one more reference, or nil.
+func (m *SharedStore) acquire(k kvStoreKey, n int) []float32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.pages[k]
+	if e == nil || len(e.b) != n {
+		return nil
+	}
+	e.refs++
+	return e.b
+}
+
+// release drops one session reference to the held page b.
+func (m *SharedStore) release(b []float32) {
+	if len(b) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.held[&b[0]]
+	if e == nil {
+		panic("model: a shared kv page released that the store does not hold")
+	}
+	e.refs--
+	if e.refs < 0 {
+		panic("model: a shared kv page released more often than it was taken")
+	}
+	switch {
+	case e.refs == 0 && e.gone:
+		m.forget(e)
+	case e.refs == 0 && e.idle:
+		m.retire(e)
+	}
+}
+
+// idle marks the held page b as one a card holds now: its other holders keep
+// reading it, and it is retired at the last one's release.
+func (m *SharedStore) idle(b []float32) {
+	if len(b) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.held[&b[0]]; e != nil {
+		e.idle = true
+	}
+}
+
+// alias makes the held page b answer to k as well: the page a prefix ends
+// inside, named by that shorter prefix (a chunk or a fill key, kvpage.go),
+// so a prompt sharing only that much aliases it and copies it on its first
+// write (kvPages.cow). A name already held is left as it is.
+func (m *SharedStore) alias(k kvStoreKey, b []float32) {
+	if len(b) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.held[&b[0]]
+	if e == nil || e.gone {
+		return
+	}
+	if _, ok := m.pages[k]; ok {
+		return
+	}
+	m.pages[k] = e
+	e.aka = append(e.aka, k)
+}
+
+// Trim forgets pages no session holds, oldest first, until the store holds
+// at most limit bytes: a bound for a store a server keeps for a model.
+func (m *SharedStore) Trim(limit uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keep := m.order[:0]
+	for _, e := range m.order {
+		if m.held[&e.b[0]] != e {
+			continue // forgotten already
+		}
+		if e.refs == 0 && m.bytes > limit {
+			m.retire(e)
+			continue
+		}
+		keep = append(keep, e)
+	}
+	clear(m.order[len(keep):])
+	m.order = keep
+}
+
+// add indexes a new held page. Callers hold m.mu.
+func (m *SharedStore) add(k kvStoreKey, b []float32) *sharedPage {
+	e := &sharedPage{key: k, b: b}
+	m.pages[k] = e
+	m.held[&b[0]] = e
+	m.order = append(m.order, e)
+	m.bytes += 4 * uint64(len(b))
+	return e
+}
+
+// retire takes e out of the index, forgetting it now if nobody holds it.
+// Callers hold m.mu.
+func (m *SharedStore) retire(e *sharedPage) {
+	m.unindex(e)
+	e.gone = true
+	if e.refs == 0 {
+		m.forget(e)
+	}
+}
+
+// unindex takes every name of e out of the index. Callers hold m.mu.
+func (m *SharedStore) unindex(e *sharedPage) {
+	for _, k := range append(e.aka, e.key) {
+		if m.pages[k] == e {
+			delete(m.pages, k)
+		}
+	}
+	e.aka = e.aka[:0]
+}
+
+// forget drops e entirely. Callers hold m.mu.
+func (m *SharedStore) forget(e *sharedPage) {
+	m.unindex(e)
+	if m.held[&e.b[0]] == e {
+		delete(m.held, &e.b[0])
+		m.bytes -= 4 * uint64(len(e.b))
+		if e.arena != nil {
+			e.arena.Unkeep(e.slot)
+			e.arena = nil
+		}
+	}
+}
+
+// UnshareKV ends ShareKV: the session's references go, and it keeps no store
+// and no namespace. The sequence starts over (Reset).
+func (s *Instance) UnshareKV() {
+	if s.kv.share == nil {
+		return
+	}
+	s.Reset()
+	s.kv.unshareAll()
+	s.kv.store, s.kv.share = NoStore{}, nil
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		s.kv.layers[li].sh = nil
+	}
+	s.kv.ns = ""
+}
+
+// ShareKV makes this session hold the sealed pages of its history once with
+// every other session sharing st: what it seals is published to st, and a
+// prefix PrefillCached finds there is aliased, not copied (SharedStore has
+// the rules). It sets st as the session's store; SetCacheKey must name the
+// namespace first, since a page is named by its tokens only inside one.
+//
+// Refused: no store, no namespace, a session with blocks on a device that
+// names no pages (nn.KVShareDevice), and a sequence past its start.
+func (s *Instance) ShareKV(st *SharedStore) error {
+	switch {
+	case st == nil:
+		return fmt.Errorf("model: ShareKV wants a store")
+	case s.kv.ns == "":
+		return fmt.Errorf("model: ShareKV wants a namespace (SetCacheKey): a page is named by its tokens only inside one")
+	case s.ld != nil && s.devCount() > 0 && !s.kvShareDevice():
+		return fmt.Errorf("model: %d block(s) of this session are on a device that does not name its kv "+
+			"pages (nn.KVShareDevice)", s.devCount())
+	case s.pos > 0:
+		return fmt.Errorf("model: ShareKV wants a fresh sequence, this one is at position %d", s.pos)
+	}
+	s.kv.store, s.kv.share = st, st
+	if s.kv.devAt == nil {
+		s.kv.devAt, s.kv.copyAt = s.devAtFn()
+	}
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		s.kv.layers[li].sh = st
+	}
+	return nil
+}
+
+// KVSharedBytes is what this session reads from pages it shares: held once
+// in its SharedStore, and not counted by KVBytes.
+func (s *Instance) KVSharedBytes() uint64 {
+	var n uint64
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		n += s.kv.layers[li].sharedBytes()
+	}
+	return n
+}
+
+// isShared says page n aliases a SharedStore's page.
+func (s *kvPages) isShared(n int) bool { return n < len(s.shared) && s.shared[n] }
+
+// markShared records that page n aliases the store's.
+func (s *kvPages) markShared(n int, on bool) {
+	for len(s.shared) <= n {
+		s.shared = append(s.shared, false)
+	}
+	s.shared[n] = on
+}
+
+// unshare drops this session's references to page n's shared memory and
+// leaves the slots nil for the caller to fill. The bytes are untouched:
+// other sessions read them, and the page's arena slot is the store's, never
+// one the session lets go (releaseSlot).
+func (s *kvPages) unshare(n int) {
+	if !s.isShared(n) {
+		return
+	}
+	s.sh.release(s.mem.K(n))
+	if !s.latent {
+		s.sh.release(s.mem.V(n))
+	}
+	s.shared[n] = false
+	s.setPage(n, nil, nil)
+}
+
+// cow gives page n private copies of its shared memory before a write: the
+// write lands in this session's page and every other holder keeps reading
+// what it read.
+func (s *kvPages) cow(n int) {
+	if !s.isShared(n) {
+		return
+	}
+	if s.cowFault {
+		return // the violation: write into the shared page in place
+	}
+	// A slot of the layer's arena where it has one, where a composed CPU
+	// block reads it, else a spare first as a fresh page is (history.Pages):
+	// the copy overwrites it whole.
+	k, v := s.mem.Take()
+	if k == nil {
+		k = s.mem.Zeroed()
+		v = k
+		if !s.latent {
+			v = s.mem.Zeroed()
+		}
+	}
+	copy(k, s.mem.K(n))
+	if !s.latent {
+		copy(v, s.mem.V(n))
+	}
+	s.unshare(n)
+	s.setPage(n, k, v)
+}
+
+// sharedBytes is what this layer's shared pages hold.
+func (s *kvPages) sharedBytes() uint64 {
+	var n uint64
+	for i := range s.shared {
+		if s.shared[i] && s.mem.K(i) != nil {
+			n += uint64(s.pp) * 4
+			if !s.latent {
+				n += uint64(s.pp) * 4
+			}
+		}
+	}
+	return n
+}
+
+// publishSealed hands page n, sealed, to the store: it becomes the store's
+// copy, or the store's existing copy replaces it and the session's buffers go
+// back to its pool.
+func (kc *kvCache) publishSealed(li, n int, key string) {
+	if kc.dev(li) != nil {
+		kc.queuePublish(li, n, key) // named where it lives, on the card
+		return
+	}
+	kc.publishHost(li, n, key)
+	// The copy a card keeps of it for a block there is named there too.
+	if kc.copyAt == nil {
+		return
+	}
+	if d := kc.copyDev(li); d != nil && d.SharePage(kc.key(li)) == kc.layers[li].p {
+		d.PublishKV(kc.key(li), n, key)
+	}
+}
+
+// publishCopies is publishSealed for the CPU device's copy of block li's
+// pages below cur, a card holding the block (histcross.go), from the first
+// it has not offered (copySealed): each held whole, the store's copy, as a
+// block on the CPU device's own page is. A page below what the copy holds
+// as history, or released behind its window, is passed over; it stops at
+// one the copy does not hold whole yet, or no key names.
+func (kc *kvCache) publishCopies(li, cur int) {
+	s := &kc.layers[li]
+	if !s.copy {
+		return
+	}
+	n := s.copySealed
+	for ; n < cur; n++ {
+		if n*s.p < s.genuine || (n >= s.mem.Len() || s.mem.K(n) == nil) && (n+1)*s.p <= s.copied[0] {
+			continue
+		}
+		key := kc.pageKey(li, n)
+		if key == "" || s.copied[0] < (n+1)*s.p {
+			break
+		}
+		kc.publishHost(li, n, key)
+	}
+	s.copySealed = n
+}
+
+// publishHost is publishSealed on the CPU device's page n.
+func (kc *kvCache) publishHost(li, n int, key string) {
+	s := &kc.layers[li]
+	if s.isShared(n) {
+		return // restored from the store: already the held copy
+	}
+	// A page the store holds already: the session reads the held copy, and
+	// its own memory goes back -- its arena slot, or to its spares, where the
+	// next page it needs is taken from (history.Pages). A page of the arena
+	// becomes the store's copy with the slot held for it, so every session
+	// that restores it reads that slot (history.Arena).
+	var a *history.Arena
+	if s.mem.ArenaPage(n) {
+		a = s.mem.Table().Arena()
+	}
+	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.mem.K(n), a)
+	v := k
+	if !s.latent {
+		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.mem.V(n), a)
+	}
+	// The store's copy in another CPU device's arena is that device's: the
+	// block keeps its own page, read through its own arena.
+	if s.mem.Table() != nil && &k[0] != &s.mem.K(n)[0] && !s.mem.InArena(k) {
+		kc.share.release(k)
+		if !s.latent {
+			kc.share.release(v)
+		}
+		return
+	}
+	switch {
+	case a != nil:
+		s.mem.Give(s.mem.K(n))
+	default:
+		if &k[0] != &s.mem.K(n)[0] {
+			s.mem.Keep(s.mem.K(n))
+		}
+		if !s.latent && &v[0] != &s.mem.V(n)[0] {
+			s.mem.Keep(s.mem.V(n))
+		}
+	}
+	s.setPage(n, k, v)
+	s.markShared(n, true)
+}
+
+// nameMoved names, on the card block li's history of pos positions has just
+// moved to, every sealed page of it: the card's page under that name where
+// the card names one already -- the page just moved is let go -- else the
+// moved page, under it. A host page the session held shared is marked idle:
+// the card holds the prefix now.
+func (kc *kvCache) nameMoved(li, pos int) {
+	d := kc.cardPage(li)
+	s := &kc.layers[li]
+	if d == nil && s.p > 0 && kc.dev(li) != nil {
+		s.apartSealed = 0
+		kc.nameApart(li, pos)
+	}
+	if d == nil || s.p == 0 {
+		return
+	}
+	for n := s.liveFrom(pos); (n+1)*s.p <= pos; n++ {
+		key := kc.pageKey(li, n)
+		if key == "" {
+			break
+		}
+		if !d.MapKV(kc.key(li), n, key, pos) {
+			kc.queuePublish(li, n, key)
+		}
+		if s.isShared(n) {
+			kc.share.idle(s.mem.K(n))
+			if !s.latent {
+				kc.share.idle(s.mem.V(n))
+			}
+		}
+	}
+	kc.flushPublish()
+	s.lastSealed = max(s.lastSealed, pos/s.p)
+}
+
+// nameApart names, on the card block li runs on where that card cuts its
+// history into pages apart from this cache, every page of it there pos has
+// passed, by the key of the positions up to the page's end at the card's
+// page: no key of this cache's pages names them. Each is named as it fills,
+// before a window lets it go.
+func (kc *kvCache) nameApart(li, pos int) {
+	s := &kc.layers[li]
+	d := kc.dev(li)
+	if d == nil || kc.ns == "" {
+		return
+	}
+	pc := d.SharePage(kc.key(li))
+	if pc <= 0 {
+		return
+	}
+	if s.apart != pc {
+		s.apart, s.apartSealed = pc, 0
+	}
+	for ; (s.apartSealed+1)*pc <= pos; s.apartSealed++ {
+		key := kc.pageKeyP(pc, s.apartSealed)
+		if key == "" {
+			return
+		}
+		d.PublishKV(kc.key(li), s.apartSealed, key)
+	}
+}
+
+// nameCopyApart is nameApart for the copy a card holds of block li's history
+// while the block runs on the CPU device (histcross.go), where the card
+// cuts the copy apart from this cache: each page of the copy pos has passed
+// named there by the key of the positions up to its end at the card's
+// page, from the first not yet named, until one the copy does not hold
+// whole yet.
+func (kc *kvCache) nameCopyApart(li, pos int) {
+	s := &kc.layers[li]
+	if kc.share == nil || kc.copyAt == nil || kc.ns == "" || s.p == 0 {
+		return
+	}
+	d := kc.copyDev(li)
+	if d == nil {
+		return
+	}
+	pc := d.SharePage(kc.key(li))
+	if pc <= 0 || pc == s.p {
+		return
+	}
+	if s.copyApart != pc {
+		s.copyApart, s.copyApartSealed = pc, 0
+	}
+	for ; (s.copyApartSealed+1)*pc <= pos; s.copyApartSealed++ {
+		key := kc.pageKeyP(pc, s.copyApartSealed)
+		if key == "" || !d.PublishKV(kc.key(li), s.copyApartSealed, key) {
+			return
+		}
+	}
+}
+
+// apartAt is the positions one of block li's pages holds on the card it runs
+// on where that card cuts its history apart from this cache, 0 where the
+// block is on no card or the card pages it alike.
+func (kc *kvCache) apartAt(li int) int {
+	if kc.share == nil || kc.layers[li].p == 0 {
+		return 0
+	}
+	d := kc.dev(li)
+	if d == nil {
+		return 0
+	}
+	if pc := d.SharePage(kc.key(li)); pc > 0 && pc != kc.layers[li].p {
+		return pc
+	}
+	return 0
+}
+
+// namedPage is the positions a page of block li that this cache names
+// holds: the card's where it pages the block apart (apartAt), else its own.
+func (kc *kvCache) namedPage(li int) int {
+	if pc := kc.apartAt(li); pc > 0 {
+		return pc
+	}
+	return kc.layers[li].p
+}
+
+// restoreApart is restore where every block deciding the coverage pages
+// apart from this cache on one card page (walksApart): each maps its card's
+// pages from the first by their keys (nameApart) while the card names them,
+// and then the page the coverage ends in by the longest fill the first of
+// them finds, probed downward from the prompt's remainder as restore probes
+// a tail, every other block taking the same or the fill given up. It
+// returns the positions mapped and the fill among them.
+func (kc *kvCache) restoreApart(limit int) (int, int) {
+	best, pc, first := -1, 0, -1
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if !kc.walksApart(li) {
+			continue
+		}
+		d := kc.dev(li)
+		p := d.SharePage(kc.key(li))
+		if pc != 0 && p != pc {
+			return 0, 0
+		}
+		pc = p
+		if first < 0 {
+			first = li
+		}
+		n := 0
+		for !kc.recurrent || (n+1)*pc <= limit {
+			key := kc.pageKeyP(pc, n)
+			if key == "" || !d.MapKV(kc.key(li), n, key, (n+1)*pc) {
+				break
+			}
+			n++
+		}
+		if cov := n * pc; best < 0 || cov < best {
+			best = cov
+		}
+	}
+	if best < 0 {
+		return 0, 0
+	}
+	tail := 0
+	if !kc.recurrent && best < len(kc.seq) {
+		j := best / pc
+		kc.probes = appendProbes(kc.probes, min(len(kc.seq)-best, pc-1), kvChunk)
+		for _, f := range kc.probes {
+			key := kc.pageKeyFillP(pc, j, f)
+			if f%kvChunk == 0 && pc%kvChunk == 0 {
+				key = kc.chunkKey(best + f)
+			}
+			if key == "" || !kc.dev(first).MapKV(kc.key(first), j, key, best+f) {
+				continue
+			}
+			tail = f
+			for li := first + 1; li < len(kc.layers) && tail > 0; li++ {
+				if kc.walksApart(li) && !kc.dev(li).MapKV(kc.key(li), j, key, best+f) {
+					tail = 0
+				}
+			}
+			break
+		}
+	}
+	for li := kc.lo; li < len(kc.layers); li++ {
+		if kc.walksApart(li) {
+			kc.layers[li].apart, kc.layers[li].apartSealed = pc, best/pc
+		}
+	}
+	return best + tail, tail
+}
+
+// mapApart maps into block li's history on the card it runs on, where that
+// card cuts it apart from this cache (nameApart), the pages of it there the
+// first n positions' window reads -- every page of a block reading its whole
+// history -- from a store whose prefix covers cover >= n positions: a page
+// inside cover named whole, the one straddling it by the chunk cover ends
+// (aliasChunks) or its fill (publishTail). It reports false at the first
+// the card names by no key.
+func (kc *kvCache) mapApart(li, n, cover int) bool {
+	s := &kc.layers[li]
+	d := kc.dev(li)
+	if d == nil || n <= 0 {
+		return false
+	}
+	pc := d.SharePage(kc.key(li))
+	if pc <= 0 {
+		return false
+	}
+	for j := s.keyStart(n) / pc; j*pc < n; j++ {
+		key := ""
+		switch fill := cover - j*pc; {
+		case fill >= pc:
+			key = kc.pageKeyP(pc, j)
+		case fill%kvChunk == 0 && pc%kvChunk == 0:
+			key = kc.chunkKey(cover)
+		default:
+			key = kc.pageKeyFillP(pc, j, fill)
+		}
+		if key == "" || !d.MapKV(kc.key(li), j, key, n) {
+			return false
+		}
+	}
+	s.apart, s.apartSealed = pc, n/pc
+	return true
+}
+
+// faultShared aliases page n of layer li from the store, or reports a miss.
+func (kc *kvCache) faultShared(li, n int, key string) error {
+	// A block on a device holds its history there: the page key names is
+	// put into the session's table on the card (nn.KVShareDevice.MapKV), no
+	// byte moved.
+	if d := kc.dev(li); d != nil {
+		if kc.cardPage(li) == nil || !d.MapKV(kc.key(li), n, key, kc.mapEnd) {
+			return ErrNoPage
+		}
+		kc.mapped += 2
+		return nil
+	}
+	return kc.faultHost(li, n, key)
+}
+
+// faultCopy aliases page n of the CPU device's copy of block li's history,
+// which a card holds (histcross.go), from the store, or reports a miss.
+func (kc *kvCache) faultCopy(li, n int, key string) error {
+	if key == "" {
+		return ErrNoPage
+	}
+	s := &kc.layers[li]
+	s.extend(n)
+	s.setPage(n, nil, nil)
+	return kc.faultHost(li, n, key)
+}
+
+// faultHost is faultShared on the CPU device's page n.
+func (kc *kvCache) faultHost(li, n int, key string) error {
+	s := &kc.layers[li]
+	k := kc.share.acquire(kvStoreKey{key, li * 2, n}, s.pp)
+	if k == nil {
+		return ErrNoPage
+	}
+	v := k
+	if !s.latent {
+		if v = kc.share.acquire(kvStoreKey{key, li*2 + 1, n}, s.pp); v == nil {
+			kc.share.release(k)
+			return ErrNoPage
+		}
+	}
+	if s.mem.Table() != nil && !s.mem.InArena(k) {
+		kc.copyShared(s, n, k, v)
+		return nil
+	}
+	s.setPage(n, k, v)
+	s.out[n] = false
+	s.markShared(n, true)
+	kc.fetched += 2
+	return nil
+}
+
+// copyShared makes page n of s a copy of the store's page k, v that another
+// CPU device's arena holds: a block reads its history through its own
+// device's arena, so the bytes move into a page of it, as a page moves
+// between any two devices, and the store's references go back.
+func (kc *kvCache) copyShared(s *kvPages, n int, k, v []float32) {
+	s.extend(n)
+	s.mem.Grow(n)
+	copy(s.mem.K(n), k)
+	if !s.latent {
+		copy(s.mem.V(n), v)
+		kc.share.release(v)
+	}
+	kc.share.release(k)
+	s.out[n] = false
+	kc.fetched += 2
+}
+
+// unshareAll drops every shared page's reference, for Close: the pool must
+// never take a page others read.
+func (kc *kvCache) unshareAll() {
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		for n := range s.shared {
+			if s.shared[n] {
+				s.unshare(n)
+				s.setPage(n, nil, nil)
+			}
+		}
+	}
+}
+
+// kvShareDevice says the session's device names and maps its kv pages.
+func (s *Instance) kvShareDevice() bool {
+	_, ok := s.ld.(nn.KVShareDevice)
+	return ok
+}
+
+// kvCopyAt is the device holding a copy of the history key names
+// (nn.HistoryKey) for a block on it reading it when it names its pages,
+// where the history's block runs on the CPU device (histcross.go); nil
+// otherwise.
+func (s *Instance) kvCopyAt(key int) nn.KVShareDevice {
+	if src := nn.HistoryBlock(key); s.devAt(src) || !s.cardReads(src, nn.HistoryIndex(key)) {
+		return nil
+	}
+	d, _ := s.ld.(nn.KVShareDevice)
+	return d
+}
+
+// kvDevAt is the device holding the history key names (nn.HistoryKey) when
+// it names its pages (nn.KVShareDevice), nil when its block is on the CPU.
+func (s *Instance) kvDevAt(key int) nn.KVShareDevice {
+	if !s.devAt(nn.HistoryBlock(key)) {
+		return nil
+	}
+	d, _ := s.ld.(nn.KVShareDevice)
+	return d
+}

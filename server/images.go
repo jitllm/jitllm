@@ -11,10 +11,13 @@ import (
 	_ "image/gif" // a GIF's first frame, which image.Decode returns
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"net/netip"
 	"strings"
 	"time"
 
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 )
 
@@ -62,6 +65,9 @@ type ImagePolicy struct {
 	MaxPixels int64
 	// MaxImages bounds the pictures of one request (default 8).
 	MaxImages int
+	// MaxVideoPixels bounds the pixels of a request's video frames together
+	// (default MaxImages pictures of MaxPixels).
+	MaxVideoPixels int64
 
 	// fetchSlots is the server-wide fetch bound, made once by withDefaults.
 	fetchSlots chan struct{}
@@ -97,6 +103,9 @@ func (p ImagePolicy) withDefaults() ImagePolicy {
 	}
 	if p.MaxImages <= 0 {
 		p.MaxImages = DefaultImageMaxImages
+	}
+	if p.MaxVideoPixels <= 0 {
+		p.MaxVideoPixels = int64(p.MaxImages) * p.MaxPixels
 	}
 	if p.FetchTimeout <= 0 {
 		p.FetchTimeout = DefaultImageFetchTimeout
@@ -156,11 +165,15 @@ func (p ImagePolicy) Validate() (ImagePolicy, error) {
 }
 
 // imageFormats maps a decoder's format name to the media type it is sent as.
-var imageFormats = map[string]string{
-	"png":  "image/png",
-	"jpeg": "image/jpeg",
-	"gif":  "image/gif",
-	"webp": "image/webp",
+func imageFormats() map[string]string {
+	return map[string]string{
+		"png":  "image/png",
+		"jpeg": "image/jpeg",
+		"gif":  "image/gif",
+		"webp": "image/webp",
+		"bmp":  "image/bmp",
+		"tiff": "image/tiff",
+	}
 }
 
 // imageMediaType is the media type for a declared one, "image/jpg" taken as
@@ -170,7 +183,7 @@ func imageMediaType(mt string) (string, bool) {
 	if mt == "image/jpg" {
 		mt = "image/jpeg"
 	}
-	for _, v := range imageFormats {
+	for _, v := range imageFormats() {
 		if v == mt {
 			return mt, true
 		}
@@ -193,11 +206,11 @@ func (p ImagePolicy) decodeImage(b []byte, mt string) (image.Image, error) {
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(b))
 	if err != nil {
-		return nil, fmt.Errorf("is not a PNG, JPEG, WebP or GIF picture: %v", err)
+		return nil, fmt.Errorf("is not a PNG, JPEG, WebP, GIF, BMP or TIFF picture: %v", err)
 	}
-	got, ok := imageFormats[format]
+	got, ok := imageFormats()[format]
 	if !ok {
-		return nil, fmt.Errorf("is %s; the pictures accepted are PNG, JPEG, WebP and GIF", format)
+		return nil, fmt.Errorf("is %s; the pictures accepted are PNG, JPEG, WebP, GIF, BMP and TIFF", format)
 	}
 	if mt != "" && mt != got {
 		return nil, fmt.Errorf("is declared %s and its bytes are %s", mt, got)
@@ -273,7 +286,7 @@ func (p ImagePolicy) decodeDataURL(u string) (image.Image, error) {
 	mt, ok := imageMediaType(params[0])
 	if !ok {
 		return nil, fmt.Errorf("is a data: URL of type %q; the pictures accepted are image/png, "+
-			"image/jpeg, image/webp and image/gif", params[0])
+			"image/jpeg, image/webp, image/gif, image/bmp and image/tiff", params[0])
 	}
 	b64 := false
 	for _, x := range params[1:] {
@@ -332,6 +345,31 @@ type pictures struct {
 func newPictures(p ImagePolicy) *pictures {
 	p.spent = new(int64)
 	return &pictures{p: p}
+}
+
+// videoFrames is a request's collector of video frames beside ps: its
+// policy and byte count, no bound on how many pictures.
+func (ps *pictures) videoFrames() *pictures {
+	p := ps.p
+	p.MaxImages = math.MaxInt
+	return &pictures{p: p}
+}
+
+// readVideo reads a video of frame URLs at fps frames a second (0 where the
+// request states none) into ps as pictures are read, each frame's pixels
+// added to *px and the request's held to MaxVideoPixels; part names frame j.
+func (ps *pictures) readVideo(ctx context.Context, urls []string, fps float64, px *int64, part func(j int) string) (Video, error) {
+	at := len(ps.imgs)
+	for j, url := range urls {
+		if err := ps.add(part(j), func() (image.Image, error) { return ps.p.imageURL(ctx, url) }); err != nil {
+			return Video{}, err
+		}
+		b := ps.imgs[len(ps.imgs)-1].Bounds()
+		if *px += int64(b.Dx()) * int64(b.Dy()); *px > ps.p.MaxVideoPixels {
+			return Video{}, fmt.Errorf("%s brings the request's video frames over the limit of %d pixels", part(j), ps.p.MaxVideoPixels)
+		}
+	}
+	return Video{Frames: ps.imgs[at:], FPS: fps}, nil
 }
 
 // add decodes one picture with load, naming part on failure.

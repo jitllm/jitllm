@@ -26,8 +26,7 @@ const madvHugepage = 14 // MADV_HUGEPAGE
 // kernel's streams jump tens of KB on a wide matrix and nearly every access
 // crosses a 4 KB page. With the frames on 4 KB pages (a kernel THP mode of
 // `madvise` leaves them there unless asked) page-table walks cost several
-// percent of every cycle, several times what llama.cpp pays for the same
-// tokens.
+// percent of every cycle.
 func placeMemory(b []byte, noHuge bool, mask []uint64) {
 	if len(b) == 0 {
 		return

@@ -3,6 +3,7 @@ package bench
 import (
 	"github.com/jitllm/jitllm/internal/oracle"
 	"math/rand"
+	"runtime"
 	"testing"
 )
 
@@ -36,7 +37,7 @@ func TestSoftmaxOnline(t *testing.T) {
 						for it := 0; it < iters; it++ {
 							copy(buf, src)
 							f(buf)
-							sinkF += buf[0]
+							runtime.KeepAlive(buf[0])
 						}
 					}
 				}
@@ -53,8 +54,6 @@ func TestSoftmaxOnline(t *testing.T) {
 		}
 	}
 }
-
-var sinkF float64
 
 func itoa(n int) string {
 	if n == 0 {

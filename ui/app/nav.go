@@ -12,8 +12,10 @@ const (
 	TabSettings
 )
 
-// TabNames is the registration order. main ranges over it.
-var TabNames = []string{"Chat", "Models", "Discover", "Convert", "Machine", "Settings"}
+// TabNames() is the registration order. main ranges over it.
+func TabNames() []string {
+	return []string{"Chat", "Models", "Discover", "Convert", "Machine", "Settings"}
+}
 
 // GoSession switches to the conversation. Safe from any goroutine -- the
 // engine calls it after a load so the user lands where the model now is.

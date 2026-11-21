@@ -1,7 +1,7 @@
 # jitllm roadmap
 
 What is planned, in priority order. Each item carries its status. The
-engineering history behind a status lives in `docs/engineering-history/`; this
+engineering history behind a status lives in `.notes/engineering-history/`; this
 file says only where each item stands and what is left.
 
 ## 1. Optimized kernels for MoE
@@ -19,7 +19,7 @@ file says only where each item stands and what is left.
   reads only the experts a token routes to, 3.10x on Moonlight-16B-A3B under a
   6 GB budget.
 - **On the device** the indexed matvec splits over k (1.31x on
-  Qwen3-MoE-4x0.6B), and a streamed placement (`tier.Config.StreamExperts`)
+  Qwen3-MoE-4x0.6B), and a streamed placement (`gpu.Config.StreamExperts`)
   uploads only the routed sheets, so Qwen3-Next-80B places 48 of 48 blocks on a
   2 GiB card.
 - **gpt-oss is supported**, on the host and every device backend, with MXFP4 stored natively (container v24).
@@ -35,22 +35,18 @@ Left:
 
 ## 2. Small models: BERT and ModernBERT
 
-**BERT is done; ModernBERT is not started.**
+**BERT and ModernBERT are done.**
 
-`bert` and `nomic-bert` run as encoder graphs (`engine/model/encoder.go`), and
+`bert`, `nomic-bert` and `modern-bert` (Laya's encoder) run as encoder graphs, and
 qwen3-embedding and EmbeddingGemma run as pooled readouts of their decoder
 graphs. One API serves both (`Model.NewEmbedder`, `jitllm embed`), WordPiece is
 in `tok/wpm.go`, and the outputs are gated against llama.cpp and float32
 sentence-transformers.
 
-Left: ModernBERT (llama.cpp's `modern-bert` pre-tokenizer is already in the
-table; the architecture is not in `convert.archOf`).
-ModernBERT is also the encoder most current PII taggers and routing
-classifiers are built on, so it comes before items 13 and 14.
 
 ## 3. Model and request parameters, complete
 
-**Mostly done.** `model.Sampler` has temperature, top-k, top-p, min-p, a
+**Mostly done.** `engine.Sampler` has temperature, top-k, top-p, min-p, a
 repetition penalty with its window, and a seed, and the sampler itself is
 generated code. The server's `GenerateRequest` adds stop strings and a token
 budget. Rope and YaRN parameters come from the container.
@@ -59,22 +55,23 @@ Left: frequency and presence penalties.
 
 ## 4. Concurrency
 
-**Serving works on the host; the next piece is designed below.**
+**Serving runs sessions on instances, with continuous batching.**
 
 Done:
-- **Ragged positions.** Each batch row has its own position, rotary table, KV
-  offset and attention length, and `Retire(i)` frees a row.
-- **A scheduler.** `model.Scheduler` admits queued sequences into free rows,
-  steps them, and retires them on a stop or a budget.
-- **Per-row prefill.** `PrefillSeq` runs an admitted row's whole prompt in one
-  pass instead of one token per step.
-- **Several sequences on one device tier.** `tier.GPU.Attach` gives each
-  `model.State` its own session and KV history; sessions are serialised per
-  device, not yet parallel.
+- **Model, instance, session.** An instance is the model composed for one
+  placement; a session holds one sequence's history and leases an instance
+  per phase from a `engine.Scheduler` (an interface; `engine.Pool` is the
+  default). `.notes/design/instances-and-sessions.md`.
+- **Continuous batching.** `engine.Batcher` admits sequences, steps every
+  leased session's rows together (`StepRuns`), and retires them on a stop or
+  a budget, on the CPU, on a card and across a seam.
+- **Ragged positions.** Each row has its own position, rotary table, KV pages
+  and attention length.
+- **Several sessions on one device tier.** `gpu.GPU.Attach` gives each
+  session its own KV history on the card, and their rows step together.
 
-Still refused: a *batched* State with blocks on a device (`errBatchDevice`).
-
-**Next: fold prefill into the decode step.** The idea as put was "prefill the
+**Was next: fold prefill into the decode step** (the Batcher's prompt budget,
+`WithPromptBudget`, folds prompt chunks into the step). The idea as put was "prefill the
 next prompt while the current one finishes inference". It is not about
 concurrency -- prefill and decode would contend for the same cores -- it is
 about the weight pass. A decode step is memory-bound with its arithmetic idle,
@@ -94,7 +91,7 @@ right shape; jitllm's batch is a property of the State.
 
 **Done, apart from a remote backend and 5a.**
 
-The cache is paged (`engine/model/kvpage.go`): pages sized per layer from the
+The cache is paged (`engine/kvpage.go`): pages sized per layer from the
 kernels, living on whichever device holds their layer, growing a page at a time
 instead of reserving the whole context. A page leaves a tier through the
 user's interface -- `Get(cacheId, layer, index, io.Writer)` plus `Set`/`Drop`
@@ -112,7 +109,7 @@ Left:
   blocks are placed, rather than attending over history the card never saw).
 
 The backends, the adversarial audit of the cache and the prefix
-design are recorded in `docs/engineering-history/placement.md`.
+design are recorded in `.notes/engineering-history/placement.md`.
 
 ### 5a. The RAM prefill buffer (not started)
 
@@ -142,7 +139,7 @@ comes before any code.
 Distributed inference across machines. The interface belongs in core with no
 dependency on libp2p or any transport; an implementation lives outside, the
 dependency pointing inward -- the shape `nn.Device` already has (declared in
-`engine/nn`, implemented in `jit/gpu`).
+`nn`, implemented in `engine/device/gpu`).
 
 What that protects: `go.mod` has one require (goffi) and libp2p is about 150
 modules; and there is no cgo, since goffi reaches the drivers through dlopen.
@@ -207,7 +204,7 @@ decode on an RTX 5070 (not measured here). Our streamed Qwen3-Next-80B on a
    tokens checked in one pass, 2.4-3.2 tokens a pass, 1.6-1.8x decode. Our
    converter used to set MTP blocks aside (`convert/qwen35.go`). Built:
    `jitllm run|speed -spec mtp`, with an adaptive draft count that stops
-   speculating where no count wins (`engine/model/spec.go`).
+   speculating where no count wins (`engine/spec.go`).
 4. **Recurrent-state checkpoints for conversations:** at turn boundaries,
    every 16k prompt tokens and at the end of the system prompt, six kept
    (~118 MB each) -- where a hybrid now restores at one point per prompt.
@@ -249,7 +246,7 @@ of the gain (GEMM 1.03x -> 0.24x). Neither idea below is measured here.
    1-bit BitDelta GEMM (3.34x) builds the fp16 operands in registers -- a bit
    permutation plus one `lop3` that sets sign bits of a packed constant --
    instead of unpack, convert, store to shared memory and reload. Check
-   whether the device prefill GEMM (`jit/gpu/kernels/mma.go`) stages
+   whether the device prefill GEMM (`composer/kernels/mma.go`) stages
    unpacked weights through shared memory; if it does, unpacking Q4_K/Q6_K
    directly into the mma fragments is a prefill lever, not a decode one.
 
@@ -450,32 +447,22 @@ server's per-model instances.
 
 ## 21. The pre-tokenizer runs the model's own pattern
 
-**Not started.** The pre-tokenizer recognises known `tokenizer.json` Split
-patterns by their text (`tok/pretok/parse.go` `parseSplit`, `isolatedSplits`),
-hand-writes a matcher per family (`tok/hunyuan.go`), maps a GGUF's
-`tokenizer.ggml.pre` name to stages through a generated table, and keeps legacy
-name families in `tok/bpe.go` for containers that stored no stages. Every
-engine that reads `tokenizer.json` (HF tokenizers and everything on it: vLLM,
-SGLang, MLX, ExLlamaV3, TensorRT-LLM; mistral.rs and candle with fancy-regex;
-Ollama on rewritten RE2) runs the pattern on a regex engine; only llama.cpp
-hand-codes matchers, and that is what this copied.
+**Part 1 done.** Every Split is stored and run as its own pattern
+(`pretok.OpPattern`, `jlm.PrePattern`) through `tok/pattern.go`, a
+backtracking engine with the tokenizers library's semantics whose classes come
+from the pinned 15.1.0 tables, bounded in size at compile and linear on the
+retried runs the shipped patterns make; a container converted earlier runs each
+old stage kind as the pattern it stands for (`pretok.Op.AsPattern`). The
+hand-written splitters are the differential gate's reference only, in
+`tok/splitters_test.go`. Left:
 
-- **First, a bug:** `parseSplit` turns any Split pattern that is not an exact
-  known text into an `OpSplit` with whatever flags its substring checks set, so
-  `\S+` or `[^\n]+|[\n]+` silently runs as the llama3 splitter, against its own
-  comment. An unknown pattern must be refused, naming it.
-- **A matcher of our own** for the constructs these patterns use (alternation,
-  classes, `\p{..}`, quantifiers, `(?i)` with full case folding, lookahead such
-  as `\s+(?!\S)`), with its Unicode classes from `tok/unicodedata.go` so the
-  15.1.0 pin holds, refusing anything else by name; generated like the rest of
-  the JIT if that measures better. It is the definition of the split.
-  Oniguruma's behaviours to reproduce: Unicode `\s`, `\d`, `\w`; `$` is end of
-  line; an empty match is a split point that yields no piece.
-- **The container stores the pattern text**, and the GGUF name table carries
-  llama.cpp's pattern per name rather than ops.
-- **Fast paths** (llama3, o200k) stay only where a gate proves them equal to
-  the matcher; `hunyuan.go`, the other recognisers and the legacy name families
-  go.
+- **Delete the splitters**, once their split of the corpus for each old stage
+  kind is a golden holding `AsPattern` (the reference
+  `TestSplitPatternsMatchTheStages` reads moves from the splitters to it); the
+  generated `ucUpper` and `ucHan` tables and the legacy name families in
+  `tok/bpe.go` go with them.
+- **Fast paths** (llama3, o200k) only where a measurement asks for one and a
+  gate proves it equal to the engine.
 - **Oracle:** HF tokenizers on the model's own `tokenizer.json` (tiktoken for a
   model that ships a `pat_str`) replaces llama.cpp for tokenization (RULE 7m),
   llama.cpp staying the source of a GGUF name's pattern. Golden ids per

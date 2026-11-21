@@ -13,6 +13,8 @@ func alignedBuf(n int) []byte { return make([]byte, n) }
 
 func directOK(off int64, n int) bool { return false }
 
-func aligned(b []byte) bool { return false }
+// aligned holds for every buffer: a buffered read asks no alignment of it,
+// and a device's memory (WithFrameMemory) is taken as it is given.
+func aligned(b []byte) bool { return true }
 
 func closeDirect(f *os.File) {}

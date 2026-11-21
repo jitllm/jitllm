@@ -1,0 +1,1575 @@
+//go:build amd64 || arm64
+
+package nn
+
+import (
+	"math"
+	"strings"
+	"sync/atomic"
+
+	"github.com/jitllm/jitllm/nn/history"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// Weight is one matvec's operand: the raw GGUF bytes plus the shape that reads
+// them. A device keys a block's on its block and slot, one held at no block's
+// slot on its Entry.
+type Weight struct {
+	T    quant.Type
+	Data []byte
+	Rows int // output features
+	K    int // input features
+
+	// Entry is the container entry the weight is, when it is one: the
+	// tensor whichever device's memory its bytes were handed in, which a
+	// device keys a copy held at no block's slot on.
+	Entry *jlm.Entry
+
+	// Packed is this weight already in the device layout, or nil. When set the
+	// device writes the spans straight to a buffer and skips the repack, which
+	// dominates upload cost on a model that streams blocks every token. The
+	// spans are read-only and not owned here.
+	Packed *Packed
+}
+
+// RowsPart is a graph over a picture's rows apart from any block's
+// residual -- a vision tower's entry over the picture, its projector over
+// its last block's rows -- formed for Rows rows, and the tensors it binds
+// by role: matrices in Weights, vectors in Vectors.
+type RowsPart struct {
+	Graph   *graph.Graph
+	Rows    int
+	Weights map[jlm.Role]Weight
+	Vectors map[jlm.Role][]float32
+	// File is the file the weights are entries of, which a device reads
+	// them from into frames of its own; nil where they are no file's.
+	File *jlm.File
+}
+
+// PictureRowsDevice runs a RowsPart over live rows: in the graph's input
+// rows, out its output's, req the request's words and pos the positions'
+// (each nil where the graph reads none); false where the device does not.
+// PrepRows forms p and holds its tensors and a call's buffers, at
+// placement, so no picture forms it; false where the device does not
+// serve it.
+type PictureRowsDevice interface {
+	RunRows(p *RowsPart, live int, req, pos []uint32, in, out []float32) bool
+	PrepRows(p *RowsPart) bool
+}
+
+// Packed is a weight already in the device layout: three spans of a jlm
+// container, read by every tier. SC is empty for formats with no per-sub-block
+// scale table (Q4_0, Q8_0).
+//
+// The layout is [sub-block][word][row], so rows are interleaved and a row range
+// is not a byte range: slicing a packed bank by rows hands the kernel another
+// expert's weights. Stride is the row count of the whole buffer and Row is
+// where this weight starts in it; both zero means the whole buffer.
+type Packed struct {
+	QS, D, SC []byte
+	// Sheet, when set, stands in for QS/D/SC: the weight is a mixture's bank
+	// whose Sheets experts live in separate container pages, so there is no
+	// one span of it anywhere. Sheet(x) is expert x's three planes, readable
+	// until the returned release is called; a device assembles the bank from
+	// them at x times one sheet's bytes, which is the layout its kernels index.
+	Sheet  func(x int) (Packed, func(), error)
+	Sheets int
+}
+
+// LayerWeights is one block's tensors, by the role the file stores each
+// under: what the block's graph binds is read from here by role, and a
+// device that does not hold a tensor the graph binds declines the block.
+type LayerWeights struct {
+	// Vectors is every vector the block holds, by role (jlm.Role.Expanded),
+	// as the file holds it.
+	Vectors []RoleVector
+	// Mats is every matrix the block holds, by role. A routed bank
+	// (jlm.ExpertBank) is every expert's sheet in one Weight, Rows counting
+	// them all; the device does its own indexing.
+	Mats []RoleWeight
+
+	// Bind points w at fr, the frames of the device offered the block -- its
+	// own, in its own memory -- claimed and unread: shapes and lengths are
+	// right, bytes are not until Ensure. A device calls it before it decides
+	// whether to take the block. nil means w is bound already.
+	Bind func(w *LayerWeights, fr *jlm.Frames) error
+	// Ensure makes the weight bytes valid in fr, the device's frames, and is
+	// called by a tier once the block is admitted and before anything is
+	// read. nil means they already are.
+	//
+	// Admission reads only shapes and len(Data), so nothing is read until the
+	// tier has said yes. Ensure also refreshes w in place: a tier that
+	// uploads a block more than once must call it again, because its frames
+	// may have moved the pages the earlier slices pointed at. After it
+	// returns, every Weight in w is valid to read now.
+	Ensure func(w *LayerWeights, fr *jlm.Frames) error
+	// EnsureExperts is Ensure for a caller that already knows which experts it
+	// needs: the block's own weights in full, and of each routed bank only the
+	// listed sheets. nil means the caller must use Ensure and take the whole
+	// bank. sel is the selection in the order the kernels will index it, and
+	// the callee must not retain it.
+	EnsureExperts func(w *LayerWeights, sel []uint32, fr *jlm.Frames) error
+	// PrefetchExperts makes sel's sheets readable and does nothing else: it
+	// does not re-point w or bind spans, so it is safe to call from another
+	// goroutine while the caller uploads sheets it already has (EnsureExperts
+	// writes through w and is not). nil means the caller must not overlap.
+	PrefetchExperts func(sel []uint32, fr *jlm.Frames) error
+	// SpeculateExperts hands the host's read service a guess: sel's sheets
+	// are read ahead in the background, never waited for, and replace any
+	// earlier guess not yet started. A nil sel abandons the unstarted ones.
+	// A demanded read (PrefetchExperts, EnsureExperts) of a guessed sheet
+	// joins the guess's read and one that is not under way takes over its
+	// place, so a wrong guess never delays the experts a token needs. nil
+	// means the host does not speculate.
+	SpeculateExperts func(sel []uint32, fr *jlm.Frames)
+	// ExpertUses is the session's selection counts for this block's experts,
+	// one a expert (engine.Hotness): the host's routing adds to it, a device
+	// routing the block adds its own selections, and a device's expert cache
+	// keeps what it counts most. nil where nothing is counted.
+	ExpertUses []uint32
+}
+
+// RoleVector is one of a block's vectors and the role the file stores it
+// under.
+type RoleVector struct {
+	Role jlm.Role
+	V    []float32
+}
+
+// Vector is the block's vector under r (Vectors), nil for none.
+func (w *LayerWeights) Vector(r jlm.Role) []float32 { return VectorOf(w.Vectors, r) }
+
+// VectorOf is the vector vs holds under r, nil for none.
+func VectorOf(vs []RoleVector, r jlm.Role) []float32 {
+	for _, v := range vs {
+		if v.Role == r {
+			return v.V
+		}
+	}
+	return nil
+}
+
+// RoleWeight is a matrix the file stores for a block, and its role.
+type RoleWeight struct {
+	Role jlm.Role
+	W    Weight
+}
+
+// Mat is the block's matrix under r (Mats), zero for none.
+func (w *LayerWeights) Mat(r jlm.Role) Weight {
+	for _, x := range w.Mats {
+		if x.Role == r {
+			return x.W
+		}
+	}
+	return Weight{}
+}
+
+// SampleMaxK bounds a device sampler's k (Head.SampleK): its candidates'
+// form is made for it once, and a larger k reads the logits back.
+const SampleMaxK = 256
+
+// InfillMaxK is the most candidates an infill draw reads (graph.SampleWalk's
+// Infill), whose sampler runs a step a candidate: a draw with no top-k, or
+// one past this, draws as though its top-k were this.
+const InfillMaxK = 64
+
+// InfillTables are what an infill draw reads of the vocabulary (tok.Infill),
+// over the logits' row: each token's class and each class's parent, the
+// depth of their chains, the end-of-generation ids and the end-of-turn
+// token.
+type InfillTables struct {
+	Class, Parent []uint32
+	Depth         int
+	EOG           []float32
+	EOT           uint32
+}
+
+// DecisionOptions is the most options a label readout weighs, and
+// DecisionGroup the most token ids one option is read at (a label, its spaced
+// form and a case's forms): the readout's form (graph.DecisionScores) is made
+// for them once, a question's own count masked within it.
+const (
+	DecisionOptions = 256
+	DecisionGroup   = 3
+)
+
+// PickMax is the most ids a device's label pick (Head.Pick) reads: a label
+// readout's every option at its whole group. Its forms are made for it once.
+const PickMax = DecisionOptions * DecisionGroup
+
+// Head is the tail of a token: the output norm and the vocabulary projection.
+// It runs in the same submission as the last block, so a token ends with one
+// readback and the residual stream is never read back.
+type Head struct {
+	// Model is which model the head belongs to; see LayerPlan.Model.
+	Model uint64
+	// File is the file the head's weights are entries of, which a device
+	// reads them from into frames of its own (as LayerPlan.File for a
+	// block); nil where they are no file's.
+	File *jlm.File
+	// Graph is the head as ops from the model's front end, nil where it
+	// states none: what a device serving the head forms.
+	Graph *graph.Graph
+	// HiddenGraph is Graph writing the norm's rows too, its second output
+	// (graph.Head.Hidden): what a device serving the head forms, so a call
+	// reading them back (Hidden) reads the rows the head normed.
+	HiddenGraph *graph.Graph
+	// Sample is the greedy token of the head's logits as ops from the front
+	// end (graph.Sample), nil where it states none: what a device serving
+	// the argmax forms.
+	Sample *graph.Graph
+	// SampleWalk is a top-k draw's token as ops from the front end
+	// (graph.SampleWalk at SampleMaxK), nil where it states none: what a
+	// device serving SampleK forms, once, whatever k, the cuts and the
+	// repeat window.
+	SampleWalk *graph.Graph
+	// PickGraph is the label pick over the logits (graph.Pick at PickMax),
+	// and PickHead the head projecting the picked rows alone (graph.Head with
+	// Pick): what a device serving Pick forms, once, whatever the labels.
+	PickGraph, PickHead *graph.Graph
+	// Embed is the step's input rows as ops from the front end, nil where
+	// it states none: what a device forms to gather a step's or a prompt
+	// chunk's rows (nn.EmbedDevice). GatherRow is the device's answer at
+	// PrepHead: it is asked to gather the rows itself, so the caller
+	// promises it the rows rather than filling them.
+	Embed     *graph.Graph
+	GatherRow bool
+	// TokEmbd is the token embedding where the head is not it (Embeds
+	// false), and PosEmbd a learned position table, zero where the model has
+	// none: the tables Embed reads beside the head.
+	TokEmbd, PosEmbd Weight
+	// Streams are the tensors the input rows bind past the embedding and the
+	// position table, for a model of several residual streams: the
+	// expansion's and the per-layer inputs' (Graph unset).
+	Streams *RowsPart
+	// Mix is the tensors Graph binds past the head's own, by role: the mix
+	// of a residual of several planes it reads first, nil for none.
+	Mix *RowsPart
+	// NoCPU says the caller did not list the CPU among the devices
+	// (engine.WithCPU): a device that pages blocks takes the projection while
+	// the slots a swap needs are left, rather than only when it costs none.
+	NoCPU bool
+	// Stream says the caller's placement streams the projection
+	// (engine.Place.Stream on the head): a device that takes it pages it
+	// through its slots as a streamed block's weights, in for the call that
+	// reads it and a victim when a page-in wants the room. Where the input
+	// rows read the projection on the device (Embeds, with Embed), its bytes
+	// are held for them and it is placed as it is without.
+	Stream bool
+	// Vectors is every vector the head's graphs may bind, by role: the
+	// model's, with the norm the instance projects through. A device serves
+	// Graph whole, binding each vector it names, or refuses the call.
+	Vectors []RoleVector
+	W       Weight // the lm_head, which is token_embd when the model ties them
+	// Logits is the destination, NVocab wide. Prefer ArgmaxOnly, which keeps
+	// the logits on the device and reads back one token id.
+	Logits []float32
+	// Embeds says W is also the model's token embedding (a tied model), so a
+	// tier holding the head can look prompt tokens up itself -- see
+	// EmbedDevice.
+	Embeds bool
+	// ArgmaxOnly asks for the next greedy token alone. A tier that can serves
+	// it on the device and sets Token, leaving Logits untouched; one that
+	// cannot fills Logits as always and leaves Token as the caller set it (-1).
+	// See engine.Instance.ForwardGreedy.
+	ArgmaxOnly bool
+	Token      int32
+	// SampleK, when positive, asks for a top-k draw's token in place of the
+	// logits: SampleWalk over the k best of the row after SamplePenalty, on
+	// each token whose count in SampleWindow (a row over the vocabulary) is
+	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
+	// off, the caller's uniform, typical-p +Inf where off, XTC's threshold
+	// +Inf where off, a word the draw does not read, and the dynamic
+	// temperature's range, 0 where off, and exponent, then the cuts' 1/T,
+	// DrawArgs.CutInvTemp's) -- exactly the CPU's
+	// draw
+	// (engine.Instance.Sample). Penalties that are off leave the row as it
+	// is, whatever the window holds. A tier that serves it sets Token and Sampled and
+	// leaves Logits untouched; one that cannot fills Logits as always. See
+	// engine.Instance.ForwardSample.
+	SampleK       int
+	SampleWindow  []float32
+	SamplePenalty Penalties
+	Sampled       bool
+	WalkArgs      [11]float32
+	// Pick, when non-empty, asks for the logits at these vocabulary ids alone
+	// in place of the row: a decision readout's label ids. A tier that serves
+	// it fills PickVals (as long as Pick at least), leaves Logits untouched
+	// and sets Picked; one that cannot fills Logits as always. The values are
+	// the head's at those ids, every op of Graph applied. See model.Decider.
+	Pick     []int32
+	PickVals []float32
+	Picked   bool
+	// Tokens is RowsDevice.LayersRows' output: each row's greedy token.
+	Tokens []int32
+	// RowLogits asks LayersRows to read every row's logits back as well, into
+	// Logits, row-major and NVocab wide per row, for a caller that samples.
+	// They are the per-row head's output, every stage of the head applied,
+	// as for one sequence.
+	//
+	// On a Layers call of several rows (a prompt chunk) it asks for every
+	// row's projection rather than the last row's alone: a speculative
+	// verification needs the logits at each position it checks. A tier that
+	// cannot refuses the call.
+	RowLogits bool
+	// Hidden, when non-nil, receives the head's input as well: the output
+	// norm's result for each row the head projects (the last row of a folded
+	// chunk, every row of a RowLogits call), NEmbd wide per row. It is what a
+	// multi-token-prediction block reads of the trunk, and what it chains to
+	// itself.
+	Hidden []float32
+	// LogitRows, when positive, says only the first LogitRows rows of a
+	// LayersRows step want the head: their logits alone are read back (and
+	// their tokens alone set), and a tier may project only them. A prompt chunk
+	// riding in a decode step needs its last row's logits at most, and the
+	// rest of its rows would otherwise each cost a vocabulary of readback.
+	// Zero is every row.
+	LogitRows int
+}
+
+// WantedRows is how many of a step's n rows want the head (LogitRows).
+func (h *Head) WantedRows(n int) int {
+	if h.LogitRows > 0 {
+		return min(h.LogitRows, n)
+	}
+	return n
+}
+
+// Vector is the head's vector under r (Vectors), nil for none.
+func (h *Head) Vector(r jlm.Role) []float32 { return VectorOf(h.Vectors, r) }
+
+// MaxRopeTables is the most rotary tables a call carries, a bound this code
+// chose: an array keeps a call's tables in its frame rather than on the heap
+// (RULE 2f), and the blocks' stated rotary ops turn two rotaries at most
+// (the model's and the sliding layers'), so four leave room. A front end stating more is refused when
+// an instance is made (Instance.initTables), naming the count; the bound
+// grows with the array.
+const MaxRopeTables = 4
+
+// RopeTables is a call's rotary tables, the model's i-th rotary's at [i]
+// (graph.Attrs.Rotary): each its rows' tables back to back, nil for a table
+// the call does not carry.
+type RopeTables [MaxRopeTables][]float32
+
+// Rows is t's tables of rows [a, b) of n, each table's row width its length
+// over n.
+func (t RopeTables) Rows(a, b, n int) RopeTables {
+	var out RopeTables
+	for i, c := range t {
+		if c == nil || n <= 0 {
+			continue
+		}
+		w := len(c) / n
+		out[i] = c[a*w : b*w]
+	}
+	return out
+}
+
+// From is t's tables from row a of n on, each table's row width its length
+// over n.
+func (t RopeTables) From(a, n int) RopeTables {
+	var out RopeTables
+	for i, c := range t {
+		if c == nil || n <= 0 {
+			continue
+		}
+		out[i] = c[a*(len(c)/n):]
+	}
+	return out
+}
+
+// Widths is each of t's tables' row width over n rows.
+func (t RopeTables) Widths(n int) (w [MaxRopeTables]int) {
+	for i, c := range t {
+		if n > 0 {
+			w[i] = len(c) / n
+		}
+	}
+	return w
+}
+
+// Count is how many of t's tables are carried: one past the last non-nil.
+func (t RopeTables) Count() int {
+	n := 0
+	for i, c := range t {
+		if c != nil {
+			n = i + 1
+		}
+	}
+	return n
+}
+
+// MLA reports whether this block runs multi-head latent attention.
+func (p *LayerPlan) MLA() bool { return p.KVLoraRank > 0 }
+
+// RopeW is how many floats one row's rotary table holds: two a pair of its
+// table (RopePairs), NRot for a table of the block's rotated pairs.
+func (p *LayerPlan) RopeW() int {
+	if p.RopePairs > 0 {
+		return 2 * p.RopePairs
+	}
+	return p.NRot
+}
+
+// ResidW is one row's residual width in Layers' x: every residual stream.
+func (p *LayerPlan) ResidW() int { return p.NEmbd * p.Streams() }
+
+// Streams is how many residual streams Layers' x carries, stream-major: the
+// streams the converter states, one elsewhere.
+func (p *LayerPlan) Streams() int { return max(p.NStreams, 1) }
+
+// InputsWriteSide says input rows' graph g, writing streams residual
+// streams, writes the rows' side inputs too: an output past the streams, its
+// last. The host and every card read it here, so they agree.
+func InputsWriteSide(g *graph.Graph, streams int) bool { return g != nil && len(g.Out) > streams }
+
+// KVRow is one position's width in the attention cache: the row the block's
+// graph appends to its history (HistRow), else the latent plus the shared
+// rotary key under MLA and NKVHead heads of HeadDim otherwise. Every cache
+// allocation, stride and migration must go through it.
+func (p *LayerPlan) KVRow() int {
+	switch {
+	case p.HistRow > 0:
+		return p.HistRow
+	case p.MLA():
+		return p.KVLoraRank + p.NRot
+	}
+	return p.NKVHead * p.HeadDim
+}
+
+// KeyHead reports that the block's cached row carries more than its kv
+// heads' keys (an indexer's key, a compressor's rows) after the attention's
+// own.
+func (p *LayerPlan) KeyHead() bool {
+	return !p.MLA() && p.HistRow != 0 && p.HistRow != p.NKVHead*p.HeadDim
+}
+
+// Scale is the attention score multiplier this block runs.
+func (p *LayerPlan) Scale() float64 {
+	if p.AttnScale != 0 {
+		return p.AttnScale
+	}
+	return 1 / math.Sqrt(float64(p.HeadDim))
+}
+
+// KVWindowSlack is how far behind its window a windowed layer's history is
+// kept, in positions, on the host and on every device: a page wholly below
+// the window start of the slowest row's position minus this is released.
+// It is what a rewind may go back without losing its window -- a speculation
+// round rewinds by its rejected rows, at most 2*specMaxDraft+2 -- and the
+// host trusts history the device returns only from the window start of
+// (its last position - 1 - KVWindowSlack), which this margin guarantees.
+const KVWindowSlack = 64
+
+// LayerPlan is everything about a block that is not in its weights.
+//
+// Most flags below describe a graph feature that runs and produces fluent,
+// wrong text when ignored, so a tier that cannot apply one must decline the
+// block by name (see RULE 8a in AGENTS.md).
+// Backends is a set of the backends a model runs on.
+type Backends uint8
+
+const (
+	BackendCPU Backends = 1 << iota
+	BackendPTX
+	BackendSPIRV
+	BackendMSL
+	BackendAMDGCN
+)
+
+// RowTable is a table of rows a block's gathers read (jlm.RowTable): the
+// container's entry, its rows RowBytes apart.
+type RowTable struct {
+	Entry    *jlm.Entry
+	RowBytes int
+}
+
+// RowTableRoles is the roles of tables ts, in their order.
+func RowTableRoles(ts []RowTable) []jlm.Role {
+	rs := make([]jlm.Role, len(ts))
+	for i, t := range ts {
+		rs[i] = t.Entry.Role
+	}
+	return rs
+}
+
+// BlockSpec is what a block is composed from, as the instance states it for
+// whichever device takes the block: the graph its front end states (Source)
+// and the one its forms are composed from (Graph), its weights' formats and
+// the strides they are laid out at, its step's geometry (a history page's
+// positions, the keys a row reads, the activation window, the sequences), a
+// history holding values in its keys, the rotaries it turns by (each device
+// states its own device to the composer), where its side input starts, the
+// tables of rows its rows read (Tables, any number, each by its role),
+// whether its history is kept at f32, whether it reads both ways inside a
+// prompt's runs (Bidir: attends, or convolves centred), reads the windows
+// its rows were handed (Windowed: its graph states them) or steps a
+// recurrent state in order (Rec) -- or why it is
+// not to be asked (Why), and where that is the statement broken, what broke
+// it (Err). Run is the most rows a run of a block reading both ways holds,
+// the instance's.
+type BlockSpec struct {
+	Why           Decline
+	Err           error
+	Source, Graph *graph.Graph
+	// Cut, where set, is the width of the row Graph reads in place of the
+	// residual: the second half of the block cut in two (graph.Cut), its
+	// input the call's cut (CutDevice), its output the residual.
+	Cut          int
+	SideOff      int
+	Formats      map[jlm.Role]jlm.Type
+	Strides      map[jlm.Role]int
+	Page, Keys   int
+	ActWindow    int
+	Seqs         int
+	ValuesInKeys bool
+	// Hists are the histories past its rows' the block reads, as the block
+	// whose history it reads keeps them (graph.Graph.KeptHistories).
+	Hists []graph.KeptHistory
+	// Bound are the other blocks' histories the block reads past those
+	// (graph.Graph.ReadsMore), each as its block keeps it: Hist 0 a block's
+	// rows', laid out as the block's own, Width its row.
+	Bound    []graph.KeptHistory
+	Rotaries []graph.Rotary
+	Tables   []RowTable
+	F32      bool
+	// KVRow, past 0, is the head width of a quantized history's rows (F32
+	// is then true: no store narrows to halves): q8 rows, or KVBlock's
+	// blocks where it is set.
+	KVRow   int
+	KVBlock graph.BlockFmt
+	// KVBF16 is a bfloat16 history's: its pools hold bfloat16 halves.
+	KVBF16          bool
+	Bidir, Windowed bool
+	Rec             bool
+	Run             int
+}
+
+type LayerPlan struct {
+	// Spec is the block's statement (BlockSpec), for a device that composes
+	// it from that; nil where none was stated.
+	Spec *BlockSpec
+	// Graph is the block's graph of generic ops as the model's front end
+	// built it from the container (engine/model/front.go), nil for a block
+	// it states none of: what a device asks the composer to form when it
+	// serves the block whole.
+	Graph *graph.Graph
+	// Cut, where set, is the width of a row of the block's crossing values:
+	// Graph is the first half of the block cut in two (graph.Cut), the other
+	// half another device's, and the half writes its rows to the call's cut
+	// (CutDevice) rather than the residual.
+	Cut int
+	// Tables are the step's rotary tables as the front end states them (the
+	// model's rotaries in order, graph.Attrs.Rotary; nil for none): what a
+	// device serving the tables forms, writing a call's RopeTables.
+	Tables []*graph.Graph
+	// GridPlanes is a non-causal block's grid table's planes (Tables[0] a
+	// graph.RopeTable over grid cells): the rotary's planes and each pair's
+	// axis after them, 0 a cell's row. The table it states turns each row by
+	// its cell (GridCellsDevice); nil for a block whose caller hands the
+	// table.
+	GridPlanes []float32
+	// RopeMarks is the most rotary marks a sequence holds (graph.OpRopePos),
+	// 0 where every row turns at its cache position.
+	RopeMarks int
+	// Rotaries is the model's rotaries, the tables a text block's rope ops
+	// pick by what they state (composer.Request.Rotaries).
+	Rotaries []graph.Rotary
+	// KPad is the width the block's matrices that read the residual or the
+	// attention's output were packed at, when NEmbd is not a whole number of
+	// 32-element blocks (a tower 144 wide, packed at 160 with zero columns
+	// past 144); their Weight.K is KPad, and the device quantizes those
+	// activations as rows of KPad with zero tails (kernels.QuantizePadded),
+	// as the host pads them. Zero everywhere else.
+	KPad                                               int
+	NEmbd, NHead, NKVHead, HeadDim, NRot, NFFN, MaxSeq int
+	RMSEps, RopeBase                                   float64
+
+	// Model is which model the block belongs to (ModelOwner): a device keys
+	// its blocks by index, so it must not take a block of a second model
+	// while the first's are there. File is the container its pages are read
+	// from: a device pages the block into frames of its own (Bind, Ensure),
+	// keeping between uses no more than FrameBudget bytes of it -- the
+	// instance's page budget, 0 for unlimited.
+	Model       uint64
+	File        *jlm.File
+	FrameBudget uint64
+	// Vocab is the output projection's rows. A device that reserves a ragged
+	// step's per-row logits at placement sizes them from it, because the
+	// head is offered after the blocks; 0 leaves them to the first step.
+	Vocab int
+	// RopeTabs is each of the model's rotary tables' folded constant planes
+	// a device builds its own table from (Rope.TabPlanes), the model's i-th
+	// rotary's at [i], so both tiers derive a table from the same constants:
+	// as many as a call carries tables (RopeTables), an entry nil for a table
+	// with no such planes. A tier may ignore them and upload the call's
+	// finished tables instead.
+	RopeTabs [][]float32
+	// RopePairs is the pairs a row's rotary table holds where the model
+	// states its table's pairs (RopeW), 0 for NRot/2: more than NRot/2 where
+	// each element of a pair turns by an entry of its own (graph.RopeSplit).
+	RopePairs int
+	// SWAWindow is how many keys a sliding-window layer attends to, zero for
+	// an architecture whose every layer sees its whole history; which blocks
+	// slide each block's graph states (its attention's Window).
+	SWAWindow int
+
+	RopeNeox bool // rotate (i, i+nRot/2), not (2i, 2i+1)
+	// MixedGeom says the model's blocks do not all attend at one geometry;
+	// NKVHead, HeadDim and NRot are then THIS block's (planFor sets them per
+	// block). OwnGeom says they, or the rotary table it reads, are not the
+	// model's, and Rotary which of the model's rotary tables it turns by
+	// (RopeTables, graph.Attrs.Rotary).
+	// VFromK says the block has no v projection and v is k's (it binds no
+	// RoleAttnV matrix).
+	MixedGeom, OwnGeom bool
+	Rotary             int
+	VFromK             bool
+	// SideW is a row's whole side input to the blocks, the input their
+	// graphs read past the residual streams, each block its own slice of it
+	// (zero for none).
+	SideW int
+	// HistRow is a position's row in the history the block reads: the key
+	// row its graph appends (graph.OpKVAppend's In[0]), or its source's where
+	// it reads another block's; 0 where it reads none.
+	HistRow int
+	// FFNWide says this block's NFFN is not the model's (its own geometry's),
+	// which a tier that bakes the FFN width into its scratch keeps apart.
+	FFNWide bool
+	// NExpert is 0 for a dense block. NExpertUsed is the top-k; one expert's
+	// hidden width is its bank's, which the block's graph binds.
+	NExpert, NExpertUsed int
+	// NFFNShExp is the shared expert's hidden width, 0 when the model has none.
+	// It runs for every token beside the routed ones and its gate is a vector
+	// rather than a router.
+	NFFNShExp int
+	// NonCausal says the block's rows attend over the key runs of the call
+	// that carries them, not over a history: every row of the call by
+	// default (a vision tower's picture), or the windowed runs on a Windowed
+	// block. Its keys live one call deep -- written, read by the block's own
+	// attention, dead before the next block -- so it keeps no history, and a
+	// call is one whole run, never a chunk of one. A vision segment's blocks
+	// are this; their MLP and rotary are the text kit's fields (UngatedFFN,
+	// NRot over Layers' cs).
+	NonCausal bool
+	// Windowed says a NonCausal block attends inside the windows the call
+	// was handed (KeyRunDevice, RowWindowDevice) rather than over every row:
+	// its attention states RowWindows.
+	Windowed bool
+	// HeadSet says a NonCausal block is a decision head's that attends and
+	// norms otherwise than the encoder before it (d1-omni: LayerNorm and 16
+	// key heads after an RMSNorm trunk of 8): a device runs it in a scratch
+	// set of its own rather than declining it for the trunk's geometry.
+	HeadSet bool
+	// Tower says a NonCausal block is the model's tower's (its vision or audio
+	// segment), which a device runs in a scratch set apart from a non-causal
+	// text model's: d1-omni's encoder beside its vision tower.
+	Tower bool
+	// KVLoraRank enables multi-head latent attention; 0 is every other
+	// architecture, and a tier without MLA declines on this field alone.
+	//
+	// The cache holds one row per position for the whole layer,
+	// [latent (KVLoraRank) | rotary key (NRot)], shared by every head; KVRow is
+	// that width. The value is the row's leading KVLoraRank floats, so a tier
+	// must not store K and V apart.
+	//
+	KVLoraRank int
+	// AttnScale is the score multiplier, and 0 means the ordinary
+	// 1/sqrt(HeadDim). It is carried because YaRN's magnitude correction reaches
+	// the score (DeepSeek), and because MLA takes its scores over the
+	// KVRow-wide absorbed query, where 1/sqrt(KVRow) is not the model's scale.
+	AttnScale float64
+	// UngatedFFN is up, its bias BUp, the activation alone, down and BDown --
+	// Gate is empty.
+	UngatedFFN bool
+	// NStreams is how many residual streams the block's x carries,
+	// stream-major, the model's (0 or 1 for one).
+	NStreams int
+	// Recurrent describes a linear-attention block, and it is non-zero only for
+	// one. It is offered to the device like any other block so the decision
+	// stays on the device's side of the seam.
+	Recurrent RecurrentPlan
+	// NoFFN is a block that is its mixer alone (plain Mamba-2, a Nemotron-H
+	// mixer layer): it ends at the first residual add, and its FFN weights,
+	// norm and kernels are absent.
+	NoFFN bool
+}
+
+// RecurrentPlan is the sizes of a recurrent block's state, which a device
+// keeps a slot of per sequence. Every field is zero for a block that keeps
+// none. A block is recurrent when Conv is set; whether it attends beside its
+// recurrence is its graph's (an op appending to a history).
+type RecurrentPlan struct {
+	StateLen  int // the recurrence's state and any tail its graph states, floats per sequence, CONSTANT in context
+	ConvState int // the convolution's window, floats per sequence
+}
+
+// Keeps reports whether the block keeps a recurrent state.
+func (r RecurrentPlan) Keeps() bool { return r.StateLen > 0 || r.ConvState > 0 }
+
+// LayerDevice runs a whole transformer block without returning the residual
+// stream to the host between its matvecs.
+//
+// The unit is a block because a per-matvec seam costs a blocking round trip per
+// matvec, and because it keeps the graph in model/: the device knows nothing
+// beyond one repeating unit (no embedding lookup, sampling or tied weights).
+// PrepLayer is per block and may decline, so a model that does not fit runs
+// its first N blocks on one device and the rest on another -- the CPU device
+// is one -- with no separate mechanism for the seam.
+// KVDefaulter is a device that keeps a session's history in its own memory
+// in a format of its choosing where the caller forces none.
+type KVDefaulter interface{ DefaultKV() KVFmt }
+
+// PageQuota is a device that budgets a model's frames by the instances
+// holding it there: SetPageQuota is this instance's quota in bytes, of which
+// the device it attached holds held of the host's memory.
+type PageQuota interface{ SetPageQuota(bytes, held uint64) }
+
+// DecodeSharer is a device several instances decode on at once: Decoding
+// records that this one decodes now, OthersDecoding whether another does.
+type DecodeSharer interface {
+	Decoding()
+	OthersDecoding() bool
+}
+
+// PrepReporter is a device that says why it could not prepare something it
+// was offered: the first error it met forming or binding it, nil for none.
+type PrepReporter interface{ PrepErr() error }
+
+// PrepNoter is a device told of an error preparing what it holds for the
+// placement (a session's history in its memory), which its PrepErr reports.
+type PrepNoter interface{ NotePrep(error) }
+
+// Spinner is a device whose idle threads may spin between calls: told after
+// each step whether the step read anything from storage, it spins only when
+// it did not.
+type Spinner interface{ SetSpinning(bool) }
+
+// Threaded is a device that runs its blocks on threads of its own.
+type Threaded interface{ Workers() int }
+
+// Quota is an instance's budget of the frames its blocks page into on a
+// device: Set moves it, Drop gives it back.
+type Quota interface {
+	Set(bytes, held uint64) uint64
+	Drop()
+}
+
+// ModelScratch keeps a value beside a model on a device for every instance
+// of it there, made by mk on the first ask, gone with the model's last hold.
+type ModelScratch interface {
+	Attached(model uint64, mk func() any) any
+}
+
+// FrameKeeper is a device whose memory holds a model's pages: the frames its
+// instances page blocks into, made by mk on the first ask, and each
+// instance's quota of them, registered before the frames are read; Frames
+// is the quota's own view of them, its budget and order.
+type FrameKeeper interface {
+	NewQuota(model, bytes uint64) Quota
+	Frames(q Quota, model uint64, mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error)
+}
+
+// ExecutionSetup is what an instance hands a device it runs blocks on when
+// it attaches its execution: the model, its frames there and its quota of
+// them (nil for an instance sharing its parent's), the fusion and prompt
+// policy, the counters of fused runs, the geometry its lanes are sized for,
+// and a trace of each block's output.
+type ExecutionSetup struct {
+	Model                uint64
+	Frames               *jlm.Frames
+	Quota                Quota
+	NoFuse               bool
+	Chunk                int
+	Tries, Runs          *atomic.Int64
+	Width, Seqs, Streams int
+	ConvLens             []int
+	Trace                func(li int)
+}
+
+// ExecutionAttacher attaches an instance's execution to a device.
+type ExecutionAttacher interface {
+	AttachExecution(ExecutionSetup) BlockPlacer
+}
+
+// ExecutionDevice is a device an instance runs its lanes on, as the instance
+// opens it.
+type ExecutionDevice interface {
+	ModelOwner
+	ModelScratch
+	FrameKeeper
+	ExecutionAttacher
+	Close()
+}
+
+// HistoryStorage is the storage a device whose memory holds sessions'
+// history keeps for the model it runs: the pool of pages closed sessions
+// gave back, each block's arena of slots, and the numbering of histories.
+// The policy over them (residency, sharing, the store) is the engine's.
+type HistoryStorage interface {
+	PagePool() *history.PagePool
+	ArenaFor(li, pp int, latent bool, slots int) (*history.Arena, error)
+	NextSequence() int64
+}
+
+// BlockPlacer is a device's side of a placement: it takes a block it is
+// offered and lets a run of them go.
+type BlockPlacer interface {
+	PrepLayer(li int, p *LayerPlan, w *LayerWeights) bool
+	ReleaseLayers(lo, hi int)
+}
+
+// FramesInPlace is a device that runs a placed block from the instance's
+// frames rather than from a copy of its own: it is handed the block's plan
+// alone, and the frames stay while the block is there.
+type FramesInPlace interface{ RunsFromFrames() bool }
+
+type LayerDevice interface {
+	// PrepLayer uploads block li's weights and scratch. It returns false if the
+	// block will not fit, or a quant type has no kernel, in which case that
+	// block and every later one runs on the CPU.
+	PrepLayer(li int, p *LayerPlan, w *LayerWeights) bool
+
+	// Layers runs blocks [lo, hi) for n consecutive positions starting at pos,
+	// reading and writing n rows of the residual stream in x. n > 1 is the
+	// prefill chunk; a device that cannot take it must return false and let
+	// the host run the chunk. cs is the cos/sin table for those positions,
+	// interleaved, NRot entries per position. The whole range is one
+	// submission: x crosses the bus once each way.
+	//
+	// head, when non-nil, continues that same submission with the output norm
+	// and the vocabulary projection, and fills head.Logits instead of reading x
+	// back. It is only offered when the device took every block, since anything
+	// left on the CPU needs the residual stream read back anyway.
+	// cs holds every rotary table the model states (RopeTables): a block
+	// turns by its own (LayerPlan.Rotary), and a tier handed no table for a
+	// block it runs declines rather than substitute another.
+	Layers(lo, hi, pos, n int, x []float32, cs RopeTables, head *Head) bool
+
+	// PrewarmLayer packs block li's weights off the main loop, so that a later
+	// PrepLayer only has to upload them. It must not touch the device and must
+	// be safe to call from another goroutine while Layers is running, since
+	// packing is most of preparing a block and is the only part that can
+	// overlap a token.
+	//
+	// False means it did not stage anything: already resident, already staged,
+	// or over the staging budget. None of those is an error; the work simply
+	// happens on the main loop as before.
+	PrewarmLayer(li int, p *LayerPlan, w *LayerWeights) bool
+
+	// MigrateKV moves block li's attention history between host and device, so
+	// that a block which changes sides keeps its keys and values. Without it a
+	// migrated block attends over the cache it arrived at, which is fluent and
+	// wrong rather than an error. pos is how many positions are live; k and v
+	// are the host arrays, [pos*kvDim + i] float32. A batch's rows travel in
+	// RowsDevice's layout, row r at positions r*maxSeq.., so pos is then the
+	// end of the last row with history.
+	MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool
+
+	// MigrateRec is MigrateKV for a linear-attention block's recurrent summary,
+	// which lives in the device's buffers while the block runs there. The host
+	// copy is what -kv-cache seals and what a seam shrink restores.
+	//
+	// toDevice=false reads the state the device is currently reading (recPair
+	// keeps two halves and flips per submission), so the answer is the summary
+	// as of the last completed token.
+	//
+	// A batch passes every row's state back to back (len(conv) a multiple of
+	// one row's), which is also the device's per-row layout; toDevice grows
+	// the device's rows to match.
+	MigrateRec(li int, conv, state []float32, toDevice bool) bool
+
+	// ReserveKV makes the device able to hold pos positions of history before
+	// any of it is written, and reports whether it can. A restored prompt
+	// prefix arrives before any submission has grown the cache. It is separate
+	// from MigrateKV because growth drops the captured graph and rebuilds the
+	// scratch, which the device cannot do from inside a call that already
+	// holds its lock: ask first, then move.
+	ReserveKV(pos int) bool
+
+	// ReleaseLayers lets blocks [lo, hi) go and frees whatever they held on
+	// the device; where they run next is the caller's placement.
+	ReleaseLayers(lo, hi int)
+
+	// PrepHead uploads the output norm and the vocabulary projection. False
+	// means Layers must be called with a nil head.
+	PrepHead(h *Head) bool
+
+	// Reserve sizes the per-call scratch buffers once, for the largest matvec
+	// the model contains, so that nothing grows on the serving path. The model
+	// knows every shape from the header; the device sees one matvec at a time.
+	//
+	// Optional: a caller that never calls it still works, and so does a shape
+	// past what was reserved.
+	Reserve(maxRows, maxK int) bool
+}
+
+// EmbedDevice is an optional LayerDevice that fills residual rows from token
+// ids on the card: dst's rows become the step's input rows (Head.Embed) of
+// the tokens ids at positions pos, pos+1, ..., gathered from the tables the
+// device holds (the head where it is the embedding, Head.TokEmbd and
+// Head.PosEmbd otherwise). True is a promise, not a write: the device gathers
+// the rows into the next Layers call whose x is dst, without the rows
+// crossing the bus, and makes them real in dst first if anything else
+// reaches it. So the caller hands dst to Layers next and does not read it
+// before. False means nothing was promised and the caller looks the rows up
+// itself.
+//
+// It exists because a host lookup in the packed layout is a cache miss per
+// word: one row's words sit a vocabulary's width apart.
+type EmbedDevice interface {
+	EmbedRows(ids []int32, pos int, dst []float32) bool
+}
+
+// KeyRun is a run of rows [Lo, Hi) that attend to each other in both
+// directions. Every mask this engine runs is, per row, an interval of keys:
+// causal is [0, p+1); a row inside a full run of a causal prompt (a Gemma 3
+// image's tokens) sees keys up to the run's end, everything before the run
+// staying causal and a sliding window still bounding the past from the row's
+// own position; a row of a NonCausal call sees its whole call, or on a
+// Windowed block its window's run.
+type KeyRun struct{ Lo, Hi int }
+
+// GridCellsDevice is an optional LayerDevice that computes a non-causal
+// call's rotary table itself, from each row's cell of a grid (the plan's
+// grid table, LayerPlan.GridPlanes): cells is the live count then a row's
+// cell, width the grid's, for the Layers calls that follow until replaced.
+// Layers' cs is then not read. False is a device that holds no grid table.
+type GridCellsDevice interface {
+	SetGridCells(cells []uint32, width int) bool
+}
+
+// KeyRunDevice is an optional LayerDevice that takes the key runs of the
+// Layers calls that follow, until replaced. full is the runs a causal call's
+// rows widen to (positions of the sequence); windowed is the windows a
+// NonCausal call's Windowed blocks attend inside ([Lo, Hi) row pairs that
+// partition the call's rows). nil for both restores plain attention. A call
+// whose rows cut a full run is refused, since no row of a run can be computed
+// before every row's key is in the cache; false is a device that cannot take
+// the runs, and the caller fails the call rather than running it unmasked.
+type KeyRunDevice interface {
+	SetKeyRuns(full, windowed []KeyRun)
+}
+
+// RowWindowDevice is an optional LayerDevice that takes one window a row for
+// the NonCausal calls that follow, until replaced: row r attends inside
+// wins[r] on its Windowed blocks (an attention stating RowWindows); the rows'
+// windows may overlap, so they are not a partition KeyRunDevice can state. A
+// window an attention states with Bidir is not this: the block's form clips
+// each row's keys to it. No windows (nil) is every row over its call. It
+// replaces the windowed runs SetKeyRuns gave and keeps its full runs, which
+// a block that states no windows reads; false is a device that cannot take
+// them.
+type RowWindowDevice interface {
+	SetRowWindows(wins []KeyRun)
+}
+
+// SeqRunsDevice is an optional LayerDevice that takes several sequences
+// packed into the rows of the NonCausal calls that follow, until replaced:
+// runs partition the rows, and every row of every non-causal block attends
+// inside its run -- an encoder answering several questions in one pass. A
+// windowed block's row windows (RowWindowDevice) are the caller's, inside
+// the runs. nil or empty is one sequence over the call's rows. It is kept
+// apart from SetRowWindows and SetKeyRuns, which it does not replace; false is
+// a device that cannot take them.
+type SeqRunsDevice interface {
+	SetSeqRuns(runs []KeyRun) bool
+}
+
+// RowsReserver is an optional LayerDevice whose NonCausal blocks are built for
+// the rows of the calls they run rather than for their plan's MaxSeq (the
+// tower's largest grid): ReserveRows makes the set block li runs in -- the
+// call's first block's -- able to take a call of n rows, moving what that
+// costs from outside any call, and reports false -- having kept nothing it
+// allocated -- when the device's budget cannot hold it. The caller moves
+// blocks off the device until it can. A device that does not implement it is
+// built for MaxSeq.
+type RowsReserver interface {
+	ReserveRows(li, n int) bool
+}
+
+// RowChunker is an optional RowsReserver whose non-causal set may take a
+// picture in row chunks when the whole does not fit (paging is the design):
+// TowerChunk, read after ReserveRows, is the rows a call takes (0: the
+// picture goes whole). Such a picture runs block by block, every chunk's
+// phase 1 (its k and v written at its rows of keys) before any chunk's phase
+// 2 (its queries over every key, and the rest of the block on its rows).
+type RowChunker interface {
+	TowerChunk() int
+	LayersPhase(lo, hi, pos, n, keys, phase int, x []float32, cs RopeTables) bool
+}
+
+// LayerInputDevice is an optional LayerDevice that takes a side input for
+// every row beside the residual (LayerPlan.SideW floats a row, row-major),
+// which each block reads its slice of. The caller sets them before every Layers or
+// LayersRows call whose rows they belong to; the device reads them during
+// that call only.
+type LayerInputDevice interface {
+	SetLayerInputs(in []float32)
+}
+
+// RopeMarksDevice is an optional LayerDevice told a sequence's rotary marks
+// where they change (graph.OpRopePos): slot's count, then its marks of
+// graph.MarkWords words. Its rotary tables turn each row by its cache
+// position and its sequence's marks, so no call states a row's positions.
+type RopeMarksDevice interface {
+	SetSeqMarks(slot int, block []uint32) error
+}
+
+// PromptDevice is an optional LayerDevice told that the calls that follow
+// are a prompt's until it is told they are not: every call of a chunked
+// prompt (a prompt of tokens or of mixed spans, an embedding run, and a
+// speculation step's rows when they go as a prompt chunk) -- its chunks, a
+// chunk's rows retried one at a time, the head over its last row -- and a
+// batch slot's prompt, its last token's one-row step included. A one-row
+// call is not a step by its width alone. A prompt the instance runs as decode
+// steps, a token at a time, is steps.
+type PromptDevice interface {
+	SetPrompt(on bool)
+}
+
+// RowsDevice is an optional LayerDevice that runs ONE decode step for several
+// independent sequences at once, so the weights are read once for all of them.
+//
+// It runs blocks [lo, hi), which may be a run of a split placement: the host or
+// another device runs the blocks around it, and x carries the residual in and
+// out. head is non-nil only when hi is the last block and this device holds
+// the projection.
+//
+// Row r is a sequence at position pos[r] whose history occupies cache slots
+// slot[r]-pos[r] .. slot[r]; the step writes its key and value at slot[r].
+// seqLen is the slots one sequence spans: row r is sequence
+// (slot[r]-pos[r])/seqLen of the session's batch, which is where a recurrent
+// block keeps its state. x is len(pos) rows of the residual stream, cs one
+// rotary table per row of each table the model states (RopeTables). With a head, head.Tokens gets each row's greedy token,
+// and with head.RowLogits set head.Logits gets each row's logits. Rows may
+// belong to one sequence, as long as they are its next positions, each once
+// and in any row order: a prompt laid out as rows at positions p..p+L-1 of the
+// same slots is a causal prefill, because every row's key and value are
+// written before any row attends and a recurrent block steps a sequence's
+// rows in position order. False means nothing ran, and the device's Err
+// (ErrReporter) says why.
+type RowsDevice interface {
+	LayersRows(lo, hi int, pos, slot []int, seqLen int, x []float32, cs RopeTables, head *Head) bool
+}
+
+// RowsWidther is a RowsDevice that states how many rows one LayersRows call
+// can take: RowsWidth(want) is the widest step of at most want rows whose
+// batched scratch every device holding a block holds or can build in its
+// budget now, 0 when not even the narrowest fits. A caller filling steps
+// (engine.Scheduler) keeps under it, since a step wider than the scratch is
+// refused rather than split.
+type RowsWidther interface {
+	RowsWidth(want int) int
+}
+
+// RowsRoomer is a RowsDevice that says, before a step runs, whether every
+// device holding a block has room for it: the scratch a step of rows rows
+// runs in and a recurrent state for each of seqs sequences, built or grown
+// now within the device's budget, and with head -- the head the step will hand
+// LayersRows, nil when the host projects -- the per-row head on the device
+// holding it. A step it has no room for is refused before anything runs, so a
+// caller asks first and moves its blocks to the CPU rather than fail the step. An
+// error is a step whose scratch does not build whatever the room -- a kernel
+// the device refused, the head not on it -- which no move gives room: the
+// caller returns it.
+type RowsRoomer interface {
+	RowsRoom(rows, seqs int, head *Head) (bool, error)
+}
+
+// HistoryKey names block li's history h on a device: history 0 is its
+// rows', HistoryKey(li, 0) == li, and a history past them is held where the
+// block runs. HistoryBlock is the block a key is of, HistoryIndex its
+// history. Above both is the type the history is held as (HistoryTyped): the
+// engine names a history untyped, and the device holding it adds the type
+// its session holds it as, so one block keeps a history of each type.
+const (
+	HistoryShift     = 24
+	HistoryTypeShift = 32
+)
+
+func HistoryKey(li, h int) int { return li | h<<HistoryShift }
+
+func HistoryBlock(key int) int { return key & (1<<HistoryShift - 1) }
+
+func HistoryIndex(key int) int { return key >> HistoryShift & (1<<(HistoryTypeShift-HistoryShift) - 1) }
+
+func HistoryTyped(key, t int) int { return key&(1<<HistoryTypeShift-1) | t<<HistoryTypeShift }
+
+func HistoryType(key int) int { return key >> HistoryTypeShift }
+
+// KVShareDevice is a device whose KV pages the prefix cache can name and map
+// (engine/device/gpu/kvshare.go): PublishKV names the session's page of block li
+// by key, held by the session; MapKV puts the page key names into the
+// session's page, the sequence then written to end at least, no byte moved,
+// and is false when no page answers to key. A write into a named page copies
+// it first. Each li is a HistoryKey: a history past a block's rows is named
+// on the device holding the block.
+type KVShareDevice interface {
+	PublishKV(li, page int, key string) bool
+	MapKV(li, page int, key string, end int) bool
+	// PublishKVs is PublishKV for many names in one call: name i is block
+	// lis[i]'s page pages[i] by keys[i]. False when any was refused.
+	PublishKVs(lis, pages []int32, keys []string) bool
+	// SharePage is the positions one of block li's pages holds on the device, 0
+	// where it names none: a page is named by the caller's key only where
+	// the two cut the history alike.
+	SharePage(li int) int
+}
+
+// RecShareDevice is a device that keeps a linear block's restore points where
+// its state lives (engine/device/gpu/recshare.go): SnapRec copies the session's
+// state of block li into the snapshot named key, HasRec says one is kept, and
+// LoadRec copies it into the session's state. Nothing crosses the bus.
+type RecShareDevice interface {
+	SnapRec(li int, key string) bool
+	// SnapRecs is SnapRec for every block of lis at one point, in one call.
+	SnapRecs(lis []int32, key string) bool
+	HasRec(li int, key string) bool
+	LoadRec(li int, key string) bool
+}
+
+// SeqKVDevice is a LayerDevice that keeps attention history per sequence --
+// the device pages it (.notes/design/device-kv-paging.md) -- rather than one
+// cache laid out in RowsDevice's slots. A batch's rows then migrate one at a
+// time, each by the base of its slots (row r's is r*maxSeq), and a batch needs
+// no whole-context reservation: each row takes pages as it writes.
+// PerSequenceKV is false on a device still running the contiguous cache.
+type SeqKVDevice interface {
+	PerSequenceKV() bool
+	// MigrateKVSeq is MigrateKV for the sequence whose slots start at base:
+	// k and v are that row's pos positions, [pos*kvDim + i] float32.
+	MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice bool) bool
+	// ReserveKVSeqs gives each sequence whose slots start at bases[i] the
+	// pages positions up to ends[i] need, on every device holding a block:
+	// what a step is about to write, and nothing more. False is no room, and
+	// the caller may move blocks and ask again.
+	ReserveKVSeqs(bases, ends []int) bool
+}
+
+// NamedDevice is an optional LayerDevice made of several named devices (the
+// names -devices gives them; see DeviceName). It places a block or the head on
+// the device a placement names, says where each went, and pins a block where
+// it is.
+// KVPrewarmer is a device whose paged KV pool can grow ahead of the history
+// written into it. PrewarmKV makes room for positions more positions in every
+// placed block's pool where the device's budget has it free -- without paging
+// weights out and without giving the pages to any sequence -- so the first
+// prompt an instance runs does not grow the pool inside its own time.
+type KVPrewarmer interface {
+	PrewarmKV(positions int)
+}
+
+// BlockMover is a NamedDevice that moves a placed block to another of its
+// devices itself, the session's history copied from the source's pages into
+// the target's without a round trip through host memory (gpu.GPU, move.go).
+type BlockMover interface {
+	// StageBlock prepares block li on the named device -- weights uploaded,
+	// kernels built, room for positions of history -- without routing it
+	// there. It is safe beside the
+	// session's own steps on the block's current device, so a move's
+	// preparation overlaps the tokens before it. False means not staged.
+	StageBlock(li int, to string, p *LayerPlan, w *LayerWeights, positions int) bool
+	// StageHead prepares the output projection on the named device the same
+	// way, for a move that will leave none of the session's blocks beside it.
+	StageHead(to string, h *Head) bool
+	// Unstage frees what StageBlock prepared on blocks [lo, hi), and what
+	// StageHead prepared, that no move committed.
+	Unstage(lo, hi int)
+	// MoveBlock routes block li to the named device with the session's
+	// history at pos positions, between steps. Moved false with no error is
+	// the target refusing the block, which stays where it was. An error that
+	// is ErrNotDirect changed nothing: the caller moves the block itself. w
+	// nil asks for the staged copy, and ErrNotStaged says there is none.
+	MoveBlock(li int, to string, p *LayerPlan, w *LayerWeights, pos int) (BlockMoved, error)
+	// RetireMoved frees what the MoveBlocks since the last call left on their
+	// sources, after the caller has moved what it is moving.
+	RetireMoved()
+}
+
+// ErrNotDirect is a BlockMover's answer for a move it cannot make itself --
+// a device that keeps the contiguous cache, a batch's rows -- with nothing
+// changed.
+const ErrNotDirect = nnError("the block's history cannot move between the devices directly")
+
+// ErrNotStaged is a BlockMover's answer to a MoveBlock handed no weights for
+// a block StageBlock did not prepare: the caller reads the block and asks
+// again.
+const ErrNotStaged = nnError("the block was not staged on the target, and no weights came with the move")
+
+// nnError is a sentinel error that is a constant.
+type nnError string
+
+func (e nnError) Error() string { return string(e) }
+
+// BlockMoved is what a BlockMover did with one block.
+type BlockMoved struct {
+	Moved bool
+	// Path is how the history went: "peer" card to card, "staged" through a
+	// host buffer, "host" through the device-independent row layout; "" when
+	// the block had no history.
+	Path string
+	// Bytes is the history copied.
+	Bytes uint64
+}
+
+type NamedDevice interface {
+	PrepLayerOn(name string, li int, p *LayerPlan, w *LayerWeights) (bool, error)
+	PrepHeadOn(name string, h *Head) (bool, error)
+	// ReleaseHead gives back the projection PrepHead or PrepHeadOn placed: the
+	// device frees it where no other session runs it.
+	ReleaseHead()
+	// DeviceOf is the name of the device holding block li, and whether one does.
+	DeviceOf(li int) (string, bool)
+	HeadDeviceName() (string, bool)
+	// Pin keeps block li on its device through seam moves, budget shrinks
+	// and eviction; it reports false when no device holds the block.
+	Pin(li int, on bool) bool
+	// Stream marks block li's weights as streaming through a device's slots
+	// rather than staying resident, before it is offered; false when no
+	// device is attached.
+	Stream(li int, on bool) bool
+	// StreamOn is Stream on the named device alone, for a block offered to
+	// it by name (PrepLayerOn); an error when no such device is attached.
+	StreamOn(name string, li int, on bool) error
+}
+
+// The optional capabilities a LayerDevice may have, asked for by type
+// assertion. One method each: test devices implement some and not others.
+
+// ActWindower takes the activation amax window the session's scale choice
+// uses (SetActWindow).
+type ActWindower interface{ SetActWindow(n int) }
+
+// ModelOwner is a device that keeps what a model placed on it for the
+// instances holding it: HoldModel counts one instance of model holding the
+// device, ReleaseModel that instance's release, and the last release gives
+// back everything model placed -- every block, every session's history on
+// them, the head, what the device built for it -- so the device may take
+// another, never while an instance still runs it. A release with no hold
+// left gives it back too.
+type ModelOwner interface {
+	HoldModel(model uint64)
+	ReleaseModel(model uint64)
+}
+
+// ModelTier is a device that serves several models by handing each its own
+// tier over the same hardware: ForModel is the device model's blocks are
+// offered to, the same one for every instance of the model.
+type ModelTier interface {
+	ForModel(model uint64) LayerDevice
+}
+
+// ErrReporter says why the device's last call refused. A session's says why
+// its own last call did, never another session's.
+type ErrReporter interface{ Err() string }
+
+// LayerRunner runs a range of blocks (LayerDevice.Layers): what a step asks
+// of every device its blocks are placed on.
+type LayerRunner interface {
+	Layers(lo, hi, pos, n int, x []float32, cs RopeTables, head *Head) bool
+}
+
+// CutDevice is a device holding one half of a block cut in two
+// (graph.Cut, LayerPlan.Cut): the next call's cut row, its rows' crossing
+// values end to end -- written by the call whose last block is a first half,
+// read by the call whose first block is a second half.
+type CutDevice interface{ SetCut(cut []float32) }
+
+// TokenReader takes the tokens of the rows the next call runs, for the
+// blocks that read them (an n-gram block's hash).
+type TokenReader interface{ SetTokens(toks []int32) }
+
+// TableReader reads the call's rotary tables (RopeTables) rather than making
+// its own from the positions.
+type TableReader interface{ ReadsTables() bool }
+
+// RunFailer is a device whose last call failed with an error of its own (a
+// page that could not be read), which the step returns as it is.
+type RunFailer interface{ RunErr() error }
+
+// PromptRows is a device told which rows a prompt chunk's call (Layers with
+// n > 1) runs: the sequence slot names, the chunk's first row base in the
+// prompt (-1 for none), and whether the prompt's rows attend both ways.
+type PromptRows interface {
+	SetPromptRows(slot, base int, bidir bool)
+}
+
+// Fuser is a device that runs a run of its blocks as one fused region,
+// on or off (SetFusion), counting the runs it fused (FusedRuns).
+type Fuser interface {
+	SetFusion(on bool)
+	FusedRuns() int64
+}
+
+// PrefillPhases is a device whose workers run a prompt as a phase of their
+// own: BeginPrefill starts one, on its efficiency cores where e asks for them
+// and it has them (and says so), EndPrefill ends it.
+type PrefillPhases interface {
+	BeginPrefill(e bool) bool
+	EndPrefill()
+}
+
+// KVMigrator is a device's half of moving block li's history of pos
+// positions to or from another device (LayerDevice.MigrateKV): toDevice takes
+// k and v into its history, else gives its history into them.
+type KVMigrator interface {
+	MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool
+}
+
+// HistoryMigrator is a device's half of moving block li's history h past
+// its rows' (history 0, KVMigrator's) with them: e holds the entries pos
+// positions closed, in order, one each period positions the block's graph
+// appends at; toDevice takes them into the device's history h, else gives
+// it into e.
+type HistoryMigrator interface {
+	MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool
+}
+
+// HistoryCopier is a device keeping copies of histories the CPU device
+// writes, for blocks placed on it that read them, and reading its own
+// blocks' histories for the CPU device's copies of them: a history read
+// across the CPU and a card. Block li's history h is its rows' (h 0) or one
+// past them (graph.Graph.KeptHistories). A rows' history crosses as rows,
+// [n][kvRow] float32 in k and v, the first row from's; one past them as its
+// entries in k alone, each its keys and then, where its values are not its
+// keys, its values, the first entry the one at or past from
+// (cpudev.History.MigrateHistory's layout). Each side pages its copy at its
+// own page size.
+type HistoryCopier interface {
+	// CopyFrom is the first position of the sequence at base of block li's
+	// history h that the copies of it here lack, at most start and at the
+	// start of the page it falls in there; false where no copy of it is
+	// held here.
+	CopyFrom(li, h, base, start int) (int, bool)
+	// CopyRows writes positions [from, to) of that history, from a position
+	// CopyFrom gave or one no call reads below, into every copy of it here;
+	// start is where the call about to run writes from.
+	CopyRows(li, h, base, from, start, to int, k, v []float32) bool
+	// ReadRows reads positions [from, to) of block li's history h, the
+	// device's own, into k and v.
+	ReadRows(li, h, base, from, to int, k, v []float32) bool
+}
+
+// RecMigrator is a device's half of moving block li's recurrent state
+// (LayerDevice.MigrateRec): toDevice takes conv and state, else gives its own
+// into them.
+type RecMigrator interface {
+	MigrateRec(li int, conv, state []float32, toDevice bool) bool
+}
+
+// RunCloser is a device that keeps a region open across its calls (the CPU's
+// fused pool region); CloseRun closes it before another device runs.
+type RunCloser interface{ CloseRun() }
+
+// HostReserver is how many bytes of the host's memory the device holds now (an
+// integrated GPU's blocks, KV and scratch), which the host's page and expert
+// budgets leave room for. It moves with placement, so the instance attaching
+// it re-reads it whenever a block moves (Instance.SetPageBudget,
+// Instance.SetMemBudget).
+type HostReserver interface{ HostReserved() uint64 }
+
+// Attacher hands out a view carrying one session's own history (a session).
+type Attacher interface{ Attach() LayerDevice }
+
+// Placer brackets a instance's whole offer sequence, so two placing at once do
+// not interleave against one budget.
+type Placer interface {
+	BeginPlacement()
+	EndPlacement()
+}
+
+// BlockPlanner is told how many blocks a placement will offer, so a model that
+// fits is spread across the devices rather than filling the first.
+type BlockPlanner interface {
+	// PlanBlocks says n blocks are about to be offered, and extra is what the
+	// placement must leave room for besides their weights: the history the
+	// session's context will hold on them, and the output projection.
+	PlanBlocks(n int, extra uint64)
+}
+
+// RefusalReporter lists the blocks the caller runs on the device whose last
+// reservation for it refused, so room is made there.
+type RefusalReporter interface{ Refused() []int }
+
+// Spiller moves a block onto a later device when the one holding it is full.
+type Spiller interface{ SpillAfter(li int) bool }
+
+// RoomReporter moves whenever any device may have gained room.
+type RoomReporter interface{ RoomGen() uint64 }
+
+// KVTrimmer shrinks a session's device history to what pos needs.
+type KVTrimmer interface{ TrimKV(pos int) bool }
+
+// SessionStepper runs one step for rows that belong to different sessions of
+// one device, row i being sess[i]'s sequence at pos[i]: every block's weights
+// are read once for all of them. sess are the views Attach handed out; each
+// row's history stays its own session's. A session may take several rows --
+// a prompt chunk riding beside the others' decoding -- as long as they are its
+// next positions, each once, in any row order; they see each other causally,
+// as RowsDevice's rows of one sequence do. x is the rows' residual and cs and
+// cs their rotary rows, as RowsDevice's; the head, when set, works as for RowsDevice.LayersRows,
+// LogitRows included.
+type SessionStepper interface {
+	LayersSessions(lo, hi int, sess []LayerRunner, pos []int, x []float32, cs RopeTables, head *Head) bool
+}
+
+// Pipeliner says how many devices a prompt chunk crosses. A device that
+// answers more than one takes chunks wider than MaxDevicePrefillChunk and runs
+// them in pieces of it, each piece one device behind the next, so the cards
+// work at once instead of in turn.
+type Pipeliner interface{ PipelineDepth() int }
+
+// ChunkLimiter says how many rows of one prompt one device call takes, 0 for
+// the device's own width: a device configured to take one row at a time
+// answers 1, and the caller cuts its chunks to that.
+type ChunkLimiter interface{ ChunkRows() int }
+
+// ExpertHolder says whether the device holding block li holds its routed
+// bank, so the host may give the bank's expert pages back with the block's
+// page. A block whose experts run off the card (streamed, hybrid) does not.
+type ExpertHolder interface{ HoldsExperts(li int) bool }
+
+// FramesHolder is a tier whose devices page the blocks placed on them into
+// frames of their own: FramesOf is the named device's over f, nil where it
+// holds none.
+type FramesHolder interface {
+	FramesOf(dev string, f *jlm.File) *jlm.Frames
+}
+
+// FrameBudgeter is a tier whose devices' frames over f are capped by a page
+// quota (LayerPlan.FrameBudget at placement): SetFrameBudget is a new one,
+// 0 for unlimited, which every device holding frames over f is re-sized to.
+type FrameBudgeter interface {
+	SetFrameBudget(f *jlm.File, bytes uint64)
+}
+
+// HostPageReleaser says a placed block's host page can be given back.
+type HostPageReleaser interface{ ReleasesHostPage(li int) bool }
+
+// BlockHolder says block li is already placed for another session: offering it
+// again shares the device's copy, so the caller need not read its weights.
+type BlockHolder interface{ HoldsBlock(li int) bool }
+
+// RecStepper counts the linear blocks whose recurrent state advanced in the
+// last call, which decides whether a failed step may restart on the host.
+type RecStepper interface{ RecSteps() int }
+
+// Session is the device view one engine.Instance holds (gpu.GPU.Attach): the
+// session's own history on the device, apart from the model's weights.
+type Session interface {
+	// Detach gives back everything the session holds on every device.
+	Detach()
+	// HeldBytes is what the session holds on every device now: its KV caches
+	// and recurrent states. The weights are the model's and not counted.
+	HeldBytes() uint64
+}
+
+// RecRowsDevice is a RowsDevice whose linear blocks keep a recurrent state per
+// row. ResetRecRows zeroes those rows' state for a new occupant.
+type RecRowsDevice interface {
+	ResetRecRows(rows []int) bool
+}
+
+// RecRewinder is a device whose linear blocks can take back one step of a
+// session's recurrent state: a speculative verification steps the summary
+// over drafted tokens a rejection must undo, and a recurrence cannot be
+// rewound by position as attention can. RecMark records where the session's
+// state is; RecRewind returns it there, and is honest about when it cannot --
+// more than one step since the mark, or a state the device keeps in one copy.
+// TowerParts is a device running a vision tower's parts apart from its
+// blocks: a square's entry, picture class class's of sample format px, over
+// the picture's words into its n patch rows; a banded entry's band, its band
+// form key over the band the request names, added into its accumulator,
+// every band before the entry; the head over the rows the last block left
+// into the projected rows; and tap j over the rows its block left. req is
+// the square's request words and pos its live rows and positions.
+type TowerParts interface {
+	Entry(class int, px uint8, pic, req, pos []uint32, n int, rows []float32) error
+	Band(class int, key uint8, pic, req, pos []uint32, n int) error
+	Head(n int, req, pos []uint32, in, out []float32) error
+	Tap(j, n int, req, pos []uint32, in, out []float32) error
+}
+
+type RecRewinder interface {
+	RecMark()
+	RecRewind() bool
+}
+
+// RecRowKeeper is a device whose linear blocks keep a session's recurrent
+// state after each of a call's first rows (RecKeepRows; zero keeps none) and
+// can return it to any of them (RecRestoreRow): a speculation's rollback to
+// its last accepted row, with no row run again.
+type RecRowKeeper interface {
+	RecKeepRows(rows int)
+	RecRestoreRow(row int) bool
+}
+
+// RecKeepPreparer is a RecRowKeeper that prepares before its calls keep
+// their rows: the forms that store them and room for calls of up to rows
+// rows (RecKeepPrep), when a speculation starts -- never at a step.
+type RecKeepPreparer interface {
+	RecKeepPrep(rows int) error
+}
+
+// SizeDecliner is an optional LayerDevice that can answer from a block's
+// size alone that no device could hold it, before the caller reads it. total
+// is every byte the block keeps resident; bank is the routed expert banks'
+// share of it, which a device that streams the bank does not keep. A
+// mixture block on a large model is gigabytes, so the read this saves is
+// the whole cost of a refusal.
+type SizeDecliner interface {
+	DeclineSize(li int, total, bank uint64) string
+}
+
+// AutoStreamer is an optional LayerDevice that, offered a mixture block no
+// device could hold resident (SizeDecliner), can take it streamed: the
+// block's base on a card and its routed experts sent per token. It answers
+// whether it will; blocks is how many blocks the model has and meanBase
+// their mean bytes without routed banks, so the device can size what
+// streaming keeps beside the bases from the whole model, not from whichever
+// block was offered first.
+type AutoStreamer interface {
+	AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool
+}
+
+// ExpertPlacer is an optional LayerDevice that can place a mixture block's
+// routed experts off the card: "host" runs them on the host (hybrid
+// execution), "card" streams their sheets to the card each token, "" leaves
+// the device to decide. The choice holds on every device, so a block that
+// moves keeps it.
+type ExpertPlacer interface {
+	PlaceExperts(li int, where string) bool
+}
+
+// ExpertModer is an optional LayerDevice that re-decides where every block
+// placed with its experts off the card runs them ("host", "card", or "" for
+// its defaults), for a measured trial; it takes effect when a block is next
+// placed, and reports how many blocks it touched.
+type ExpertModer interface {
+	SetExpertMode(where string) int
+}
+
+// CPU is the CPU's device name: a block an instance runs on the CPU is at CPU as
+// one a card runs is at that card's name.
+const CPU = "cpu"
+
+// DeviceName is a device name as a placement compares it: lower case, and the
+// API spellings (ptx, amdgcn, spirv, msl) under the backend ones -devices prints, so
+// "PTX:0" and "cuda:0" are one device.
+func DeviceName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	for _, r := range [][2]string{{"ptx", "cuda"}, {"amdgcn", "hip"}, {"spirv", "vulkan"}, {"msl", "metal"}} {
+		if s == r[0] || strings.HasPrefix(s, r[0]+":") {
+			s = r[1] + s[len(r[0]):]
+		}
+	}
+	if s == "metal:0" {
+		s = "metal"
+	}
+	return s
+}

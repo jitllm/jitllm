@@ -83,7 +83,7 @@ func HostLine(a Allocation) string {
 	var b strings.Builder
 	// Runs and holds are different counts: a device block's page can be held
 	// here too, and a host block can be paged out.
-	fmt.Fprintf(&b, "runs %d block(s), holds %s of pages", a.HostBlocks, Bytes(a.HostUsed))
+	fmt.Fprintf(&b, "runs %d block(s), holds %s of pages", a.CPUBlocks, Bytes(a.HostUsed))
 	if a.HostBudget > 0 {
 		fmt.Fprintf(&b, " of a %s budget", Bytes(a.HostBudget))
 	} else {
@@ -115,12 +115,12 @@ func DeviceUseLine(d DeviceUse) string {
 }
 
 // PlacementLine counts where the blocks of the loaded model went. A byte this
-// package does not know counts as host, so the card is never over-reported.
+// package does not know counts as the CPU's, so the card is never over-reported.
 func PlacementLine(b []byte) string {
 	if len(b) == 0 {
 		return "nothing loaded yet -- placement appears here after a load"
 	}
-	var dev, paged, hostN int
+	var dev, paged, cpu int
 	for _, p := range b {
 		switch p := Placement(p); {
 		case p.Device() >= 0:
@@ -128,10 +128,10 @@ func PlacementLine(b []byte) string {
 		case !p.Resident():
 			paged++
 		default:
-			hostN++
+			cpu++
 		}
 	}
-	return fmt.Sprintf("%d of %d block(s) on a device, %d on the host, %d paged out", dev, len(b), hostN, paged)
+	return fmt.Sprintf("%d of %d block(s) on a card, %d on the CPU, %d paged out", dev, len(b), cpu, paged)
 }
 
 // PagerLine is the container pager's counters.

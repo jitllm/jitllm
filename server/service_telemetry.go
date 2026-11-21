@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"time"
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/capabilities"
 	"github.com/jitllm/jitllm/internal/localserver"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -74,23 +76,20 @@ func (s *TelemetryService) snapshot(modelID, sessionID string) *v1.GetStatsRespo
 			Generating:      sess.running.Load(),
 			QueuePosition:   sess.queuePos.Load(),
 		}
-		// The pool and mixture counters are written by the decode loop, so
+		// The pool's counters are written by the decode loop, so
 		// they are read only when the session is idle; a busy session
 		// reports zeros rather than race.
 		if !sess.running.Load() && sess.mu.TryLock() {
-			par, ser := sess.st.JIT().Regions()
-			b, l := sess.st.MoEDispatch()
-			bd, ld := sess.st.MoEDownDispatch()
+			var par, ser int64
+			var workers int
+			sess.in().With(func(st *engine.Instance) {
+				par, ser = cpudev.PoolOf(st.Devices()).Regions()
+				workers = st.Workers()
+			})
 			ss.Pool = &v1.PoolStats{
 				ParallelRegions: par,
 				InlineRegions:   ser,
-				Workers:         int32(sess.st.Workers()),
-			}
-			ss.Mixture = &v1.MixtureStats{
-				BatchedDispatch:     b,
-				LoopedDispatch:      l,
-				BatchedDownDispatch: bd,
-				LoopedDownDispatch:  ld,
+				Workers:         int32(workers),
 			}
 			sess.mu.Unlock()
 		}

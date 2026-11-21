@@ -6,35 +6,35 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The host reader is gated against the GGUF dequantizer, not the device
 // kernel: agreeing with quant.Dequant32 (the source layout) on every format
 // proves the pack is a pure permutation, where two readers of the same layout
-// agreeing would prove nothing. The formats come from quant.PackedTypes so a
+// agreeing would prove nothing. The formats come from quant.PackedTypes() so a
 // new one cannot be missed.
-var packedRefFormats = func() (fs []struct {
+func packedRefFormats() (fs []struct {
 	name string
 	g    quant.Type
-	k    kernels.Quant
+	k    layout.Quant
 }) {
-	for _, g := range quant.PackedTypes {
-		k, ok := kernels.QuantOf(g)
+	for _, g := range quant.PackedTypes() {
+		k, ok := layout.QuantOf(g)
 		if !ok {
-			panic(g.String() + " is in quant.PackedTypes and has no device layout")
+			panic(g.String() + " is in quant.PackedTypes() and has no device layout")
 		}
 		fs = append(fs, struct {
 			name string
 			g    quant.Type
-			k    kernels.Quant
+			k    layout.Quant
 		}{g.String(), g, k})
 	}
 	return fs
-}()
+}
 
 // plant gives every block finite scales; random bytes are not a valid block.
 func plant(t *testing.T, g quant.Type, src []byte, seed int) {
@@ -55,7 +55,7 @@ func TestPackedRefMatchesDequant(t *testing.T) {
 	// Row counts that are not multiples of eight on purpose: a row-stride bug
 	// is invisible at a count the tile divides. 300 also crosses PackWeights'
 	// 256-row fan-out, exercising both packers.
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		for _, nrows := range []int{9, 300} {
 			t.Run(f.name, func(t *testing.T) {
 				const k = 512
@@ -70,7 +70,7 @@ func TestPackedRefMatchesDequant(t *testing.T) {
 				// Inf or NaN, which poisons both arms. Only the scale fields
 				// are constrained; every payload bit stays random.
 				plant(t, f.g, src, nrows)
-				qs, d, sc, err := kernels.PackWeights(f.k, src, nrows, k)
+				qs, d, sc, err := layout.PackWeights(f.k, src, nrows, k)
 				if err != nil {
 					t.Fatalf("pack: %v", err)
 				}
@@ -117,7 +117,7 @@ func TestPackedRefMatchesDequant(t *testing.T) {
 // text. Every row is checked, since a bug in the `si*words*nrows + r` stride is
 // invisible on row 0.
 func TestRowPackedMatchesDequant(t *testing.T) {
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		for _, nrows := range []int{9, 300} {
 			t.Run(f.name, func(t *testing.T) {
 				const k = 512
@@ -129,7 +129,7 @@ func TestRowPackedMatchesDequant(t *testing.T) {
 					src[i] = byte(rng.Intn(256))
 				}
 				plant(t, f.g, src, nrows)
-				qs, d, sc, err := kernels.PackWeights(f.k, src, nrows, k)
+				qs, d, sc, err := layout.PackWeights(f.k, src, nrows, k)
 				if err != nil {
 					t.Fatalf("pack: %v", err)
 				}
@@ -176,7 +176,7 @@ func TestRowPackedMatchesDequant(t *testing.T) {
 // widened payload, and at the memory wall the byte count is the run time.
 func TestPackedPayloadIsNativeWidth(t *testing.T) {
 	// The native width of each format, which is a fact about the format and
-	// so is written here; the sweep is quant.PackedTypes, and a format missing
+	// so is written here; the sweep is quant.PackedTypes(), and a format missing
 	// from this map fails rather than going unchecked.
 	native := map[quant.Type]int{
 		quant.Q4_0: 4, quant.Q5_0: 5, quant.Q5_1: 5, quant.Q8_0: 8, quant.Q4_K: 4,
@@ -187,14 +187,14 @@ func TestPackedPayloadIsNativeWidth(t *testing.T) {
 		quant.TQ2_0:   2, // the 2-bit plane: four fields a byte (kernels.Fields)
 		quant.TQ2_F32: 2,
 	}
-	for _, f := range packedRefFormats {
+	for _, f := range packedRefFormats() {
 		bits, ok := native[f.g]
 		if !ok {
 			t.Errorf("%s: no native width recorded here", f.name)
 			continue
 		}
 		const nrows, k = 8, 512
-		nq, _, _, err := kernels.PackedWords(f.k, nrows, k)
+		nq, _, _, err := layout.PackedWords(f.k, nrows, k)
 		if err != nil {
 			t.Fatalf("%s: %v", f.name, err)
 		}
@@ -205,7 +205,7 @@ func TestPackedPayloadIsNativeWidth(t *testing.T) {
 		// And against the source, so the expansion is a number rather than a
 		// claim: the GGUF block plus what the packer adds for scales.
 		src := nrows * k / int(f.g.BlockElems()) * int(f.g.BlockBytes())
-		_, nd, nsc, _ := kernels.PackedWords(f.k, nrows, k)
+		_, nd, nsc, _ := layout.PackedWords(f.k, nrows, k)
 		tot := (nq + nd + nsc) * 4
 		t.Logf("%-5s %d bits/weight, %d bytes against the GGUF's %d (%+.1f%%)",
 			f.name, got, tot, src, 100*(float64(tot)/float64(src)-1))
@@ -239,7 +239,7 @@ func TestMXFP4ScaleTheF32CannotHoldIsRefused(t *testing.T) {
 		{0, 0x10, false},
 	} {
 		src := append(blk(127, 0x21), blk(c.e, c.code)...)
-		_, _, _, err := kernels.PackWeights(kernels.MXFP4, src, nrows, k)
+		_, _, _, err := layout.PackWeights(layout.MXFP4, src, nrows, k)
 		if (err == nil) != c.ok {
 			t.Errorf("e=%d codes %#02x: err=%v, want ok=%v", c.e, c.code, err, c.ok)
 		}

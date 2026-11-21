@@ -1,0 +1,291 @@
+package gpu
+
+import (
+	"github.com/jitllm/jitllm/nn"
+)
+
+// Scratch sets by geometry. A model whose blocks attend at more than one
+// geometry (nn.LayerPlan.MixedGeom) -- a head width, kv head count or rotary
+// width of a block's own -- needs one scratch SET per geometry, since every
+// attention kernel a scratch builds bakes one: the decode scratch, the batched
+// ones by width and the widths reserved for them. A block runs in its own
+// geometry's set.
+// GPU.runsInto cuts a range where the geometry changes, as it cuts where the
+// device changes, so every submission is one geometry and the residual
+// crosses the host between them; the KV pages are per layer already
+// (kvGeomOf reads the block's plan).
+//
+// A feed-forward width of a block's own (nn.LayerPlan.FFNWide) is a second
+// axis, since the FFN kernels bake their width too, so a set is keyed by both
+// (geoKey); a non-causal segment, a decision head and a cache row carrying an
+// index key are the others. A non-causal set is keyed by its blocks'
+// attention geometry whatever the model's: its rows' offsets, its transient
+// pair and its rotary table are built for one (initScratch, towerStep).
+//
+// The set in use is swapped in place (useGeom): every path below reads g.bs and
+// g.bbs as it always did. The home set is the blocks' at the model's own
+// geometry, which holds the head, and every entry point that switches restores
+// it before it returns.
+
+// geoKey names a scratch set: the zero key is the home set. nkv, hd, nrot and
+// rotary are a block's own attention geometry and rotary table (nn.LayerPlan.OwnGeom),
+// zero for a block at the model's; nffn is a feed-forward width of its own.
+// A non-causal block's key carries its geometry always: nh and embd its query
+// heads and residual width, nrot its rotary table's width.
+type geoKey struct {
+	flags         geoFlag
+	nkv, hd, nrot int32
+	rotary        int32
+	nffn          int32
+	nh, embd      int32
+}
+
+// geoFlag is a set's kind beyond its shape.
+type geoFlag uint8
+
+const (
+	geoNonCausal geoFlag = 1 << iota // a non-causal segment's blocks: a vision tower's
+	// geoIndexKey is a selecting block's: its cache row
+	// carries the indexer's key as one more head, which every K/V writer and
+	// the paged pool's geometry bake, where a dense block's row does not.
+	geoIndexKey
+	// geoNCHead is, beside geoNonCausal, a decision head's own non-causal
+	// set (nn.LayerPlan.HeadSet): it resizes with the encoder's (visrows.go).
+	geoNCHead
+	// geoTower is, beside geoNonCausal, a tower's set (nn.LayerPlan.Tower),
+	// apart from a non-causal text model's: its residual, heads and rows are
+	// not the encoder's, and the two size apart.
+	geoTower
+)
+
+// geoOf is the set block plan p runs in. A non-causal segment (a vision
+// tower) is its own set whatever else it is: its residual, heads and FFN are
+// not the text model's, a call over it is one whole run, and the two never
+// share a submission -- so where the hybrid rule takes a union of two block
+// kinds over one residual, a segment takes a set of its own.
+func geoOf(p *nn.LayerPlan) geoKey {
+	if p.NonCausal {
+		k := geoKey{flags: geoNonCausal, nh: int32(p.NHead), nkv: int32(p.NKVHead), hd: int32(p.HeadDim),
+			nrot: int32(p.RopeW()), embd: int32(p.NEmbd)}
+		switch {
+		case p.HeadSet:
+			k.flags |= geoNCHead
+		case p.Tower:
+			k.flags |= geoTower
+		}
+		return k
+	}
+	var k geoKey
+	if p.MixedGeom && p.OwnGeom {
+		k.nkv, k.hd, k.nrot, k.rotary = int32(p.NKVHead), int32(p.HeadDim), int32(p.NRot), int32(p.Rotary)
+	}
+	if p.FFNWide {
+		k.nffn = int32(p.NFFN)
+	}
+	if p.KeyHead() {
+		k.flags |= geoIndexKey
+	}
+	return k
+}
+
+// geomSet is one geometry's scratch: what useGeom swaps.
+type geomSet struct {
+	bs      *blockScratch
+	bbs     map[int]*blockScratch
+	promptW int
+	stepW   int
+}
+
+// useGeom makes set k the one g.bs and g.bbs name. Callers hold g.mu.
+func (g *devTier) useGeom(k geoKey) {
+	if k == g.geoCur {
+		return
+	}
+	if g.geoSets == nil {
+		g.geoSets = map[geoKey]geomSet{}
+	}
+	g.geoSets[g.geoCur] = geomSet{bs: g.bs, bbs: g.bbs, promptW: g.promptW, stepW: g.stepW}
+	o := g.geoSets[k]
+	delete(g.geoSets, k)
+	g.bs, g.bbs, g.promptW, g.stepW = o.bs, o.bbs, o.promptW, o.stepW
+	if g.bbs == nil {
+		g.bbs = map[int]*blockScratch{}
+	}
+	g.geoCur = k
+}
+
+// setPromptW is set k's reserved prompt width. Callers hold g.mu.
+func (g *devTier) setPromptW(k geoKey) int {
+	if k == g.geoCur {
+		return g.promptW
+	}
+	return g.geoSets[k].promptW
+}
+
+// homeScratch is the home set's decode scratch, which holds the head,
+// whichever set is in use. Callers hold g.mu.
+func (g *devTier) homeScratch() *blockScratch {
+	if g.geoCur == (geoKey{}) {
+		return g.bs
+	}
+	return g.geoSets[geoKey{}].bs
+}
+
+// geoKeys is the keys of the sets not in use. Callers hold g.mu.
+func (g *devTier) geoKeys() []geoKey {
+	ks := make([]geoKey, 0, len(g.geoSets))
+	for k := range g.geoSets {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
+// graphBound is maxGraphs on every model but a split one, whose token is one
+// submission per scratch-set run (and the head's own, after a run outside the
+// home set), and so a recording key per run per row count a step takes: the
+// E-models' four sets over a step's arms outgrew two per block and re-recorded
+// every token. Eight per block bounds it; the bound only has to stop a long
+// generation accumulating.
+// Callers hold g.mu.
+func (g *devTier) graphBound() int {
+	if !g.geoUsed {
+		return maxGraphs
+	}
+	return maxGraphs + 8*len(g.layers)
+}
+
+// restoreGeom puts back the set a caller had in use.
+func (g *devTier) restoreGeom(k geoKey) {
+	g.mu.Lock()
+	g.useGeom(k)
+	g.mu.Unlock()
+}
+
+// geomFor is the set blocks [lo, hi) run in: the range's first block's, the
+// home set for an empty range (the head). Callers hold g.mu.
+func (g *devTier) geomFor(lo, hi int) geoKey {
+	if lo >= hi {
+		return geoKey{}
+	}
+	if l := g.layers[lo]; l != nil {
+		return l.geo
+	}
+	return geoKey{}
+}
+
+// enterGeomOf makes block li's scratch set the one in use and returns the set
+// it left, for useGeom to restore: a check or a form of one block reads its
+// own set's scratch -- a sliding block's table, a tower block's feeds --
+// whichever set its caller is in. Callers hold g.mu.
+func (g *devTier) enterGeomOf(li int) geoKey {
+	prev := g.geoCur
+	if g.geoUsed {
+		g.useGeom(g.geomFor(li, li+1))
+	}
+	return prev
+}
+
+// scratchPlanOf is the plan a block's scratch set is built from. On a model of
+// mixed geometry each set holds one geometry and one rotary: a set at the
+// model's the first table, a set of blocks rotating by the second that one in
+// the first slot (the caller hands it that table as cs), so none carries a
+// second table. The per-block fields
+// (v from k, the output scalar) are the block's, not the scratch's.
+func scratchPlanOf(p *nn.LayerPlan) *nn.LayerPlan {
+	if !p.MixedGeom {
+		return p
+	}
+	q := *p
+	q.RopeTabs = nil
+	if p.Rotary < len(p.RopeTabs) {
+		q.RopeTabs = [][]float32{p.RopeTabs[p.Rotary]}
+	}
+	q.VFromK = false
+	return &q
+}
+
+// dropOtherGeom frees every set not in use, as dropAllScratch frees the one in
+// use. Callers hold g.mu.
+func (g *devTier) dropOtherGeom() {
+	home := g.geoCur
+	for k := range g.geoSets {
+		g.useGeom(k)
+		for w := range g.bbs {
+			g.dropBatch(w)
+		}
+		g.dropScratch(g.bs)
+		g.bs = nil
+	}
+	g.useGeom(home)
+	clear(g.geoSets)
+}
+
+// SetLayerInputs takes the rows' per-layer embedding inputs for the next
+// call (nn.LayerInputDevice).
+func (g *devTier) SetLayerInputs(in []float32) {
+	g.mu.Lock()
+	g.pleHost = in
+	g.mu.Unlock()
+}
+
+// SetLayerInputs keeps the rows' per-layer inputs for this session's next
+// call, which hands them to every device it holds (inputsTo): a session's
+// inputs are its own, as its history is.
+func (s *gpuSession) SetLayerInputs(in []float32) { s.ple = in }
+
+// SetCut keeps the cut rows this session's next call's first half writes
+// (nn.CutDevice), handed to every device it holds as its inputs are.
+func (s *gpuSession) SetCut(cut []float32) { s.cut = cut }
+
+// SetCut is the cut rows the next call's first half writes (nn.CutDevice).
+func (g *devTier) SetCut(cut []float32) {
+	g.mu.Lock()
+	g.cutHost = cut
+	g.mu.Unlock()
+}
+
+// SetRequest keeps the request words this session's next calls' blocks
+// read (nn.RequestDevice), handed to every device it holds as its inputs
+// are.
+func (s *gpuSession) SetRequest(req []uint32) { s.req = req }
+
+// inputsTo hands the session's per-layer inputs to the devices enter took.
+func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
+	for _, d := range ds {
+		s.inputsOn(d)
+	}
+	return ds
+}
+
+// inputsOn hands the session's inputs to d alone.
+func (s *gpuSession) inputsOn(d *devTier) {
+	d.setInputs(s.sid, s.ple, s.prompt, s.toks, s.req, s.cut)
+}
+
+// pleRows is the staged per-layer inputs, n floats: the caller's rows, then
+// zeros for a grid's padding rows. Callers hold g.mu.
+func (g *devTier) pleRows(n int) []float32 { return g.sideRows(g.pleHost, n) }
+
+// reqWords is the staged request words, n of them: the session's, then
+// zeros. Callers hold g.mu.
+func (g *devTier) reqWords(n int) []uint32 {
+	if cap(g.reqStage) < n {
+		g.reqStage = make([]uint32, n)
+	}
+	st := g.reqStage[:n]
+	m := copy(st, g.reqHost)
+	clear(st[m:])
+	return st
+}
+
+// sideRows is n floats of the caller's rows host for the blocks' side
+// input, zeros past them, staged in pleStage.
+func (g *devTier) sideRows(host []float32, n int) []float32 {
+	if cap(g.pleStage) < n {
+		g.pleStage = make([]float32, n)
+	}
+	st := g.pleStage[:n]
+	m := copy(st, host)
+	clear(st[m:])
+	return st
+}

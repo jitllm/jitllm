@@ -52,14 +52,14 @@ Kernels are specialised to the model's shapes and weight formats. On a GPU a
 whole block (attention, norms, feed-forward, expert routing) runs in one
 submission. Tuners measure kernel layouts, worker counts, prompt chunks and
 matrix tiles on the machine; applications can override every choice through Go
-options. [Kernel fusion and block bridging](fusion.md) explains how
+options. [Kernel fusion and block bridging](../.notes/fusion.md) explains how
 consecutive ops and resident blocks run as one unit without giving up
 relocation or paging.
 
 | Directory | Contents |
 |---|---|
-| [`jit/cpu`](../jit/cpu/) | the x86-64 and ARM64 code generators |
-| [`jit/gpu`](../jit/gpu/) | the kernel IR, its PTX/SPIR-V/MSL lowerings, the backends and the device tier |
+| [`engine/device/cpu`](../jit/cpu/) | the x86-64 and ARM64 code generators |
+| [`engine/device/gpu`](../jit/gpu/) | the kernel IR, its PTX/SPIR-V/MSL lowerings, the backends and the device tier |
 | [`engine/model`](../engine/model/) | the graphs, paging, placement and sampling |
 | [`format/jlm`](../format/jlm/) | the container and its pager |
 | [`convert`](../convert/) | GGUF and safetensors to `.jlm`, the catalog and the Hugging Face client |

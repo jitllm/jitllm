@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,12 +14,12 @@ import (
 	"github.com/jitllm/jitllm/tok"
 )
 
-// The oracle is llama.cpp's own tokenizer (llama-tokenize --ids), not a round
+// The oracle is the GGUF oracle's tokenizer (llama-tokenize --ids), not a round
 // trip: a tokenizer that emits one token per byte round-trips perfectly and
 // ruins the model.
-func llamaTokenize(t *testing.T, model, text string) ([]int32, bool) {
+func llamaTokenize(t *testing.T, model, text string, parseSpecial bool) ([]int32, bool) {
 	t.Helper()
-	// Without JITLLM_LCPP (a llama.cpp build directory holding llama-tokenize)
+	// Without JITLLM_LCPP (the oracle's build directory, holding llama-tokenize)
 	// there is no oracle and the caller skips.
 	lcpp := os.Getenv("JITLLM_LCPP")
 	if lcpp == "" {
@@ -28,7 +29,11 @@ func llamaTokenize(t *testing.T, model, text string) ([]int32, bool) {
 	if _, err := os.Stat(bin); err != nil {
 		return nil, false
 	}
-	cmd := exec.Command(bin, "-m", model, "-p", text, "--ids")
+	args := []string{"-m", model, "-p", text, "--ids"}
+	if !parseSpecial {
+		args = append(args, "--no-parse-special")
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(),
 		"LD_LIBRARY_PATH="+filepath.Dir(bin))
 	out, err := cmd.Output()
@@ -57,31 +62,33 @@ func llamaTokenize(t *testing.T, model, text string) ([]int32, bool) {
 // subtly wrong: contractions, digit grouping in threes, runs of spaces (where
 // the last one belongs to the next word), newlines, CJK, emoji and punctuation
 // runs.
-var bpeCases = []string{
-	"The capital of France is Paris.",
-	"hello world",
-	"  leading and   internal   spaces  ",
-	"Isn't it? I'd say we've all got 'em, y'all.",
-	"1 12 123 1234 12345 007 3.14159",
-	"line one\nline two\n\n\nline three\r\ntrailing",
-	"tabs\tand\t\tmore",
-	"CamelCaseIdentifier snake_case_name kebab-case-name",
-	"func main() { fmt.Println(\"hi\") } // comment",
-	"日本語のテキストです。中文也可以。한국어도.",
-	"emoji 🚀🔥 and combining é vs e\u0301",
-	"<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
-	"a  b   c    d     e",
-	"$1,234.56 + €99 = ???",
-	"",
-	" ",
-	"\n",
-	"x",
+func bpeCases() []string {
+	return []string{
+		"The capital of France is Paris.",
+		"hello world",
+		"  leading and   internal   spaces  ",
+		"Isn't it? I'd say we've all got 'em, y'all.",
+		"1 12 123 1234 12345 007 3.14159",
+		"line one\nline two\n\n\nline three\r\ntrailing",
+		"tabs\tand\t\tmore",
+		"CamelCaseIdentifier snake_case_name kebab-case-name",
+		"func main() { fmt.Println(\"hi\") } // comment",
+		"日本語のテキストです。中文也可以。한국어도.",
+		"emoji 🚀🔥 and combining é vs e\u0301",
+		"<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
+		"a  b   c    d     e",
+		"$1,234.56 + €99 = ???",
+		"",
+		" ",
+		"\n",
+		"x",
+	}
 }
 
 func TestBPEAgainstLlamaCpp(t *testing.T) {
 	models := testmodels.Glob("*.gguf")
 	if len(models) == 0 {
-		t.Skip("MODEL MISSING: no *.gguf in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no *.gguf in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	checked := 0
 	for _, path := range models {
@@ -105,29 +112,29 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 			continue
 		}
 		name := filepath.Base(path)
-		for _, text := range bpeCases {
-			want, ok := llamaTokenize(t, path, text)
-			if !ok {
-				continue // llama-tokenize declined this one (it rejects "")
-			}
-			got := v.Encode(text, true)
-			if len(got) != len(want) {
-				t.Errorf("%s %q:\n got  %v\n want %v", name, text, got, want)
-				continue
-			}
-			for i := range got {
-				if got[i] != want[i] {
-					t.Errorf("%s %q:\n got  %v\n want %v", name, text, got, want)
-					break
+		// llama-tokenize parses specials unless told not to: EncodeSpecial is
+		// the one, Encode the other, a control token's text characters there.
+		for _, text := range bpeCases() {
+			for _, parse := range []bool{true, false} {
+				want, ok := llamaTokenize(t, path, text, parse)
+				if !ok {
+					continue // llama-tokenize declined this one (it rejects "")
 				}
+				got := v.Encode(text, true)
+				if parse {
+					got = v.EncodeSpecial(text, true)
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("%s %q (parse_special %v):\n got  %v\n want %v", name, text, parse, got, want)
+					continue
+				}
+				checked++
 			}
-			checked++
 		}
 		// Decode must invert Encode -- except that it deliberately does not
 		// render control tokens, which is what a caller printing model output
-		// wants and what llama.cpp's detokenizer does by default. So the round
-		// trip holds for every case that contains none.
-		for _, text := range bpeCases {
+		// wants. So the round trip holds for every case that contains none.
+		for _, text := range bpeCases() {
 			if strings.Contains(text, "<|") {
 				continue
 			}
@@ -137,7 +144,7 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 		}
 		// Only meaningful where those tokens exist; on a vocabulary without
 		// them the text is literal and round-trips, which is also correct.
-		if ids := v.Encode("<|im_start|>hi<|im_end|>", false); len(ids) == 3 {
+		if ids := v.EncodeSpecial("<|im_start|>hi<|im_end|>", false); len(ids) == 3 {
 			if got := v.Decode(ids); got != "hi" {
 				t.Errorf("%s: control tokens should not render, got %q", name, got)
 			}
@@ -146,5 +153,5 @@ func TestBPEAgainstLlamaCpp(t *testing.T) {
 	if checked == 0 {
 		t.Skip("no gpt2-tokenizer model, or llama-tokenize is not installed")
 	}
-	t.Logf("%d cases identical to llama.cpp", checked)
+	t.Logf("%d cases identical to the oracle", checked)
 }

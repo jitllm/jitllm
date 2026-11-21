@@ -15,15 +15,19 @@ import (
 // carry: about two lines at the page's 1440 px and 1000 px widths.
 const helpLimit = 240
 
-// acronyms are the all-capital words that are names rather than shouting.
-var acronyms = map[string]bool{
-	"CPU": true, "GPU": true, "GGUF": true, "CUDA": true, "RAM": true, "ISA": true, "SMT": true,
+// acronyms() are the all-capital words that are names rather than shouting.
+func acronyms() map[string]bool {
+	return map[string]bool{
+		"CPU": true, "GPU": true, "GGUF": true, "CUDA": true, "RAM": true, "ISA": true, "SMT": true,
+	}
 }
 
-// notYetPlain are help lines the page draws that are known not to be plain
+// notYetPlain() are help lines the page draws that are known not to be plain
 // yet, matched by prefix and skipped; an entry that no longer matches anything
 // fails.
-var notYetPlain = []string{}
+func notYetPlain() []string {
+	return []string{}
+}
 
 // The Machine page's help text must be plain and short. It walks what the
 // screen builds rather than a list of constants, so a later inline note is
@@ -50,7 +54,7 @@ func TestMachineHelpIsPlainAndShort(t *testing.T) {
 			header, last, strings.Join(texts, "\n  "))
 	}
 
-	used := make([]bool, len(notYetPlain))
+	used := make([]bool, len(notYetPlain()))
 	for _, s := range texts {
 		if i := exempt(s); i >= 0 {
 			used[i] = true
@@ -65,7 +69,7 @@ func TestMachineHelpIsPlainAndShort(t *testing.T) {
 	}
 	for i, ok := range used {
 		if !ok {
-			t.Errorf("exemption %q matches nothing on the page any more; delete it", notYetPlain[i])
+			t.Errorf("exemption %q matches nothing on the page any more; delete it", notYetPlain()[i])
 		}
 	}
 }
@@ -86,7 +90,7 @@ func collectText(w widget.Widget, out *[]string) {
 }
 
 func exempt(s string) int {
-	for i, p := range notYetPlain {
+	for i, p := range notYetPlain() {
 		if strings.HasPrefix(s, p) {
 			return i
 		}
@@ -109,7 +113,7 @@ func shouted(s string) []string {
 				}
 			}
 		}
-		if letters >= 2 && upper == letters && !acronyms[w] {
+		if letters >= 2 && upper == letters && !acronyms()[w] {
 			out = append(out, w)
 		}
 	}

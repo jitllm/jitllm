@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -54,7 +55,7 @@ func cmdSessions(ctx context.Context, c cli, args []string) error {
 			MaxSeq:               int32(*maxSeq),
 			DeviceIds:            csv(*devices),
 			RelocateWhileServing: *grow,
-			KeepOffHost:          *keepOff,
+			KeepOffCpu:           *keepOff,
 			PromptCache:          *promptCache,
 			CacheKey:             *cacheKey,
 		}
@@ -128,13 +129,13 @@ func cmdSessions(ctx context.Context, c cli, args []string) error {
 	ss := resp.Msg.GetSessions()
 	fmt.Fprintf(c.out, "%d session(s)\n", len(ss))
 	for _, s := range ss {
-		where := "host"
+		where := nn.CPU
 		if ids := s.GetDeviceIds(); len(ids) > 0 {
 			where = strings.Join(ids, ",")
 		}
 		fmt.Fprintf(c.out, "  %-20s %-20s pos %-6d %2d dev / %2d host block(s)  kv %-11s [%s]\n",
 			s.GetSessionId(), s.GetModelId(), s.GetPosition(),
-			s.GetDeviceBlocks(), s.GetHostBlocks(), bytesOf(s.GetKvBytes()), where)
+			s.GetDeviceBlocks(), s.GetCpuBlocks(), bytesOf(s.GetKvBytes()), where)
 	}
 	return nil
 }
@@ -143,13 +144,13 @@ func printSession(w io.Writer, s *v1.Session, b *v1.SessionBudget) {
 	if s == nil {
 		return
 	}
-	where := "host"
+	where := nn.CPU
 	if ids := s.GetDeviceIds(); len(ids) > 0 {
 		where = strings.Join(ids, ",")
 	}
 	fmt.Fprintf(w, "\nsession %s   model %s\n", s.GetSessionId(), s.GetModelId())
 	fmt.Fprintf(w, "  position   %d of %d max_seq\n", s.GetPosition(), s.GetMaxSeq())
-	fmt.Fprintf(w, "  blocks     %d on %s, %d on host\n", s.GetDeviceBlocks(), where, s.GetHostBlocks())
+	fmt.Fprintf(w, "  blocks     %d on %s, %d on cpu\n", s.GetDeviceBlocks(), where, s.GetCpuBlocks())
 	fmt.Fprintf(w, "  kv         %s\n", bytesOf(s.GetKvBytes()))
 	state := "idle"
 	if s.GetGenerating() {

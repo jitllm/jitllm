@@ -1,0 +1,498 @@
+package composer
+
+import (
+	"cmp"
+	"errors"
+	"fmt"
+	"math"
+	"slices"
+
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// erfP and erfA are erf's rational approximation, Abramowitz and Stegun
+// 7.1.26: erf(z) = 1 - (a1 t + ... + a5 t^5) e^(-z^2), t = 1/(1 + p z), for
+// z >= 0, odd in z.
+const erfP = float32(0.3275911)
+
+func erfA(i int) float32 {
+	switch i {
+	case 0:
+		return 0.254829592
+	case 1:
+		return -0.284496736
+	case 2:
+		return 1.421413741
+	case 3:
+		return -1.453152027
+	}
+	return 1.061405429
+}
+
+func (x *exprs) fma(a, b, c int) int { return x.add(Expr{Op: OpFma, Type: ir.F32, A: a, B: b, C: c}) }
+
+func (x *exprs) neg(a int) int { return x.op(OpSub, ir.F32, x.f(0), a) }
+
+func (x *exprs) sigmoid(v int) int {
+	return x.op(OpDiv, ir.F32, x.f(1), x.op(OpAdd, ir.F32, x.f(1), x.un(OpExp, ir.F32, x.neg(v))))
+}
+
+// tanh is 1 - 2/(e^2a + 1), which saturates to +-1 where e^2a overflows or
+// vanishes.
+func (x *exprs) tanh(a int) int {
+	F := ir.F32
+	e := x.un(OpExp, F, x.op(OpMul, F, x.f(2), a))
+	return x.op(OpSub, F, x.f(1), x.op(OpDiv, F, x.f(2), x.op(OpAdd, F, e, x.f(1))))
+}
+
+// erf is erfA's approximation at |a|, given a's sign.
+func (x *exprs) erf(a int) int {
+	F := ir.F32
+	z := x.op(OpMax, F, a, x.neg(a))
+	t := x.op(OpDiv, F, x.f(1), x.fma(x.f(erfP), z, x.f(1)))
+	p := x.f(erfA(4))
+	for i := 3; i >= 0; i-- {
+		p = x.fma(p, t, x.f(erfA(i)))
+	}
+	y := x.op(OpSub, F, x.f(1), x.op(OpMul, F, x.op(OpMul, F, p, t), x.un(OpExp, F, x.neg(x.op(OpMul, F, z, z)))))
+	return x.sel(F, x.op(OpLess, ir.Pred, a, x.f(0)), x.neg(y), y)
+}
+
+// decomposeExpr is the op's terms, element by element: its inputs read as
+// an OpMap's are (an operand narrower than the row broadcast), its bound
+// vectors' elements as scalars at fixed places. One map holds them all,
+// unless the device's registers refuse that map (ErrRegisterPressure): then
+// each term is a map of its own, the terms between them scratch rows.
+func decomposeExpr(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.Out) != 1 || len(o.Attr.Expr) == 0 {
+		return nil, fmt.Errorf("an expression of %d outputs, %d terms", len(o.Out), len(o.Attr.Expr))
+	}
+	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
+	if e := c.Graph.Values[o.Out[0]].Elem; e != graph.ElemF32 && !words {
+		return nil, fmt.Errorf("an expression into %s values", c.Graph.Values[o.Out[0]].Name)
+	}
+	for _, v := range o.In {
+		if words && c.Graph.Values[v].Elem != graph.ElemU32 {
+			return nil, fmt.Errorf("an expression into words over %s, not words", c.Graph.Values[v].Name)
+		}
+	}
+	for _, v := range o.In {
+		if n, w := c.width(v), c.width(o.Out[0]); n <= 0 || w%n != 0 {
+			return nil, fmt.Errorf("an operand of %d elements under an expression of %d", n, w)
+		}
+	}
+	for _, w := range o.Weight {
+		if w.Rows > 1 {
+			return nil, fmt.Errorf("an expression over a matrix")
+		}
+	}
+	all := make([]int, len(o.Attr.Expr))
+	for k := range all {
+		all[k] = k
+	}
+	whole, err := exprPrim(o, c, all, nil)
+	if err != nil || len(o.Attr.Expr) == 1 || c.split == nil {
+		return []Prim{whole}, err
+	}
+	if at := (exprAt{c.Of, o.Out[0]}); !c.split.terms[at] {
+		c.split.whole[c.Of] = append(c.split.whole[c.Of], exprSize{at, len(whole.Expr)})
+		return []Prim{whole}, nil
+	}
+	out := c.value(o.Out[0])
+	rows := make([]Operand, len(o.Attr.Expr))
+	prims := make([]Prim, len(o.Attr.Expr))
+	for k := range o.Attr.Expr {
+		rows[k] = Operand{Kind: OperandScratch, Name: fmt.Sprintf("%s.t%d", out.Name, k)}
+		if words {
+			rows[k].Elem = ir.U32
+		}
+		if prims[k], err = exprPrim(o, c, []int{k}, rows); err != nil {
+			return nil, err
+		}
+		if k < len(rows)-1 {
+			prims[k].Out = rows[k]
+		}
+	}
+	return prims, nil
+}
+
+// exprAt is an expression of a run: its part and its value.
+type exprAt struct {
+	of  int
+	out graph.ValueID
+}
+
+type exprSize struct {
+	at    exprAt
+	nodes int
+}
+
+// exprSplit is the expressions of a run formed a map a term, and those the
+// last decomposition formed whole, by part, each with its map's nodes.
+type exprSplit struct {
+	terms map[exprAt]bool
+	whole map[int][]exprSize
+	// unfused is the parts formed with their kernels joined to none,
+	// unjammed the times a part's jammed form was refused, each halving
+	// its rows a call (RowJam),
+	// unpaired those formed with each head a call of its own (HeadPairs),
+	// uncursored those formed indexing their buffers (Cursors), unsplit
+	// those formed with their dots' runs whole (HalfSplit), unvector those
+	// formed with no loop across lanes (Vectorize); unwide the kernels
+	// formed with no loop's rows across lanes (Jam), unstreamed those formed
+	// walking each row group through every sub-block (Streams).
+	unfused, unpaired, uncursored, unsplit, unvector map[int]bool
+	unwide, unstreamed, crowded                      map[KernelAt]bool
+	// uninit is the kernels formed with no initializer take (Cursor.Init),
+	// the first a refusal gives up.
+	uninit map[KernelAt]bool
+	// copied is the kernels formed with their bases walked by copies
+	// (Kernel.Copied), what a refusal tries before uninit.
+	copied   map[KernelAt]bool
+	untailed map[KernelAt]bool
+	unjammed map[int]int
+	// unrolls is the times a kernel's form with its vector loops run
+	// several vectors a trip was refused, each halving them (Unroll).
+	unrolls map[KernelAt]int
+}
+
+func newExprSplit() *exprSplit {
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uninit: map[KernelAt]bool{}, copied: map[KernelAt]bool{}, untailed: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}, unrolls: map[KernelAt]int{}}
+}
+
+// splitRefused forms a part whose refused kernel ran several vectors a trip
+// (Unroll) with half as many; else one whose refused kernel took copies at
+// a bank's sheet (Cursor.Init) with its bases copied, then uncrowded, then
+// with no such takes; else one whose refused kernel walked a weight's planes
+// along the rows (Streams) without that walk; else one whose refused kernel
+// ran several rows a call with half the rows a call, and nothing else; else
+// one whose refused kernel ran two heads a call with a head a call; else one
+// whose refused kernel jammed a loop's rows across lanes with none; else one
+// whose refused kernel walked its addresses
+// indexing them; else a map a term the largest expression formed whole
+// in each part of the kernels refused, or a part with none left unfused,
+// reporting whether it changed a part.
+func (sp *exprSplit) splitRefused(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pe *PressureError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	more := false
+	for _, at := range pe.Unrolled {
+		sp.unrolls[at]++
+		more = true
+	}
+	if more {
+		return true
+	}
+	crowded := map[KernelAt]bool{}
+	for _, at := range pe.Crowded {
+		crowded[at] = true
+	}
+	for _, at := range pe.Inited {
+		switch {
+		case !sp.copied[at]:
+			sp.copied[at], more = true, true
+		case crowded[at] && !sp.crowded[at]:
+			// A walk holding every plane in one rows loop gives that up
+			// before its takes do: a take at a sheet's base is what keeps
+			// a bank's planes walked by cursors at all.
+			sp.crowded[at], more = true, true
+		case !sp.uninit[at]:
+			sp.uninit[at], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, at := range pe.Crowded {
+		if !sp.crowded[at] {
+			sp.crowded[at], more = true, true
+		}
+	}
+	for _, at := range pe.Streamed {
+		if !sp.unstreamed[at] {
+			sp.unstreamed[at], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Split {
+		if !sp.unsplit[of] {
+			sp.unsplit[of], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Jammed {
+		sp.unjammed[of]++
+		more = true
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Paired {
+		if !sp.unpaired[of] {
+			sp.unpaired[of], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, at := range pe.Wide {
+		if !sp.unwide[at] {
+			sp.unwide[at], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Cursored {
+		if !sp.uncursored[of] {
+			sp.uncursored[of], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Parts {
+		split := false
+		if ws := sp.whole[of]; len(ws) > 0 {
+			big := slices.MaxFunc(ws, func(a, b exprSize) int { return cmp.Compare(a.nodes, b.nodes) })
+			split = !sp.terms[big.at]
+			sp.terms[big.at] = true
+		}
+		if !split && !sp.unfused[of] {
+			sp.unfused[of], split = true, true
+		}
+		more = more || split
+	}
+	clear(sp.whole)
+	if more {
+		return true
+	}
+	// Nothing left to take apart: the part's kernels formed with no loop
+	// across lanes.
+	for _, of := range pe.Parts {
+		if !sp.unvector[of] {
+			sp.unvector[of], more = true, true
+		}
+	}
+	return more
+}
+
+// exprPrim is the map of terms ks of o, the last its value: an earlier term
+// is one of ks or, where rows is given, the scratch row rows names for it.
+// An expression into words is evaluated in words (wordFn).
+func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
+	sh := c.rows(o.Out[0])
+	e, in, _, err := exprTerms(o, c, ks, rows, sh, nil)
+	if err != nil {
+		return Prim{}, err
+	}
+	return Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e}, nil
+}
+
+// decomposeIterate is an iteration over its input's elements: its terms
+// one primitive, the first Taps the values before the first trip, the last
+// Taps the values after a trip, a carried value ExprState, a term summed
+// over a run of the row OpSpanSum, each term of its own type. Where each value has an output of its own, they are the
+// primitive's Stores.
+func decomposeIterate(o graph.Op, c *Context) ([]Prim, error) {
+	n := o.Attr.Taps
+	if len(o.In) < 1 || len(o.Out) != 1 && len(o.Out) != n || n < 1 || o.Attr.Span < 1 || len(o.Attr.Expr) < 2*n {
+		return nil, fmt.Errorf("%d values carried through %d trips by %d terms", n, o.Attr.Span, len(o.Attr.Expr))
+	}
+	elems, err := graph.IterateElems(c.Graph, o)
+	if err != nil {
+		return nil, err
+	}
+	ks := make([]int, len(o.Attr.Expr))
+	for k := range ks {
+		ks[k] = k
+	}
+	sh := c.rows(o.In[0])
+	e, in, vals, err := exprTerms(o, c, ks, nil, sh, elems)
+	if err != nil {
+		return nil, err
+	}
+	it := &Iterate{Trips: o.Attr.Span}
+	for j := range n {
+		next := len(ks) - n + j
+		if len(o.Attr.Words) == n {
+			next = int(o.Attr.Words[j])
+		}
+		if next < n || next >= len(ks) {
+			return nil, fmt.Errorf("value %d carried out by term %d of %d", j, next, len(ks))
+		}
+		it.Init = append(it.Init, vals[j])
+		it.Next = append(it.Next, vals[next])
+	}
+	p := Prim{Kind: PrimIterate, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: e, Type: e[it.Init[0]].Type, Iterate: it}
+	if len(o.Out) == n && n > 1 {
+		for j, v := range o.Out {
+			p.Stores = append(p.Stores, PrimStore{Out: c.value(v), Value: it.Next[j]})
+		}
+	}
+	// A table's loads reach its whole width.
+	for j, v := range o.In[1:] {
+		for s, op := range in {
+			if op == c.value(o.In[1+j]) {
+				if p.Facts.Extents == nil {
+					p.Facts.Extents = map[int]int{}
+				}
+				p.Facts.Extents[s] = c.width(v)
+			}
+		}
+	}
+	return []Prim{p}, nil
+}
+
+// exprTerms is terms ks of o's expression as a primitive's nodes over a
+// space of shape sh, its rows by its elements: the nodes, the operands
+// they read and each term's node. elems, where set, is an iteration's
+// type of each term, a carried value's its first term's; where nil, every
+// term is of o's output's type and a term reading a carried value is
+// refused. A word read by a float term is its integer's float.
+func exprTerms(o graph.Op, c *Context, ks []int, rows []Operand, sh []int, elems []graph.Elem) ([]Expr, []Operand, map[int]int, error) {
+	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
+	R, W := sh[0], sh[1]
+	var x exprs
+	asFloat := func(a int) int { return x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, a)) }
+	r, i := x.coord(0), x.coord(1)
+	var in []Operand
+	slot := map[string]int{}
+	use := func(op Operand) int {
+		key := fmt.Sprintf("%d/%d/%v/%s", op.Kind, op.Value, op.Role, op.Name)
+		j, ok := slot[key]
+		if !ok {
+			j, slot[key], in = len(in), len(in), append(in, op)
+		}
+		return j
+	}
+	operand := func(v graph.ValueID) int {
+		n := c.width(v)
+		e := i
+		switch {
+		case n == 1:
+			e = x.u(0)
+		case n != W:
+			e = x.op(OpDiv, ir.U32, i, x.u(uint32(W/n)))
+		}
+		a := x.at(use(c.value(v)), []int{R, n}, r, e)
+		if c.Graph.Values[v].Elem == graph.ElemU32 && !words {
+			a = asFloat(a)
+		}
+		return a
+	}
+	vals := map[int]int{}
+	for _, k := range ks {
+		t := o.Attr.Expr[k]
+		args := make([]int, t.Fn.Arity())
+		if elems != nil {
+			words = elems[k] == graph.ElemU32
+		}
+		take := t.Fn == graph.MapTake
+		// A word an iteration's float term reads is its float; a take's
+		// index is a word whatever the table holds.
+		typed := func(v int) int {
+			if elems != nil && !words && !take && x.e[v].Type == ir.U32 {
+				return asFloat(v)
+			}
+			return v
+		}
+		if take {
+			a := t.Args[0]
+			if a.Kind != graph.ArgIn || a.Index < 1 || a.Index >= len(o.In) {
+				return nil, nil, nil, fmt.Errorf("term %d takes from %v, which is no table", k, a.Kind)
+			}
+			if el := c.Graph.Values[o.In[a.Index]].Elem; el != graph.ElemU32 && el != graph.ElemF32 || words != (el == graph.ElemU32) {
+				return nil, nil, nil, fmt.Errorf("term %d takes from a table of type %d", k, el)
+			}
+		}
+		for j := range args {
+			if take && j == 0 {
+				continue
+			}
+			switch a := t.Args[j]; a.Kind {
+			case graph.ArgIn:
+				if a.Index < 0 || a.Index >= len(o.In) {
+					return nil, nil, nil, fmt.Errorf("term %d reads operand %d of %d", k, a.Index, len(o.In))
+				}
+				args[j] = operand(o.In[a.Index])
+			case graph.ArgWeight:
+				if words {
+					return nil, nil, nil, fmt.Errorf("term %d reads a stored vector's float into words", k)
+				}
+				if a.Index < 0 || a.Index >= len(o.Weight) || a.Elem < 0 || a.Elem >= o.Weight[a.Index].K {
+					return nil, nil, nil, fmt.Errorf("term %d reads element %d of bound vector %d", k, a.Elem, a.Index)
+				}
+				w := o.Weight[a.Index]
+				args[j] = x.at(use(Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}), []int{w.K}, x.u(uint32(a.Elem)))
+			case graph.ArgConst:
+				switch {
+				case !words:
+					args[j] = x.f(float32(a.Const))
+				case a.Const < 0 || a.Const >= 1<<32 || a.Const != math.Trunc(a.Const):
+					return nil, nil, nil, fmt.Errorf("term %d reads %v, which is no word", k, a.Const)
+				default:
+					args[j] = x.u(uint32(a.Const))
+				}
+
+			case graph.ArgTerm:
+				v, ok := vals[a.Index]
+				switch {
+				case a.Index < 0 || a.Index >= k:
+					return nil, nil, nil, fmt.Errorf("term %d reads term %d", k, a.Index)
+				case !ok && rows == nil:
+					return nil, nil, nil, fmt.Errorf("term %d reads term %d, which is not made", k, a.Index)
+				case !ok:
+					v = x.at(use(rows[a.Index]), []int{R, W}, r, i)
+				}
+				args[j] = typed(v)
+			case graph.ArgState:
+				v, ok := vals[a.Index]
+				if elems == nil || !ok {
+					return nil, nil, nil, fmt.Errorf("term %d reads a carried value, which only an iteration carries", k)
+				}
+				args[j] = typed(x.add(Expr{Op: ExprState, In: a.Index, Type: x.e[v].Type}))
+			case graph.ArgSum:
+				v, ok := vals[a.Index]
+				if elems == nil || !ok || o.Attr.Width < 1 || x.e[v].Type != ir.F32 {
+					return nil, nil, nil, fmt.Errorf("term %d reads term %d summed over runs of %d, which only an iteration's float terms are", k, a.Index, o.Attr.Width)
+				}
+				args[j] = x.add(Expr{Op: OpSpanSum, Type: ir.F32, A: v, Imm: int64(o.Attr.Width)})
+			default:
+				return nil, nil, nil, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
+			}
+		}
+		var v int
+		var err error
+		switch {
+		case take:
+			if x.e[args[1]].Type != ir.U32 {
+				return nil, nil, nil, fmt.Errorf("term %d takes at an index that is no word", k)
+			}
+			table, et := c.value(o.In[t.Args[0].Index]), ir.F32
+			if words {
+				table.Elem, et = ir.U32, ir.U32
+			}
+			v = x.add(Expr{Op: ExprLoad, Type: et, In: use(table), A: args[1]})
+		case words:
+			v, err = x.wordFn(t.Fn, args)
+		default:
+			v, err = x.mapFn(t.Fn, args, c.exactDiv || !o.Attr.Exact)
+		}
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		vals[k] = v
+	}
+	return x.e, in, vals, nil
+}

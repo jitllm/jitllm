@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -8,20 +9,20 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // TypeSafe-compatible POST /v1/systemone: the System One request, as the
-// TypeSafe SDK sends it (typesafe-sdk's OpenAPI models) and as `lev serve`,
-// `laya-serve` and llama-server answer it. An adapter like the rest of the
-// shim: it builds DecideOptions and calls Backend.Decide.
+// TypeSafe SDK sends it. An adapter like the
+// rest of the shim: it builds DecideOptions and calls Backend.Decide.
 //
 // The request is read with every object's keys in the order the client wrote
 // them, since the state is rendered into the prompt and a reordered object is
 // a different prompt. A malformed request is a 422 in FastAPI's shape
-// ({"detail": [{"loc", "msg", "type"}]}), which is what TypeSafe's API and the
-// reference servers return.
+// ({"detail": [{"loc", "msg", "type"}]}), which is what TypeSafe's API
+// returns.
 
 // maxSystemOneBody bounds a request body; a state is text, not a payload.
 const maxSystemOneBody = 16 << 20
@@ -66,78 +67,108 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 		s1Fail(w, http.StatusUnprocessableEntity, "Field required", "questions")
 		return
 	}
-	qs, err := model.ParseDecisionQuestions(qv)
+	qs, err := engine.ParseDecisionQuestions(qv)
 	if err != nil {
 		s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "questions")
 		return
-	}
-	// The pictures: "files" and "images" data URLs, and the image_url parts
-	// of a chat-message state, as llama.cpp's server reads them.
-	state, urls, err := model.DecisionMedia(req, state)
-	if err != nil {
-		s1Fail(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	pics := newPictures(c.img)
-	var clip []float32
-	for i, u := range urls {
-		// A voice clip rides "files" too (d1-omni's), told apart by its
-		// media type; one, and never beside a picture.
-		if strings.HasPrefix(u, "data:audio/") {
-			if clip != nil || len(urls) > 1 {
-				s1Fail(w, http.StatusUnprocessableEntity, "a request has images or one audio clip, not both")
-				return
-			}
-			if len(u) > maxDecisionAudioURL {
-				s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("files[%d]: an audio clip over %d bytes", i, maxDecisionAudioURL))
-				return
-			}
-			if clip, err = model.DecodeAudioDataURL(u); err != nil {
-				s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("files[%d]: %v", i, err))
-				return
-			}
-			continue
-		}
-		err := pics.add(fmt.Sprintf("images[%d]", i), func() (image.Image, error) { return pics.p.decodeDataURL(u) })
-		if err != nil {
-			s1Fail(w, http.StatusUnprocessableEntity, err.Error())
-			return
-		}
-	}
-	// A video's frames are pictures under the same byte bounds; they do not
-	// count against the pictures a request carries (MaxImages), a video's own
-	// bound being model.MaxVideoFrames.
-	vurls, err := model.DecisionVideos(req)
-	if err != nil {
-		s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "videos")
-		return
-	}
-	var vids []model.VideoFrames
-	for i, v := range vurls {
-		vf := model.VideoFrames{FPS: v.FPS}
-		for j, u := range v.Frames {
-			f, err := pics.p.decodeDataURL(u)
-			if err != nil {
-				s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("videos[%d] frame %d %v", i, j, err))
-				return
-			}
-			vf.Frames = append(vf.Frames, f)
-		}
-		vids = append(vids, vf)
 	}
 	name := ""
 	if mv, ok := req.Get("model"); ok && mv.IsString() {
 		name = mv.AsString()
 	}
 	if name == "" {
-		// TypeSafe's request names a model; a server with one model loaded
-		// answers with it, as lev serve and llama-server do.
+		// A server with one model loaded answers with it.
 		if ls := c.b.ListLoaded(); len(ls) == 1 {
 			name = ls[0].ID
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Videos: vids,
-		Audio: clip})
+	pics := newPictures(c.img)
+	if iv, ok := req.Get("images"); ok && !iv.IsNone() {
+		if !iv.IsList() {
+			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of image URLs", "images")
+			return
+		}
+		for i, u := range iv.AsList().Items {
+			if !u.IsString() {
+				s1Fail(w, http.StatusUnprocessableEntity, "must be an image URL", "images", i)
+				return
+			}
+			url := u.AsString()
+			if err := pics.add(fmt.Sprintf("images[%d]", i), func() (image.Image, error) {
+				return pics.p.imageURL(r.Context(), url)
+			}); err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "images", i)
+				return
+			}
+		}
+	}
+	// "files" are voice clips, each a data URL of an audio type over a WAV
+	// the engine reads (engine.ReadWAV).
+	var clips []model.Clip
+	if fv, ok := req.Get("files"); ok && !fv.IsNone() {
+		if !fv.IsList() {
+			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of audio data URLs", "files")
+			return
+		}
+		for i, u := range fv.AsList().Items {
+			clip, err := clipURL(u)
+			if err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "files", i)
+				return
+			}
+			clips = append(clips, clip)
+		}
+	}
+	// "videos" are videos, each a list of picture URLs or an object of
+	// "frames", that list, and "fps", their rate; each frame is read as a
+	// picture is, the frames' pixels together bounded (MaxVideoPixels).
+	var videos []Video
+	if vv, ok := req.Get("videos"); ok && !vv.IsNone() {
+		if !vv.IsList() {
+			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of videos", "videos")
+			return
+		}
+		frames := pics.videoFrames()
+		var px int64
+		for i, v := range vv.AsList().Items {
+			var fps float64
+			fv := v
+			if v.IsDict() {
+				fv, _ = v.AsDict().Get("frames")
+				if rv, ok := v.AsDict().Get("fps"); ok && !rv.IsNone() {
+					switch {
+					case rv.IsInt():
+						fps = float64(rv.AsInt())
+					case rv.IsFloat():
+						fps = rv.AsFloat()
+					}
+					if !(fps > 0) {
+						s1Fail(w, http.StatusUnprocessableEntity, "must be a positive number of frames a second", "videos", i, "fps")
+						return
+					}
+				}
+			}
+			if !fv.IsList() || len(fv.AsList().Items) == 0 {
+				s1Fail(w, http.StatusUnprocessableEntity, "must be a list of frame URLs or an object of them", "videos", i)
+				return
+			}
+			var urls []string
+			for j, u := range fv.AsList().Items {
+				if !u.IsString() {
+					s1Fail(w, http.StatusUnprocessableEntity, "must be an image URL", "videos", i, j)
+					return
+				}
+				urls = append(urls, u.AsString())
+			}
+			vid, err := frames.readVideo(r.Context(), urls, fps, &px, func(j int) string { return fmt.Sprintf("videos[%d][%d]", i, j) })
+			if err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "videos", i)
+				return
+			}
+			videos = append(videos, vid)
+		}
+	}
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Clips: clips, Videos: videos})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):
@@ -149,16 +180,24 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeRawJSON(w, http.StatusOK, model.DecisionResponse(res.ModelID, qs, res.Answers, res.InputTokens))
-}
-
-func writeRawJSON(w http.ResponseWriter, status int, b []byte) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write(b)
+	w.WriteHeader(http.StatusOK)
+	w.Write(res.Body)
 }
 
-// maxDecisionAudioURL bounds a voice clip's data URL: the 30 seconds d1-omni
-// reads of 16 kHz 16-bit PCM, base64'd, with room for a WAV's header and a
-// longer clip it cuts.
-const maxDecisionAudioURL = 8 << 20
+// clipURL is a request file's clip: a data URL of an audio type, base64,
+// over a WAV the engine reads.
+func clipURL(u jinja.Value) (model.Clip, error) {
+	if !u.IsString() {
+		return model.Clip{}, fmt.Errorf("must be an audio data URL")
+	}
+	head, data, ok := strings.Cut(u.AsString(), ",")
+	if !ok || !strings.HasPrefix(head, "data:audio/") || !strings.HasSuffix(head, ";base64") {
+		return model.Clip{}, fmt.Errorf("must be a base64 data URL of an audio type")
+	}
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return model.Clip{}, fmt.Errorf("is not base64: %v", err)
+	}
+	return engine.ReadWAV(raw)
+}

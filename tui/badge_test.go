@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jitllm/jitllm/common/api"
 	"github.com/jitllm/jitllm/common/engine"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -28,10 +30,10 @@ func TestTheStatusBarAlwaysSaysWhichEngine(t *testing.T) {
 	r := newTestRoot(t)
 	for _, w := range []int{160, 80, 60} {
 		r.Update(tea.WindowSizeMsg{Width: w, Height: 30})
-		for s := range screenNames {
+		for s := range screenNames() {
 			r.setScreen(screen(s))
 			if f := footerOf(r); !strings.Contains(f, "Embedded · API off") {
-				t.Errorf("%s at %d columns: no badge in %q", screenNames[s], w, f)
+				t.Errorf("%s at %d columns: no badge in %q", screenNames()[s], w, f)
 			}
 		}
 	}
@@ -51,7 +53,7 @@ func TestTheStatusBarAlwaysSaysWhichEngine(t *testing.T) {
 // Turning the API on where a jitllmd answers is refused, the setting goes
 // back off, and the line says how to connect instead.
 func TestTheAPIIsRefusedWhereAServiceAnswers(t *testing.T) {
-	svc := server.New(server.Config{ModelDir: t.TempDir(), Version: "4.5.6"})
+	svc := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: t.TempDir(), Version: "4.5.6"})
 	defer svc.Close()
 	held, err := api.Start("127.0.0.1:0", svc)
 	if err != nil {
@@ -87,12 +89,7 @@ func TestTheStatusBarFollowsAConnectedService(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	bin := filepath.Join(t.TempDir(), "jitllmd"+exeSuffix())
-	build := exec.Command("go", "build", "-o", bin, "./cmd/jitllmd")
-	build.Dir = filepath.Join("..", "server")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building jitllmd: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllmd", filepath.Join("..", "server"), "./cmd/jitllmd")
 	cmd := exec.Command(bin, "serve", "-addr", addr, "-models", t.TempDir(), "-version", "5.4.3")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

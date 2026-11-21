@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
 )
 
 // The end-to-end gate: a real container, a real prefill, real tokens.
@@ -24,7 +24,7 @@ import (
 //
 //	JITLLM_SERVER_MODEL=<something>.jlm \
 //	  ./scripts/cap 24G -- taskset -c 0,2,4,6,8,10 \
-//	  go test ./server/ -run TestEndToEnd -count=1 -v
+//	  go test ./server/ -run TestEndToEndAgainstARealContainer -count=1 -v
 //
 // Unset, it skips with that command in the message. Set, it never skips: a
 // missing file, a GGUF or an unopenable container is a failure.
@@ -51,15 +51,15 @@ func TestEndToEndAgainstARealContainer(t *testing.T) {
 			"format and a GGUF must be converted first", path, model.Ext)
 	}
 
-	e := New(Config{ModelDir: filepath.Dir(path), Probe: noProbe})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: noProbe}))
 	defer e.Close()
 
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "e2e"})
 	if err != nil {
 		t.Fatalf("LoadModel(%q): %v", path, err)
 	}
-	t.Logf("loaded %s: arch=%s blocks=%d n_embd=%d n_ctx=%d vocab=%d chat=%v",
-		lm.Name(), lm.m.Cfg.Arch, lm.m.Cfg.NLayer, lm.m.Cfg.NEmbd, lm.m.Cfg.NCtx,
+	t.Logf("loaded %s: blocks=%d n_embd=%d n_ctx=%d vocab=%d chat=%v",
+		lm.Name(), lm.m.Cfg.NLayer, lm.m.Cfg.NEmbd, lm.m.Cfg.NCtx,
 		lm.m.Cfg.NVocab, lm.m.ChatCapable())
 
 	// ---- 1. the ConnectRPC path, streaming.

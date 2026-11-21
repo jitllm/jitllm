@@ -1,0 +1,188 @@
+package oracle
+
+import "math"
+
+// PILFilter is one of Pillow's antialiased resample filters.
+type PILFilter int
+
+const (
+	PILBilinear PILFilter = iota
+	PILBicubic
+	PILLanczos
+)
+
+// PILResize is PILResizeBy with Pillow's BILINEAR filter, or BICUBIC where
+// cubic.
+func PILResize(rgb []byte, w, h, ow, oh int, cubic bool) []byte {
+	if cubic {
+		return PILResizeBy(rgb, w, h, ow, oh, PILBicubic)
+	}
+	return PILResizeBy(rgb, w, h, ow, oh, PILBilinear)
+}
+
+// PILResizeBy is Pillow's Image.resize of an RGB picture, three bytes a
+// pixel, w x h, to ow x oh by filter f: Resample.c's ImagingResample for
+// 8-bit images -- each output's window and weights from the reduction's
+// scale in float64, the weights in 22-bit fixed point, a horizontal pass to
+// bytes where the width changes, then a vertical one where the height does.
+func PILResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
+	return resizeBy(rgb, w, h, ow, oh, f, false)
+}
+
+// TorchResizeBy is torchvision's antialiased resize of an 8-bit RGB
+// picture by Pillow's filter f (F.resize on a uint8 tensor on the CPU):
+// Pillow's windows, weights and passes, each axis's weights rounded at the
+// widest precision (to 21 bits) at which its largest holds in an int16
+// (UpSampleKernel.cpp's _compute_index_ranges_int16_weights).
+func TorchResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
+	return resizeBy(rgb, w, h, ow, oh, f, true)
+}
+
+func resizeBy(rgb []byte, w, h, ow, oh int, f PILFilter, torch bool) []byte {
+	support, filter := 1.0, func(x float64) float64 {
+		x = math.Abs(x)
+		if x < 1 {
+			return 1 - x
+		}
+		return 0
+	}
+	switch f {
+	case PILBicubic:
+		support, filter = 2, func(x float64) float64 {
+			const a = -0.5
+			x = math.Abs(x)
+			if x < 1 {
+				return ((a+2)*x-(a+3))*x*x + 1
+			}
+			if x < 2 {
+				return (((x-5)*x+8)*x - 4) * a
+			}
+			return 0
+		}
+	case PILLanczos:
+		// Resample.c's lanczos_filter: the sinc windowed by the sinc a third
+		// as wide, over [-3, 3) -- the bounds as Pillow writes them.
+		sinc := func(x float64) float64 {
+			if x == 0 {
+				return 1
+			}
+			x *= math.Pi
+			return math.Sin(x) / x
+		}
+		support, filter = 3, func(x float64) float64 {
+			if -3 <= x && x < 3 {
+				return sinc(x) * sinc(x/3)
+			}
+			return 0
+		}
+	}
+	const bits = 22
+	coeffs := func(in, out int) (bounds []int, kk []int, ksize int) {
+		scale := float64(in) / float64(out)
+		fs := math.Max(scale, 1)
+		sup := support * fs
+		ksize = int(math.Ceil(sup))*2 + 1
+		bounds, kk = make([]int, 2*out), make([]int, out*ksize)
+		k := make([]float64, out*ksize)
+		most := 0.0
+		for xx := range out {
+			center := (float64(xx) + 0.5) * scale
+			ss := 1 / fs
+			xmin := int(center - sup + 0.5)
+			if xmin < 0 {
+				xmin = 0
+			}
+			xmax := int(center + sup + 0.5)
+			if xmax > in {
+				xmax = in
+			}
+			xmax -= xmin
+			ww := 0.0
+			for x := range xmax {
+				k[xx*ksize+x] = filter((float64(x+xmin) - center + 0.5) * ss)
+				ww += k[xx*ksize+x]
+			}
+			for x := range ksize {
+				v := 0.0
+				if x < xmax && ww != 0 {
+					v = k[xx*ksize+x] / ww
+				}
+				k[xx*ksize+x] = v
+				most = math.Max(most, v)
+			}
+			bounds[2*xx], bounds[2*xx+1] = xmin, xmax
+		}
+		prec := bits
+		if torch {
+			prec = 0
+			for prec < 21 && int(0.5+most*float64(int(1)<<(prec+1))) < 1<<15 {
+				prec++
+			}
+		}
+		for i, v := range k {
+			if v < 0 {
+				kk[i] = int(-0.5+v*float64(int(1)<<prec)) << (bits - prec)
+			} else {
+				kk[i] = int(0.5+v*float64(int(1)<<prec)) << (bits - prec)
+			}
+		}
+		return bounds, kk, ksize
+	}
+	clip := func(v int) byte {
+		v >>= bits
+		if v < 0 {
+			return 0
+		}
+		if v > 255 {
+			return 255
+		}
+		return byte(v)
+	}
+	img, iw := rgb, w
+	if ow != w {
+		b, kk, ks := coeffs(w, ow)
+		next := make([]byte, ow*h*3)
+		for y := range h {
+			for x := range ow {
+				for c := range 3 {
+					ss := 1 << (bits - 1)
+					for t := range b[2*x+1] {
+						ss += int(img[(y*iw+b[2*x]+t)*3+c]) * kk[x*ks+t]
+					}
+					next[(y*ow+x)*3+c] = clip(ss)
+				}
+			}
+		}
+		img, iw = next, ow
+	}
+	if oh != h {
+		b, kk, ks := coeffs(h, oh)
+		next := make([]byte, iw*oh*3)
+		for y := range oh {
+			for x := range iw {
+				for c := range 3 {
+					ss := 1 << (bits - 1)
+					for t := range b[2*y+1] {
+						ss += int(img[((b[2*y]+t)*iw+x)*3+c]) * kk[y*ks+t]
+					}
+					next[(y*iw+x)*3+c] = clip(ss)
+				}
+			}
+		}
+		img = next
+	}
+	return img
+}
+
+// PILPattern is scripts/pilgold.py's pattern picture, RGB: red (7x + 13y)
+// mod 256, green (3xy + 5) mod 256, blue 11(x + 2y) mod 256.
+func PILPattern(w, h int) []byte {
+	b := make([]byte, w*h*3)
+	for y := range h {
+		for x := range w {
+			i := (y*w + x) * 3
+			b[i], b[i+1], b[i+2] = byte(7*x+13*y), byte(3*x*y+5), byte(11*(x+2*y))
+		}
+	}
+	return b
+}

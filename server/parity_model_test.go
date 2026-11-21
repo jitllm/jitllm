@@ -308,7 +308,7 @@ func sameReply(t *testing.T, what string, native, openai preply) {
 func parityEngine(t *testing.T) (clients, *Engine) {
 	t.Helper()
 	small, chatPath := modelPath(t, smallModel), modelPath(t, parityChatModel)
-	e := New(Config{ModelDir: filepath.Dir(small), Probe: noProbe, Version: "test", NoOnDemand: true})
+	e := New(admitConfig(Config{ModelDir: filepath.Dir(small), Probe: noProbe, Version: "test", NoOnDemand: true}))
 	t.Cleanup(e.Close)
 	for id, p := range map[string]string{"s": small, "q": chatPath} {
 		if _, err := e.LoadModel(LoadOptions{Path: p, ModelID: id}); err != nil {
@@ -496,8 +496,10 @@ func TestNativeMatchesOpenAIOnChat(t *testing.T) {
 				TopK: ptr(int32(50)), Seed: ptr(uint64(21))}
 		}), true)
 
+	// The object states additionalProperties false: absent, a further key is
+	// valid, and the model writes keys to max_tokens.
 	const schema = `{"type":"object","properties":{"colour":{"enum":["red","green","blue"]},"ok":{"type":"boolean"}},` +
-		`"required":["colour","ok"]}`
+		`"required":["colour","ok"],"additionalProperties":false}`
 	js := compare("response_format json_schema",
 		`{"model":"q","messages":`+msgsJSON+`,"max_tokens":64,"temperature":0,"top_p":1,"seed":0,`+
 			`"response_format":{"type":"json_schema","json_schema":{"name":"c","strict":true,"schema":`+schema+`}}}`,
@@ -649,9 +651,9 @@ func TestNativeListsWhatTheOpenAIRouteLists(t *testing.T) {
 // TestNativeEmbedMatchesOpenAI: the same vectors and token counts through
 // either door.
 func TestNativeEmbedMatchesOpenAI(t *testing.T) {
-	_, lm, url := embedServer(t, embedGateModels[0], Config{})
+	_, lm, url := embedServer(t, embedGateModels()[0], Config{})
 	cl := jitllmv1connect.NewInferenceServiceClient(http.DefaultClient, url)
-	texts := []string{embedTexts[0], embedTexts[2]}
+	texts := []string{embedTexts()[0], embedTexts()[2]}
 	code, oa := postEmbeddings(t, url, map[string]any{"model": "emb", "input": texts})
 	if code != http.StatusOK {
 		t.Fatalf("OpenAI embeddings: %d", code)

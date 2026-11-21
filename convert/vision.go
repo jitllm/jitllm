@@ -22,15 +22,14 @@ import (
 // are quantized; see quantizeTower. It is a role list rather than "2-D and
 // F16", which would sweep in v.position_embd (shaped like a weight, used as a
 // lookup, cheap to keep exact).
-var towerMatrix = map[jlm.Role]bool{
-	jlm.RoleVPatchEmbd: true,
-	jlm.RoleVAttnQ:     true, jlm.RoleVAttnK: true, jlm.RoleVAttnV: true, jlm.RoleVAttnOut: true,
-	jlm.RoleVFC1: true, jlm.RoleVFC2: true, jlm.RoleVFFNGate: true,
-	jlm.RoleVProj: true, jlm.RoleVProj2: true, jlm.RoleVProj3: true, jlm.RoleVMerge: true,
-	jlm.RoleVRsKV: true, jlm.RoleVRsQ: true, jlm.RoleVRsK: true, jlm.RoleVRsV: true,
-	jlm.RoleVRsOut: true, jlm.RoleVRsProj: true,
-	jlm.RoleVDsFC1: true, jlm.RoleVDsFC2: true,
-	jlm.RoleVMergeConv: true, jlm.RoleVProjGate: true, jlm.RoleVProjUp: true, jlm.RoleVProjDown: true,
+func towerMatrix(r jlm.Role) bool {
+	switch r {
+	case jlm.RoleVMNStem, jlm.RoleVMNConvExp, jlm.RoleVMNConvPwl, jlm.RoleVMNPwExp,
+		jlm.RoleVMNPwProj, jlm.RoleVMNFusionExp, jlm.RoleVMNFusionProj,
+		jlm.RoleVPatchEmbd, jlm.RoleVPatchEmbd2, jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2, jlm.RoleVFFNGate, jlm.RoleVProj, jlm.RoleVProj2, jlm.RoleVProj3, jlm.RoleVMerge, jlm.RoleVRsKV, jlm.RoleVRsQ, jlm.RoleVRsK, jlm.RoleVRsV, jlm.RoleVRsOut, jlm.RoleVRsProj, jlm.RoleVDsFC1, jlm.RoleVDsFC2, jlm.RoleVMergeConv, jlm.RoleVProjGate, jlm.RoleVProjUp, jlm.RoleVProjDown:
+		return true
+	}
+	return false
 }
 
 // q8Block is the source format's Q8_0 block: an f16 scale and 32 signed bytes.
@@ -52,7 +51,7 @@ const (
 // columns, which contribute exactly zero to a dot product.
 func reshapePatchEmbd(t *jlm.Tensor, patch, nembd int) error {
 	if t.NDim == 2 {
-		// Already 2-D (Llama 4's unfold is a linear, and llama.cpp writes it
+		// Already 2-D (Llama 4's unfold is a linear, and its GGUF holds it
 		// so): k only needs padding to a whole block.
 		return padPatchK(t, nembd)
 	}
@@ -115,7 +114,7 @@ func padPatchK(t *jlm.Tensor, nembd int) error {
 func quantizeTower(ts []jlm.Tensor) error {
 	for i := range ts {
 		t := &ts[i]
-		if !towerMatrix[t.Role] && !jlm.AudioMatrix(t.Role) {
+		if !towerMatrix(t.Role) && !jlm.AudioMatrix(t.Role) {
 			continue
 		}
 		if jlm.Packed(t.Type) {
@@ -134,10 +133,10 @@ func quantizeTower(ts []jlm.Tensor) error {
 		if err := quant.Dequant32(src, t.Data, vals); err != nil {
 			return fmt.Errorf("convert: %s: %w", t.Name, err)
 		}
-		// A k that is not a whole number of blocks (a tower 144 wide) is
-		// padded with zero columns to the next one, which add nothing to a
-		// product; the engine reads the matrix at the tower's width and pads
-		// each activation row to match (model.unpadK, State.padRows).
+		// A k that is not a whole number of blocks is padded with zero columns
+		// to the next one, which add nothing to a product: a program binds the
+		// matrix at its stored width and reads a narrower row widened with
+		// zeros (graph.OpPad).
 		if kp := (k + q8Elems - 1) / q8Elems * q8Elems; kp != k {
 			padded := make([]float32, kp*rows)
 			for r := 0; r < rows; r++ {
@@ -154,8 +153,8 @@ func quantizeTower(ts []jlm.Tensor) error {
 
 // quantizeQ8Rows writes vals as Q8_0 source blocks.
 //
-// The recipe is ggml's (amax/127 stored as f16, codes rounded from the
-// unrounded d), because quant.Dequant32 and kernels.PackWeights already read
+// The recipe is Q8_0's reference quantizer (amax/127 stored as f16, codes
+// rounded from the unrounded d), because quant.Dequant32 and kernels.PackWeights already read
 // these bytes back as its inverse; another recipe would be a second
 // specification of one layout.
 func quantizeQ8Rows(vals []float32, k, rows int) []byte {
@@ -221,8 +220,8 @@ func f32ToF16(f float32) uint16 {
 // container stores, and it is exact for an image.
 //
 // The two planes are added, not concatenated. Qwen2-VL's ViT takes
-// temporal_patch_size=2 frames, and llama.cpp runs IM2COL+MUL_MAT once per
-// plane and adds the results:
+// temporal_patch_size=2 frames, and a 3-D convolution over two frames is one
+// 2-D convolution per plane with the results added:
 //
 //	node_3  = MUL_MAT(im2col(frame), v.patch_embd.weight)    {64, 1280}
 //	node_10 = MUL_MAT(im2col(frame), v.patch_embd.weight.1)  {64, 1280}
@@ -231,7 +230,7 @@ func f32ToF16(f float32) uint16 {
 // A still image is fed to both planes, so both read the same im2col output and
 // x*W0 + x*W1 = x*(W0+W1). This is exact only for a still image: two video
 // frames differ, so the second plane stays in the container beside the sum
-// (RoleVPatchEmbd, index 1), and a video's pair of frames runs as
+// (RoleVPatchEmbd2), and a video's pair of frames runs as
 // x0*(W0+W1) + (x1-x0)*W1 = x0*W0 + x1*W1.
 func foldPatchPlanes(s *jlm.Source) error {
 	var base *jlm.Tensor
@@ -262,6 +261,7 @@ func foldPatchPlanes(s *jlm.Source) error {
 			return fmt.Errorf("convert: %s + %s: %w", base.Name, t.Name, err)
 		}
 		base.Data = sum
+		t.Role, t.Index = jlm.RoleVPatchEmbd2, -1
 		keep = append(keep, *t)
 		folded++
 	}

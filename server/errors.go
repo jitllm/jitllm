@@ -8,13 +8,16 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 )
 
 // connectErr maps an engine error onto a Connect code. A GGUF handed to Open
 // yields a *model.NotConvertedError carrying the convert command; it becomes
 // FailedPrecondition, with the command repeated in an error detail so a
-// client can show it as an action.
+// client can show it as an action. A container of another version
+// (*jlm.VersionError) is FailedPrecondition too, its fix -- upgrade or
+// convert -- in the metadata.
 func connectErr(err error) error {
 	if err == nil {
 		return nil
@@ -28,6 +31,16 @@ func connectErr(err error) error {
 	if errors.As(err, &nc) {
 		ce := connect.NewError(connect.CodeFailedPrecondition, err)
 		ce.Meta().Set("jitllm-not-converted", nc.Path)
+		return ce
+	}
+	var ve *jlm.VersionError
+	if errors.As(err, &ve) {
+		ce := connect.NewError(connect.CodeFailedPrecondition, err)
+		fix := "convert"
+		if ve.Upgradable {
+			fix = "upgrade"
+		}
+		ce.Meta().Set("jitllm-container-version", fix)
 		return ce
 	}
 	switch {
@@ -55,6 +68,27 @@ func connectErr(err error) error {
 	}
 	return connect.NewError(connect.CodeInternal, err)
 }
+
+// chatErr is a chat render's error as the server answers it: a system message
+// the model's chat template has no role for is the caller's to change.
+func chatErr(err error) error {
+	var sr *model.SystemRoleError
+	if errors.As(err, &sr) {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return err
+}
+
+// systemPromptError is the refusal of a system prompt a request sends apart
+// from its messages, for a chat template with no system role.
+type systemPromptError struct{ role *model.SystemRoleError }
+
+func (e *systemPromptError) Error() string {
+	return "the request's system prompt has no place in this chat template, which has no system role; " +
+		"send its text in a user message"
+}
+
+func (e *systemPromptError) Unwrap() error { return e.role }
 
 func invalid(format string, a ...any) error {
 	return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf(format, a...))

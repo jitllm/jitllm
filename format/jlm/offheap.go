@@ -1,10 +1,9 @@
 package jlm
 
 import (
-	"sync/atomic"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/internal/offheap"
 )
 
 // A File's weight memory -- its page frames and its dense region -- lives off
@@ -20,35 +19,45 @@ import (
 //
 // The cost is the collector's safety net: a span into a frame that outlives
 // its File's Close faults instead of keeping the frame alive. Where the
-// platform has no anonymous mmap, buf falls back to the heap.
-var offHeap atomic.Bool
+// platform has no anonymous mmap, buf falls back to the heap; a File opened
+// OnHeap keeps it there.
 
-func init() { offHeap.Store(true) }
+// FrameMemory is the memory a device gives its frames: the CPU device's
+// anonymous mappings, a card's page-locked staging. Map is n bytes, aligned
+// to Align for O_DIRECT; Unmap gives back a buffer Map returned, whole.
+type FrameMemory interface {
+	Map(n int) ([]byte, error)
+	Unmap(b []byte)
+}
 
-// SetOffHeap sets whether Files opened after the call keep their weight memory
-// off the Go heap (the default), and reports the previous setting. Off is the
-// control arm for a measurement; a caller turning it off should also call
-// sched.SetWeightsOffHeap(false), so the weight budget keeps its reserve
-// against the collector's goal.
-func SetOffHeap(on bool) bool { return offHeap.Swap(on) }
+// WithFrameMemory makes the frames' memory mem's in place of anonymous
+// mappings: a device's own (NewFrames). A buffer mem cannot give is mapped
+// as it would be without it.
+func WithFrameMemory(mem FrameMemory) FramesOption {
+	return func(o *framesOpts) { o.mem = mem }
+}
 
-// offHeapBytes is every live off-heap mapping in the process, all Files.
-var offHeapBytes atomic.Int64
-
-// OffHeapBytes is how much weight memory this process holds outside the Go
-// heap.
-func OffHeapBytes() int64 { return offHeapBytes.Load() }
-
-// buf is an n-byte weight buffer, Align-aligned for O_DIRECT, on the heap or
-// mapped as the File was opened to do. A mapped one is recorded for Close.
-func (f *File) buf(n int) []byte {
+// buf is an n-byte weight buffer, Align-aligned for O_DIRECT: the frames'
+// memory where they were given one, else mapped off the heap, or on the heap
+// as NewFrames was asked. A mapped one is recorded for Close.
+func (f *Frames) buf(n int) []byte {
+	if f.mem != nil && n > 0 {
+		if b, err := f.mem.Map(n); err == nil && len(b) >= n && aligned(b) {
+			if f.memMapped == nil {
+				f.memMapped = map[*byte][]byte{}
+			}
+			f.memMapped[unsafe.SliceData(b)] = b
+			return b[:n:n]
+		} else if err == nil {
+			f.mem.Unmap(b)
+		}
+	}
 	if f.offHeap && n > 0 {
-		if b, mapped, err := kernels.MapOffHeap(n); err == nil && mapped {
+		if b, mapped, err := offheap.MapOffHeap(n); err == nil && mapped {
 			if f.mapped == nil {
 				f.mapped = map[*byte][]byte{}
 			}
 			f.mapped[unsafe.SliceData(b)] = b
-			offHeapBytes.Add(int64(cap(b)))
 			return b[:n:n]
 		}
 	}
@@ -64,7 +73,7 @@ func (f *File) buf(n int) []byte {
 //
 // fn runs after f.mu is released, on whichever goroutine paged, and before
 // that goroutine reads anything into the frame. nil turns it off.
-func (f *File) OnRecycle(fn func(p unsafe.Pointer, n uintptr)) {
+func (f *Frames) OnRecycle(fn func(p unsafe.Pointer, n uintptr)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.recycle = fn
@@ -73,7 +82,7 @@ func (f *File) OnRecycle(fn func(p unsafe.Pointer, n uintptr)) {
 // retire records b for the recycle callback: the whole buffer, since a frame
 // handed to a smaller page (take) still holds the tail of what it held before.
 // Callers hold f.mu.
-func (f *File) retire(b []byte) {
+func (f *Frames) retire(b []byte) {
 	if f.recycle == nil || cap(b) == 0 {
 		return
 	}
@@ -83,7 +92,7 @@ func (f *File) retire(b []byte) {
 // flushRecycled hands what retire recorded to the callback. Callers do not hold
 // f.mu: the callback reaches a device's own lock, and the device reaches this
 // File's (a page-in from inside an upload).
-func (f *File) flushRecycled() {
+func (f *Frames) flushRecycled() {
 	f.mu.Lock()
 	fn, bs := f.recycle, f.recycled
 	f.recycled, f.recycledSpare = f.recycledSpare, nil
@@ -109,24 +118,32 @@ func (f *File) flushRecycled() {
 // release gives a buffer this File no longer holds back: a mapping is
 // unmapped at once, a heap buffer is left to the collector. Callers hold f.mu and
 // hold no span into it.
-func (f *File) release(b []byte) {
+func (f *Frames) release(b []byte) {
+	if f.inExp(b) {
+		f.dropExp(b)
+		return
+	}
 	f.retire(b)
+	if m, ok := f.memMapped[unsafe.SliceData(b)]; ok {
+		delete(f.memMapped, unsafe.SliceData(b))
+		f.mem.Unmap(m)
+		return
+	}
 	if m, ok := f.mapped[unsafe.SliceData(b)]; ok {
 		delete(f.mapped, unsafe.SliceData(b))
-		offHeapBytes.Add(-int64(cap(m)))
-		kernels.UnmapOffHeap(m)
+		offheap.UnmapOffHeap(m)
 	}
 }
 
 // putFree keeps a frame of size bytes for the next page-in. Callers hold f.mu.
-func (f *File) putFree(size uint64, b []byte) {
+func (f *Frames) putFree(size uint64, b []byte) {
 	f.free[size] = append(f.free[size], b)
 	f.freeBytes += size
 }
 
 // trimFree releases free frames until at most keep bytes of them are left.
 // Callers hold f.mu.
-func (f *File) trimFree(keep uint64) {
+func (f *Frames) trimFree(keep uint64) {
 	for size, l := range f.free {
 		for len(l) > 0 && f.freeBytes > keep {
 			f.release(l[len(l)-1])
@@ -145,7 +162,7 @@ func (f *File) trimFree(keep uint64) {
 // next page-in, which is what makes a burst of them cheap (placement releases
 // each block's pages and the next block's land in the same frames), and once
 // the burst is over nothing will take it: the caller ends one by trimming.
-func (f *File) TrimFree() {
+func (f *Frames) TrimFree() {
 	if f == nil {
 		return
 	}
@@ -157,17 +174,21 @@ func (f *File) TrimFree() {
 
 // MappedBytes is how much off-heap memory this File holds, and
 // FreeBytes how much of its frame memory is on the free list.
-func (f *File) MappedBytes() uint64 {
+func (f *Frames) MappedBytes() uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var n uint64
 	for _, m := range f.mapped {
 		n += uint64(cap(m))
 	}
-	return n
+	for _, m := range f.memMapped {
+		n += uint64(cap(m))
+	}
+	// The expert reservation costs only the frames it holds.
+	return n + f.expHeld
 }
 
-func (f *File) FreeBytes() uint64 {
+func (f *Frames) FreeBytes() uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.freeBytes
@@ -175,10 +196,13 @@ func (f *File) FreeBytes() uint64 {
 
 // unmapAll returns every mapping this File still holds. Callers hold f.mu and
 // have already dropped every reference the File holds.
-func (f *File) unmapAll() {
+func (f *Frames) unmapAll() {
 	for k, m := range f.mapped {
-		offHeapBytes.Add(-int64(cap(m)))
-		kernels.UnmapOffHeap(m)
+		offheap.UnmapOffHeap(m)
 		delete(f.mapped, k)
+	}
+	for k, m := range f.memMapped {
+		f.mem.Unmap(m)
+		delete(f.memMapped, k)
 	}
 }

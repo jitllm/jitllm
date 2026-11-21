@@ -135,7 +135,7 @@ function engine(force: boolean) {
   const ctxLen = info?.contextLength ?? 0;
   const model = card("Model " + (id || ""),
     info ? h("div", { class: "kvs" },
-      kv("architecture", info.architecture), kv("blocks", String(info.blockCount)),
+      kv("blocks", String(info.blockCount)),
       kv("width", String(info.embeddingDim)), kv("vocab", String(info.vocabSize)),
       info.expertCount ? kv("experts", `${info.expertsUsed} of ${info.expertCount}`) : null,
       info.linearBlocks ? kv("attn / linear", `${info.attentionBlocks} / ${info.linearBlocks}`) : null) : h("p", { class: "dim", text: id ? "Reading the model's details…" : "No model selected." }),
@@ -202,7 +202,7 @@ function placementTab(force: boolean) {
 const hostName = "the CPU";
 
 // serverMoves is what the server moved on its own initiative: a conversation
-// that is talking promoted onto a card, idle ones moved home to make room.
+// that is talking promoted onto a card, idle ones moved to the CPU to make room.
 function serverMoves(): HTMLElement {
   const o = live.stats?.orchestrator;
   if (!o) return card("Server moves", h("p", { class: "dim small", text: "Waiting for the server's stats…" }));
@@ -210,9 +210,9 @@ function serverMoves(): HTMLElement {
   const rows = [...o.moves].reverse().slice(0, 8).map((m) =>
     h("div", { class: "kv" },
       h("span", { class: "dim small", text: new Date(Number(m.unixMillis)).toLocaleTimeString() }),
-      h("span", { class: "small", text: `${m.blocks} layer(s) of ${m.modelId} (${m.sessionId}) to ${m.to === "host" ? "CPU" : "GPU"} · ${m.why} · ${m.millis.toFixed(0)} ms` })));
+      h("span", { class: "small", text: `${m.blocks} layer(s) of ${m.modelId} (${m.sessionId}) to ${m.to} · ${m.why} · ${m.millis.toFixed(0)} ms` })));
   return card("Server moves",
-    h("p", { class: "dim small", text: `The server puts a conversation that is replying on a card, moving idle ones to the CPU to make room. ${o.promotions} promotion(s), ${o.demotions} demotion(s); ${o.blocksUp} layer(s) up, ${o.blocksHome} home.` }),
+    h("p", { class: "dim small", text: `The server puts a conversation that is replying on a card, moving idle ones to the CPU to make room. ${o.promotions} promotion(s), ${o.demotions} demotion(s); ${o.blocksToCards} layer(s) onto the cards, ${o.blocksToCpu} onto the CPU.` }),
     rows.length ? h("div", { class: "kvs" }, ...rows) : h("p", { class: "dim small", text: "No moves yet." }));
 }
 
@@ -249,7 +249,7 @@ function drawPlacement() {
   const no = target ? "" : "no GPU on this server";
   const move = async (first: number, last: number, toHost: boolean, what: string) => {
     try {
-      const r = await placement.relocateBlocks({ sessionId: placeSession, firstBlock: first, lastBlock: last, toHost, toDeviceId: toHost ? "" : target!.ref!.id });
+      const r = await placement.relocateBlocks({ sessionId: placeSession, firstBlock: first, lastBlock: last, toDeviceId: toHost ? "cpu" : target!.ref!.id });
       lastMove = r.declined[0] ? `Declined: ${r.declined[0].reason}` : `${what}: ${r.blocksMoved} layer(s) moved in ${r.millis} ms`;
       ctx.toast(lastMove, !!r.declined[0]);
     } catch (e) { lastMove = errText(e); ctx.toast(lastMove, true); }
@@ -267,7 +267,7 @@ function drawPlacement() {
       h("p", { class: "plain" }, `A model is a stack of ${nb} layers. Each layer runs either on the CPU or on a graphics card; a card is faster when it has room.`),
       h("div", { class: "seam" }, h("b", { text: String(nb) }), ` layers: ${sentence}`),
       h("div", { class: "blocks pick", attrs: { role: "group", "aria-label": "Layers: click, shift-click or drag to select" } }, ...p.blocks.map((b) => h("i", {
-        class: "blk " + (b.location === BlockLocation.DEVICE ? "dev" : "host") + (b.kind === BlockKind.LINEAR ? " lin" : "") + (b.kind === BlockKind.VISION ? " vis" : "") + (b.location !== BlockLocation.DEVICE && !b.hostResident ? " cold" : "") + (inSel(b.index) ? " sel" : ""),
+        class: "blk " + (b.location === BlockLocation.DEVICE ? "dev" : "host") + (b.kind === BlockKind.LINEAR ? " lin" : "") + (b.kind === BlockKind.VISION ? " vis" : "") + (b.location !== BlockLocation.DEVICE && !b.cpuResident ? " cold" : "") + (inSel(b.index) ? " sel" : ""),
         title: `layer ${b.index} · ${BlockKind[b.kind].toLowerCase()} · ${b.location === BlockLocation.DEVICE ? b.deviceId : "CPU"} · ${b.bytes?.human ?? ""}`,
         attrs: { "data-i": String(b.index) },
         on: {
@@ -308,7 +308,7 @@ function drawPlacement() {
 
 function deviceCard(d: Device): HTMLElement {
   const total = n(d.totalMemory?.bytes), free = n(d.freeMemory?.bytes);
-  const kind = d.kind === DeviceKind.HOST ? "host" : d.kind === DeviceKind.INTEGRATED ? "integrated" : "discrete";
+  const kind = d.kind === DeviceKind.CPU ? "host" : d.kind === DeviceKind.INTEGRATED ? "integrated" : "discrete";
   return h("section", { class: "card dev" + (d.available ? "" : " off") },
     h("h3", {}, d.name || d.ref?.id || "device", h("span", { class: "chip", text: kind })),
     h("div", { class: "id", text: d.ref?.id ?? "" }),
@@ -354,7 +354,7 @@ let loadOpts = { device: "", budgetGiB: "", maxBlocks: "" };
 // one already listed. "cpu" asks for the host alone.
 // A software renderer is no accelerator, and a device sharing the host's memory
 // is not a second pool; both stay pickable by name but are not in the default.
-const accelerator = (d: Device) => d.kind !== DeviceKind.HOST && d.available && !d.sameDeviceAs && !/llvmpipe|swiftshader|software/i.test(d.name);
+const accelerator = (d: Device) => d.kind !== DeviceKind.CPU && d.available && !d.sameDeviceAs && !/llvmpipe|swiftshader|software/i.test(d.name);
 function gpuIds(): string[] {
   const rank = (id: string) => (id.startsWith("vulkan") ? 1 : 0);
   return live.devs.filter((d) => accelerator(d) && !d.countsTowardHostBudget).map((d) => d.ref?.id ?? "").filter(Boolean).sort((a, b) => rank(a) - rank(b));
@@ -386,7 +386,7 @@ function modelsTab(force: boolean) {
     const chat = h("button", { class: "btn sm", text: "Chat", title: "Start a new conversation on this model", on: { click: () => ctx.newChatOn(x.modelId) } });
     const users = live.stats?.models.find((s) => s.modelId === x.modelId)?.sessions ?? 0;
     return h("div", { class: "row" },
-      h("div", { class: "grow" }, h("b", { text: x.modelId }), h("div", { class: "dim small", text: `${x.architecture} · ${x.blockCount} layers · ${x.defaultDeviceIds.length ? x.defaultDeviceIds.join(", ") : "CPU"} · ctx ${x.contextLength} · ${users} session${users === 1 ? "" : "s"}` })),
+      h("div", { class: "grow" }, h("b", { text: x.modelId }), h("div", { class: "dim small", text: `${x.blockCount} layers · ${x.defaultDeviceIds.length ? x.defaultDeviceIds.join(", ") : "CPU"} · ctx ${x.contextLength} · ${users} session${users === 1 ? "" : "s"}` })),
       chat, un);
   });
   const files = m.files.filter((f) => f.modelId === "" && !f.name.startsWith("mmproj-") && f.name.toLowerCase().includes(filter.toLowerCase()));

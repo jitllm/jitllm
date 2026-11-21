@@ -38,19 +38,17 @@ func TestVulkanLineCarriesTheIndexThatNamesTheDevice(t *testing.T) {
 	}
 }
 
-// The clipboard report carries both kernel columns; the row-major column
-// alone would read as "no kernels" on a host generated through the packed
-// family.
-func TestReportTextPrintsBothKernelFamilies(t *testing.T) {
+// The clipboard report carries the composer's form of the CPU and the
+// instruction sets it reads.
+func TestReportTextPrintsTheComposersForm(t *testing.T) {
 	r := Report{
 		Probed: true, GOOS: "linux", GOARCH: "amd64", GoVersion: "go1.27.1",
 		CPU: "a cpu", Logical: 8, PCores: []int{0, 2}, SMT: []int{0, 1, 2, 3}, Decode: []int{0, 2},
-		Arch: "amd64", ISA: "AVX2 (probed: ABSENT -- ...)",
-		Kernels: []Kernel{{Format: "Q4_K", NativeNote: "none", Packed: true, PackedNote: "vex"}},
-		GPUs:    []GPU{{API: "ptx", Name: "a card", Slots: 30720, Free: 1 << 30, Total: 4 << 30}},
+		Arch: "amd64", ISA: "sse2, avx2", Form: "x86, wide passes",
+		GPUs: []GPU{{API: "ptx", Name: "a card", Slots: 30720, Free: 1 << 30, Total: 4 << 30}},
 	}
 	got := ReportText(r)
-	for _, want := range []string{"row-major none", "packed vex", "a card", "linux/amd64"} {
+	for _, want := range []string{"composer  x86, wide passes", "isa sse2, avx2", "a card", "linux/amd64"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ReportText missing %q in:\n%s", want, got)
 		}

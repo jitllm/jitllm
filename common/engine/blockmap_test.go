@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	h = byte(session.PlaceHost)
+	h = byte(session.PlaceCPU)
 	d = byte(session.PlaceDevice)
 )
 

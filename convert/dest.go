@@ -11,8 +11,8 @@ import (
 // beside the source when dir is "".
 //
 // It defaults to the model directory rather than the source's directory, so a
-// container does not land on the main disk beside an Ollama blob or a
-// download. The CLI and the app both derive the default here.
+// container does not land on the main disk beside another tool's model
+// store or a download. The CLI and the app both derive the default here.
 func DestFor(src, dir string) string {
 	// '/' too: Windows takes both separators, and a directory typed or
 	// dropped as C:/models/qwen/ named ".jlm" with only '\' trimmed.

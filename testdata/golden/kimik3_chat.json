@@ -1,0 +1,293 @@
+[
+ {
+  "name": "one user turn",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hello"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Hello<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "system then user",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are terse."
+   },
+   {
+    "role": "user",
+    "content": "What is 2+2?"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"system\"<|sep|>You are terse.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>What is 2+2?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "a past exchange",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hi"
+   },
+   {
+    "role": "assistant",
+    "content": "Hello! How can I help?"
+   },
+   {
+    "role": "user",
+    "content": "Tell me a joke."
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Hi<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|><|close|>think<|sep|><|open|>response<|sep|>Hello! How can I help?<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Tell me a joke.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "kept reasoning",
+  "messages": [
+   {
+    "role": "user",
+    "content": "2+2?"
+   },
+   {
+    "role": "assistant",
+    "content": "4",
+    "reasoning_content": "Add them."
+   },
+   {
+    "role": "user",
+    "content": "And 3+3?"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>2+2?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>Add them.<|close|>think<|sep|><|open|>response<|sep|>4<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>And 3+3?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "blank reasoning",
+  "messages": [
+   {
+    "role": "user",
+    "content": "2+2?"
+   },
+   {
+    "role": "assistant",
+    "content": "4",
+    "reasoning_content": "  \n"
+   },
+   {
+    "role": "user",
+    "content": "Again?"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>2+2?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|><|close|>think<|sep|><|open|>response<|sep|>4<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Again?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "reasoning field",
+  "messages": [
+   {
+    "role": "user",
+    "content": "2+2?"
+   },
+   {
+    "role": "assistant",
+    "content": "4",
+    "reasoning": "Count up."
+   },
+   {
+    "role": "user",
+    "content": "Next?"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>2+2?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>Count up.<|close|>think<|sep|><|open|>response<|sep|>4<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Next?<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "escaped names",
+  "messages": [
+   {
+    "role": "user",
+    "content": "hey",
+    "name": "Ann & \"Bo\""
+   },
+   {
+    "role": "assistant",
+    "content": "hi",
+    "name": "kimi"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\" name=\"Ann &amp; &quot;Bo&quot;\"<|sep|>hey<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\" name=\"kimi\"<|sep|><|open|>think<|sep|><|close|>think<|sep|><|open|>response<|sep|>hi<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "text parts",
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "Look: "
+     },
+     {
+      "type": "text",
+      "text": "twice"
+     }
+    ]
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Look: twice<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "no generation prompt",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hello"
+   },
+   {
+    "role": "assistant",
+    "content": "Hi there"
+   }
+  ],
+  "add_generation_prompt": false,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Hello<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|><|close|>think<|sep|><|open|>response<|sep|>Hi there<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|>"
+ },
+ {
+  "name": "whitespace kept",
+  "messages": [
+   {
+    "role": "user",
+    "content": "  line one\nline two  \n"
+   },
+   {
+    "role": "assistant",
+    "content": "\n ok \n"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>  line one\nline two  \n<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|><|close|>think<|sep|><|open|>response<|sep|>\n ok \n<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "unicode",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Привет, 世界 ✓"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Привет, 世界 ✓<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "thinking off",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hello"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": false,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"user\"<|sep|>Hello<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>response<|sep|>"
+ },
+ {
+  "name": "thinking off with history",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hi"
+   },
+   {
+    "role": "assistant",
+    "content": "Hello",
+    "reasoning_content": "dropped"
+   },
+   {
+    "role": "user",
+    "content": "Bye"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": false,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"user\"<|sep|>Hi<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>response<|sep|>Hello<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Bye<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>response<|sep|>"
+ },
+ {
+  "name": "low effort",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hello"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": "low",
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=low`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Hello<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "high effort with history",
+  "messages": [
+   {
+    "role": "system",
+    "content": "Be brief."
+   },
+   {
+    "role": "user",
+    "content": "Hi"
+   },
+   {
+    "role": "assistant",
+    "content": "Hey"
+   },
+   {
+    "role": "user",
+    "content": "Bye"
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": "high",
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=high`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"system\"<|sep|>Be brief.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Hi<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|><|close|>think<|sep|><|open|>response<|sep|>Hey<|close|>response<|sep|><|close|>message<|sep|><|end_of_msg|><|open|>message role=\"user\"<|sep|>Bye<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ },
+ {
+  "name": "system alone",
+  "messages": [
+   {
+    "role": "system",
+    "content": "Only a system turn."
+   }
+  ],
+  "add_generation_prompt": true,
+  "thinking": null,
+  "thinking_effort": null,
+  "text": "<|open|>message role=\"system\" type=\"thinking-effort\"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=max`.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"system\"<|sep|>Only a system turn.<|close|>message<|sep|><|end_of_msg|><|open|>message role=\"assistant\"<|sep|><|open|>think<|sep|>"
+ }
+]

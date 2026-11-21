@@ -1,0 +1,3333 @@
+{
+ "head": [
+  {
+   "op": "in",
+   "if": "not (collapsed and states_streams)",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "stream_mix",
+   "if": "collapsed and states_streams",
+   "out": "x"
+  },
+  {
+   "op": "layer_norm",
+   "if": "not (collapsed and not stored('output_norm')) and (layer_norm)",
+   "in": "x",
+   "w": [
+    "output_norm",
+    "output_norm.bias?"
+   ],
+   "out": "n"
+  },
+  {
+   "op": "norm",
+   "if": "not (collapsed and not stored('output_norm')) and (not layer_norm)",
+   "in": "x",
+   "w": "output_norm",
+   "out": "n"
+  },
+  {
+   "op": "let",
+   "if": "collapsed and not stored('output_norm')",
+   "in": "x",
+   "out": "n"
+  },
+  {
+   "op": "matvec",
+   "if": "stored('output')",
+   "in": "n",
+   "w": [
+    "output",
+    "output.bias?"
+   ],
+   "rows": "vocab",
+   "out": "l"
+  },
+  {
+   "op": "matvec",
+   "if": "not stored('output')",
+   "in": "n",
+   "w": [
+    "token_embd",
+    "output.bias?"
+   ],
+   "rows": "vocab",
+   "out": "l"
+  },
+  {
+   "op": "emit",
+   "if": "final_softcap != 0",
+   "kind": "map",
+   "in": "l",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "2 / final_softcap"
+   },
+   "outs": [
+    {
+     "name": "softcap.arg",
+     "width": "vocab"
+    }
+   ],
+   "out": "c"
+  },
+  {
+   "op": "emit",
+   "if": "final_softcap != 0",
+   "kind": "map",
+   "in": "c",
+   "attr": {
+    "Fn": "'sigmoid'"
+   },
+   "outs": [
+    {
+     "name": "softcap.sigmoid",
+     "width": "vocab"
+    }
+   ],
+   "out": "c"
+  },
+  {
+   "op": "emit",
+   "if": "final_softcap != 0",
+   "kind": "map",
+   "in": "c",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "2"
+   },
+   "outs": [
+    {
+     "name": "softcap.twice",
+     "width": "vocab"
+    }
+   ],
+   "out": "c"
+  },
+  {
+   "op": "emit",
+   "if": "final_softcap != 0",
+   "kind": "map",
+   "in": "c",
+   "attr": {
+    "Fn": "'sub'",
+    "Const": "1"
+   },
+   "outs": [
+    {
+     "name": "softcap.tanh",
+     "width": "vocab"
+    }
+   ],
+   "out": "c"
+  },
+  {
+   "op": "emit",
+   "if": "final_softcap != 0",
+   "kind": "map",
+   "in": "c",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "final_softcap"
+   },
+   "outs": [
+    {
+     "name": "capped",
+     "width": "vocab"
+    }
+   ],
+   "out": "l"
+  },
+  {
+   "op": "emit",
+   "if": "logit_scale != 1",
+   "kind": "map",
+   "in": "l",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "1 / logit_scale"
+   },
+   "outs": [
+    {
+     "name": "scaled",
+     "width": "vocab"
+    }
+   ],
+   "out": "l"
+  },
+  {
+   "op": "out",
+   "in": "l"
+  },
+  {
+   "op": "let",
+   "if": "not (collapsed and not stored('output_norm'))",
+   "in": "n",
+   "out": "hid"
+  },
+  {
+   "op": "emit",
+   "if": "hidden and collapsed and not stored('output_norm')",
+   "kind": "slice",
+   "in": "x",
+   "attr": {
+    "Width": "embd"
+   },
+   "outs": [
+    {
+     "name": "hidden",
+     "width": "embd"
+    }
+   ],
+   "out": "hid"
+  },
+  {
+   "op": "out",
+   "if": "hidden",
+   "in": "hid"
+  }
+ ],
+ "embed": [
+  {
+   "op": "emit",
+   "kind": "embed",
+   "bind": [
+    {
+     "w": "token_embd",
+     "k": "embd",
+     "rows": "vocab"
+    }
+   ],
+   "outs": [
+    {
+     "name": "embd",
+     "width": "embd"
+    }
+   ],
+   "out": "x"
+  },
+  {
+   "op": "emit",
+   "if": "embd_scale != 1",
+   "kind": "map",
+   "in": "x",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "embd_scale"
+   },
+   "outs": [
+    {
+     "name": "scaled",
+     "width": "embd"
+    }
+   ],
+   "out": "x"
+  },
+  {
+   "op": "emit",
+   "if": "stored('position_embd')",
+   "kind": "embed",
+   "attr": {
+    "Positional": "true"
+   },
+   "bind": [
+    {
+     "w": "position_embd"
+    }
+   ],
+   "outs": [
+    {
+     "name": "pos",
+     "width": "embd"
+    }
+   ],
+   "out": "p"
+  },
+  {
+   "op": "add",
+   "if": "stored('position_embd')",
+   "in": [
+    "x",
+    "p"
+   ],
+   "out": "x"
+  },
+  {
+   "op": "emit",
+   "if": "stored('token_types') and k('token_types') == embd and rows('token_types') > 0",
+   "kind": "embed",
+   "attr": {
+    "Positional": "true",
+    "Span": "1"
+   },
+   "bind": [
+    {
+     "w": "token_types"
+    }
+   ],
+   "outs": [
+    {
+     "name": "types",
+     "width": "embd"
+    }
+   ],
+   "out": "y"
+  },
+  {
+   "op": "add",
+   "if": "stored('token_types') and k('token_types') == embd and rows('token_types') > 0",
+   "in": [
+    "x",
+    "y"
+   ],
+   "out": "x"
+  },
+  {
+   "op": "layer_norm",
+   "if": "stored('token_embd_norm') and layer_norm",
+   "in": "x",
+   "w": [
+    "token_embd_norm",
+    "token_embd_norm.bias?"
+   ],
+   "out": "x"
+  },
+  {
+   "op": "norm",
+   "if": "stored('token_embd_norm') and not layer_norm",
+   "in": "x",
+   "w": "token_embd_norm",
+   "out": "x"
+  },
+  {
+   "op": "out",
+   "in": "x"
+  },
+  {
+   "op": "expand_streams",
+   "if": "expands",
+   "in": "x"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "embed",
+   "bind": [
+    {
+     "w": "per_layer_token_embd",
+     "k": "ple_width",
+     "rows": "rows('per_layer_token_embd')"
+    }
+   ],
+   "outs": [
+    {
+     "name": "ple.tok",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pt"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "map",
+   "in": "pt",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "ple_dim ** 0.5"
+   },
+   "outs": [
+    {
+     "name": "ple.tok.scaled",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pt"
+  },
+  {
+   "op": "matvec",
+   "if": "ple_dim != 0",
+   "in": "x",
+   "w": "per_layer_model_proj",
+   "rows": "ple_width",
+   "out": "pr"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "map",
+   "in": "pr",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "embd ** -0.5"
+   },
+   "outs": [
+    {
+     "name": "ple.proj.scaled",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pr"
+  },
+  {
+   "op": "head_norm",
+   "if": "ple_dim != 0",
+   "in": "pr",
+   "w": "per_layer_proj_norm",
+   "width": "ple_dim",
+   "out": "pr"
+  },
+  {
+   "op": "add",
+   "if": "ple_dim != 0",
+   "in": [
+    "pr",
+    "pt"
+   ],
+   "out": "pl"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "map",
+   "in": "pl",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "0.7071067811865476"
+   },
+   "outs": [
+    {
+     "name": "ple.in",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pl"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0 and deep_taps != 0",
+   "kind": "map",
+   "in": "x",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "0"
+   },
+   "outs": [
+    {
+     "name": "taps.zero",
+     "width": "deep_taps * embd"
+    }
+   ],
+   "out": "tz"
+  },
+  {
+   "op": "concat",
+   "if": "ple_dim != 0 and deep_taps != 0",
+   "in": [
+    "tz",
+    "pl"
+   ],
+   "name": "side",
+   "out": "pl"
+  },
+  {
+   "op": "out",
+   "if": "ple_dim != 0",
+   "in": "pl"
+  }
+ ],
+ "given": [
+  {
+   "op": "in",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "emit",
+   "if": "stored('position_embd')",
+   "kind": "embed",
+   "attr": {
+    "Positional": "true"
+   },
+   "bind": [
+    {
+     "w": "position_embd"
+    }
+   ],
+   "outs": [
+    {
+     "name": "pos",
+     "width": "embd"
+    }
+   ],
+   "out": "p"
+  },
+  {
+   "op": "add",
+   "if": "stored('position_embd')",
+   "in": [
+    "x",
+    "p"
+   ],
+   "out": "x"
+  },
+  {
+   "op": "out",
+   "if": "stored('position_embd')",
+   "in": "x"
+  },
+  {
+   "op": "emit",
+   "if": "expands and not stored('position_embd')",
+   "kind": "slice",
+   "in": "x",
+   "attr": {
+    "Width": "embd"
+   },
+   "outs": [
+    {
+     "name": "stream",
+     "width": "embd"
+    }
+   ],
+   "out": "c"
+  },
+  {
+   "op": "out",
+   "if": "expands and not stored('position_embd')",
+   "in": "c"
+  },
+  {
+   "op": "expand_streams",
+   "if": "expands",
+   "in": "x"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "embed",
+   "bind": [
+    {
+     "w": "per_layer_token_embd",
+     "k": "ple_width",
+     "rows": "rows('per_layer_token_embd')"
+    }
+   ],
+   "outs": [
+    {
+     "name": "ple.tok",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pt"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "map",
+   "in": "pt",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "ple_dim ** 0.5"
+   },
+   "outs": [
+    {
+     "name": "ple.tok.scaled",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pt"
+  },
+  {
+   "op": "matvec",
+   "if": "ple_dim != 0",
+   "in": "x",
+   "w": "per_layer_model_proj",
+   "rows": "ple_width",
+   "out": "pr"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "map",
+   "in": "pr",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "embd ** -0.5"
+   },
+   "outs": [
+    {
+     "name": "ple.proj.scaled",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pr"
+  },
+  {
+   "op": "head_norm",
+   "if": "ple_dim != 0",
+   "in": "pr",
+   "w": "per_layer_proj_norm",
+   "width": "ple_dim",
+   "out": "pr"
+  },
+  {
+   "op": "add",
+   "if": "ple_dim != 0",
+   "in": [
+    "pr",
+    "pt"
+   ],
+   "out": "pl"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0",
+   "kind": "map",
+   "in": "pl",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "0.7071067811865476"
+   },
+   "outs": [
+    {
+     "name": "ple.in",
+     "width": "ple_width"
+    }
+   ],
+   "out": "pl"
+  },
+  {
+   "op": "emit",
+   "if": "ple_dim != 0 and deep_taps != 0",
+   "kind": "map",
+   "in": "x",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "0"
+   },
+   "outs": [
+    {
+     "name": "taps.zero",
+     "width": "deep_taps * embd"
+    }
+   ],
+   "out": "tz"
+  },
+  {
+   "op": "concat",
+   "if": "ple_dim != 0 and deep_taps != 0",
+   "in": [
+    "tz",
+    "pl"
+   ],
+   "name": "side",
+   "out": "pl"
+  },
+  {
+   "op": "out",
+   "if": "ple_dim != 0",
+   "in": "pl"
+  }
+ ],
+ "outnorm": [
+  {
+   "op": "in",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "layer_norm",
+   "if": "layer_norm",
+   "in": "x",
+   "w": [
+    "output_norm",
+    "output_norm.bias?"
+   ],
+   "out": "n"
+  },
+  {
+   "op": "norm",
+   "if": "not layer_norm",
+   "in": "x",
+   "w": "output_norm",
+   "out": "n"
+  },
+  {
+   "op": "out",
+   "in": "n"
+  }
+ ],
+ "pool": [
+  {
+   "op": "in",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "layer_norm",
+   "if": "stored('output_norm') and layer_norm",
+   "in": "x",
+   "w": [
+    "output_norm",
+    "output_norm.bias?"
+   ],
+   "out": "x"
+  },
+  {
+   "op": "norm",
+   "if": "stored('output_norm') and not layer_norm",
+   "in": "x",
+   "w": "output_norm",
+   "out": "x"
+  },
+  {
+   "op": "emit",
+   "kind": "pool",
+   "in": "x",
+   "attr": {
+    "Pooling": "pooling"
+   },
+   "outs": [
+    {
+     "name": "pooled",
+     "width": "embd"
+    }
+   ],
+   "out": "p"
+  },
+  {
+   "op": "in",
+   "out": "embed.norm",
+   "width": "1"
+  },
+  {
+   "op": "let",
+   "in": "embed.norm",
+   "out": "k"
+  },
+  {
+   "op": "let",
+   "in": "p",
+   "out": "raw"
+  },
+  {
+   "op": "matvec",
+   "if": "stored('embd_dense1')",
+   "in": "p",
+   "w": "embd_dense1",
+   "rows": "rows('embd_dense1')",
+   "out": "p"
+  },
+  {
+   "op": "matvec",
+   "if": "stored('embd_dense2')",
+   "in": "p",
+   "w": "embd_dense2",
+   "rows": "rows('embd_dense2')",
+   "out": "p"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "p",
+   "attr": {
+    "Fn": "'abs'"
+   },
+   "outs": [
+    {
+     "name": "unit.abs",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.a"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.a",
+   "attr": {
+    "Fn": "'log'"
+   },
+   "outs": [
+    {
+     "name": "unit.log",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.l"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.l",
+    "k"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "unit.klog",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.kl"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.kl",
+   "attr": {
+    "Fn": "'exp'"
+   },
+   "outs": [
+    {
+     "name": "unit.pow",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.pk"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "unit.pk",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "unit.sum",
+     "width": "1"
+    }
+   ],
+   "out": "unit.s"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.s",
+   "attr": {
+    "Fn": "'log'"
+   },
+   "outs": [
+    {
+     "name": "unit.lsum",
+     "width": "1"
+    }
+   ],
+   "out": "unit.ls"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.ls",
+    "k"
+   ],
+   "attr": {
+    "Fn": "'div'"
+   },
+   "outs": [
+    {
+     "name": "unit.lroot",
+     "width": "1"
+    }
+   ],
+   "out": "unit.lr"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.lr",
+   "attr": {
+    "Fn": "'exp'"
+   },
+   "outs": [
+    {
+     "name": "unit.root",
+     "width": "1"
+    }
+   ],
+   "out": "unit.root"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "unit.a",
+   "attr": {
+    "Fn": "'max'"
+   },
+   "outs": [
+    {
+     "name": "unit.max",
+     "width": "1"
+    }
+   ],
+   "out": "unit.mx"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.mx",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "1 / 32760"
+   },
+   "outs": [
+    {
+     "name": "unit.big",
+     "width": "1"
+    }
+   ],
+   "out": "unit.big"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "k",
+   "attr": {
+    "Fn": "'equal'",
+    "Const": "0"
+   },
+   "outs": [
+    {
+     "name": "unit.k0",
+     "width": "1"
+    }
+   ],
+   "out": "unit.k0"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.k0",
+    "unit.big"
+   ],
+   "attr": {
+    "Fn": "'where'",
+    "Const": "1"
+   },
+   "outs": [
+    {
+     "name": "unit.div0",
+     "width": "1"
+    }
+   ],
+   "out": "unit.div0"
+  },
+  {
+   "op": "expr",
+   "in": [
+    "k",
+    "unit.root",
+    "unit.div0"
+   ],
+   "name": "unit.div",
+   "width": "1",
+   "terms": [
+    {
+     "fn": "where",
+     "args": [
+      {
+       "in": 0
+      },
+      {
+       "in": 1
+      },
+      {
+       "in": 2
+      }
+     ]
+    }
+   ],
+   "out": "unit.div"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.div",
+   "attr": {
+    "Fn": "'recip'"
+   },
+   "outs": [
+    {
+     "name": "unit.recip",
+     "width": "1"
+    }
+   ],
+   "out": "unit.rc"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.div",
+    "unit.rc"
+   ],
+   "attr": {
+    "Fn": "'where'"
+   },
+   "outs": [
+    {
+     "name": "unit.scale",
+     "width": "1"
+    }
+   ],
+   "out": "unit.sc"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "k",
+   "attr": {
+    "Fn": "'equal'",
+    "Const": "2"
+   },
+   "outs": [
+    {
+     "name": "unit.k2",
+     "width": "1"
+    }
+   ],
+   "out": "unit.k2"
+  },
+  {
+   "op": "emit",
+   "kind": "head_norm",
+   "in": "p",
+   "attr": {
+    "Eps": "0.000000000000000000000001 / (rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd))",
+    "HeadDim": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+   },
+   "outs": [
+    {
+     "name": "unit.rms",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.rms"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.rms",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "(rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)) ** -0.5"
+   },
+   "outs": [
+    {
+     "name": "unit",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.unit"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "p",
+    "unit.sc"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "unit.scaled",
+     "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)"
+    }
+   ],
+   "out": "unit.scd"
+  },
+  {
+   "op": "expr",
+   "in": [
+    "unit.k2",
+    "unit.unit",
+    "unit.scd"
+   ],
+   "name": "unit.out",
+   "width": "rows('embd_dense2') if stored('embd_dense2') else (rows('embd_dense1') if stored('embd_dense1') else embd)",
+   "terms": [
+    {
+     "fn": "where",
+     "args": [
+      {
+       "in": 0
+      },
+      {
+       "in": 1
+      },
+      {
+       "in": 2
+      }
+     ]
+    }
+   ],
+   "out": "unit.out"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "raw",
+   "attr": {
+    "Fn": "'abs'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.abs",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.a",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.a",
+   "attr": {
+    "Fn": "'log'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.log",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.l",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.raw.l",
+    "k"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.klog",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.kl",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.kl",
+   "attr": {
+    "Fn": "'exp'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.pow",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.pk",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "unit.raw.pk",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.sum",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.s",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.s",
+   "attr": {
+    "Fn": "'log'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.lsum",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.ls",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.raw.ls",
+    "k"
+   ],
+   "attr": {
+    "Fn": "'div'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.lroot",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.lr",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.lr",
+   "attr": {
+    "Fn": "'exp'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.root",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.root",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "unit.raw.a",
+   "attr": {
+    "Fn": "'max'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.max",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.mx",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.mx",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "1 / 32760"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.big",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.big",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "k",
+   "attr": {
+    "Fn": "'equal'",
+    "Const": "0"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.k0",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.k0",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.raw.k0",
+    "unit.raw.big"
+   ],
+   "attr": {
+    "Fn": "'where'",
+    "Const": "1"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.div0",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.div0",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "expr",
+   "in": [
+    "k",
+    "unit.raw.root",
+    "unit.raw.div0"
+   ],
+   "name": "unit.raw.div",
+   "width": "1",
+   "terms": [
+    {
+     "fn": "where",
+     "args": [
+      {
+       "in": 0
+      },
+      {
+       "in": 1
+      },
+      {
+       "in": 2
+      }
+     ]
+    }
+   ],
+   "out": "unit.raw.div",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.div",
+   "attr": {
+    "Fn": "'recip'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.recip",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.rc",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "unit.raw.div",
+    "unit.raw.rc"
+   ],
+   "attr": {
+    "Fn": "'where'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.scale",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.sc",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "k",
+   "attr": {
+    "Fn": "'equal'",
+    "Const": "2"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.k2",
+     "width": "1"
+    }
+   ],
+   "out": "unit.raw.k2",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "head_norm",
+   "in": "raw",
+   "attr": {
+    "Eps": "0.000000000000000000000001 / (embd)",
+    "HeadDim": "embd"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.rms",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.rms",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "unit.raw.rms",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "(embd) ** -0.5"
+   },
+   "outs": [
+    {
+     "name": "unit.raw",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.unit",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "raw",
+    "unit.raw.sc"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "unit.raw.scaled",
+     "width": "embd"
+    }
+   ],
+   "out": "unit.raw.scd",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "expr",
+   "in": [
+    "unit.raw.k2",
+    "unit.raw.unit",
+    "unit.raw.scd"
+   ],
+   "name": "unit.raw.out",
+   "width": "embd",
+   "terms": [
+    {
+     "fn": "where",
+     "args": [
+      {
+       "in": 0
+      },
+      {
+       "in": 1
+      },
+      {
+       "in": 2
+      }
+     ]
+    }
+   ],
+   "out": "unit.raw.out",
+   "if": "stored('embd_dense1') or stored('embd_dense2')"
+  },
+  {
+   "op": "out",
+   "if": "not (stored('embd_dense1') or stored('embd_dense2'))",
+   "in": "unit.out"
+  },
+  {
+   "op": "out",
+   "if": "stored('embd_dense1') or stored('embd_dense2')",
+   "in": [
+    "unit.out",
+    "unit.raw.out"
+   ]
+  }
+ ],
+ "pointer": [
+  {
+   "op": "in",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "emit",
+   "kind": "pool",
+   "in": "x",
+   "attr": {
+    "Pooling": "pool_last"
+   },
+   "outs": [
+    {
+     "name": "last",
+     "width": "embd"
+    }
+   ],
+   "out": "last"
+  },
+  {
+   "op": "emit",
+   "kind": "take_rows",
+   "in": "x",
+   "outs": [
+    {
+     "name": "marks",
+     "width": "embd"
+    }
+   ],
+   "out": "marks"
+  },
+  {
+   "op": "norm",
+   "in": "last",
+   "w": "output_norm",
+   "out": "ln"
+  },
+  {
+   "op": "matvec",
+   "in": "ln",
+   "w": [
+    "scorer_out",
+    "scorer_out.bias?"
+   ],
+   "rows": "rows('scorer_out')",
+   "out": "lp"
+  },
+  {
+   "op": "emit",
+   "kind": "slice",
+   "in": "lp",
+   "attr": {
+    "Width": "rows('scorer_out') // 2"
+   },
+   "outs": [
+    {
+     "name": "query",
+     "width": "rows('scorer_out') // 2"
+    }
+   ],
+   "out": "q"
+  },
+  {
+   "op": "norm",
+   "in": "marks",
+   "w": "output_norm",
+   "out": "mn"
+  },
+  {
+   "op": "matvec",
+   "in": "mn",
+   "w": [
+    "scorer_out",
+    "scorer_out.bias?"
+   ],
+   "rows": "rows('scorer_out')",
+   "out": "mp"
+  },
+  {
+   "op": "emit",
+   "kind": "slice",
+   "in": "mp",
+   "attr": {
+    "Offset": "rows('scorer_out') // 2",
+    "Width": "rows('scorer_out') // 2"
+   },
+   "outs": [
+    {
+     "name": "key",
+     "width": "rows('scorer_out') // 2"
+    }
+   ],
+   "out": "k"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "q",
+    "k"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "qk",
+     "width": "rows('scorer_out') // 2"
+    }
+   ],
+   "out": "qk"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "qk",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "dot",
+     "width": "1"
+    }
+   ],
+   "out": "dot"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "dot",
+   "attr": {
+    "Fn": "'mul'",
+    "Const": "(rows('scorer_out') // 2) ** -0.5"
+   },
+   "outs": [
+    {
+     "name": "score",
+     "width": "1"
+    }
+   ],
+   "out": "score"
+  },
+  {
+   "op": "out",
+   "in": "score"
+  }
+ ],
+ "predict_entry": [
+  {
+   "op": "emit",
+   "kind": "embed",
+   "bind": [
+    {
+     "w": "predict.embd",
+     "k": "embd",
+     "rows": "vocab"
+    }
+   ],
+   "outs": [
+    {
+     "name": "e",
+     "width": "embd"
+    }
+   ],
+   "out": "tok"
+  },
+  {
+   "op": "norm",
+   "in": "tok",
+   "w": "predict.token_norm",
+   "out": "e"
+  },
+  {
+   "op": "in",
+   "out": "x",
+   "width": "residual_streams * embd"
+  },
+  {
+   "op": "norm",
+   "if": "residual_streams == 1",
+   "in": "x",
+   "w": "predict.hidden_norm",
+   "out": "x"
+  },
+  {
+   "op": "concat",
+   "if": "residual_streams == 1",
+   "in": [
+    "e",
+    "x"
+   ],
+   "name": "eh",
+   "out": "eh"
+  },
+  {
+   "op": "matvec",
+   "if": "residual_streams == 1",
+   "in": "eh",
+   "w": "predict.proj",
+   "rows": "embd",
+   "out": "z"
+  },
+  {
+   "op": "emit",
+   "if": "residual_streams > 1",
+   "kind": "head_norm",
+   "in": "x",
+   "attr": {
+    "Eps": "eps",
+    "HeadDim": "embd"
+   },
+   "outs": [
+    {
+     "name": "h.normed",
+     "width": "residual_streams * embd"
+    }
+   ],
+   "out": "xn"
+  },
+  {
+   "op": "emit",
+   "if": "residual_streams > 1",
+   "kind": "map",
+   "in": "xn",
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "bind": [
+    {
+     "w": "predict.hidden_norm",
+     "k": "residual_streams * embd"
+    }
+   ],
+   "outs": [
+    {
+     "name": "h.norm",
+     "width": "residual_streams * embd"
+    }
+   ],
+   "out": "xn"
+  },
+  {
+   "op": "each",
+   "if": "residual_streams > 1",
+   "n": "residual_streams",
+   "as": "j",
+   "name": "z",
+   "out": "z",
+   "steps": [
+    {
+     "op": "emit",
+     "kind": "slice",
+     "in": "xn",
+     "attr": {
+      "Offset": "j * embd",
+      "Width": "embd"
+     },
+     "outs": [
+      {
+       "name": "h.stream",
+       "width": "embd"
+      }
+     ],
+     "out": "xk"
+    },
+    {
+     "op": "concat",
+     "in": [
+      "e",
+      "xk"
+     ],
+     "name": "eh",
+     "out": "eh"
+    },
+    {
+     "op": "matvec",
+     "in": "eh",
+     "w": "predict.proj",
+     "rows": "embd",
+     "out": "zk"
+    }
+   ]
+  },
+  {
+   "op": "out",
+   "in": "z"
+  }
+ ],
+ "mark": [
+  {
+   "op": "in",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "emit",
+   "kind": "take_rows",
+   "in": "x",
+   "outs": [
+    {
+     "name": "marks",
+     "width": "embd"
+    }
+   ],
+   "out": "r"
+  },
+  {
+   "op": "layer_norm",
+   "in": "r",
+   "w": [
+    "scorer_norm",
+    "scorer_norm.bias?"
+   ],
+   "eps": "marker_eps",
+   "out": "n"
+  },
+  {
+   "op": "matvec",
+   "in": "n",
+   "w": [
+    "scorer",
+    "scorer.bias?"
+   ],
+   "rows": "embd",
+   "out": "h"
+  },
+  {
+   "op": "expr",
+   "in": "h",
+   "name": "scorer.act",
+   "width": "embd",
+   "terms": [
+    {
+     "fn": "mul",
+     "args": [
+      {
+       "in": 0
+      },
+      {
+       "const": "0.7071067690849304"
+      }
+     ]
+    },
+    {
+     "fn": "erf",
+     "args": [
+      {
+       "term": 0
+      }
+     ]
+    },
+    {
+     "fn": "mul",
+     "args": [
+      {
+       "const": "0.5"
+      },
+      {
+       "in": 0
+      }
+     ]
+    },
+    {
+     "fn": "add",
+     "args": [
+      {
+       "const": "1"
+      },
+      {
+       "term": 1
+      }
+     ]
+    },
+    {
+     "fn": "mul",
+     "args": [
+      {
+       "term": 2
+      },
+      {
+       "term": 3
+      }
+     ]
+    }
+   ],
+   "out": "g"
+  },
+  {
+   "op": "matvec",
+   "in": "g",
+   "w": [
+    "scorer_out",
+    "scorer_out.bias?"
+   ],
+   "rows": "1",
+   "out": "o"
+  },
+  {
+   "op": "out",
+   "in": "o"
+  }
+ ],
+ "joint": [
+  {
+   "op": "in",
+   "out": "x",
+   "width": "embd"
+  },
+  {
+   "op": "norm",
+   "if": "stored('output_norm')",
+   "in": "x",
+   "w": "output_norm",
+   "out": "x"
+  },
+  {
+   "op": "layer_norm",
+   "in": "x",
+   "w": [
+    "decision.hidden_norm",
+    "decision.hidden_norm.bias"
+   ],
+   "eps": "decision_eps",
+   "out": "hn"
+  },
+  {
+   "op": "matvec",
+   "in": "hn",
+   "w": "decision.proj_memory",
+   "rows": "rows('decision.proj_memory')",
+   "out": "memory"
+  },
+  {
+   "op": "emit",
+   "kind": "span_pool",
+   "in": "hn",
+   "attr": {
+    "Offset": "joint_question_spans"
+   },
+   "outs": [
+    {
+     "name": "question",
+     "width": "embd"
+    }
+   ],
+   "out": "qv"
+  },
+  {
+   "op": "emit",
+   "kind": "span_pool",
+   "in": "hn",
+   "attr": {
+    "Offset": "joint_option_spans"
+   },
+   "outs": [
+    {
+     "name": "option",
+     "width": "embd"
+    }
+   ],
+   "out": "ctx"
+  },
+  {
+   "op": "emit",
+   "if": "stored('output')",
+   "kind": "embed",
+   "attr": {
+    "Request": "true",
+    "Offset": "joint_tokens"
+   },
+   "bind": [
+    {
+     "w": "output",
+     "k": "embd",
+     "rows": "rows('output')"
+    }
+   ],
+   "outs": [
+    {
+     "name": "tokens",
+     "width": "embd"
+    }
+   ],
+   "out": "tokens"
+  },
+  {
+   "op": "emit",
+   "if": "not stored('output')",
+   "kind": "embed",
+   "attr": {
+    "Request": "true",
+    "Offset": "joint_tokens"
+   },
+   "bind": [
+    {
+     "w": "token_embd",
+     "k": "embd",
+     "rows": "rows('token_embd')"
+    }
+   ],
+   "outs": [
+    {
+     "name": "tokens",
+     "width": "embd"
+    }
+   ],
+   "out": "tokens"
+  },
+  {
+   "op": "emit",
+   "kind": "span_pool",
+   "in": "tokens",
+   "attr": {
+    "Offset": "joint_option_spans"
+   },
+   "outs": [
+    {
+     "name": "lexical",
+     "width": "embd"
+    }
+   ],
+   "out": "lex"
+  },
+  {
+   "op": "emit",
+   "kind": "pool",
+   "in": "hn",
+   "attr": {
+    "Pooling": "pool_last"
+   },
+   "outs": [
+    {
+     "name": "global",
+     "width": "embd"
+    }
+   ],
+   "out": "global"
+  },
+  {
+   "op": "emit",
+   "kind": "take_rows",
+   "in": "qv",
+   "attr": {
+    "Offset": "joint_option_question"
+   },
+   "outs": [
+    {
+     "name": "option.question",
+     "width": "embd"
+    }
+   ],
+   "out": "qOf"
+  },
+  {
+   "op": "matvec",
+   "in": "ctx",
+   "w": "decision.proj_option_context",
+   "rows": "rows('decision.proj_memory')",
+   "out": "o1"
+  },
+  {
+   "op": "matvec",
+   "in": "lex",
+   "w": "decision.proj_option_lexical",
+   "rows": "rows('decision.proj_memory')",
+   "out": "o2"
+  },
+  {
+   "op": "add",
+   "in": [
+    "o1",
+    "o2"
+   ],
+   "out": "opts"
+  },
+  {
+   "op": "matvec",
+   "in": "qOf",
+   "w": "decision.proj_option_question",
+   "rows": "rows('decision.proj_memory')",
+   "out": "o3"
+  },
+  {
+   "op": "add",
+   "in": [
+    "opts",
+    "o3"
+   ],
+   "out": "opts"
+  },
+  {
+   "op": "each",
+   "n": "decision_routing",
+   "as": "rb",
+   "steps": [
+    {
+     "op": "layer_norm",
+     "in": "memory",
+     "w": [
+      "dec.blk.{rb}.cross_attn_norm_kv",
+      "dec.blk.{rb}.cross_attn_norm_kv.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "mn"
+    },
+    {
+     "op": "layer_norm",
+     "in": "opts",
+     "w": [
+      "dec.blk.{rb}.cross_attn_norm",
+      "dec.blk.{rb}.cross_attn_norm.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "cn"
+    },
+    {
+     "op": "matvec",
+     "in": "cn",
+     "w": [
+      "dec.blk.{rb}.cross_attn_q",
+      "dec.blk.{rb}.cross_attn_q.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mq"
+    },
+    {
+     "op": "matvec",
+     "in": "mn",
+     "w": [
+      "dec.blk.{rb}.cross_attn_k",
+      "dec.blk.{rb}.cross_attn_k.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mk"
+    },
+    {
+     "op": "matvec",
+     "in": "mn",
+     "w": [
+      "dec.blk.{rb}.cross_attn_v",
+      "dec.blk.{rb}.cross_attn_v.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mv"
+    },
+    {
+     "op": "emit",
+     "kind": "rows_attend",
+     "in": [
+      "mq",
+      "mk",
+      "mv"
+     ],
+     "attr": {
+      "NHead": "decision_heads",
+      "NKVHead": "decision_heads",
+      "HeadDim": "(rows('decision.proj_memory')) // (decision_heads)",
+      "Scale": "((rows('decision.proj_memory')) // (decision_heads)) ** -0.5",
+      "Offset": "0"
+     },
+     "outs": [
+      {
+       "name": "attn",
+       "width": "rows('decision.proj_memory')"
+      }
+     ],
+     "out": "ma"
+    },
+    {
+     "op": "matvec",
+     "in": "ma",
+     "w": [
+      "dec.blk.{rb}.cross_attn_o",
+      "dec.blk.{rb}.cross_attn_o.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "co"
+    },
+    {
+     "op": "add",
+     "in": [
+      "opts",
+      "co"
+     ],
+     "out": "opts"
+    },
+    {
+     "op": "layer_norm",
+     "in": "opts",
+     "w": [
+      "dec.blk.{rb}.ffn_norm",
+      "dec.blk.{rb}.ffn_norm.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "fn"
+    },
+    {
+     "op": "matvec",
+     "in": "fn",
+     "w": [
+      "dec.blk.{rb}.ffn_up",
+      "dec.blk.{rb}.ffn_up.bias"
+     ],
+     "rows": "rows('dec.blk.' ~ rb ~ '.ffn_up')",
+     "out": "fh"
+    },
+    {
+     "op": "expr",
+     "in": "fh",
+     "name": "ffn.act",
+     "width": "rows('dec.blk.' ~ rb ~ '.ffn_up')",
+     "terms": [
+      {
+       "fn": "mul",
+       "args": [
+        {
+         "in": 0
+        },
+        {
+         "const": "0.7071067690849304"
+        }
+       ]
+      },
+      {
+       "fn": "erf",
+       "args": [
+        {
+         "term": 0
+        }
+       ]
+      },
+      {
+       "fn": "mul",
+       "args": [
+        {
+         "const": "0.5"
+        },
+        {
+         "in": 0
+        }
+       ]
+      },
+      {
+       "fn": "add",
+       "args": [
+        {
+         "const": "1"
+        },
+        {
+         "term": 1
+        }
+       ]
+      },
+      {
+       "fn": "mul",
+       "args": [
+        {
+         "term": 2
+        },
+        {
+         "term": 3
+        }
+       ]
+      }
+     ],
+     "out": "fg"
+    },
+    {
+     "op": "matvec",
+     "in": "fg",
+     "w": [
+      "dec.blk.{rb}.ffn_down",
+      "dec.blk.{rb}.ffn_down.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "fd"
+    },
+    {
+     "op": "add",
+     "in": [
+      "opts",
+      "fd"
+     ],
+     "out": "opts"
+    }
+   ]
+  },
+  {
+   "op": "matvec",
+   "in": "qv",
+   "w": "decision.proj_question",
+   "rows": "rows('decision.proj_memory')",
+   "out": "base"
+  },
+  {
+   "op": "emit",
+   "kind": "rows_attend",
+   "in": [
+    "base",
+    "opts",
+    "opts"
+   ],
+   "attr": {
+    "NHead": "1",
+    "NKVHead": "1",
+    "HeadDim": "(rows('decision.proj_memory')) // (1)",
+    "Scale": "((rows('decision.proj_memory')) // (1)) ** -0.5",
+    "Offset": "joint_question_options"
+   },
+   "outs": [
+    {
+     "name": "summary",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "summary"
+  },
+  {
+   "op": "emit",
+   "kind": "embed",
+   "attr": {
+    "Request": "true",
+    "Offset": "joint_question_types"
+   },
+   "bind": [
+    {
+     "w": "token_types",
+     "k": "rows('decision.proj_memory')",
+     "rows": "rows('token_types')"
+    }
+   ],
+   "outs": [
+    {
+     "name": "type",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "typed"
+  },
+  {
+   "op": "layer_norm",
+   "in": "summary",
+   "w": [
+    "decision.option_summary_norm",
+    "decision.option_summary_norm.bias"
+   ],
+   "eps": "decision_eps",
+   "out": "sn"
+  },
+  {
+   "op": "add",
+   "in": [
+    "base",
+    "sn"
+   ],
+   "out": "fields"
+  },
+  {
+   "op": "matvec",
+   "in": "global",
+   "w": "decision.proj_global",
+   "rows": "rows('decision.proj_memory')",
+   "out": "gp"
+  },
+  {
+   "op": "add",
+   "in": [
+    "fields",
+    "gp"
+   ],
+   "out": "fields"
+  },
+  {
+   "op": "add",
+   "in": [
+    "fields",
+    "typed"
+   ],
+   "out": "fields"
+  },
+  {
+   "op": "each",
+   "n": "decision_blocks",
+   "as": "jb",
+   "steps": [
+    {
+     "op": "layer_norm",
+     "in": "fields",
+     "w": [
+      "dec.blk.{decision_routing + jb}.attn_norm",
+      "dec.blk.{decision_routing + jb}.attn_norm.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "s1"
+    },
+    {
+     "op": "layer_norm",
+     "in": "fields",
+     "w": [
+      "dec.blk.{decision_routing + jb}.attn_norm",
+      "dec.blk.{decision_routing + jb}.attn_norm.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "s2"
+    },
+    {
+     "op": "matvec",
+     "in": "s1",
+     "w": [
+      "dec.blk.{decision_routing + jb}.attn_q",
+      "dec.blk.{decision_routing + jb}.attn_q.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mq"
+    },
+    {
+     "op": "matvec",
+     "in": "s2",
+     "w": [
+      "dec.blk.{decision_routing + jb}.attn_k",
+      "dec.blk.{decision_routing + jb}.attn_k.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mk"
+    },
+    {
+     "op": "matvec",
+     "in": "s2",
+     "w": [
+      "dec.blk.{decision_routing + jb}.attn_v",
+      "dec.blk.{decision_routing + jb}.attn_v.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mv"
+    },
+    {
+     "op": "emit",
+     "kind": "rows_attend",
+     "in": [
+      "mq",
+      "mk",
+      "mv"
+     ],
+     "attr": {
+      "NHead": "decision_heads",
+      "NKVHead": "decision_heads",
+      "HeadDim": "(rows('decision.proj_memory')) // (decision_heads)",
+      "Scale": "((rows('decision.proj_memory')) // (decision_heads)) ** -0.5",
+      "Offset": "joint_fields"
+     },
+     "outs": [
+      {
+       "name": "attn",
+       "width": "rows('decision.proj_memory')"
+      }
+     ],
+     "out": "ma"
+    },
+    {
+     "op": "matvec",
+     "in": "ma",
+     "w": [
+      "dec.blk.{decision_routing + jb}.attn_o",
+      "dec.blk.{decision_routing + jb}.attn_o.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "so"
+    },
+    {
+     "op": "add",
+     "in": [
+      "fields",
+      "so"
+     ],
+     "out": "fields"
+    },
+    {
+     "op": "layer_norm",
+     "in": "fields",
+     "w": [
+      "dec.blk.{decision_routing + jb}.cross_attn_norm",
+      "dec.blk.{decision_routing + jb}.cross_attn_norm.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "c1"
+    },
+    {
+     "op": "matvec",
+     "in": "c1",
+     "w": [
+      "dec.blk.{decision_routing + jb}.cross_attn_q",
+      "dec.blk.{decision_routing + jb}.cross_attn_q.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mq"
+    },
+    {
+     "op": "matvec",
+     "in": "memory",
+     "w": [
+      "dec.blk.{decision_routing + jb}.cross_attn_k",
+      "dec.blk.{decision_routing + jb}.cross_attn_k.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mk"
+    },
+    {
+     "op": "matvec",
+     "in": "memory",
+     "w": [
+      "dec.blk.{decision_routing + jb}.cross_attn_v",
+      "dec.blk.{decision_routing + jb}.cross_attn_v.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "mv"
+    },
+    {
+     "op": "emit",
+     "kind": "rows_attend",
+     "in": [
+      "mq",
+      "mk",
+      "mv"
+     ],
+     "attr": {
+      "NHead": "decision_heads",
+      "NKVHead": "decision_heads",
+      "HeadDim": "(rows('decision.proj_memory')) // (decision_heads)",
+      "Scale": "((rows('decision.proj_memory')) // (decision_heads)) ** -0.5",
+      "Offset": "0"
+     },
+     "outs": [
+      {
+       "name": "attn",
+       "width": "rows('decision.proj_memory')"
+      }
+     ],
+     "out": "ma"
+    },
+    {
+     "op": "matvec",
+     "in": "ma",
+     "w": [
+      "dec.blk.{decision_routing + jb}.cross_attn_o",
+      "dec.blk.{decision_routing + jb}.cross_attn_o.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "cx"
+    },
+    {
+     "op": "add",
+     "in": [
+      "fields",
+      "cx"
+     ],
+     "out": "fields"
+    },
+    {
+     "op": "layer_norm",
+     "in": "fields",
+     "w": [
+      "dec.blk.{decision_routing + jb}.ffn_norm",
+      "dec.blk.{decision_routing + jb}.ffn_norm.bias"
+     ],
+     "eps": "decision_eps",
+     "out": "fn"
+    },
+    {
+     "op": "matvec",
+     "in": "fn",
+     "w": [
+      "dec.blk.{decision_routing + jb}.ffn_up",
+      "dec.blk.{decision_routing + jb}.ffn_up.bias"
+     ],
+     "rows": "rows('dec.blk.' ~ decision_routing + jb ~ '.ffn_up')",
+     "out": "fh"
+    },
+    {
+     "op": "expr",
+     "in": "fh",
+     "name": "ffn.act",
+     "width": "rows('dec.blk.' ~ decision_routing + jb ~ '.ffn_up')",
+     "terms": [
+      {
+       "fn": "mul",
+       "args": [
+        {
+         "in": 0
+        },
+        {
+         "const": "0.7071067690849304"
+        }
+       ]
+      },
+      {
+       "fn": "erf",
+       "args": [
+        {
+         "term": 0
+        }
+       ]
+      },
+      {
+       "fn": "mul",
+       "args": [
+        {
+         "const": "0.5"
+        },
+        {
+         "in": 0
+        }
+       ]
+      },
+      {
+       "fn": "add",
+       "args": [
+        {
+         "const": "1"
+        },
+        {
+         "term": 1
+        }
+       ]
+      },
+      {
+       "fn": "mul",
+       "args": [
+        {
+         "term": 2
+        },
+        {
+         "term": 3
+        }
+       ]
+      }
+     ],
+     "out": "fg"
+    },
+    {
+     "op": "matvec",
+     "in": "fg",
+     "w": [
+      "dec.blk.{decision_routing + jb}.ffn_down",
+      "dec.blk.{decision_routing + jb}.ffn_down.bias"
+     ],
+     "rows": "rows('decision.proj_memory')",
+     "out": "fd"
+    },
+    {
+     "op": "add",
+     "in": [
+      "fields",
+      "fd"
+     ],
+     "out": "fields"
+    }
+   ]
+  },
+  {
+   "op": "layer_norm",
+   "in": "fields",
+   "w": [
+    "decision.field_norm",
+    "decision.field_norm.bias"
+   ],
+   "eps": "decision_eps",
+   "out": "fields"
+  },
+  {
+   "op": "emit",
+   "kind": "take_rows",
+   "in": "fields",
+   "attr": {
+    "Offset": "joint_option_question"
+   },
+   "outs": [
+    {
+     "name": "option.field",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "field"
+  },
+  {
+   "op": "layer_norm",
+   "in": "opts",
+   "w": [
+    "decision.option_norm",
+    "decision.option_norm.bias"
+   ],
+   "eps": "decision_eps",
+   "out": "option"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "field",
+    "option"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "cos.mul",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "cm"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "cm",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "cos.dot",
+     "width": "1"
+    }
+   ],
+   "out": "dot"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "field",
+    "field"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "cos.f.mul",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "lf.m"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "lf.m",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "cos.f.sq",
+     "width": "1"
+    }
+   ],
+   "out": "lf.s"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "lf.s",
+   "attr": {
+    "Fn": "'sqrt'"
+   },
+   "outs": [
+    {
+     "name": "cos.f.len",
+     "width": "1"
+    }
+   ],
+   "out": "lf"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "option",
+    "option"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "cos.o.mul",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "lo.m"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "lo.m",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "cos.o.sq",
+     "width": "1"
+    }
+   ],
+   "out": "lo.s"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "lo.s",
+   "attr": {
+    "Fn": "'sqrt'"
+   },
+   "outs": [
+    {
+     "name": "cos.o.len",
+     "width": "1"
+    }
+   ],
+   "out": "lo"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "lf",
+    "lo"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "cos.prod",
+     "width": "1"
+    }
+   ],
+   "out": "lp"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "lp",
+   "attr": {
+    "Fn": "'max'",
+    "Const": "0.00000001"
+   },
+   "outs": [
+    {
+     "name": "cos.lens",
+     "width": "1"
+    }
+   ],
+   "out": "lens"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "dot",
+    "lens"
+   ],
+   "attr": {
+    "Fn": "'div'"
+   },
+   "outs": [
+    {
+     "name": "cos",
+     "width": "1"
+    }
+   ],
+   "out": "cosine"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "field",
+    "option"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "feat.mul",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "fm"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "field",
+    "option"
+   ],
+   "attr": {
+    "Fn": "'sub'"
+   },
+   "outs": [
+    {
+     "name": "feat.sub",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "fs"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "fs",
+   "attr": {
+    "Fn": "'abs'"
+   },
+   "outs": [
+    {
+     "name": "feat.abs",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "fa"
+  },
+  {
+   "op": "concat",
+   "in": [
+    "field",
+    "option",
+    "fm",
+    "fa"
+   ],
+   "name": "features",
+   "out": "features"
+  },
+  {
+   "op": "matvec",
+   "in": "features",
+   "w": [
+    "scorer",
+    "scorer.bias"
+   ],
+   "rows": "rows('decision.proj_memory')",
+   "out": "sh"
+  },
+  {
+   "op": "expr",
+   "in": "sh",
+   "name": "scorer.act",
+   "width": "rows('decision.proj_memory')",
+   "terms": [
+    {
+     "fn": "mul",
+     "args": [
+      {
+       "in": 0
+      },
+      {
+       "const": "0.7071067690849304"
+      }
+     ]
+    },
+    {
+     "fn": "erf",
+     "args": [
+      {
+       "term": 0
+      }
+     ]
+    },
+    {
+     "fn": "mul",
+     "args": [
+      {
+       "const": "0.5"
+      },
+      {
+       "in": 0
+      }
+     ]
+    },
+    {
+     "fn": "add",
+     "args": [
+      {
+       "const": "1"
+      },
+      {
+       "term": 1
+      }
+     ]
+    },
+    {
+     "fn": "mul",
+     "args": [
+      {
+       "term": 2
+      },
+      {
+       "term": 3
+      }
+     ]
+    }
+   ],
+   "out": "hidden"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "hidden",
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "scorer.mul",
+     "width": "rows('decision.proj_memory')"
+    }
+   ],
+   "out": "prod",
+   "bind": [
+    {
+     "w": "scorer_out",
+     "k": "rows('decision.proj_memory')"
+    }
+   ],
+   "if": "rows('scorer_out') < 1"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "prod",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "scorer.dot",
+     "width": "1"
+    }
+   ],
+   "out": "sdot",
+   "if": "rows('scorer_out') < 1"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "sdot",
+   "attr": {
+    "Fn": "'add'",
+    "Width": "1"
+   },
+   "outs": [
+    {
+     "name": "scorer.out",
+     "width": "1"
+    }
+   ],
+   "out": "residual",
+   "bind": [
+    {
+     "w": "scorer_out.bias",
+     "k": "1"
+    }
+   ],
+   "if": "rows('scorer_out') < 1"
+  },
+  {
+   "op": "matvec",
+   "if": "rows('scorer_out') >= 1",
+   "in": "hidden",
+   "w": [
+    "scorer_out",
+    "scorer_out.bias"
+   ],
+   "rows": "1",
+   "out": "residual"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "cosine",
+   "attr": {
+    "Fn": "'mul'",
+    "Width": "1",
+    "Offset": "1"
+   },
+   "outs": [
+    {
+     "name": "joint.scaled",
+     "width": "1"
+    }
+   ],
+   "out": "js",
+   "bind": [
+    {
+     "w": "decision.scales",
+     "k": "3"
+    }
+   ]
+  },
+  {
+   "op": "add",
+   "in": [
+    "js",
+    "residual"
+   ],
+   "out": "joint"
+  },
+  {
+   "op": "add",
+   "in": [
+    "qOf",
+    "global"
+   ],
+   "out": "qg"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "qg",
+    "qg"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "anchor.mul",
+     "width": "embd"
+    }
+   ],
+   "out": "anchor.len.m"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "anchor.len.m",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "anchor.sq",
+     "width": "1"
+    }
+   ],
+   "out": "anchor.len.s"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "anchor.len.s",
+   "attr": {
+    "Fn": "'sqrt'"
+   },
+   "outs": [
+    {
+     "name": "anchor.len",
+     "width": "1"
+    }
+   ],
+   "out": "anchor.len"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "anchor.len",
+   "attr": {
+    "Fn": "'max'",
+    "Const": "0.000000000001"
+   },
+   "outs": [
+    {
+     "name": "anchor.floor",
+     "width": "1"
+    }
+   ],
+   "out": "anchor.fl"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "qg",
+    "anchor.fl"
+   ],
+   "attr": {
+    "Fn": "'div'"
+   },
+   "outs": [
+    {
+     "name": "anchor",
+     "width": "embd"
+    }
+   ],
+   "out": "anchor"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "lex",
+    "lex"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "lexical.unit.mul",
+     "width": "embd"
+    }
+   ],
+   "out": "lu.len.m"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "lu.len.m",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "lexical.unit.sq",
+     "width": "1"
+    }
+   ],
+   "out": "lu.len.s"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "lu.len.s",
+   "attr": {
+    "Fn": "'sqrt'"
+   },
+   "outs": [
+    {
+     "name": "lexical.unit.len",
+     "width": "1"
+    }
+   ],
+   "out": "lu.len"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "lu.len",
+   "attr": {
+    "Fn": "'max'",
+    "Const": "0.000000000001"
+   },
+   "outs": [
+    {
+     "name": "lexical.unit.floor",
+     "width": "1"
+    }
+   ],
+   "out": "lu.fl"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "lex",
+    "lu.fl"
+   ],
+   "attr": {
+    "Fn": "'div'"
+   },
+   "outs": [
+    {
+     "name": "lexical.unit",
+     "width": "embd"
+    }
+   ],
+   "out": "lu"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": [
+    "lu",
+    "anchor"
+   ],
+   "attr": {
+    "Fn": "'mul'"
+   },
+   "outs": [
+    {
+     "name": "prior.mul",
+     "width": "embd"
+    }
+   ],
+   "out": "pm"
+  },
+  {
+   "op": "emit",
+   "kind": "reduce",
+   "in": "pm",
+   "attr": {
+    "Fn": "'add'"
+   },
+   "outs": [
+    {
+     "name": "prior.dot",
+     "width": "1"
+    }
+   ],
+   "out": "pd"
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "pd",
+   "attr": {
+    "Fn": "'mul'",
+    "Width": "1",
+    "Offset": "0"
+   },
+   "outs": [
+    {
+     "name": "prior",
+     "width": "1"
+    }
+   ],
+   "out": "prior",
+   "bind": [
+    {
+     "w": "decision.scales",
+     "k": "3"
+    }
+   ]
+  },
+  {
+   "op": "emit",
+   "kind": "map",
+   "in": "joint",
+   "attr": {
+    "Fn": "'mul'",
+    "Width": "1",
+    "Offset": "2"
+   },
+   "outs": [
+    {
+     "name": "joint.gated",
+     "width": "1"
+    }
+   ],
+   "out": "jg",
+   "bind": [
+    {
+     "w": "decision.scales",
+     "k": "3"
+    }
+   ]
+  },
+  {
+   "op": "add",
+   "in": [
+    "prior",
+    "jg"
+   ],
+   "out": "logit"
+  },
+  {
+   "op": "out",
+   "in": "logit"
+  }
+ ]
+}

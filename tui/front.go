@@ -3,6 +3,7 @@ package main
 import (
 	"sync"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/engine"
 	"github.com/jitllm/jitllm/common/session"
 )
@@ -94,7 +95,12 @@ type front struct {
 	turns     []session.Turn
 	thinkOpen map[int]bool
 	alert     string
+
+	crashes crash.Guard
 }
+
+// Crashes is where a panic in an engine command is reported.
+func (f *front) Crashes() *crash.Guard { return &f.crashes }
 
 func newFront() *front {
 	return &front{queue: make(chan any, 256), thinkOpen: map[int]bool{}}
@@ -224,6 +230,7 @@ func newState(fr *front, deviceSpec, placement string, maxSeq int, chat, kvCache
 		Vision:       newValue(fr, fOther, false),
 		Chat:         newValue(fr, fOther, chat),
 		ChatCapable:  newValue(fr, fOther, false),
+		Own:          newValue(fr, fOther, session.Sampling{}),
 		PromptTokS:   newValue(fr, fRates, 0.0),
 		DecodeTokS:   newValue(fr, fRates, 0.0),
 		BytesPerTok:  newValue(fr, fRates, 0.0),

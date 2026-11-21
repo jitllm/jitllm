@@ -1,0 +1,59 @@
+package backend
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
+)
+
+// The package reads no environment; its test binary does, to point the suite's
+// opens at a device the default rule would not pick. Each variable is the
+// Opts field of the same meaning:
+//
+//	JITLLM_VK_DEVICE     Vulkan device pin (Opts.Vulkan.Device), e.g. "1" for
+//	                     the second card -- the default rule takes a discrete
+//	                     card first, so without it an iGPU is never tested
+//	JITLLM_VK_MAXGROUPS  workgroups per dispatch (Opts.Vulkan.MaxGroups), e.g.
+//	                     "7", which sends nearly every launch in the suite
+//	                     through a split dispatch on every Vulkan device
+//	JITLLM_ROCM          the ROCm library directory (Opts.HIP.Path); unset
+//	                     searches the default places
+//
+// and the opens stay on the devices JITLLM_TEST_DEVICES selects (Opts.Admit).
+func testOpts() Opts {
+	o := Opts{Admit: testdevices.Admit()}
+	o.HIP.Path = os.Getenv("JITLLM_ROCM")
+	if v := os.Getenv("JITLLM_VK_DEVICE"); v != "" {
+		o.Vulkan.Device = v
+	}
+	if v := os.Getenv("JITLLM_VK_MAXGROUPS"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil || n == 0 {
+			panic(fmt.Sprintf("JITLLM_VK_MAXGROUPS=%q: want a positive count of workgroups", v))
+		}
+		o.Vulkan.MaxGroups = uint32(n)
+	}
+	return o
+}
+
+// OpenForTest is Open with the suite's choices (testOpts): what every test of
+// this package opens its devices with.
+func OpenForTest() []Device { return OpenWith(testOpts()) }
+
+// VulkanGroups reports a Vulkan device's workgroups per dispatch and how many
+// dispatches it has recorded, and false for any other device. The count is the
+// selection check for a split launch: a split and an unsplit launch leave the
+// same buffer behind.
+func VulkanGroups(d Device) (limit uint32, dispatches uint64, ok bool) {
+	v, ok := d.(*vkDev)
+	if !ok {
+		return 0, 0, false
+	}
+	return v.c.MaxGroups(), v.c.Dispatches(), true
+}
+
+// MetalKernelWrites overrides the write mask a Metal kernel was compiled
+// with: the violation arm of the concurrent encoder's gate.
+func MetalKernelWrites(k Kernel, m uint64) { k.(*mtlKern).k.SetWrites(m) }

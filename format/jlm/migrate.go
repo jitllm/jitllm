@@ -6,7 +6,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/layout"
 )
 
 // Container migrations. The reader opens one version (Version); a container
@@ -21,27 +21,49 @@ import (
 // (Tensor.Stored), so the result is byte for byte the container a fresh
 // conversion at the new version writes (TestUpgradeIsAFreshConversion).
 
-// migrations[v] rewrites the version v container at path as version v+1.
-// Every Version bump adds the entry for the version before it
-// (TestEveryVersionHasItsMigration).
-// Filled in init: a migration opens the container, and Open's refusal asks
-// which versions upgrade.
-var migrations = map[uint32]func(path string) error{}
+// Stating is what a container written before v31 must state that only the
+// architecture code its record names says, an error naming what it lacks
+// (convert.LegacyStated): the converter's knowledge, handed to the migration
+// that reads the old record. The code is opaque here. Nil checks nothing.
+type Stating func(code uint16, c *Config) error
 
-func init() {
-	migrations[26] = migrate26
-	migrations[27] = migrate27
-	migrations[28] = migrate28
-	migrations[29] = migrate29
+// migrationFor is the step that rewrites the version v container at path as
+// version v+1, or nil when there is none, st what v30 must state. Every
+// Version bump adds the entry for the version before it
+// (TestEveryVersionHasItsMigration).
+func migrationFor(v uint32, st Stating) func(path string) error {
+	switch v {
+	case 26:
+		return migrate26
+	case 27:
+		return migrate27
+	case 28:
+		return migrate28
+	case 29:
+		return migrate29
+	case 30:
+		return func(path string) error { return migrate30(path, st) }
+	case 31:
+		return migrate31
+	case 32:
+		return migrate32
+	case 33:
+		return migrate33
+	}
+	return nil
 }
 
 // Upgradable reports whether a chain of migrations reaches Version from v.
 func Upgradable(v uint32) bool {
+	return upgradableWith(func(v uint32) func(string) error { return migrationFor(v, nil) }, v)
+}
+
+func upgradableWith(steps func(uint32) func(string) error, v uint32) bool {
 	if v >= Version {
 		return false
 	}
 	for ; v < Version; v++ {
-		if migrations[v] == nil {
+		if steps(v) == nil {
 			return false
 		}
 	}
@@ -59,16 +81,21 @@ func ReadVersion(path string) (uint32, error) {
 	if _, err := f.ReadAt(b[:], 0); err != nil {
 		return 0, fmt.Errorf("jlm: reading %s: %w", path, err)
 	}
-	if [8]byte(b[0:8]) != Magic {
+	if string(b[0:8]) != Magic {
 		return 0, fmt.Errorf("jlm: %s is not a jlm container", path)
 	}
 	return binary.LittleEndian.Uint32(b[8:]), nil
 }
 
 // Upgrade brings the container at path to Version through the migrations,
-// and reports the version it started at. A current container is left as it
-// is; one no chain reaches is refused, naming the convert command.
-func Upgrade(path string) (from uint32, err error) {
+// st what a v30 container must state, and reports the version it started at.
+// A current container is left as it is; one no chain reaches is refused,
+// naming the convert command.
+func Upgrade(path string, st Stating) (from uint32, err error) {
+	return upgradeWith(func(v uint32) func(string) error { return migrationFor(v, st) }, path)
+}
+
+func upgradeWith(steps func(uint32) func(string) error, path string) (from uint32, err error) {
 	from, err = ReadVersion(path)
 	if err != nil {
 		return 0, err
@@ -76,12 +103,12 @@ func Upgrade(path string) (from uint32, err error) {
 	if from == Version {
 		return from, nil
 	}
-	if !Upgradable(from) {
+	if !upgradableWith(steps, from) {
 		return from, fmt.Errorf("jlm: %s is version %d and no migration reaches %d from it; "+
 			"re-run `jitllm convert` on its source", path, from, Version)
 	}
 	for v := from; v < Version; v++ {
-		if err := migrations[v](path); err != nil {
+		if err := steps(v)(path); err != nil {
 			return from, fmt.Errorf("jlm: upgrading %s from version %d to %d: %w", path, v, v+1, err)
 		}
 		if got, err := ReadVersion(path); err != nil || got != v+1 {
@@ -121,11 +148,11 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 	type plane struct{ off, per uint64 }
 	var planes []plane
 	if q, ok := packerOf(e.Type); ok {
-		nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+		nq, nd, nsc, err := layout.PackedWords(q, int(rows), e.K())
 		if err != nil {
 			return nil, err
 		}
-		if f.ver < 27 && kernels.ScStream(q) {
+		if f.ver < 27 && layout.ScStream(q) {
 			// v26 spent a word on two sub-blocks' pairs, four a super-block.
 			nsc = int(rows) * e.K() / 256 * scWords26
 		}
@@ -160,6 +187,81 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// migrate33 is version 33 to 34. v34's config record may state the parts
+// outside the blocks (Config.Front); a v33 container states none, so only the
+// version word changes, in place, and the upgrade's restatement states them
+// over what the container holds (Restate, convert.StateStored).
+func migrate33(path string) error {
+	f, err := openAt(path, 33)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return setVersion(path, 34)
+}
+
+// migrate32 is version 32 to 33. v33's config record keeps no count of
+// prediction blocks: they are the blocks the graph statement states past the
+// trunk (PredictionBlocks). A v32 record's count is held to that statement,
+// which every v32 writer wrote beside it, and the record is rewritten four
+// bytes shorter, every tensor's planes carried as they are. A count the
+// statement does not cover has no graph for its blocks, which is refused for
+// a conversion from the source.
+func migrate32(path string) error {
+	f, err := openAt(path, 32)
+	if err != nil {
+		return err
+	}
+	if n := f.cfg.legacyPredict; n != f.cfg.PredictionBlocks() {
+		f.Close()
+		return &UpgradeError{What: fmt.Sprintf("%d prediction blocks", n), Reconvert: true}
+	}
+	f.cfg.legacyPredict = 0
+	src := &Source{Config: f.cfg, Vision: f.vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return f.publish(path, src, 33)
+}
+
+// migrate31 is version 31 to 32. v32 added PrePattern, a pre-tokenizer stage
+// that is its Split's regex, carried in the vocab record's last tail: a stage
+// kind no v31 reader knew. A v31 container's stages are kinds every v32
+// reader runs (as the patterns they stand for), and nothing it holds moved or
+// changed meaning, so only the version word changes, in place.
+func migrate31(path string) error {
+	f, err := openAt(path, 31)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return setVersion(path, 32)
+}
+
+// migrate30 is version 30 to 31. v31's config record names no
+// architecture: its first two bytes are written zero. Every other byte of
+// the record, and every tensor, is what v30 wrote, carried as it is. Where
+// only an architecture's code says what a container must state, st says it,
+// and a container that does not state it yet is refused here, where the
+// architecture is last read, for a conversion from its source.
+func migrate30(path string, st Stating) error {
+	f, err := openAt(path, 30)
+	if err != nil {
+		return err
+	}
+	if st != nil {
+		if err := st(f.cfg.legacy, f.cfg); err != nil {
+			f.Close()
+			return fmt.Errorf("jlm: %s %w, which v31 cannot recover: convert the model again", path, err)
+		}
+	}
+	src := &Source{Config: f.cfg, Vision: f.vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return f.publish(path, src, 31)
 }
 
 // migrate29 is version 29 to 30: the audio tower's depthwise bias folded into
@@ -229,11 +331,34 @@ func migrate29(path string) error {
 	return f.publish(path, src, 30)
 }
 
+// Restate rewrites the current container at path with the config state
+// leaves, every tensor's planes carried as they are: what a container
+// written before a config field an older reader drops was stated is brought
+// forward by, with no version word to change. A container state reports
+// unchanged is left as it is.
+func Restate(path string, state func(f *File, c *Config) (bool, error)) (bool, error) {
+	f, err := openAt(path, Version)
+	if err != nil {
+		return false, err
+	}
+	c := *f.cfg
+	changed, err := state(f, &c)
+	if err != nil || !changed {
+		f.Close()
+		return false, err
+	}
+	src := &Source{Config: &c, Vision: f.vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return true, f.publish(path, src, Version)
+}
+
 // carried is entry e as Write takes it back: its stored planes, read when the
 // writer reaches it, placed without packing.
 func (f *File) carried(e *Entry) Tensor {
 	return Tensor{Role: e.Role, Block: e.Block, Index: e.Index, Type: e.Type, NDim: e.NDim,
-		Dims: e.Dims, Name: e.Name, Stored: true, Load: func() ([]byte, error) { return f.storedBytes(e) }}
+		Dims: e.Dims, Name: e.Name, Stored: true, RowTable: f.RowTable(e), Load: func() ([]byte, error) { return f.storedBytes(e) }}
 }
 
 // publish writes src as a version ver container in place of the one f was opened from,
@@ -269,7 +394,7 @@ func migrate28(path string) error {
 }
 
 // migrate27 is version 27 to 28. v28 put the count of multi-token-prediction
-// blocks (Config.NMTP) into the config record after NExpertGroupUsed; a v27
+// blocks into the config record after NExpertGroupUsed (v33 took it out); a v27
 // container has none, so it is zero. The record grows by four bytes, which
 // moves every offset after it, so the container is rewritten with every
 // tensor's planes carried as they are.
@@ -306,7 +431,7 @@ func migrate26(path string) error {
 	for i := range f.tab {
 		e := &f.tab[i]
 		t := f.carried(e)
-		if q, ok := packerOf(e.Type); ok && kernels.ScStream(q) {
+		if q, ok := packerOf(e.Type); ok && layout.ScStream(q) {
 			t.Load = func() ([]byte, error) { return f.restream26(e, q) }
 		}
 		src.Tensors = append(src.Tensors, t)
@@ -319,20 +444,20 @@ func migrate26(path string) error {
 // sub-blocks 2w and 2w+1: the scale in bits 0-7 and 16-23, the minimum in
 // 8-15 and 24-31. v27 word w of super-block s is sc[(s*3+w)*rows+r], each
 // field where kernels.ScField puts it.
-func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
+func (f *File) restream26(e *Entry, q layout.Quant) ([]byte, error) {
 	b, err := f.storedBytes(e)
 	if err != nil {
 		return nil, err
 	}
 	sheets, rows := sheetsOf(e.Dims, e.NDim)
-	nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+	nq, nd, nsc, err := layout.PackedWords(q, int(rows), e.K())
 	if err != nil {
 		return nil, err
 	}
 	nsuper := e.K() / 256
 	old := int(rows) * nsuper * scWords26
 	head := (nq + nd) * 4 * int(sheets)
-	if len(b) != head+old*4*int(sheets) || nsc != int(rows)*nsuper*kernels.ScStreamWords {
+	if len(b) != head+old*4*int(sheets) || nsc != int(rows)*nsuper*layout.ScStreamWords {
 		return nil, fmt.Errorf("jlm: %s: %d stored bytes for a v26 %v of %d sheets of %d rows",
 			e.Name, len(b), e.Type, sheets, rows)
 	}
@@ -344,7 +469,7 @@ func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
 		dst := out[head+sh*nsc*4:]
 		for r := 0; r < int(rows); r++ {
 			for s := 0; s < nsuper; s++ {
-				var ws [kernels.ScStreamWords]uint32
+				var ws [layout.ScStreamWords]uint32
 				for sub := 0; sub < 8; sub++ {
 					si := s*8 + sub
 					v := le.Uint32(in[4*((si/2)*int(rows)+r):])
@@ -353,7 +478,7 @@ func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
 					scPut26(&ws, sub, true, uint8(v>>(lane+8)))
 				}
 				for w, v := range ws {
-					le.PutUint32(dst[4*((s*kernels.ScStreamWords+w)*int(rows)+r):], v)
+					le.PutUint32(dst[4*((s*layout.ScStreamWords+w)*int(rows)+r):], v)
 				}
 			}
 		}
@@ -363,8 +488,8 @@ func (f *File) restream26(e *Entry, q kernels.Quant) ([]byte, error) {
 
 // scPut26 ORs a 6-bit field into a super-block's stream words, where
 // kernels.ScField places it.
-func scPut26(ws *[kernels.ScStreamWords]uint32, sub int, min bool, v uint8) {
-	w, b, hi := kernels.ScField(sub, min)
+func scPut26(ws *[layout.ScStreamWords]uint32, sub int, min bool, v uint8) {
+	w, b, hi := layout.ScField(sub, min)
 	ws[w] |= uint32(v&63) << uint(b)
 	if hi > 0 {
 		ws[w+1] |= uint32(v&63) >> uint(6-hi)
