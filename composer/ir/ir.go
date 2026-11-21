@@ -155,8 +155,8 @@ const (
 	OpTileMMA
 	OpTileStore
 	// OpSubF16x2 and OpFmaF16x2 are packed binary16 arithmetic on two halves
-	// in one u32: a-b, and a*b+c rounded once. They serve sm_70's tensor-core
-	// matvec (kernels.MatVecMMA70). Only PTX lowers them.
+	// in one u32: a-b, and a*b+c rounded once. The composer's HalfPairs pass
+	// forms them for a device that states them (composer.HalfPairsOn).
 	OpSubF16x2
 	OpFmaF16x2
 	// OpLoadV reads n (2 or 4) consecutive elements (idx+off .. idx+off+n-1)
