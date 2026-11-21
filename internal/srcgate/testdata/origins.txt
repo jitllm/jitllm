@@ -1473,6 +1473,8 @@ fault	engine/probe/cache_windows.go	"probe: GetLogicalProcessorInformationEx sta
 fault	engine/probe/cache_windows.go	"probe: GetLogicalProcessorInformationEx: %w"	the host states no figure; the probe measures without it
 fault	engine/probe/cache_windows.go	"probe: a cache record of %d bytes at %d of %d"	the host states no figure; the probe measures without it
 fault	engine/probe/cache_windows.go	"probe: no data cache record names the first processor"	the host states no figure; the probe measures without it
+context	engine/probe/clock_windows.go	"probe: %w"
+fault	engine/probe/clock_windows.go	"probe: the performance counter states %d ticks a second"	the host states no counter rate; the probe has no clock to time its forms with
 bug	engine/probe/formed.go	"probe: %s binds %+v, which no probe provides"
 bug	engine/probe/formed.go	"probe: %s has a call word at %d past the argument block"
 bug	engine/probe/formed.go	"probe: %s has no host code"
