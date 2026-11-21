@@ -133,7 +133,7 @@ func (s *TelemetryService) GetServerInfo(ctx context.Context, req *connect.Reque
 			info.Devices = append(info.Devices, s.E.pbDevice(d))
 		}
 	}
-	m, err := capabilities.WithAPI(s.E.cfg.Version, API())
+	m, err := s.E.manifest()
 	if err != nil {
 		return nil, connectErr(err)
 	}

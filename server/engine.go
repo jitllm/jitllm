@@ -271,8 +271,6 @@ type Engine struct {
 	demandMu sync.Mutex
 }
 
-// New builds an Engine. It does not touch the hardware; the first ListDevices
-// or LoadModel does.
 // manifest is the engine's capability manifest, built once: it reads the
 // model library, which a health probe must not wait on per request.
 func (e *Engine) manifest() (capabilities.Manifest, error) {
@@ -280,6 +278,8 @@ func (e *Engine) manifest() (capabilities.Manifest, error) {
 	return e.caps, e.capsErr
 }
 
+// New builds an Engine. It does not touch the hardware; the first ListDevices
+// or LoadModel does.
 func New(cfg Config) *Engine {
 	cfg.withDefaults()
 	// One fetch bound for the whole server, shared by every surface.
