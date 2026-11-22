@@ -88,9 +88,10 @@ func (s *Instance) park() (ParkStats, error) {
 	}
 	if s.kv.share != nil {
 		// A sharing session's sealed pages are the shared store's copy, held
-		// once: evicted, nothing would be freed and nothing would hold them
-		// against the store's trim before Resume. They are named and kept.
+		// once: the session lets go of them and the store holds them for its
+		// Resume, against its trim (parkShared).
 		s.kv.seal(s.pos)
+		st.PagesOut = s.kv.parkShared()
 	} else {
 		ev := s.kv.evicted
 		// Seal first: a page the store does not hold is never evicted. The
@@ -129,6 +130,7 @@ func (s *Instance) Resume() (int, error) {
 	}
 	s.parked = false
 	s.ParkedIn += int64(in)
+	s.kv.unpinAll() // every page is the session's again
 	if s.parkStore != nil {
 		// Every page is back in the cache: the store and its copies go with
 		// the last reference, and the session is storeless again. Nothing was

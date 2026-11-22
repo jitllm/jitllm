@@ -491,6 +491,9 @@ type kvCache struct {
 	keys []int
 	// chunked is how far aliasChunks has named this sequence's shared pages.
 	chunked int
+	// pins are the store's pages a parked sharing session let go of and
+	// holds for its Resume (parkShared).
+	pins []*sharedPage
 	// sealedAt is where the last prompt this sequence sealed ended
 	// (SealPrompt): the fill a repeat of it asks for in the page it ended
 	// in, named there when a sharing session lets that page go.
@@ -2069,8 +2072,9 @@ func (kc *kvCache) cardPage(li int) nn.KVShareDevice {
 // flushPublish sends the queued names to the device, in one call.
 func (kc *kvCache) flushPublish() {
 	if len(kc.pubLi) > 0 {
-		if d := kc.devAt(int(kc.pubLi[0])); d != nil {
-			d.PublishKVs(kc.pubLi, kc.pubPage, kc.pubKey)
+		if d := kc.devAt(int(kc.pubLi[0])); d != nil && d.PublishKVs(kc.pubLi, kc.pubPage, kc.pubKey) &&
+			kc.share != nil {
+			kc.share.countCard(0, 0, 2*len(kc.pubLi))
 		}
 	}
 	kc.pubLi, kc.pubPage = kc.pubLi[:0], kc.pubPage[:0]
@@ -2637,6 +2641,7 @@ func (kc *kvCache) reset() {
 	}
 	kc.ck = kc.ck[:0]
 	kc.chunked, kc.sealedAt = 0, 0
+	kc.unpinAll()
 }
 
 // keepOnReset lets page n go as reset does, its memory kept in spare for the
