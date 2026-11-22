@@ -49,7 +49,7 @@ func TestMatrixTileFollowsTheModel(t *testing.T) {
 		found, halves := false, false
 		for _, cd := range codes {
 			halves = halves || strings.HasSuffix(cd.Name, ".halves")
-			if cd.Matrix == [2]int{} {
+			if cd.Matrix == [2]int{} || cd.Band.Upto > 0 {
 				continue
 			}
 			found = true
@@ -71,6 +71,73 @@ func TestMatrixTileFollowsTheModel(t *testing.T) {
 		}
 		if convert := c.n <= 128; halves == convert {
 			t.Fatalf("%d outputs of %d: a halves kernel %v, the stage converting the row's factor %v", c.n, c.k, halves, convert)
+		}
+	}
+}
+
+// TestMatrixBandsFollowTheModel forms a projection at a 512-row step for a
+// V100's stated units, threads and workgroup memory, and holds its codes to
+// the bands the device's model prices: the vector form at the fewest rows,
+// a narrower tile of the profile's at the calls past it, and the form of the
+// step's capacity past those; every call of 1 to 512 rows launches exactly
+// one form's projection. A forced tile is the form at every call.
+func TestMatrixBandsFollowTheModel(t *testing.T) {
+	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Shared: 96 << 10, Matrix: [3]int{16, 16, 16}}
+	form := func(d composer.Device, n, k int) []composer.Code {
+		b := graph.New()
+		in := b.In("x", k)
+		b.Out(b.MatVec(in, jlm.RoleAttnQ, n))
+		_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleAttnQ: jlm.TypeQ4S},
+			Step: composer.Step{Rows: 512, Page: 64, Keys: 1, ActWindow: 32}, Device: d})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return codes
+	}
+	projections := func(codes []composer.Code, rows int) (vec, mat []composer.Code) {
+		for _, c := range codes {
+			if !c.Runs(rows) || !strings.Contains(c.Name, "reduce") || strings.Contains(c.Name, "combine") ||
+				strings.Contains(c.Name, "halves") || strings.Contains(c.Name, "rowscale") {
+				continue
+			}
+			if c.Matrix == [2]int{} {
+				vec = append(vec, c)
+			} else {
+				mat = append(mat, c)
+			}
+		}
+		return vec, mat
+	}
+	for _, sh := range [][2]int{{4096, 4096}, {14336, 4096}, {4096, 14336}} {
+		codes := form(dev, sh[0], sh[1])
+		narrow := 0
+		for _, c := range codes {
+			if c.Matrix != [2]int{} && c.Band.Upto > 0 {
+				narrow++
+			}
+		}
+		if narrow == 0 {
+			t.Fatalf("%v: no matrix code runs in a band below the capacity's form: the model's narrower tiles were never formed", sh)
+		}
+		groups := map[int]bool{}
+		for rows := 1; rows <= 512; rows++ {
+			vec, mat := projections(codes, rows)
+			if len(vec) > 0 && len(mat) > 0 || len(vec)+len(mat) == 0 {
+				t.Fatalf("%v at %d rows: %d vector and %d matrix projection codes launch, want one form's", sh, rows, len(vec), len(mat))
+			}
+			if len(mat) > 0 {
+				groups[mat[0].Groups] = true
+			}
+		}
+		if len(groups) < 2 {
+			t.Fatalf("%v: every call's matrix projection is one tile's (%v)", sh, groups)
+		}
+		d := dev
+		d.Tile = composer.MatrixTile{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{2, 2}, Resident: 2}
+		for _, c := range form(d, sh[0], sh[1]) {
+			if c.Matrix != [2]int{} && c.Band.Upto > 0 {
+				t.Fatalf("%v: a forced tile's form runs %s in a band of its own", sh, c.Name)
+			}
 		}
 	}
 }

@@ -105,6 +105,9 @@ func (r *Registry) form(req Request) ([]Code, error) {
 	}
 	if alternated(req) {
 		t, v, narrow := r.bands(ks, req)
+		if req.Device.Tile.Rows > 0 {
+			narrow = nil // the caller's tile is the form's at every call
+		}
 		for i := len(narrow) - 1; i >= 0; i-- {
 			nr := req
 			nr.Device.Tile = narrow[i].tile
