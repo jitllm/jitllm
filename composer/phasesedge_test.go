@@ -15,7 +15,7 @@ import (
 // the first write of an output, the order the tier writes an output over
 // its input by.
 func TestPhasesTakeEdgeReadersOrWriters(t *testing.T) {
-	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, ExactArith: true, Regs: 32, Shared: 96 << 10, VectorLoads: true}
+	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32, Shared: 96 << 10, VectorLoads: true}
 	const E, K = 32, 4
 	b := graph.New()
 	x := b.In("scores", E)
@@ -48,7 +48,7 @@ func TestPhasesTakeEdgeReadersOrWriters(t *testing.T) {
 // squares, reading the part's inputs in one-workgroup launches that run as
 // phases of one.
 func TestPhasesFormTheExpertsSum(t *testing.T) {
-	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, ExactArith: true, Regs: 32, Shared: 96 << 10, VectorLoads: true}
+	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32, Shared: 96 << 10, VectorLoads: true}
 	g, _, _, _ := expertsSum(2, 64)
 	phased := 0
 	for _, c := range formWith(t, composer.Default(), g, map[jlm.Role]jlm.Type{}, v100) {

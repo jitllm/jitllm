@@ -18,7 +18,7 @@ import (
 func TestPrologueRunsWhereEveryWorkgroupReadsAll(t *testing.T) {
 	const P, K, rows, E = 4, 2880, 2880, 32
 	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Shared: 96 << 10,
-		ExactDiv: true, ExactArith: true, HalfPairs: true, VectorLoads: true}
+		ExactDiv: true, HalfPairs: true, VectorLoads: true}
 	jt, _ := jlm.TypeOf(quant.MXFP4)
 	prologues := func(experts bool) int {
 		b := graph.New()

@@ -28,7 +28,7 @@ func TestExpertGroupingIsShared(t *testing.T) {
 	}
 	b.Out(outs...)
 	jt, _ := jlm.TypeOf(quant.Q4_K)
-	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 163840, Lanes: 32, Units: 80, Shared: 98304, ExactDiv: true, ExactArith: true, Matrix: [3]int{16, 16, 16}}
+	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 163840, Lanes: 32, Units: 80, Shared: 98304, ExactDiv: true, Matrix: [3]int{16, 16, 16}}
 	_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleExpGateBank: jt, jlm.RoleExpUpBank: jt},
 		Step: composer.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
 	if err != nil {

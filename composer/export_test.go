@@ -20,9 +20,7 @@ func XDMark(at, ends, h, w, idx uint32) RopeMark { return xdMark(at, ends, h, w,
 
 // WeightLoads is the weight words a launch of req's form at its capacity
 // loads: each live load of a weight operand a thread makes, times the trips
-// of every loop it varies with, times the threads that make it. A form for
-// few rows (Kernel.Few), launched in place of its tiled form only at a call
-// of few rows, is left out.
+// of every loop it varies with, times the threads that make it.
 func WeightLoads(r *Registry, req Request) (int, error) {
 	ks, err := r.formKernels(req)
 	if err != nil {
@@ -30,9 +28,6 @@ func WeightLoads(r *Registry, req Request) (int, error) {
 	}
 	n := 0
 	for _, k := range ks {
-		if k.Few > 0 {
-			continue
-		}
 		threads := k.Elements()
 		if k.Work {
 			threads *= k.Group

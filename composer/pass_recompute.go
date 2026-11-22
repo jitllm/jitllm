@@ -123,7 +123,7 @@ const recomputeReads = 2
 // kernel from ks[i] to its last reader writes what ks[i] reads.
 func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 	pk := ks[i]
-	if pk.Kind != PrimMap || pk.Work || len(pk.Loops) != 0 || len(pk.Stores) != 1 || pk.Few > 0 || pk.Many > 0 {
+	if pk.Kind != PrimMap || pk.Work || len(pk.Loops) != 0 || len(pk.Stores) != 1 {
 		return nil, false
 	}
 	st := pk.Stores[0]

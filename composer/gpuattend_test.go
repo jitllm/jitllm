@@ -346,7 +346,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	// to a wider one: the V100's Vulkan driver reads 1.4e-7 on the form
 	// before the running pass as after it, the laptop's 3e-14.
 	band := 1e-8
-	if !dev.ExactArith {
+	if !composer.ExactArithOn(d.API()) {
 		band = 1e-6
 	}
 	for r := range R {

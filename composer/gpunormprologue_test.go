@@ -48,7 +48,7 @@ func prefetches(codes []composer.Code) int {
 // they take several or a thread takes many of its trips. The violation:
 // no touches.
 func TestComposedGPUNormInProjections(t *testing.T) {
-	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, ExactArith: true, Regs: 32, Shared: 96 << 10, VectorLoads: true}
+	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32, Shared: 96 << 10, VectorLoads: true}
 	for _, c := range []struct {
 		K, Q, KV, want int
 	}{{1536, 8960, 0, 1}, {2560, 10240, 0, 1}, {4096, 14336, 0, 2}, {4096, 4096, 1024, 2}, {3072, 3072, 3072, 2}} {

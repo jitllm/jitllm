@@ -103,7 +103,7 @@ func (k *Kernel) bound() int {
 func phaseable(k *Kernel) bool {
 	if k.Group <= 0 || k.groups() != 1 || k.Kind == PrimMatrix || k.Kind == PrimScan || k.Ones != 0 || k.Calls != 0 ||
 		k.Pick != nil || k.Quarter != nil || k.Positions != nil || k.Heads != nil || k.Rows != 0 || k.Clamp != 0 ||
-		k.RowsHeld || k.Tile != 0 || k.TileRows != 0 || k.Few != 0 || k.Many != 0 || k.Running != nil || k.Seq != nil ||
+		k.RowsHeld || k.Tile != 0 || k.TileRows != 0 || k.Running != nil || k.Seq != nil ||
 		k.Args != nil || k.Ptrs != nil || k.Lines != nil || k.Jam != 0 || k.Resident != 0 {
 		return false
 	}
