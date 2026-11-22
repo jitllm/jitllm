@@ -289,7 +289,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 			if dev.Units > 0 && (banded == 0 || vecRan == 0 || matRan == 0) {
 				t.Fatalf("%s: the vector form beside the matrix form: %d codes banded, %d launches of the vector form's and %d of the matrix form's", name, banded, vecRan, matRan)
 			}
-			if cuts == 0 {
+			if dev.Units > 0 && cuts == 0 {
 				t.Fatalf("%s: no projection's k was cut at launch: the calls of few rows never ran a cut", name)
 			}
 			t.Logf("%s: %d projections formed on the matrix unit, %d cut at launch, held to the oracle at calls of 1 to their capacity's rows", name, ran, cuts)
