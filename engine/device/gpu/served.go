@@ -300,7 +300,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 	}
 	g.Stats.ComposedLanes = lanes
 	dev := composer.Device{Kind: composer.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
-		Regs: threadRegs(g.dev), ExactDiv: composer.ExactDivOn(g.dev.API()), ExactArith: composer.ExactArithOn(g.dev.API()),
+		Regs: threadRegs(g.dev), ExactDiv: composer.ExactDivOn(g.dev.API()),
 		Matrix: g.composedMatrix(), HalfPairs: composer.HalfPairsOn(g.dev.API()),
 		VectorLoads: composer.VectorLoadsOn(g.dev.API()), Shared: sharedPerUnit(g.dev), Launch: g.launchWords(),
 		Buffers: backend.Bindings(g.dev), Group: int(g.groupMost.Load())}
@@ -428,7 +428,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 	}
 	for ci, c := range codes {
 		geom := composer.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
-			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
+			LiveGroup: c.LiveGroup, Work: c.Work}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
 			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA }),
 			attend: slices.Contains(c.Passes, "flash"), sweep: c.Sweep})
@@ -979,9 +979,6 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 	var matrix unitLaunches
 	for i := lo; i < hi; i++ {
 		fc, bufs := &f.codes[i], sv.args[i]
-		if !fc.geom.RunsAt(sv.rows) {
-			continue
-		}
 		for j, a := range f.args[i] {
 			var b backend.Buf
 			switch a.kind {

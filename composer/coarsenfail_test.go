@@ -17,7 +17,7 @@ import (
 // allocation of the whole form.
 func TestCoarsenRefusesWithoutBuildingTheChain(t *testing.T) {
 	g := (&graph.SampleTopK{NVocab: 151552, K: 64}).Build()
-	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 30720, Lanes: 32, Units: 20, Shared: 102400, ExactDiv: true, ExactArith: true}
+	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 30720, Lanes: 32, Units: 20, Shared: 102400, ExactDiv: true}
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)

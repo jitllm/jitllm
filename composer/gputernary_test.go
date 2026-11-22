@@ -136,9 +136,6 @@ func runGraphRowsWith(d backend.Device, codes []composer.Code, kerns []backend.K
 	}
 	own := map[composer.Operand]backend.Buf{}
 	for ci, c := range codes {
-		if !c.RunsAt(rows) {
-			continue
-		}
 		args := make([]backend.Buf, len(c.Binds))
 		for i, bd := range c.Binds {
 			o := bd.Operand

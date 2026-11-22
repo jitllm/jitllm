@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
@@ -43,12 +44,12 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 // of CUDA's statement and one of Vulkan's: from 128 rows on the largest
 // kernel's op count stays within 1% (an address constant's form, a tail's
 // guard), from two rows on every projection is tiled, and no kernel passes
-// 1,000 ops. At one row nothing is tiled. On the device whose arithmetic is
-// exact each tiled projection has its form for few rows beside it, and on
-// the other none. With the pass off every row loads the weight itself, at
+// 1,000 ops. At one row nothing is tiled. No projection has a second
+// kernel for few rows (a width tier): a call of any rows runs the one form,
+// held to its rows. With the pass off every row loads the weight itself, at
 // eight times the weight loads a row or more: the gate sees it.
 func TestRowTilesHoldTheOps(t *testing.T) {
-	cuda := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, ExactArith: true}
+	cuda := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true}
 	formats := func(typ jlm.Type) map[jlm.Role]jlm.Type {
 		return map[jlm.Role]jlm.Type{jlm.RoleFFNGate: typ, jlm.RoleFFNUp: typ, jlm.RoleFFNDown: typ, jlm.RoleFFNNorm: jlm.TypeF32}
 	}
@@ -70,24 +71,20 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 					largest, tiled, few := 0, 0, 0
 					for _, c := range codes {
 						largest = max(largest, len(c.GPU.Ops))
-						switch {
-						case c.Few > 0:
+						if strings.Contains(c.Name, ".few") {
 							few++
-						case slices.Contains(c.Passes, "rowtiles"):
+						}
+						if slices.Contains(c.Passes, "rowtiles") {
 							tiled++
 						}
-					}
-					fewWant := 0
-					if R > 1 && d.ExactArith {
-						fewWant = 3
 					}
 					switch {
 					case R == 1 && tiled != 0:
 						t.Fatalf("%s: %d kernels tiled at one row", name, tiled)
 					case R > 1 && tiled != 3:
 						t.Fatalf("%s at %d rows: %d of 3 projections tiled", name, R, tiled)
-					case few != fewWant:
-						t.Fatalf("%s at %d rows: %d forms for few rows, want %d", name, R, few, fewWant)
+					case few != 0:
+						t.Fatalf("%s at %d rows: %d kernels formed for few rows beside their projection's: a width tier", name, R, few)
 					case largest > 1000:
 						t.Fatalf("%s at %d rows: a kernel of %d ops", name, R, largest)
 					}
@@ -161,8 +158,7 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 // shape -- at a capacity of 16 rows on every device present, and runs it at
 // calls of 1 to 5 and 16 rows: each call's rows are bit for bit the
 // capacity's call's, where the device's arithmetic is exact through the
-// untiled form for few rows (which must be formed there), elsewhere through
-// the tiled form alone. The input's rows moved by one must part a call from
+// tiled form, the one kernel a call of any rows runs. The input's rows moved by one must part a call from
 // the capacity's: the comparison sees a row that is not its own.
 // FloatTiles is removed: it takes a float32 projection over rows first.
 func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
@@ -191,13 +187,6 @@ func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 				Step: composer.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
 			if err != nil {
 				t.Fatal(err)
-			}
-			few := 0
-			for _, c := range formed {
-				few = max(few, c.Few)
-			}
-			if dev.ExactArith && few == 0 {
-				t.Fatal("no form for few rows on a device whose arithmetic is exact")
 			}
 			op, err := compileLone(d, formed)
 			if err != nil {
@@ -234,7 +223,7 @@ func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
 			if got := run(3, rot); slices.Equal(got[:n], full[:n]) {
 				t.Fatal("a call with the input's rows moved by one wrote row 0 as the capacity's call did: the gate cannot see it")
 			}
-			t.Logf("%s: calls of 1 to 5 and 16 rows bit for bit, the form for few rows up to %d rows", d.API(), few)
+			t.Logf("%s: calls of 1 to 5 and 16 rows bit for bit", d.API())
 		})
 	}
 }
@@ -277,7 +266,7 @@ func tiledWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []b
 // every count of rows a call may state -- 1, 3, 7, 31, 33, 100, 511 and 512,
 // the rows past them poisoned -- each row held to the oracle and bit for bit
 // to its value in a call of the capacity's rows (a call of few rows runs the
-// form for few rows where the device's arithmetic is exact, and one must),
+// one tiled form, held to its rows),
 // and every word past the call's rows, to the capacity and the guard after
 // it, untouched.
 // The decode form runs its one row the same way. Three violations must
@@ -309,7 +298,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 		t.Run(d.API(), func(t *testing.T) {
 			dev := gpuDevice(d)
 			rng := rand.New(rand.NewSource(43))
-			ran, tiledRan, fewRan := 0, 0, 0
+			ran, tiledRan := 0, 0
 			for _, sh := range shapes {
 				typ, n, k := sh.typ, sh.n, sh.k
 				jt, ok := jlm.TypeOf(typ)
@@ -395,13 +384,6 @@ func TestComposedGPURowTiles(t *testing.T) {
 							}
 							return res[:L*n], clean
 						}
-						few := 0
-						for _, c := range formed {
-							few = max(few, c.Few)
-						}
-						if few == 0 && dev.ExactArith && R > 1 {
-							t.Fatalf("%s: no form for few rows on a device whose arithmetic is exact", name)
-						}
 						full, _ := run(R, R, x, planes)
 						for _, L := range calls {
 							if L > R {
@@ -413,9 +395,6 @@ func TestComposedGPURowTiles(t *testing.T) {
 									t.Fatalf("%s: a call of %d rows writes row %d's element %d as %08x, a call of %d rows as %08x",
 										name, L, i/n, i%n, math.Float32bits(v), R, math.Float32bits(full[i]))
 								}
-							}
-							if R > 1 && L <= few {
-								fewRan++
 							}
 							if !clean {
 								t.Fatalf("%s: a call of %d rows wrote past them", name, L)
@@ -448,10 +427,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 					}
 				}
 			}
-			if dev.ExactArith && fewRan == 0 {
-				t.Fatalf("%s: no call ran a form for few rows", d.API())
-			}
-			t.Logf("%s: %d calls right against the oracle and bit for bit against the capacity's call, %d of them tiled, %d on the form for few rows, every violation seen", d.API(), ran, tiledRan, fewRan)
+			t.Logf("%s: %d calls right against the oracle and bit for bit against the capacity's call, %d of them tiled, every violation seen", d.API(), ran, tiledRan)
 		})
 	}
 }

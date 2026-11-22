@@ -119,11 +119,6 @@ type Kernel struct {
 	// TileFirst 1 + the node its first store's row is (the first, held to
 	// the last); TileRows is the leading axis's rows before tiling.
 	Tile, TileBase, TileLast, TileFirst, TileRows int
-	// Few, where set, is a kernel launched in place of the kernel before it
-	// at a call of at most Few rows, and Many, where set, one launched only
-	// at a call of more than Many rows, the kernel after it holding fewer
-	// (Split.Few).
-	Few, Many int
 	// TileMajor is a kernel whose calls over a step's rows and a weight's
 	// tiles (Workers) run every row of a tile before the next tile.
 	TileMajor bool

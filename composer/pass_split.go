@@ -32,14 +32,6 @@ type Split struct {
 	Fill float64
 	// Width, where set, forces a workgroup split's threads.
 	Width int
-	// Few, where set, forms beside a tiled kernel's split (groupSplitRows),
-	// or beside the tiled kernel where its rows are wide enough to take no
-	// split, its untiled form, each row's sums cut and combined in the tiled
-	// one's order, launched in its place at a call of at most Few rows: a row
-	// computed alone rather than with the tile's copies of it. Only on a
-	// device whose float arithmetic rounds every operation alone
-	// (Device.ExactArith), where the two kernels write a row's same bits.
-	Few   int
 	Kinds []PrimKind
 	// Drop adds every float sum's segments but the last: a gate's violation.
 	Drop bool
@@ -69,7 +61,7 @@ func (s Split) groupThreads(d Device) int {
 }
 
 func (s Split) groupSegments(n *Kernel, d Device) (S, G int, ok bool) {
-	if !s.Group || s.Parts > 0 || n.Few > 0 || n.Many > 0 || n.Work || n.Tile > 1 && n.Capacity > 0 || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
+	if !s.Group || s.Parts > 0 || n.Work || n.Tile > 1 && n.Capacity > 0 || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
 		return 0, 0, false
 	}
 	c, _, ok := sums(n)
@@ -160,10 +152,6 @@ func segmentsAt(k *Kernel, S, G int) int {
 }
 
 func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
-	if n.Few > 0 || n.Many > 0 {
-		// A pair's two forms are cut alike or not at all.
-		return nil, false, nil
-	}
 	if s.Parts == 0 && n.Tile > 1 && n.Capacity > 0 && !n.Work && covers(s.Kinds, n.Kind) && (!s.Matrix || readsMatrix(n)) {
 		if gs, ok := s.groupSplitRows(n, d); ok {
 			return gs, true, nil
@@ -511,19 +499,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 		S *= 2
 	}
 	if S == 1 {
-		// Rows wide enough to fill the device whole: no split, and the
-		// untiled form for few rows runs a row's sum as the tile does.
-		if s.Few == 0 || !d.ExactArith {
-			return nil, false
-		}
-		u, ok := untiled(n)
-		if !ok {
-			return nil, false
-		}
-		g := n.clone()
-		g.Many, u.Few = s.Few, s.Few
-		u.Name = n.Name + ".few"
-		return []*Kernel{g, u}, true
+		return nil, false // rows wide enough to fill the device whole
 	}
 	// A workgroup's segments hold whole elements of one unit: fewer
 	// elements than a 128-thread workgroup's share take a narrower one.
@@ -535,50 +511,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	if !ok {
 		return nil, false
 	}
-	if s.Few == 0 || !d.ExactArith {
-		return []*Kernel{g}, true
-	}
-	u, ok := untiled(n)
-	if !ok {
-		return []*Kernel{g}, true
-	}
-	f, ok := splitTile(u, S, fewGroup(G, S, E, d), s.Drop)
-	if !ok {
-		return []*Kernel{g}, true
-	}
-	g.Many, f.Few = s.Few, s.Few
-	f.Name = n.Name + ".few.group"
-	return []*Kernel{g, f}, true
-}
-
-// untiled is a tiled kernel n (RowTiles) whose threads each sum one row: its
-// first row's stores alone, the tile's first row the leading coordinate, the
-// leading axis the rows before tiling. A row's sum is the tiled kernel's
-// row's, node for node.
-func untiled(n *Kernel) (*Kernel, bool) {
-	base := n.Nodes[n.TileBase-1]
-	if n.TileRows == 0 || base.Op != OpMul || n.Nodes[base.A].Op != OpCoord || n.Nodes[base.A].A != 0 {
-		return nil, false
-	}
-	m := n.clone()
-	m.redirect(n.TileBase-1, base.A, -1)
-	m.Stores = m.Stores[:len(n.Stores)/n.Tile]
-	m.Space[0] = n.TileRows
-	m.Tile, m.TileBase, m.TileRows = 1, base.A+1, 0
-	m.compact()
-	return m, true
-}
-
-// fewGroup is the workgroup of a form for few rows: the tiled form's G
-// threads, halved while a row's E elements fill fewer workgroups than the
-// device has multiprocessors, down to one warp. Its segments stay S, so a
-// row's sums are the tiled form's; only how many elements a workgroup holds
-// moves.
-func fewGroup(G, S, E int, d Device) int {
-	for d.Units > 0 && E*S/G < d.Units && G/2 >= 32 && G/2 >= S && E%(G/2/S) == 0 {
-		G /= 2
-	}
-	return G
+	return []*Kernel{g}, true
 }
 
 // splitTile is n, whose threads each sum a tile of n.Tile rows (one where
@@ -773,9 +706,7 @@ func (b Blocks) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (b Blocks) apply(n *Kernel) ([]*Kernel, bool, error) {
 	B := b.Size
-	// A form for few rows sums as its tiled form does, which blocks none
-	// of its several sums a loop.
-	if !covers(b.Kinds, n.Kind) || n.Few > 0 || n.Many > 0 {
+	if !covers(b.Kinds, n.Kind) {
 		return nil, false, nil
 	}
 	var r *Kernel

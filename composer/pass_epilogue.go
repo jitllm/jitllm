@@ -64,7 +64,7 @@ func (p Epilogue) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // epilogueOf is the store of workgroup kernel w that map m runs on, where m
 // is one the epilogue runs in w.
 func epilogueOf(w, m *Kernel) (Store, bool) {
-	if !w.Work || m.Work || len(w.Stores) == 0 || w.Few > 0 || w.Many > 0 || lastSteps(w) > 1 || !epilogueCandidate(w, m) {
+	if !w.Work || m.Work || len(w.Stores) == 0 || lastSteps(w) > 1 || !epilogueCandidate(w, m) {
 		return Store{}, false
 	}
 	last := w.Stores[len(w.Stores)-1]

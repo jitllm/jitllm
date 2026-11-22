@@ -37,7 +37,7 @@ func TestDecodeSplitFollowsTheDevice(t *testing.T) {
 		}
 		return out
 	}
-	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, ExactArith: true, Regs: 32, Shared: 96 << 10}
+	v100 := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32, Shared: 96 << 10}
 	small := v100
 	small.Slots, small.Units = 20*1536, 20
 	// q's 4096 rows in 16 segments, k's and v's 1024 each in 32, at 512

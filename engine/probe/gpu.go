@@ -287,7 +287,7 @@ func newGPUProbe(d backend.Device) (*gpuProbe, error) {
 		lanes = ir.SubgroupLanes
 	}
 	dev := composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, ExactDiv: composer.ExactDivOn(d.API()),
-		ExactArith: composer.ExactArithOn(d.API()), VectorLoads: composer.VectorLoadsOn(d.API()), Buffers: backend.Bindings(d)}
+		VectorLoads: composer.VectorLoadsOn(d.API()), Buffers: backend.Bindings(d)}
 	if u, ok := d.(backend.MultiprocessorDevice); ok {
 		dev.Units = u.Multiprocessors()
 	}

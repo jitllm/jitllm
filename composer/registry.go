@@ -48,11 +48,6 @@ type Device struct {
 	// IEEE 754 states it: a CPU's, PTX's div.rn. The int8 form's scale and
 	// inverse are divisions there, and made exact in integers where not.
 	ExactDiv bool
-	// ExactArith is a device whose lowering rounds every float operation
-	// alone (PTX's .rn), so two kernels computing a value by the same
-	// operations in the same order write its same bits; a driver free to
-	// contract them (SPIR-V's, MSL's) is not.
-	ExactArith bool
 	// Matrix, where set, is the collective tile (rows, columns, depth) the
 	// device multiplies binary16 operands into a float32 accumulator in,
 	// staged in workgroup memory and carried across a loop (ir's tile ops):
