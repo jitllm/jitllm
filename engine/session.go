@@ -31,6 +31,10 @@ type Session struct {
 	pos   int
 	// logits is what the session's last step ended on.
 	logits []float32
+	// argmax is the greedy token a joint step's head left for the session's
+	// last row in place of its logits (Run.Argmax), where argmaxSet.
+	argmax    int32
+	argmaxSet bool
 	// parked is Park's: the session is preempted. ParkedOut and ParkedIn
 	// count the KV pages Park sent to the store and Resume brought back
 	// (park.go).

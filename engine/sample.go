@@ -262,6 +262,10 @@ func (s *Sampler) dryOn() bool {
 // greedyMoved reports whether a greedy draw's row is not the logits as they
 // are: its penalties or DRY move them, and they run before the temperature,
 // whose greedy draw keeps the largest of what they leave.
+// Argmax reports a draw that is the logits' largest alone: greedy, with no
+// penalty and no DRY to move the row first.
+func (s *Sampler) Argmax() bool { return s == nil || s.Temp <= 0 && !s.greedyMoved() }
+
 func (s *Sampler) greedyMoved() bool { return s != nil && (!s.penalties().Off() || s.dryOn()) }
 
 // staged reports whether a draw runs its stages in an order of their own.
