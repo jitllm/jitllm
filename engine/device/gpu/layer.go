@@ -3366,9 +3366,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		toks = g.tokWords(g.stepToks, min(R, batchWidth))
 	}
 	if pe == nil {
-		for i := range hx {
-			hx[i] = 0
-		}
+		// Only the call's rows are staged and uploaded (layersSession): a
+		// form reads no row past the call's.
 		// AltUp's streams are stream-major over the caller's nrow rows and
 		// over the scratch's R (altup.go); one stream is a prefix either way.
 		streamRows(hx, x, p, R, nrow)
@@ -3943,6 +3942,13 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.TSubStage += time.Since(t)
 		}
 	}
+	wAt := func(b backend.Buf, off int, p []byte) {
+		if err == nil {
+			t := time.Now()
+			err = s.WriteAt(b, off, p)
+			g.TSubStage += time.Since(t)
+		}
+	}
 	// lc is the submission's launch path; its la is the ordinary launch
 	// (see launcher).
 	g.launchTo.s = s
@@ -4395,7 +4401,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			err = serr
 		}
 	} else {
-		w(bs.x, f32b(hx))
+		rows, d := min(nrow, R), p.NEmbd
+		for k := range p.Streams() {
+			at := k * R * d
+			wAt(bs.x, 4*at, f32b(hx[at:at+rows*d]))
+		}
 	}
 	// Served input rows write the per-layer inputs too (embedOuts).
 	if bs.rowPos != nil {

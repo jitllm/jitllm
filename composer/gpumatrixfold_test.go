@@ -88,6 +88,7 @@ func TestComposedGPUMatrixFoldedRows(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
+					want8 := int8Projection(t, typ, w, x, n, k, 32, false)
 					for _, L := range []int{1, 5, 64, 300, capacity} {
 						xs := make([]float32, len(x))
 						copy(xs, x[:L*k/fold])
@@ -111,8 +112,17 @@ func TestComposedGPUMatrixFoldedRows(t *testing.T) {
 						}
 						// A call's last folded row reads rows past the call's own, which
 						// the guard words poison, unless the call fills it.
+						// A call the vector form runs (alternatives) is held to the
+						// int8 matvec over the step's activation window as well.
 						whole := L / fold * n
-						if e := gpuNMSE(res[:whole], want[:whole]); whole > 0 && (math.IsNaN(e) || !(e < 2e-6)) {
+						e := gpuNMSE(res[:whole], want[:whole])
+						for _, c := range formed {
+							if c.Band.Upto > 0 && c.Runs(L) && whole > 0 {
+								e = min(e, gpuNMSE(res[:whole], want8[:whole]))
+								break
+							}
+						}
+						if whole > 0 && (math.IsNaN(e) || !(e < 2e-6)) {
 							t.Fatalf("%s: a call of %d rows reads NMSE %.3e against the oracle", what, L, e)
 						}
 					}

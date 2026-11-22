@@ -1467,6 +1467,11 @@ type devShared struct {
 	// composed prompt instance or the head changes: what GPU.RowsComposed's
 	// answer rests on, read without the lock.
 	placeGen atomic.Uint64
+	// rangeAt and reservedAt hold rangeComposed's and reservedBlocks' last
+	// true answers until placeGen moves: a step asks them every call, for
+	// every block, and only a placement changes them.
+	rangeAt    composedAt
+	reservedAt composedAt
 	// instBytes is what the composed parts' instances charge
 	// (Stats.ComposedBytes).
 	instBytes uint64

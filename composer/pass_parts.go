@@ -40,7 +40,7 @@ func (p Parts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 func (p Parts) joins(group []*Kernel, n *Kernel) bool {
-	if !covers(p.Kinds, n.Kind) || n.Work || len(n.Loops) != 0 {
+	if !covers(p.Kinds, n.Kind) || n.Work || len(n.Loops) != 0 || n.Cut.Sums {
 		return false
 	}
 	for _, g := range group {

@@ -176,6 +176,9 @@ func (c *Code) LiveGroups(rows int) int {
 		return c.Groups
 	}
 	units := c.LiveUnitsOf(rows)
+	if !c.Cut.Sums {
+		units *= c.Cut.Of(rows)
+	}
 	if c.Work {
 		return units * c.LiveInner
 	}

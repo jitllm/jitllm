@@ -428,7 +428,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 	}
 	for ci, c := range codes {
 		geom := composer.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
-			LiveGroup: c.LiveGroup, Work: c.Work}
+			LiveGroup: c.LiveGroup, Work: c.Work, Band: c.Band, Cut: c.Cut}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
 			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA }),
 			attend: slices.Contains(c.Passes, "flash"), sweep: c.Sweep})
@@ -979,6 +979,9 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 	var matrix unitLaunches
 	for i := lo; i < hi; i++ {
 		fc, bufs := &f.codes[i], sv.args[i]
+		if !fc.geom.Runs(sv.rows) {
+			continue
+		}
 		for j, a := range f.args[i] {
 			var b backend.Buf
 			switch a.kind {

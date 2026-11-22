@@ -53,6 +53,9 @@ type Device struct {
 	// staged in workgroup memory and carried across a loop (ir's tile ops):
 	// a reduction over several rows runs there (Matrix, the pass).
 	Matrix [3]int
+	// RowTile, where set, is the rows a projection's tile holds (RowTiles):
+	// a request's vector form beside its matrix form (alternatives).
+	RowTile int
 	// Tile, where set, is the matrix tile every projection takes in place
 	// of the one the model chooses (Matrix.chosen).
 	Tile MatrixTile

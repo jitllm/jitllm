@@ -233,6 +233,9 @@ func runPooled(d backend.Device, codes []composer.Code, in graph.ValueID, x []fl
 				outBuf = b
 			}
 		}
+		if !c.Runs(rows) {
+			continue
+		}
 		if err := op.kerns[ci].Launch(c.Groups, c.GPU.Group[0], args...); err != nil {
 			return nil, err
 		}
