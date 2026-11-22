@@ -24,6 +24,24 @@ import (
 // went home, and a step with two sequences' pages at home is refused as one
 // step, so each session ran alone and re-streamed its evicted prefix every
 // token, a Sync a pass. Its violation is
+// TestSixtyFourRequestsGateDiscriminates.
+func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
+	for wave, w := range sixtyFour(t, 2, false) {
+		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d admissions put off for room, "+
+			"%d refusals, %d rows parked for room, %d evictions, %d streamed passes", wave, w.failed, w.joint, w.waits,
+			w.refusals, w.roomParks, w.evictions, w.passes)
+		if w.failed > 0 {
+			t.Fatalf("wave %d: %d of 64 requests failed", wave, w.failed)
+		}
+		if w.joint == 0 {
+			t.Fatalf("wave %d: no joint step ran: the rows stepped one session at a time", wave)
+		}
+		if w.waits == 0 {
+			t.Fatalf("wave %d: no admission was put off: the budget never bound and the gate proved nothing", wave)
+		}
+	}
+}
+
 // TestSixtyFourRequestsGateDiscriminates runs one wave of the gate with every
 // waiting request admitted whatever the card has room for, beside one wave
 // admitted by room, and demands the card thrash without admission: no
