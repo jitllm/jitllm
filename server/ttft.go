@@ -161,6 +161,9 @@ type ttft struct {
 	// shared is the model's pages held once (engine.SharedStore), which its
 	// Deciders share through: nil with Config.NoMemCache.
 	shared *engine.SharedStore
+	// layered says kv writes through to a prompt store on disk, which the
+	// shared store does not: a generate then keeps the copying cache.
+	layered bool
 	// kv is what an instance is pointed at: the memory cache, or the memory cache
 	// over Config.PromptStore (layered) when the server has one.
 	kv engine.KVStore
@@ -187,6 +190,7 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 		t.kv = t.store
 		if e.cfg.PromptStore != nil {
 			t.kv = &layered{mem: t.store, disk: e.cfg.PromptStore}
+			t.layered = true
 		}
 	}
 	switch {
@@ -294,9 +298,19 @@ func (e *Engine) useStore(s *Session, o GenerateOptions) bool {
 
 // attachStore points s's instance at the model's store for one generate, or
 // takes it away. The instance is at position 0 (the caller reset it).
-func (s *Session) attachStore(on bool) error {
+//
+// The prefix a generate restores is the shared store's pages, held once
+// (engine.SharedStore): on a card the session maps the card's named pages
+// into its table, on the host it aliases the store's, and what it seals
+// becomes the store's -- no history copied home and back up. A server with a
+// prompt store on disk keeps the copying cache, which is what writes through
+// to that disk, and so does a session placed on a device that names no pages.
+func (s *Session) attachStore(ctx context.Context, on bool) error {
 	if !on {
 		if s.storeOn {
+			if err := s.unshare(ctx); err != nil {
+				return err
+			}
 			s.ms.SetKVStore(nil)
 			if err := s.ms.SetCacheKey(""); err != nil {
 				return err
@@ -305,11 +319,39 @@ func (s *Session) attachStore(on bool) error {
 		}
 		return nil
 	}
-	s.ms.SetKVStore(s.lm.ttft.kv)
 	if err := s.ms.SetCacheKey(s.lm.ttft.ns); err != nil {
 		return err
 	}
+	if t := &s.lm.ttft; t.shared != nil && !t.layered {
+		in, err := s.ms.Hold(ctx, engine.PhasePrefill)
+		if err != nil {
+			return err
+		}
+		err = in.ShareKV(t.shared)
+		s.ms.Unhold(in)
+		if err == nil {
+			s.shares, s.storeOn = true, true
+			return nil
+		}
+	}
+	s.ms.SetKVStore(s.lm.ttft.kv)
 	s.storeOn = true
+	return nil
+}
+
+// unshare ends the session's sharing, if it shares: its references to the
+// store's pages go and the sequence starts over.
+func (s *Session) unshare(ctx context.Context) error {
+	if !s.shares {
+		return nil
+	}
+	in, err := s.ms.Hold(ctx, engine.PhasePrefill)
+	if err != nil {
+		return err
+	}
+	in.UnshareKV()
+	s.ms.Unhold(in)
+	s.shares = false
 	return nil
 }
 

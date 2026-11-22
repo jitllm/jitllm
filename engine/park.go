@@ -31,7 +31,8 @@ func (s *Instance) Park() (ParkStats, error) {
 	return s.park()
 }
 
-// ParkInto is Park into st rather than the session's own store: every sealed
+// ParkInto is Park into st rather than the session's own store (a sharing
+// session parks as Park does, its pages the shared store's): every sealed
 // page the session holds is offered to st -- the ones its own store already
 // had too, since that store may drop them (a bounded one does) while the
 // session is parked -- and Resume faults them back from st and gives the
@@ -40,6 +41,9 @@ func (s *Instance) Park() (ParkStats, error) {
 func (s *Instance) ParkInto(st KVStore) (ParkStats, error) {
 	if s.parked {
 		return ParkStats{}, nil
+	}
+	if s.kv.share != nil {
+		return s.park() // its sealed pages are the shared store's already
 	}
 	s.parkPrev = s.kv.store
 	s.kv.store = st
@@ -78,11 +82,16 @@ func (s *Instance) park() (ParkStats, error) {
 		}
 		sess.away = true
 	}
-	if _, ok := s.kv.store.(NoStore); ok {
+	if _, ok := s.kv.store.(NoStore); ok && s.kv.share == nil {
 		s.parkStore = NewMemStore()
 		s.kv.store = s.parkStore
 	}
-	{
+	if s.kv.share != nil {
+		// A sharing session's sealed pages are the shared store's copy, held
+		// once: evicted, nothing would be freed and nothing would hold them
+		// against the store's trim before Resume. They are named and kept.
+		s.kv.seal(s.pos)
+	} else {
 		ev := s.kv.evicted
 		// Seal first: a page the store does not hold is never evicted. The
 		// tail page is being written and stays.

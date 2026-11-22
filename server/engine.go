@@ -1219,6 +1219,9 @@ type Session struct {
 	// storeOn says the instance is attached to the model's memory cache for the
 	// generate in hand (attachStore). Guarded by mu.
 	storeOn bool
+	// shares says it shares the model's pages held once (attachStore), which
+	// ending takes the instance's references back (unshare). Guarded by mu.
+	shares bool
 	// spec is the session's speculation for generates that carry none, and
 	// specRan a generate that stopped inside a speculative round: the model
 	// ran rows past the last token the reply kept, so the session cannot be
@@ -2302,7 +2305,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if err := s.reset(ctx); err != nil {
 			return err
 		}
-		if err := s.attachStore(store); err != nil {
+		if err := s.attachStore(ctx, store); err != nil {
 			return err
 		}
 		clear(s.rows)
