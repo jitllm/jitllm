@@ -20,17 +20,3 @@ func TestHostMeasuresSSE(t *testing.T) {
 	}
 	hostMeasures(t, h)
 }
-
-// TestComposedHostRatesMatchTheBuiltSSE holds the SSE tier's composed
-// rates, delays, mix and call to its hand-built kernels, the tier forced,
-// as TestComposedHostRatesMatchTheBuilt holds AVX2's.
-func TestComposedHostRatesMatchTheBuiltSSE(t *testing.T) {
-	ratesMatch(t, cpu.New(cpu.AtTier(cpu.TierSSE)))
-}
-
-// TestComposedHostChaseMatchesTheBuiltSSE holds the SSE tier's composed
-// chase to its hand-built one, the tier forced, as
-// TestComposedHostChaseMatchesTheBuilt holds AVX2's.
-func TestComposedHostChaseMatchesTheBuiltSSE(t *testing.T) {
-	chaseMatches(t, cpu.New(cpu.AtTier(cpu.TierSSE)))
-}

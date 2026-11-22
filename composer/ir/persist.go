@@ -28,11 +28,13 @@ import "fmt"
 // kernel's parameters back to those indices, its last parameter being the
 // grid barrier's sync buffer (GridSyncWords words, zero when allocated).
 
-// Part is one launch: its kernel, its workgroup count and, per parameter, the
-// caller's index of the buffer it was bound to.
+// Part is one launch: its kernel, its workgroup count and width and, per
+// parameter, the caller's index of the buffer it was bound to. Persist takes
+// the width from its own argument; PersistRuns cuts runs by Width.
 type Part struct {
 	K      *Kernel
 	Groups int
+	Width  int
 	Bind   []int
 }
 
@@ -50,6 +52,10 @@ type Persisted struct {
 	// Words is how many words of the dep buffer, from the base it was
 	// composed at, a PersistDeps kernel's counters take; zero for Persist.
 	Words int
+	// Dep is a kernel PersistAt ordered by dependency counters, its last
+	// parameter the dep buffer; Tiles is its tile-wise waits.
+	Dep   bool
+	Tiles int
 }
 
 // PersistJoins reports whether a launch of k can join a persistent kernel of

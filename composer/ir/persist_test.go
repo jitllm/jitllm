@@ -94,3 +94,86 @@ func TestPersistRefusesWhatItCannotCompose(t *testing.T) {
 		t.Fatalf("the composition with its grid barrier made a workgroup barrier: %v", err)
 	}
 }
+
+// TestPersistRunsCutWhereALaunchCannotJoin holds the plan's cuts: a run
+// takes its first launch's width and every launch that joins it; an
+// in-place launch and one with no IR go alone, saying why.
+func TestPersistRunsCutWhereALaunchCannotJoin(t *testing.T) {
+	k128, k256 := scaleKernel(t, 128), scaleKernel(t, 256)
+	parts := []Part{
+		{K: k128, Groups: 3, Width: 128, Bind: []int{0, 1}},
+		{K: k128, Groups: 3, Width: 128, Bind: []int{1, 2}},
+		{K: k128, Groups: 3, Width: 128, Bind: []int{3, 3}},
+		{K: k256, Groups: 2, Width: 256, Bind: []int{2, 4}},
+		{K: k128, Groups: 5, Width: 128, Bind: []int{4, 5}},
+		{Groups: 1, Width: 128},
+	}
+	want := []struct {
+		lo, hi, w int
+		why       string
+	}{{0, 2, 128, ""}, {2, 3, 128, "input and an output"}, {3, 5, 256, ""}, {5, 6, 128, "no IR"}}
+	runs := PersistRuns(parts)
+	if len(runs) != len(want) {
+		t.Fatalf("%d runs %+v, want %d", len(runs), runs, len(want))
+	}
+	for i, w := range want {
+		r := runs[i]
+		if r.Lo != w.lo || r.Hi != w.hi || r.W != w.w {
+			t.Errorf("run %d: [%d, %d) width %d, want [%d, %d) width %d", i, r.Lo, r.Hi, r.W, w.lo, w.hi, w.w)
+		}
+		if (w.why == "") != (r.Why == nil) || (r.Why != nil && !strings.Contains(r.Why.Error(), w.why)) {
+			t.Errorf("run %d: why %v, want %q", i, r.Why, w.why)
+		}
+		if r.Composed() != (w.hi-w.lo >= 2) {
+			t.Errorf("run %d: composed %v", i, r.Composed())
+		}
+	}
+	if g := PersistGrid(parts[3:5], 0); g != 5 {
+		t.Errorf("grid %d, want the widest launch's 5", g)
+	}
+	if g := PersistGrid(parts[3:5], 4); g != 4 {
+		t.Errorf("grid %d under a limit of 4", g)
+	}
+}
+
+// TestPersistAtFallsBackWhenTheCountersDoNotFit holds PersistAt's choice:
+// dependency counters in a region that holds them, grid barriers in one a
+// word short of them and in the empty region.
+func TestPersistAtFallsBackWhenTheCountersDoNotFit(t *testing.T) {
+	k := scaleKernel(t, 128)
+	parts := []Part{{K: k, Groups: 4, Width: 128, Bind: []int{0, 1}}, {K: k, Groups: 4, Width: 128, Bind: []int{1, 2}}}
+	const base = 16
+	d, err := PersistDeps("probe", parts, 128, 2, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Words == 0 {
+		t.Fatal("a dependent pair takes no counter words: the fallback cannot be told apart")
+	}
+	for _, c := range []struct {
+		name string
+		dep  DepRegion
+		want bool
+	}{
+		{"a region that fits", DepRegion{base, base + d.Words}, true},
+		{"a word short", DepRegion{base, base + d.Words - 1}, false},
+		{"no region", DepRegion{}, false},
+	} {
+		p, err := PersistAt(parts, 128, 2, c.dep)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		barriers := 0
+		for _, o := range p.K.Ops {
+			if o.Kind == OpGridBarrier {
+				barriers++
+			}
+		}
+		if p.Dep != c.want || (barriers > 0) == c.want {
+			t.Errorf("%s: dep %v with %d grid barriers, want dep %v", c.name, p.Dep, barriers, c.want)
+		}
+		if !p.Dep && (p.Words != 0 || p.Tiles != 0) {
+			t.Errorf("%s: grid barriers with %d words, %d tiles", c.name, p.Words, p.Tiles)
+		}
+	}
+}

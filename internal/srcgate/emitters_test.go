@@ -21,7 +21,8 @@ import (
 // builds a device kernel by hand (ir.New). Reading their ISA constants, IR
 // types or decoders (x86.KernelISA) emits nothing and is not held; a test may
 // assemble an instruction or build a kernel to plant a violation in a gate or
-// to hold a composed form to the kernel it replaced. openEmitters is the list
+// to drive what sits below the composer (an encoding, the CPU device's call,
+// a backend's lowering of one op) in its own unit test. openEmitters is the list
 // still owed to the composer, and an entry that no longer emits fails too, so
 // the list cannot outlive its reason.
 func TestOnlyTheComposerEmitsCode(t *testing.T) {
