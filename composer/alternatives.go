@@ -3,19 +3,17 @@ package composer
 import "reflect"
 
 // Band is the live rows of a call a code runs at: Upto, where set, at most
-// Upto rows; Past, where set, more than Past rows or a call stating none.
+// Upto rows; Past, where set, more than Past rows, or a call stating none
+// where Upto is not set.
 type Band struct{ Upto, Past int }
 
 // Runs reports whether a call of rows rows launches a code of b: a call of
 // 0 rows runs the form's capacity.
 func (b Band) Runs(rows int) bool {
-	switch {
-	case b.Upto > 0:
-		return rows > 0 && rows <= b.Upto
-	case b.Past > 0:
-		return rows <= 0 || rows > b.Past
+	if b.Upto > 0 && (rows <= 0 || rows > b.Upto) {
+		return false
 	}
-	return true
+	return b.Past == 0 || rows <= 0 || rows > b.Past
 }
 
 // Cut is a matrix form's k cut at launch by the call's rows: at most Most
@@ -61,16 +59,24 @@ type matrixPrice struct {
 	depth, split int
 }
 
-// crossing is the rows a projection's tile holds in req's vector form, and
-// the most rows a call runs it at, where ks are req's kernels formed with
-// the matrix unit: the model's cost of the matrix kernels at a call's rows
-// (Matrix.cost, cut as the call's rows cut them) against the vector form's
-// at a tile of t rows -- a pass over the weight each t rows of the call,
-// each weight element paying its read or its t rows' products, the greater.
-// The vector form runs while it costs no more than the matrix form; of the
-// tiles, the one whose calls cost least over the rows any tile runs at, the
-// smaller at a tie. 0 rows where the vector form is never the cheaper.
-func (r *Registry) crossing(ks []*Kernel, req Request) (int, int) {
+// narrowBand is a matrix tile the model prices least at the calls of more
+// than the band below's rows and at most upto rows.
+type narrowBand struct {
+	tile MatrixTile
+	upto int
+}
+
+// bands is how req's projections run by the live rows of a call, where ks
+// are its kernels formed with the matrix unit at its capacity: the vector
+// form at a tile of t rows at calls of at most v rows, then each of narrow's
+// tiles in its band, and past the last the form ks are. At each call's rows
+// the model (Matrix.cost; the vector form a pass over the weight each t
+// rows, each weight element paying its read or its t rows' products, the
+// greater) takes the least costly of the vector form, ks' form and the
+// profile's tiles; a tile is a band of its own only where it is the least
+// costly over consecutive rows below ks' form's. v is 0 where the vector
+// form is never the cheaper.
+func (r *Registry) bands(ks []*Kernel, req Request) (t, v int, narrow []narrowBand) {
 	d, R := req.Device, req.Step.Rows
 	var ms []*Kernel
 	for _, k := range ks {
@@ -79,15 +85,19 @@ func (r *Registry) crossing(ks []*Kernel, req Request) (int, int) {
 		}
 	}
 	most := 0
+	var tiles []MatrixTile
 	for _, p := range r.Profiles[d.Kind].Passes {
-		if t, ok := p.(RowTiles); ok {
-			most = t.most(d)
+		switch p := p.(type) {
+		case RowTiles:
+			most = p.most(d)
+		case Matrix:
+			tiles = append([]MatrixTile{p.Tile()}, p.Tiles...)
 		}
 	}
-	if len(ms) == 0 || most < 2 {
-		return 0, 0
+	if len(ms) == 0 {
+		return 0, 0, nil
 	}
-	mat := func(rows int) int {
+	own := func(rows int) int {
 		c := 0
 		for _, k := range ms {
 			s := k.price.split
@@ -98,6 +108,37 @@ func (r *Registry) crossing(ks []*Kernel, req Request) (int, int) {
 		}
 		return c
 	}
+	at := func(tile MatrixTile, rows int) int {
+		c := 0
+		for _, k := range ms {
+			q := k.price.p.with(tile)
+			n, kk := k.Matrix[0], k.Matrix[1]
+			least := q.cost(rows, n, kk, 1, k.price.depth, d)
+			for s := 2; s <= R/tile.Rows && kk%(s*k.price.depth) == 0 && kk/s >= 2*k.price.depth; s *= 2 {
+				least = min(least, q.cost(rows, n, kk, s, k.price.depth, d))
+			}
+			c += least
+		}
+		return c
+	}
+	// best is the matrix option least costly at rows: -1 for ks' own form,
+	// else the tile's index.
+	best := func(rows int) (int, int) {
+		b, c := -1, own(rows)
+		for i, tile := range tiles {
+			if tile.Rows >= R {
+				continue
+			}
+			if x := at(tile, rows); x < c {
+				b, c = i, x
+			}
+		}
+		return b, c
+	}
+	mat := func(rows int) int {
+		_, c := best(rows)
+		return c
+	}
 	vec := func(rows, t int) int {
 		c := 0
 		for _, k := range ms {
@@ -106,40 +147,61 @@ func (r *Registry) crossing(ks []*Kernel, req Request) (int, int) {
 		}
 		return c
 	}
-	var tiles, upto []int
-	top := 0
-	for t := 2; t <= most; t *= 2 {
-		n := 1
-		for n+1 < R && vec(n+1, t) <= mat(n+1) {
-			n++
+	if most >= 2 {
+		var ts, upto []int
+		top := 0
+		for t := 2; t <= most; t *= 2 {
+			n := 1
+			for n+1 < R && vec(n+1, t) <= mat(n+1) {
+				n++
+			}
+			ts, upto, top = append(ts, t), append(upto, n), max(top, n)
 		}
-		tiles, upto, top = append(tiles, t), append(upto, n), max(top, n)
-	}
-	best, least := -1, 0
-	for i, t := range tiles {
-		c := 0
-		for rows := 2; rows <= top; rows++ {
-			if rows <= upto[i] {
-				c += vec(rows, t)
-			} else {
-				c += mat(rows)
+		pick, least := -1, 0
+		for i := range ts {
+			c := 0
+			for rows := 2; rows <= top; rows++ {
+				if rows <= upto[i] {
+					c += vec(rows, ts[i])
+				} else {
+					c += mat(rows)
+				}
+			}
+			if upto[i] > 1 && (pick < 0 || c < least) {
+				pick, least = i, c
 			}
 		}
-		if upto[i] > 1 && (best < 0 || c < least) {
-			best, least = i, c
+		if pick >= 0 {
+			t, v = ts[pick], upto[pick]
 		}
 	}
-	if best < 0 {
-		return 0, 0
+	// The bands run up from the vector form's; the first call ks' own form
+	// is the least costly at ends them, and a tile met again starts none.
+	seen := map[int]bool{}
+	cur := -1
+	for rows := max(v, 1) + 1; rows <= R; rows++ {
+		b, _ := best(rows)
+		if b < 0 || seen[b] && b != cur {
+			break
+		}
+		if b == cur {
+			narrow[len(narrow)-1].upto = rows
+			continue
+		}
+		cur, seen[b] = b, true
+		narrow = append(narrow, narrowBand{tiles[b], rows})
 	}
-	return tiles[best], upto[best]
+	if len(narrow) > 0 && narrow[len(narrow)-1].upto >= R {
+		narrow = narrow[:len(narrow)-1]
+	}
+	return t, v, narrow
 }
 
 // alternatives is one form of a request formed two ways at one capacity:
-// vec without the matrix unit, its projections a tile of rows a thread over
-// the weight read once, and mat with it. The codes the two share, in order,
-// run at every call; between them, vec's run at calls of at most r rows and
-// mat's at the rest.
+// vec (the vector form, or a narrower band's tile) and mat. The codes the
+// two share, in order, run at every call; between them, vec's run at calls
+// of at most r rows and mat's at the rest, within the band each already
+// had.
 func alternatives(vec, mat []PartCode, r int) []PartCode {
 	n, m := len(vec), len(mat)
 	lcs := make([][]int, n+1)
@@ -166,7 +228,7 @@ func alternatives(vec, mat []PartCode, r int) []PartCode {
 			out = append(out, c)
 		}
 		for _, c := range gm {
-			c.Band = Band{Past: r}
+			c.Band.Past = max(c.Band.Past, r)
 			out = append(out, c)
 		}
 		gv, gm = gv[:0], gm[:0]
