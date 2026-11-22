@@ -125,7 +125,7 @@ func (k *Kernel) aligned() bool {
 		case OpShr:
 			n := b
 			it := k.Nodes[a]
-			if n == 0 || n > 31 || C&(1<<n-1) != 0 || c >= 1<<n || it.Op != OpIter || k.Loops[it.At].Count > 0 ||
+			if n == 0 || n > 31 || C&(1<<n-1) != 0 || c >= 1<<n || it.Op != OpIter || k.Loops[it.At].Count > 0 && !k.Loops[it.At].Capped ||
 				uint64(k.Loops[it.At].Trip)*uint64(C)+uint64(c) >= 1<<32 {
 				continue
 			}
@@ -494,7 +494,7 @@ func (k *Kernel) below(i int, memo map[int]uint64) uint64 {
 		case OpConst:
 			v = uint64(uint32(nd.Imm))
 		case OpIter:
-			if l := k.Loops[nd.At]; l.Count == 0 && l.Trip > 0 {
+			if l := k.Loops[nd.At]; (l.Count == 0 || l.Capped) && l.Trip > 0 {
 				v = uint64(l.Trip - 1)
 			}
 		case OpCoord:

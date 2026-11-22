@@ -99,14 +99,38 @@ func (r *Registry) Formed() int64 {
 }
 
 func (r *Registry) form(req Request) ([]Code, error) {
+	ks, codes, err := r.formCodes(req)
+	if err != nil {
+		return nil, err
+	}
+	if alternated(req) {
+		if t, rows := r.crossing(ks, req); rows > 1 {
+			vr := req
+			vr.Device.Matrix, vr.Device.Tile, vr.Device.RowTile = [3]int{}, MatrixTile{}, t
+			_, vec, err := r.formCodes(vr)
+			if err != nil {
+				return nil, err
+			}
+			codes = alternatives(vec, codes, rows)
+		}
+	}
+	out := make([]Code, len(codes))
+	for i, c := range codes {
+		out[i] = c.Code
+	}
+	return out, nil
+}
+
+// formCodes is req's codes formed one way, and the kernels they lower.
+func (r *Registry) formCodes(req Request) ([]*Kernel, []PartCode, error) {
 	prof, ok := r.Profiles[req.Device.Kind]
 	if !ok {
-		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
+		return nil, nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
 	}
 	prof = prof.on(req.Device)
 	ks, err := r.formWith(req, prof, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	t0 := time.Now()
 	codes, err := r.Lower(ks, req.Device)
@@ -114,14 +138,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 	if err == nil {
 		codes, err = r.untailed(req, prof, ks, codes)
 	}
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Code, len(codes))
-	for i, c := range codes {
-		out[i] = c.Code
-	}
-	return out, nil
+	return ks, codes, err
 }
 
 // FormKernels is req's final IR beside its codes, code i kernel i's

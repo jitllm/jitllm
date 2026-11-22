@@ -128,6 +128,9 @@ func (f Fuse) joinsThen(p, c *Kernel, ks []*Kernel) (Operand, int, bool) {
 }
 
 func (f Fuse) allows(p, c *Kernel, atStores bool) bool {
+	if p.Cut.Sums || c.Cut.Sums {
+		return false
+	}
 	for _, pr := range f.Pairs {
 		if pr.Then || pr.Alongside {
 			continue

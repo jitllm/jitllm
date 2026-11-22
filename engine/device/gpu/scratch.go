@@ -536,6 +536,10 @@ func (g *devTier) headReserved() bool {
 // rangeComposed reports whether the composer serves, as part, every block of
 // [lo, hi) in the reserved width (composedBlock).
 func (g *devTier) rangeComposed(lo, hi int, part nn.Parts) bool {
+	gen := g.placeGen.Load()
+	if c := g.rangeAt; c.set && c.gen == gen && c.lo == lo && c.hi == hi && c.part == part {
+		return true
+	}
 	bb := g.reservedFor(part)
 	if bb == nil || lo >= hi {
 		return false
@@ -546,6 +550,9 @@ func (g *devTier) rangeComposed(lo, hi int, part nn.Parts) bool {
 			return false
 		}
 		served = true
+	}
+	if served {
+		g.rangeAt = composedAt{set: true, gen: gen, lo: lo, hi: hi, part: part}
 	}
 	return served
 }
@@ -699,6 +706,10 @@ func (g *devTier) rowsReserved() bool {
 // one set) and where its set formed it: the set in use may have narrowed
 // alone (narrowReserved). Callers hold g.mu.
 func (g *devTier) reservedBlocks() (int, bool) {
+	gen := g.placeGen.Load()
+	if c := g.reservedAt; c.set && c.gen == gen {
+		return c.n, true
+	}
 	if g.reservedFor(nn.ComposedBlock) == nil {
 		return 0, false
 	}
@@ -712,7 +723,18 @@ func (g *devTier) reservedBlocks() (int, bool) {
 		}
 		n++
 	}
+	g.reservedAt = composedAt{set: true, gen: gen, n: n}
 	return n, true
+}
+
+// composedAt is a true answer of the reserved width's checks at placement
+// generation gen: rangeComposed's over [lo, hi) for part, or reservedBlocks'
+// n blocks.
+type composedAt struct {
+	set       bool
+	gen       uint64
+	lo, hi, n int
+	part      nn.Parts
 }
 
 // composedInSet is composedBlock asked in block li's own set, at that set's

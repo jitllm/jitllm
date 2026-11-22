@@ -124,6 +124,12 @@ type Kernel struct {
 	TileMajor bool
 	// Matrix is a matrix kernel's shape: its outputs and its reduction's trip.
 	Matrix [2]int
+	// Cut is the segments a matrix kernel's k is cut in at launch, and its
+	// combine's.
+	Cut Cut
+	// price is a matrix kernel's model (crossing): its form, depth and
+	// segments.
+	price matrixPrice
 	// Share, where set, is the rows a kernel's calls (Workers) hold, a
 	// call's first row its coordinate's ShareUnit rows on and its rows a
 	// length the caller sizes to the workers it runs, a multiple of them.
@@ -248,6 +254,9 @@ type Loop struct {
 	// Serial is a loop whose trips follow each other: its folds carry
 	// values, not sums, and no pass takes its trips apart or regroups them.
 	Serial bool
+	// Capped is a loop whose Count never passes its Trip: its iterations
+	// stay below Trip, a bound a pass may take.
+	Capped bool
 }
 
 // Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the

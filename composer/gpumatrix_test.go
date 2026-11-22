@@ -81,7 +81,10 @@ func matrixWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []
 // of the served models, at outputs and a capacity that do not fill the
 // workgroups' blocks, and runs the one form at calls of 1 to the capacity's
 // rows: the projection must be formed on the matrix unit (its kernel the
-// matrix pass's, its tiles multiplied), each row held to the oracle within
+// matrix pass's, its tiles multiplied), and on a card stating its units
+// beside a vector form the calls of few rows run (alternatives), each form
+// launched at some call and k cut by the call's rows at one tile at least;
+// each row held to the oracle within
 // binary16's rounding of both factors, rows whose magnitudes reach past
 // binary16's range among them (every fifth times 2^20), and every word past
 // the call's rows and the guard after them untouched. Two violations must fail: the
@@ -93,8 +96,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no device here multiplies binary16 tiles")
 	}
-	const guard, capacity = 64, 100
-	calls := []int{1, 15, 33, 64, 100}
+	const guard = 64
 	formats := []quant.Type{quant.F16, quant.Q8_0, quant.Q3_K, quant.Q4_K, quant.Q5_K, quant.Q6_K}
 	names := slices.Sorted(func(yield func(string) bool) {
 		for n := range devs {
@@ -109,11 +111,25 @@ func TestComposedGPUMatrix(t *testing.T) {
 			dev := gpuDevice(d)
 			dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 			rng := rand.New(rand.NewSource(53))
-			ran := 0
+			ran, cuts, banded, vecRan, matRan := 0, 0, 0, 0, 0
+			calls100 := []int{1, 15, 33, 64, 100}
 			for _, typ := range formats {
-				for _, sh := range []struct{ n, k int }{{100, 256}, {1056, 512}, {160, 2048}} {
+				// The last shape's row tiles and outputs fill the units at
+				// its capacity and its k is long, so the model leaves k whole
+				// there and cuts it at launch by the call's rows (Cut): run
+				// at the profile's tile and its model's split alone, over
+				// binary16 and the served models' commonest format.
+				for _, sh := range []struct {
+					n, k, capacity int
+					calls          []int
+				}{{100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
 					for _, tile := range splitTiles(gpuMatrixTiles()) {
-						n, k := sh.n, sh.k
+						n, k, capacity, calls := sh.n, sh.k, sh.capacity, sh.calls
+						own := gpuMatrixTiles()[0]
+						own.Split, own.Convert = 0, -1
+						if capacity != 100 && (tile != own || typ != quant.F16 && typ != quant.Q4_K) {
+							continue
+						}
 						td := dev
 						td.Tile = tile
 						jt, ok := jlm.TypeOf(typ)
@@ -141,6 +157,20 @@ func TestComposedGPUMatrix(t *testing.T) {
 						}
 						tiles, atTile := 0, 0
 						for _, c := range formed {
+							if c.Cut.Most > 1 && !c.Cut.Sums {
+								cuts++
+							}
+							if c.Band.Upto > 0 {
+								banded++
+							}
+							for _, L := range calls {
+								switch {
+								case c.Band.Upto > 0 && c.Runs(L):
+									vecRan++
+								case c.Band.Past > 0 && c.Runs(L):
+									matRan++
+								}
+							}
 							if slices.Contains(c.Passes, "matrix") {
 								if c.Matrix != [2]int{} {
 									if !formedAtTile(c, tile, capacity, n) {
@@ -213,9 +243,26 @@ func TestComposedGPUMatrix(t *testing.T) {
 						if e := gpuNMSE(runX(big, capacity, planes), wantBig); math.IsNaN(e) || !(e < 2e-6) {
 							t.Fatalf("%s: rows past binary16's range read NMSE %.3e against the oracle", what, e)
 						}
+						// A call of few rows runs the vector form beside the
+						// matrix form (alternatives): the int8 matvec over the
+						// step's activation window where the format takes one,
+						// else the decoded weight's.
+						want8 := int8Projection(t, typ, w, x, n, k, 32, false)
+						vectorAt := func(L int) bool {
+							for _, c := range formed {
+								if c.Band.Upto > 0 && c.Runs(L) {
+									return true
+								}
+							}
+							return false
+						}
 						worst := 0.0
 						for _, L := range calls {
-							e := gpuNMSE(run(L, planes), want[:L*n])
+							got := run(L, planes)
+							e := gpuNMSE(got, want[:L*n])
+							if vectorAt(L) {
+								e = min(e, gpuNMSE(got, want8[:L*n]))
+							}
 							if math.IsNaN(e) || !(e < 2e-6) {
 								t.Fatalf("%s: a call of %d rows reads NMSE %.3e against the oracle", what, L, e)
 							}
@@ -239,7 +286,13 @@ func TestComposedGPUMatrix(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("%s: %d projections formed on the matrix unit, held to the oracle at calls of %v rows", name, ran, calls)
+			if dev.Units > 0 && (banded == 0 || vecRan == 0 || matRan == 0) {
+				t.Fatalf("%s: the vector form beside the matrix form: %d codes banded, %d launches of the vector form's and %d of the matrix form's", name, banded, vecRan, matRan)
+			}
+			if dev.Units > 0 && cuts == 0 {
+				t.Fatalf("%s: no projection's k was cut at launch: the calls of few rows never ran a cut", name)
+			}
+			t.Logf("%s: %d projections formed on the matrix unit, %d cut at launch, held to the oracle at calls of 1 to their capacity's rows", name, ran, cuts)
 		})
 	}
 }
@@ -255,11 +308,12 @@ func gpuMatrixTiles() []composer.MatrixTile {
 }
 
 // splitTiles is each tile with k whole and cut in four, the row's factor
-// written as halves first, and k whole with the factor converted in the stage.
+// written as halves first, k whole with the factor converted in the stage,
+// and k cut as the model chooses, at launch by the call's rows (Cut).
 func splitTiles(tiles []composer.MatrixTile) []composer.MatrixTile {
 	var out []composer.MatrixTile
 	for _, t := range tiles {
-		for _, c := range [][2]int{{1, -1}, {4, -1}, {1, 1}} {
+		for _, c := range [][2]int{{1, -1}, {4, -1}, {1, 1}, {0, -1}} {
 			t.Split, t.Convert = c[0], c[1]
 			out = append(out, t)
 		}
@@ -268,12 +322,16 @@ func splitTiles(tiles []composer.MatrixTile) []composer.MatrixTile {
 }
 
 // formedAtTile is whether c, a matrix kernel over capacity rows by n
-// outputs, holds tile's workgroups, k cut in its segments: its rows and
+// outputs, holds tile's workgroups, k cut in its segments (any the model
+// chooses where the tile states none): its rows and
 // warps along them halved where the device's workgroup memory takes fewer.
 func formedAtTile(c composer.Code, t composer.MatrixTile, capacity, n int) bool {
 	for rows, wr := t.Rows, t.Warps[0]; wr >= 1; rows, wr = rows/2, wr/2 {
-		if c.GPU.Group[0] == 32*wr*t.Warps[1] && c.Groups == (capacity+rows-1)/rows*((n+t.Cols-1)/t.Cols)*max(t.Split, 1) {
-			return true
+		base := (capacity + rows - 1) / rows * ((n + t.Cols - 1) / t.Cols)
+		for s := max(t.Split, 1); s <= max(t.Split, 32); s *= 2 {
+			if c.GPU.Group[0] == 32*wr*t.Warps[1] && c.Groups == base*s {
+				return true
+			}
 		}
 	}
 	return false

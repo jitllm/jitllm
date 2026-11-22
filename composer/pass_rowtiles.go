@@ -58,9 +58,13 @@ func (p RowTiles) tile(k *Kernel, d Device) int {
 	if !shared {
 		return 1
 	}
-	most := p.Rows
-	if d.Regs > 0 {
-		most = d.Regs / rowRegs
+	most := p.most(d)
+	if d.RowTile > 0 {
+		t := 1
+		for 2*t <= min(d.RowTile, most) && 2*t <= k.Space[0] {
+			t *= 2
+		}
+		return t
 	}
 	// More rows a thread share more of the weight's loads but leave fewer
 	// threads: past the first two, a tile doubles only while the threads
@@ -71,6 +75,15 @@ func (p RowTiles) tile(k *Kernel, d Device) int {
 		t *= 2
 	}
 	return t
+}
+
+// most is the most rows a tile holds on d: as many as its registers
+// hold sums and terms for, where known.
+func (p RowTiles) most(d Device) int {
+	if d.Regs > 0 {
+		return d.Regs / rowRegs
+	}
+	return p.Rows
 }
 
 // rowDependent marks the nodes of k whose value depends on the leading
@@ -111,10 +124,15 @@ func tileRows(k *Kernel, t int) *Kernel {
 	R := m.Space[0]
 	m.Space[0] = (R + t - 1) / t
 	base := m.bin(OpMul, ir.U32, m.add(Node{Op: OpCoord, A: 0, Type: ir.U32}), m.u32(t))
+	// The last live row is the kernel's own: the call's rows where its rows
+	// are the step's, else the call's share of R -- a quarter of them under a
+	// fold of four rows.
 	last := -1
 	switch {
-	case m.Capacity > 0:
+	case m.Capacity == R:
 		last = m.bin(OpSub, ir.U32, m.liveRows(m.Capacity), m.u32(1))
+	case m.Capacity > 0:
+		last = m.bin(OpSub, ir.U32, m.liveElements([]int{R}, m.Capacity), m.u32(1))
 	case R%t != 0:
 		last = m.u32(R - 1)
 	}

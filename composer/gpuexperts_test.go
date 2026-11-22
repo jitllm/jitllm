@@ -208,18 +208,32 @@ func TestComposedGPUExperts(t *testing.T) {
 						// The per-pair form is the int8 matvec a pair at a time
 						// (expertInt8) over the step's activation window where the
 						// format takes one, else the decoded sheets': held to
-						// whichever of the two references it computes.
-						ref8 := ref
-						if !bank.grouped {
-							ref8 = make([]float32, len(ref))
-							for s := range capacity * P {
-								copy(ref8[s*rows:], int8Projection(t, typ, sheets[sels[s]], xs[s*K:(s+1)*K], rows, K, 32, false))
+						// whichever of the two references it computes. A grouped
+						// bank's calls of few rows run its vector form beside the
+						// matrix form (alternatives), held to the int8 reference;
+						// the rest to the decoded sheets'.
+						ref8 := make([]float32, len(ref))
+						for s := range capacity * P {
+							copy(ref8[s*rows:], int8Projection(t, typ, sheets[sels[s]], xs[s*K:(s+1)*K], rows, K, 32, false))
+						}
+						vectorAt := func(L int) bool {
+							for _, c := range formed {
+								if c.Band.Upto > 0 && c.Runs(L) {
+									return true
+								}
 							}
+							return false
 						}
 						worst := 0.0
 						for _, L := range calls {
 							got := run(L)
 							e := min(gpuNMSE(got, ref[:L*P*rows]), gpuNMSE(got, ref8[:L*P*rows]))
+							switch {
+							case bank.grouped && vectorAt(L):
+								e = gpuNMSE(got, ref8[:L*P*rows])
+							case bank.grouped:
+								e = gpuNMSE(got, ref[:L*P*rows])
+							}
 							if math.IsNaN(e) || !(e < 2e-6) {
 								t.Fatalf("%s: a call of %d rows reads NMSE %.3e against the oracle", what, L, e)
 							}
@@ -346,6 +360,9 @@ func runExperts(d backend.Device, codes []composer.Code, kerns []backend.Kernel,
 				}
 				args[i] = b
 			}
+		}
+		if !c.Runs(rows) {
+			continue
 		}
 		if err := kerns[ci].Launch(c.LiveGroups(rows), c.GPU.Group[0], args...); err != nil {
 			return nil, nil, fmt.Errorf("launching %s: %w", c.Name, err)
