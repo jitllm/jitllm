@@ -142,6 +142,10 @@ const storeShare = 8
 
 // MemCacheStats is a model's memory cache and its sessions, as counted.
 type MemCacheStats struct {
+	// Store is the memory cache: the pages held once that generates share
+	// (engine.SharedStore, its lookups counting a card's mapped names) with
+	// the copying cache a layered server and a session on a device that
+	// names no pages use, and what parked sessions hold in either.
 	Store engine.MemStoreStats
 	// Restored and Computed are prompt positions taken from the store and
 	// prefilled, over every generate that started its sequence.
@@ -168,6 +172,9 @@ type ttft struct {
 	// over Config.PromptStore (layered) when the server has one.
 	kv engine.KVStore
 	ns string
+
+	// limit is the bound the two stores were last held to between them.
+	limit atomic.Uint64
 
 	inflight atomic.Int32
 	queueCap int
@@ -245,6 +252,13 @@ func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 	var st engine.MemStoreStats
 	if t.store != nil {
 		st = t.store.Stats()
+	}
+	if t.shared != nil {
+		sh := t.shared.Stats()
+		st.Hits, st.Misses, st.Sets, st.Evicted = st.Hits+sh.Hits, st.Misses+sh.Misses, st.Sets+sh.Sets, st.Evicted+sh.Evicted
+		st.Pages, st.Bytes, st.Pinned = st.Pages+sh.Pages, st.Bytes+sh.Bytes, st.Pinned+sh.Pinned
+		// The two are held to one bound between them (applyPageBudget).
+		st.Limit = t.limit.Load()
 	}
 	return MemCacheStats{
 		Store:          st,
