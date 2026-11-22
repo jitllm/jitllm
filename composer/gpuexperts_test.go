@@ -124,7 +124,9 @@ func TestComposedGPUExperts(t *testing.T) {
 							if strings.HasSuffix(c.Name, ".combine") {
 								cuts++
 							}
-							if strings.HasSuffix(c.Name, ".halves") && c.Groups*c.GPU.Group[0] == capacity*K/2 {
+							// A thread a word of the tile's rows, or a
+							// workgroup a row beside its scale (WorkRow).
+							if strings.HasSuffix(c.Name, ".halves") && (c.Groups*c.GPU.Group[0] == capacity*K/2 || c.Work && c.Groups == capacity) {
 								byRow++
 							}
 							if c.Matrix != [2]int{} && !threadsAtTile(c, tile) {
