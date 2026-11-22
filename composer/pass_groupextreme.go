@@ -35,10 +35,7 @@ func (s GroupExtreme) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		return s.largest(n, d)
 	}
 	c, ext, car, vs, cs, ok := extremeSplittable(n)
-	if !ok {
-		return s.largest(n, d)
-	}
-	if n.Nodes[ext].Type != ir.F32 || n.Nodes[n.Nodes[ext].A].Op != OpMax {
+	if !ok || n.Nodes[ext].Type != ir.F32 || n.Nodes[n.Nodes[ext].A].Op != OpMax {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.Elements()
