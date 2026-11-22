@@ -53,9 +53,9 @@ type Matrix struct {
 	Tiles             []MatrixTile
 	Latency, Decode   int
 	Launch, Plane     int
-	// Vector is a projection's cost beside this form at few rows, a weight
-	// element on a unit, in the model's units (crossing): its read, and each
-	// row's product, of which a tile pays the greater.
+	// Vector is a projection's cost beside this form at few rows, sixteen
+	// stored bits of weight on a unit, in the model's units (bands): their
+	// read, and each row's products, of which a tile pays the greater.
 	Vector [2]int
 	// cut is the most segments a call's rows cut k in at launch (Cut), where
 	// the model chose the split and the form holds the call's rows.

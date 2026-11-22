@@ -1,5 +1,7 @@
 package composer
 
+import "github.com/jitllm/jitllm/format/jlm"
+
 import "reflect"
 
 // Band is the live rows of a call a code runs at: Upto, where set, at most
@@ -126,7 +128,7 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		c := 0
 		for _, k := range ms {
 			v := k.price.p.Vector
-			c += (rows + t - 1) / t * max(v[0], v[1]*t) * (k.Matrix[0] * k.Matrix[1] / d.Units)
+			c += (rows + t - 1) / t * max(v[0], v[1]*t) * (k.Matrix[0] * k.Matrix[1] / d.Units) * weightBits(k) / 256
 		}
 		return c
 	}
@@ -171,6 +173,32 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		out = out[:len(out)-1]
 	}
 	return out
+}
+
+// weightBits is sixteen times the bits k's weight stores an element in, its
+// codes' planes and their scales' bytes (72 for 4.5 bits); a weight it does
+// not state is priced as f32's.
+func weightBits(k *Kernel) int {
+	for _, b := range k.Bufs {
+		o := b.Operand
+		if o.Kind != OperandWeight || o.Region != 0 {
+			continue
+		}
+		if l, ok := jlm.Layout(o.Format); ok {
+			scales := 1
+			if l.HasMin {
+				scales = 2
+			}
+			return 16*(l.Planes[0]+l.Planes[1]) + 16*8*scales/l.Sub
+		}
+		switch o.Format {
+		case jlm.TypeF16, jlm.TypeBF16:
+			return 256
+		case jlm.TypeF32:
+			return 512
+		}
+	}
+	return 512
 }
 
 // alternatives is one form of a request formed two ways at one capacity:
