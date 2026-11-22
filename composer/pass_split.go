@@ -152,7 +152,7 @@ func segmentsAt(k *Kernel, S, G int) int {
 }
 
 func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
-	if s.Parts == 0 && n.Tile > 1 && n.Capacity > 0 && !n.Work && covers(s.Kinds, n.Kind) && (!s.Matrix || readsMatrix(n)) {
+	if n.Tile > 1 && n.Capacity > 0 && !n.Work && s.tiles(n.Kind) && (!s.Matrix || readsMatrix(n)) {
 		if gs, ok := s.groupSplitRows(n, d); ok {
 			return gs, true, nil
 		}
@@ -483,21 +483,17 @@ const splitShared = 8 << 10
 // the leading axis (Space: units, then the unit's workgroups), so a call
 // holds its rows' units whole (CallRows).
 func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
-	T := n.Tile
-	if T < 2 || len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
+	T, O := n.Tile, max(n.TileOut, 1)
+	if T < 2 || len(n.Stores) != T*O || n.TileFirst == 0 || n.TileBase == 0 {
 		return nil, false
 	}
 	c, _, _, ok := rowsSplittable(n)
 	if !ok {
 		return nil, false
 	}
-	slots := s.slots(d)
 	K, U := n.Loops[c].Trip, n.Space[0]
 	E := n.Elements() / U
-	S := 1
-	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && groupWidth(S*2, d)*T <= splitShared {
-		S *= 2
-	}
+	S := s.tileSegments(E, K, T*O, d)
 	if S == 1 {
 		return nil, false // rows wide enough to fill the device whole
 	}
@@ -514,12 +510,31 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	return []*Kernel{g}, true
 }
 
+// tileSegments is the segments groupSplitRows cuts a sum of K trips in,
+// where one unit of the rows is E elements and a thread sums cells sums:
+// doubling while they stay under Max, the unit's threads under twice the
+// slots, the trips divide into Block-wide blocks a segment, and every
+// thread's partials fit the workgroup memory a split holds.
+func (s Split) tileSegments(E, K, cells int, d Device) int {
+	S := 1
+	for S < s.Max && E*S < 2*s.slots(d) && K%(s.Block*S*2) == 0 && groupWidth(S*2, d)*cells <= splitShared {
+		S *= 2
+	}
+	return S
+}
+
+// tiles reports whether s cuts a tiled form of a capacity's sum of kind
+// kind over a weight (groupSplitRows).
+func (s Split) tiles(kind PrimKind) bool {
+	return s.Parts == 0 && covers(s.Kinds, kind)
+}
+
 // splitTile is n, whose threads each sum a tile of n.Tile rows (one where
-// untiled), split in S segments within a workgroup of G threads
-// (groupSplitRows).
+// untiled) by n.TileOut outputs, split in S segments within a workgroup of
+// G threads (groupSplitRows).
 func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
-	T := n.Tile
-	if len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
+	T, O := n.Tile, max(n.TileOut, 1)
+	if len(n.Stores) != T*O || n.TileFirst == 0 || n.TileBase == 0 {
 		return nil, false
 	}
 	c, folds, terms, ok := rowsSplittable(n)
@@ -528,7 +543,7 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 	}
 	K, U := n.Loops[c].Trip, n.Space[0]
 	E := n.Elements() / U
-	if S == 1 || G%S != 0 || E%(G/S) != 0 || K%S != 0 || G*T > splitShared {
+	if S == 1 || G%S != 0 || E%(G/S) != 0 || K%S != 0 || G*T*O > splitShared {
 		return nil, false
 	}
 	rpg := G / S
@@ -552,7 +567,7 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 	g := n.clone()
 	g.Name = n.Name + ".group"
 	g.Work, g.Group, g.Space = true, G, []int{U, E / rpg}
-	g.Tile, g.TileBase, g.TileLast, g.TileFirst, g.TileRows = 0, 0, 0, 0, 0
+	g.Tile, g.TileOut, g.TileBase, g.TileLast, g.TileFirst, g.TileRows = 0, 0, 0, 0, 0, 0
 	I := ir.U32
 	var old []int
 	for i, nd := range n.Nodes {
@@ -580,8 +595,8 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 			return nil, false
 		}
 	}
-	store0 := g.Stores[0]
-	sh := g.buf(Buf{Kind: BufShared, Elem: t, Size: G * T})
+	firsts := slices.Clone(g.Stores[(T-1)*O:])
+	sh := g.buf(Buf{Kind: BufShared, Elem: t, Size: G * T * O})
 	lead := g.add(Node{Op: OpLess, Type: ir.Pred, A: seg, B: g.u32(1)})
 	g.Stores = nil
 	for j, f := range folds {
@@ -597,16 +612,6 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 		if n.TileLast > 0 {
 			jj = g.bin(OpMin, I, jj, g.bin(OpSub, I, n.TileLast-1, first))
 		}
-		at := g.bin(OpAdd, I, g.bin(OpMul, I, jj, g.u32(G)), rl)
-		sum := -1
-		for i := range kept(S, t, drop) {
-			x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, I, at, g.u32(i*rpg))})
-			if sum < 0 {
-				sum = x
-				continue
-			}
-			sum = g.bin(OpAdd, t, sum, x)
-		}
 		row := g.bin(OpAdd, I, n.TileBase-1, jj)
 		if n.TileLast > 0 {
 			row = g.bin(OpMin, I, row, n.TileLast-1)
@@ -620,17 +625,29 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 			}
 			return 0, false
 		}
-		st := store0
-		st.Val = sum
-		if store0.Ax == nil {
-			st.Ix = copyInto(g, g, store0.Ix, leaf)
-		} else {
-			st.Ax = make([]int, len(store0.Ax))
-			for a, x := range store0.Ax {
-				st.Ax[a] = copyInto(g, g, x, leaf)
+		for o, st := range firsts {
+			at := g.bin(OpAdd, I, g.bin(OpMul, I, g.bin(OpSub, I, g.u32(T-1), jj), g.u32(G*O)), g.bin(OpAdd, I, rl, g.u32(o*G)))
+			sum := -1
+			for i := range kept(S, t, drop) {
+				x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, I, at, g.u32(i*rpg))})
+				if sum < 0 {
+					sum = x
+					continue
+				}
+				sum = g.bin(OpAdd, t, sum, x)
 			}
+			st.Val = sum
+			if st.Ax == nil {
+				st.Ix = copyInto(g, g, st.Ix, leaf)
+			} else {
+				ax := make([]int, len(st.Ax))
+				for a, x := range st.Ax {
+					ax[a] = copyInto(g, g, x, leaf)
+				}
+				st.Ax = ax
+			}
+			g.Stores = append(g.Stores, st)
 		}
-		g.Stores = append(g.Stores, st)
 	}
 	return g, true
 }

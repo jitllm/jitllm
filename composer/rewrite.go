@@ -365,6 +365,12 @@ func (n *Kernel) iterOf(c int) int {
 // operand, kind and shape; leaf, where it answers, stands for a node,
 // given the node with its operands already copied.
 func copyInto(dst, src *Kernel, root int, leaf func(i int, nd Node) (int, bool)) int {
+	return copyRoots(dst, src, []int{root}, leaf)[0]
+}
+
+// copyRoots is copyInto of each of roots, one copy of each node of src
+// however many of them reach it.
+func copyRoots(dst, src *Kernel, roots []int, leaf func(i int, nd Node) (int, bool)) []int {
 	memo := map[int]int{}
 	var walk func(i int) int
 	walk = func(i int) int {
@@ -400,7 +406,11 @@ func copyInto(dst, src *Kernel, root int, leaf func(i int, nd Node) (int, bool))
 		memo[i] = v
 		return v
 	}
-	return walk(root)
+	out := make([]int, len(roots))
+	for i, r := range roots {
+		out[i] = walk(r)
+	}
+	return out
 }
 
 // bufLike is k's buffer of b's operand, kind and shape, added where k has

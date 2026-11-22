@@ -55,30 +55,31 @@ func alternated(req Request) bool {
 }
 
 // matrixPrice is what the model prices a matrix kernel by: its form, the
-// elements of k a trip stages, and the segments k is cut in at capacity.
+// elements of k a trip stages, the segments k is cut in at capacity, and
+// its weight's role, which its vector form's counts are found by.
 type matrixPrice struct {
 	p            Matrix
 	depth, split int
+	role         jlm.Role
 }
 
 // band is a form a call's projections run at when its live rows are more
 // than the band below's and at most upto: the vector form at a tile of vec
-// rows, or, where vec is 0, the matrix unit at tile.
+// rows by out outputs, or, where vec is 0, the matrix unit at tile.
 type band struct {
-	vec  int
-	tile MatrixTile
-	upto int
+	vec, out int
+	tile     MatrixTile
+	upto     int
 }
 
 // bands is how req's projections run by the live rows of a call, where ks
 // are its kernels formed with the matrix unit at its capacity: each band in
 // order, and past the last the form ks are. At each call's rows the model
-// (Matrix.cost; the vector form a pass over the weight each t rows, each
-// weight element paying its read or its t rows' products, the greater) takes
-// the least costly of the vector form at each tile of rows up to RowTiles'
-// most, ks' form and the profile's matrix tiles. The bands run up from one
-// row: the first call ks' own form is the least costly at ends them, and a
-// form met again after another starts none.
+// takes the least costly of the vector form at each tile of rows by outputs
+// whose sums and terms RowTiles' registers hold (vectorCost), ks' form and
+// the profile's matrix tiles (Matrix.cost). The bands run up from one row:
+// the first call ks' own form is the least costly at ends them, and a form
+// met again after another starts none.
 func (r *Registry) bands(ks []*Kernel, req Request) []band {
 	d, R := req.Device, req.Step.Rows
 	var ms []*Kernel
@@ -89,12 +90,15 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 	}
 	most := 0
 	var tiles []MatrixTile
+	var splits []Split
 	for _, p := range r.Profiles[d.Kind].Passes {
 		switch p := p.(type) {
 		case RowTiles:
 			most = p.most(d)
 		case Matrix:
 			tiles = append([]MatrixTile{p.Tile()}, p.Tiles...)
+		case Split:
+			splits = append(splits, p)
 		}
 	}
 	if len(ms) == 0 {
@@ -124,17 +128,26 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		}
 		return c
 	}
-	vec := func(rows, t int) int {
-		c := 0
-		for _, k := range ms {
-			v := k.price.p.Vector
-			c += (rows + t - 1) / t * max(v[0], v[1]*t) * (k.Matrix[0] * k.Matrix[1] / d.Units) * weightBits(k) / 256
-		}
-		return c
-	}
 	var opts []band
-	for t := 2; t <= most; t *= 2 {
-		opts = append(opts, band{vec: t})
+	var counts map[jlm.Role]vectorOps
+	if most >= 2 {
+		counts = r.vectorCounts(req)
+	}
+	vectors := len(counts) > 0
+	for _, k := range ms {
+		_, ok := counts[k.price.role]
+		vectors = vectors && ok
+	}
+	for t := 2; vectors && t <= most; t *= 2 {
+		for u := 1; t*u <= most; u *= 2 {
+			fit := true
+			for _, k := range ms {
+				fit = fit && (u == 1 || outputsFit(k.Matrix[0], u, tileLanes(d)))
+			}
+			if fit {
+				opts = append(opts, band{vec: t, out: u})
+			}
+		}
 	}
 	for _, tile := range tiles {
 		if tile.Rows < R {
@@ -142,10 +155,22 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		}
 	}
 	price := func(o band, rows int) int {
-		if o.vec > 0 {
-			return vec(rows, o.vec)
+		if o.vec == 0 {
+			return at(o.tile, rows)
 		}
-		return at(o.tile, rows)
+		c := 0
+		for _, k := range ms {
+			v := counts[k.price.role]
+			x := vectorTile{rows: rows, t: o.vec, u: o.out, n: k.Matrix[0], k: k.Matrix[1], bits: weightBits(k), lanes: tileLanes(d), segments: 1}
+			for _, s := range splits {
+				if s.tiles(v.kind) {
+					x.segments = s.tileSegments(x.elements(), v.trips, o.vec*o.out, d)
+					break
+				}
+			}
+			c += k.price.p.vectorCost(x, v, d)
+		}
+		return c
 	}
 	var out []band
 	seen := map[int]bool{}
@@ -173,6 +198,171 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		out = out[:len(out)-1]
 	}
 	return out
+}
+
+// vectorTile is a call of rows rows of a projection of n outputs over k,
+// bits its weightBits, in its vector form at a tile of t rows by u outputs
+// a thread, an output copy lanes outputs from the next (tileLanes), its sum
+// cut in segments within a workgroup (Split.tileSegments).
+type vectorTile struct {
+	rows, t, u, n, k, bits, lanes, segments int
+}
+
+// elements is the threads one tile of rows takes before its sum is cut.
+func (x vectorTile) elements() int {
+	if x.u == 1 {
+		return x.n
+	}
+	return (x.n + x.u*x.lanes - 1) / (x.u * x.lanes) * x.lanes
+}
+
+// vectorCost is the model's time for x: a pass over the weight each t rows,
+// each pass paying the greater of its read (Vector.Read a sixteen stored
+// bits) and its issue -- every thread's trips, the greater of their loads
+// (Vector.Load each) and their other ops (Vector.Op each), which separate
+// pipes issue -- and Vector.Exposed sixteenths of the lesser, spread over
+// the device's units; a call launching fewer than Vector.Warps warps a unit
+// pays as many times more as it falls short.
+func (p Matrix) vectorCost(x vectorTile, v vectorOps, d Device) int {
+	threads := x.elements()
+	loads, ops := v.at(x.t, x.u)
+	issue := threads * v.trips / d.Units * max(p.Vector.Load*loads, p.Vector.Op*ops)
+	read := x.n * x.k / d.Units * x.bits / 256 * p.Vector.Read
+	passes := (x.rows + x.t - 1) / x.t
+	c := passes * (max(read, issue) + min(read, issue)*p.Vector.Exposed/16)
+	launched, want := passes*threads*x.segments, p.Vector.Warps*d.Units*x.lanes
+	if launched < want {
+		c = c * want / launched
+	}
+	return c
+}
+
+// vectorOps is what one trip of a projection's vector form issues a
+// thread, untiled, by what each value depends on: its loads and its other
+// ops each [neither, the row, the output, both]; trips is its sum's trips.
+// A tile of t rows by u outputs issues the row's t times, the output's u
+// times, both's t*u times and the rest once (RowTiles). An op only an
+// address reads is left out: it folds into the loads' offsets (Affine).
+type vectorOps struct {
+	loads, ops [4]int
+	trips      int
+	kind       PrimKind
+}
+
+// at is the loads and the other ops a trip of a tile of t rows by u outputs
+// issues.
+func (v vectorOps) at(t, u int) (loads, ops int) {
+	w := [4]int{1, t, u, t * u}
+	for c := range w {
+		loads += w[c] * v.loads[c]
+		ops += w[c] * v.ops[c]
+	}
+	return loads, ops
+}
+
+// countVector is k's vectorOps, false where RowTiles does not take k.
+func countVector(k *Kernel) (vectorOps, bool) {
+	if !tileable(k) || len(k.Space) != 2 {
+		return vectorOps{}, false
+	}
+	row, out := k.coordDependent(0), k.coordDependent(1)
+	live := k.Live()
+	// addr marks the nodes whose every reader takes them as an address.
+	addr := make([]bool, len(k.Nodes))
+	read := make([]bool, len(k.Nodes))
+	var buf [3]int
+	for i := range k.Nodes {
+		for _, a := range k.args(i, &buf) {
+			read[a] = true
+		}
+	}
+	for i := range addr {
+		addr[i] = read[i]
+	}
+	for _, s := range k.Stores {
+		if !s.Barrier && !s.Run {
+			addr[s.Val] = false
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range k.Nodes {
+			if !live[i] {
+				continue
+			}
+			for _, a := range k.args(i, &buf) {
+				if addr[a] && nd.Op != OpLoad && !addr[i] {
+					addr[a], changed = false, true
+				}
+			}
+		}
+	}
+	v := vectorOps{trips: k.Loops[0].Trip, kind: k.Kind}
+	for i, nd := range k.Nodes {
+		switch {
+		case !live[i] || addr[i] || !k.Varies(i, 0):
+			continue
+		case nd.Op == OpConst || nd.Op == OpCoord || nd.Op == OpIter || nd.Op == OpThread || nd.Op == OpFold:
+			continue
+		}
+		c := 0
+		if row[i] {
+			c++
+		}
+		if out[i] {
+			c += 2
+		}
+		if nd.Op == OpLoad {
+			v.loads[c]++
+		} else {
+			v.ops[c]++
+		}
+	}
+	return v, true
+}
+
+// vectorCounts is the vectorOps of each projection req forms in its vector
+// form, by its weight's role: req formed through the device's passes before
+// RowTiles, with no matrix unit, its addresses simplified as the device's
+// Affine does.
+func (r *Registry) vectorCounts(req Request) map[jlm.Role]vectorOps {
+	req.Device.Matrix, req.Device.Tile, req.Device.RowTile, req.Device.OutTile = [3]int{}, MatrixTile{}, 0, 0
+	prof := r.Profiles[req.Device.Kind].on(req.Device)
+	var affine []Pass
+	for _, p := range prof.Passes {
+		if a, ok := p.(Affine); ok {
+			affine = append(affine, a)
+		}
+	}
+	for i, p := range prof.Passes {
+		if _, ok := p.(RowTiles); ok {
+			prof.Passes = append(prof.Passes[:i:i], affine...)
+			break
+		}
+	}
+	ks, err := r.formWith(req, prof, nil)
+	if err != nil {
+		return nil
+	}
+	out := map[jlm.Role]vectorOps{}
+	for _, k := range ks {
+		if v, ok := countVector(k); ok {
+			if w, ok := weightOf(k); ok {
+				out[w] = v
+			}
+		}
+	}
+	return out
+}
+
+// weightOf is the role of the weight matrix k reads.
+func weightOf(k *Kernel) (jlm.Role, bool) {
+	for _, b := range k.Bufs {
+		if b.Kind == BufIn && b.Operand.Kind == OperandWeight {
+			return b.Operand.Role, true
+		}
+	}
+	return 0, false
 }
 
 // weightBits is sixteen times the bits k's weight stores an element in, its

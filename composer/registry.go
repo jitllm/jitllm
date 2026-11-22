@@ -56,6 +56,9 @@ type Device struct {
 	// RowTile, where set, is the rows a projection's tile holds (RowTiles):
 	// a request's vector form beside its matrix form (alternatives).
 	RowTile int
+	// OutTile, where set, is the outputs such a tile holds a thread beside
+	// its rows (RowTiles.outputs).
+	OutTile int
 	// Tile, where set, is the matrix tile every projection takes in place
 	// of the one the model chooses (Matrix.chosen).
 	Tile MatrixTile

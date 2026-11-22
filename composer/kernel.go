@@ -114,11 +114,13 @@ type Kernel struct {
 	// workgroups each of the device's units is to hold at once.
 	Resident int
 	// Tile, where RowTiles set it, is the rows a thread of the kernel sums,
-	// its stores one a row; TileBase and TileLast are 1 + the nodes of the
-	// tile's first row and of the last row the call states (0 for none), and
-	// TileFirst 1 + the node its first store's row is (the first, held to
-	// the last); TileRows is the leading axis's rows before tiling.
-	Tile, TileBase, TileLast, TileFirst, TileRows int
+	// and TileOut the outputs beside them (0 or 1 for one): row j's output i
+	// is store (Tile-1-j)*TileOut+i, the last row's first. TileBase and
+	// TileLast are 1 + the nodes of the tile's first row and of the last row
+	// the call states (0 for none), and TileFirst 1 + the node row 0's
+	// stores' row is (the first, held to the last); TileRows is the leading
+	// axis's rows before tiling.
+	Tile, TileOut, TileBase, TileLast, TileFirst, TileRows int
 	// TileMajor is a kernel whose calls over a step's rows and a weight's
 	// tiles (Workers) run every row of a tile before the next tile.
 	TileMajor bool

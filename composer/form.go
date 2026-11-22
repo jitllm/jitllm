@@ -112,7 +112,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 			}
 			br := req
 			if b.vec > 0 {
-				br.Device.Matrix, br.Device.Tile, br.Device.RowTile = [3]int{}, MatrixTile{}, b.vec
+				br.Device.Matrix, br.Device.Tile, br.Device.RowTile, br.Device.OutTile = [3]int{}, MatrixTile{}, b.vec, b.out
 			} else {
 				br.Device.Tile = b.tile
 			}

@@ -53,13 +53,21 @@ type Matrix struct {
 	Tiles             []MatrixTile
 	Latency, Decode   int
 	Launch, Plane     int
-	// Vector is a projection's cost beside this form at few rows, sixteen
-	// stored bits of weight on a unit, in the model's units (bands): their
-	// read, and each row's products, of which a tile pays the greater.
-	Vector [2]int
+	// Vector is a projection's cost in its vector form beside this one at
+	// few rows (bands).
+	Vector VectorCost
 	// cut is the most segments a call's rows cut k in at launch (Cut), where
 	// the model chose the split and the form holds the call's rows.
 	cut int
+}
+
+// VectorCost is the model's price of a projection's vector form, in its
+// units (Matrix.vectorCost): Read sixteen stored bits of weight read on a
+// unit, Load a thread's load and Op its other op issued on one, Exposed
+// the sixteenths of the lesser of a pass's read and issue the greater does
+// not hide, and Warps the warps a unit issues at its rate from.
+type VectorCost struct {
+	Read, Load, Op, Exposed, Warps int
 }
 
 // MatrixTile is one form of Matrix: a workgroup's rows, outputs and warps,
@@ -672,6 +680,9 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		m.Cut = Cut{Most: cut, Units: m.Space[0], Live: R}
 	}
 	m.price = matrixPrice{p: p, depth: KC, split: S}
+	if w, ok := weightOf(k); ok {
+		m.price.role = w
+	}
 	m.price.p.Tiles = nil
 	m.Work, m.Group = true, 32*WR*WN
 	shared := func(name string, e ir.Type, n int) int {
