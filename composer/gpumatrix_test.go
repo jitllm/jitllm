@@ -163,6 +163,9 @@ func TestComposedGPUMatrix(t *testing.T) {
 							if c.Cut.Most > 1 && !c.Cut.Sums {
 								cuts++
 								for _, L := range calls {
+									if !c.Runs(L) {
+										continue
+									}
 									if c.LiveUnitsOf(L)*c.Cut.Of(L) > c.Cut.Units {
 										past++
 									}
