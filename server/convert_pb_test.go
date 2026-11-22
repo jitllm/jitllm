@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/offheap"
 	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -41,6 +42,7 @@ func TestEveryEngineErrorHasItsCode(t *testing.T) {
 		{fmt.Errorf("%w: no prompt", ErrInvalid), connect.CodeInvalidArgument},
 		{fmt.Errorf("%w: 1 open session", ErrInUse), connect.CodeFailedPrecondition},
 		{ErrQueueTimeout, connect.CodeResourceExhausted},
+		{fmt.Errorf("open a session: %w", fmt.Errorf("%w: cannot allocate memory", offheap.ErrNoMemory)), connect.CodeResourceExhausted},
 		{context.Canceled, connect.CodeCanceled},
 		{context.DeadlineExceeded, connect.CodeDeadlineExceeded},
 		{errors.New("a fault"), connect.CodeInternal},

@@ -34,7 +34,7 @@ func (p procs) commit(b []byte) error {
 		return p.err
 	}
 	if addr, _, e := syscall.SyscallN(p.alloc, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), memCommit, pageReadWrite); addr == 0 {
-		return e
+		return hostErr(e)
 	}
 	return nil
 }

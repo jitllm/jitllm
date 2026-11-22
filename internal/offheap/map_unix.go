@@ -22,7 +22,7 @@ func mapAligned(n int) ([]byte, bool, error) {
 	b, err := syscall.Mmap(-1, 0, n, syscall.PROT_READ|syscall.PROT_WRITE,
 		syscall.MAP_PRIVATE|syscall.MAP_ANON)
 	if err != nil {
-		return nil, false, err
+		return nil, false, hostErr(err)
 	}
 	return b, true, nil
 }
@@ -50,7 +50,7 @@ func ReserveOffHeap(n int) ([]byte, bool, error) {
 	b, err := syscall.Mmap(-1, 0, n, syscall.PROT_READ|syscall.PROT_WRITE,
 		syscall.MAP_PRIVATE|syscall.MAP_ANON|syscall.MAP_NORESERVE)
 	if err != nil {
-		return nil, false, err
+		return nil, false, hostErr(err)
 	}
 	return b, true, nil
 }
