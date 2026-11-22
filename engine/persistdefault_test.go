@@ -14,7 +14,9 @@ import (
 // (gpu.WithPersistDeps), either before the gate's own options, which still
 // decide; the tier then fails t when it ends if it ran a block's launches down
 // the path and launched no persistent kernel (none ordered by dependency
-// counters, for deps): the gate ran the per-op path.
+// counters, for deps): the gate ran the per-op path -- or if a step met
+// launches no placement had composed a plan for: composition happens when a
+// block is placed, never at a step.
 func openGPU(t testing.TB, opts ...gpu.Option) (*gpu.GPU, error) {
 	mode := os.Getenv("JITLLM_TEST_PERSIST")
 	switch mode {
@@ -29,8 +31,10 @@ func openGPU(t testing.TB, opts ...gpu.Option) (*gpu.GPU, error) {
 		return g, err
 	}
 	t.Cleanup(func() {
-		runs, launched, deps := g.PersistLaunched()
+		runs, launched, deps, unplanned := g.PersistLaunched()
 		switch {
+		case unplanned > 0:
+			t.Errorf("JITLLM_TEST_PERSIST is set and %d of %d runs of a block's launches found no plan composed at the block's placement: they ran per-op", unplanned, runs)
 		case runs > 0 && launched == 0:
 			t.Errorf("JITLLM_TEST_PERSIST is set and %d runs of a block's launches launched no persistent kernel: the gate ran the per-op path", runs)
 		case mode == "deps" && launched > 0 && deps == 0:

@@ -1609,12 +1609,19 @@ func (sv *servedPart) run(g *devTier, lc *launcher, inst *partInst, in, out []ba
 	return sv.runAs(g, lc, inst, sv.sl.kind, in, out)
 }
 
+// issue binds the part's launches to in and out and issues them, counting
+// nothing: runAs at a step, and the placement collecting a block's launches
+// for its persistent plan (persistPlace).
+func (sv *servedPart) issue(lc *launcher, inst *partInst, in, out []backend.Buf) (unitLaunches, error) {
+	copy(sv.in[:sv.n], in)
+	copy(sv.out[:sv.m], out)
+	return sv.launch(lc, inst, sv.in[:sv.n], sv.out[:sv.m])
+}
+
 // runAs is run, counted as a step of part kind: a prompt's one-row call
 // launches a decode step's form and is the prompt's.
 func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind nn.Part, in, out []backend.Buf) error {
-	copy(sv.in[:sv.n], in)
-	copy(sv.out[:sv.m], out)
-	matrix, err := sv.launch(lc, inst, sv.in[:sv.n], sv.out[:sv.m])
+	matrix, err := sv.issue(lc, inst, in, out)
 	if err != nil {
 		return err
 	}
@@ -2743,6 +2750,34 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	return sv, g.promptInst(bs, sv.f), cp, nil
 }
 
+// blockIO is what block l's served part reads and writes at a step of R rows
+// on bs: x and the rows' per-layer inputs (blockServes) in, x out -- h where a
+// copy follows (apart) -- the cut where l is a first half, and each stream's
+// rows at its offset in x where its graph has several. A step and the
+// placement's persistent plan (persistPlace) both bind from here, so the plan
+// is composed over what the step binds. in and out are the caller's, so a
+// step allocates nothing. Callers hold g.mu.
+func (g *devTier) blockIO(bs *blockScratch, l *layer, apart bool, R int, in *[2]backend.Buf, out *[1]backend.Buf) ([]backend.Buf, []backend.Buf, error) {
+	*in = [2]backend.Buf{bs.x, bs.pleIn}
+	*out = [1]backend.Buf{bs.x}
+	if apart {
+		out[0] = bs.h
+	}
+	if l.cut > 0 {
+		if err := g.cutScratch(bs, R*l.cut*4); err != nil {
+			return nil, nil, err
+		}
+		out[0] = bs.cut
+	}
+	if len(l.graph.Out) > 1 {
+		if apart {
+			return bs.servedStreamsApart(R, len(l.graph.Out))
+		}
+		return bs.servedStreams(R, len(l.graph.Out))
+	}
+	return in[:], out[:], nil
+}
+
 // errStreamForm names a block whose form over passes did not form: its step
 // fails with it, as any form's that does not build.
 const errStreamForm tierError = "the composed block over passes"
@@ -2822,6 +2857,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 		if why := g.passesRoomless(l, li, bs, narrow, "the composed block over passes: "); why != "" {
 			return why
 		}
+		g.persistPlace(bs, l, li)
 	}
 	// Every prompt width the lane holds a scratch for, and a ragged step's:
 	// its first chunk or step forms and allocates nothing.
