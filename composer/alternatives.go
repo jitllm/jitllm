@@ -59,24 +59,25 @@ type matrixPrice struct {
 	depth, split int
 }
 
-// narrowBand is a matrix tile the model prices least at the calls of more
-// than the band below's rows and at most upto rows.
-type narrowBand struct {
+// band is a form a call's projections run at when its live rows are more
+// than the band below's and at most upto: the vector form at a tile of vec
+// rows, or, where vec is 0, the matrix unit at tile.
+type band struct {
+	vec  int
 	tile MatrixTile
 	upto int
 }
 
 // bands is how req's projections run by the live rows of a call, where ks
-// are its kernels formed with the matrix unit at its capacity: the vector
-// form at a tile of t rows at calls of at most v rows, then each of narrow's
-// tiles in its band, and past the last the form ks are. At each call's rows
-// the model (Matrix.cost; the vector form a pass over the weight each t
-// rows, each weight element paying its read or its t rows' products, the
-// greater) takes the least costly of the vector form, ks' form and the
-// profile's tiles; a tile is a band of its own only where it is the least
-// costly over consecutive rows below ks' form's. v is 0 where the vector
-// form is never the cheaper.
-func (r *Registry) bands(ks []*Kernel, req Request) (t, v int, narrow []narrowBand) {
+// are its kernels formed with the matrix unit at its capacity: each band in
+// order, and past the last the form ks are. At each call's rows the model
+// (Matrix.cost; the vector form a pass over the weight each t rows, each
+// weight element paying its read or its t rows' products, the greater) takes
+// the least costly of the vector form at each tile of rows up to RowTiles'
+// most, ks' form and the profile's matrix tiles. The bands run up from one
+// row: the first call ks' own form is the least costly at ends them, and a
+// form met again after another starts none.
+func (r *Registry) bands(ks []*Kernel, req Request) []band {
 	d, R := req.Device, req.Step.Rows
 	var ms []*Kernel
 	for _, k := range ks {
@@ -95,7 +96,7 @@ func (r *Registry) bands(ks []*Kernel, req Request) (t, v int, narrow []narrowBa
 		}
 	}
 	if len(ms) == 0 {
-		return 0, 0, nil
+		return nil
 	}
 	own := func(rows int) int {
 		c := 0
@@ -121,24 +122,6 @@ func (r *Registry) bands(ks []*Kernel, req Request) (t, v int, narrow []narrowBa
 		}
 		return c
 	}
-	// best is the matrix option least costly at rows: -1 for ks' own form,
-	// else the tile's index.
-	best := func(rows int) (int, int) {
-		b, c := -1, own(rows)
-		for i, tile := range tiles {
-			if tile.Rows >= R {
-				continue
-			}
-			if x := at(tile, rows); x < c {
-				b, c = i, x
-			}
-		}
-		return b, c
-	}
-	mat := func(rows int) int {
-		_, c := best(rows)
-		return c
-	}
 	vec := func(rows, t int) int {
 		c := 0
 		for _, k := range ms {
@@ -147,54 +130,47 @@ func (r *Registry) bands(ks []*Kernel, req Request) (t, v int, narrow []narrowBa
 		}
 		return c
 	}
-	if most >= 2 {
-		var ts, upto []int
-		top := 0
-		for t := 2; t <= most; t *= 2 {
-			n := 1
-			for n+1 < R && vec(n+1, t) <= mat(n+1) {
-				n++
-			}
-			ts, upto, top = append(ts, t), append(upto, n), max(top, n)
-		}
-		pick, least := -1, 0
-		for i := range ts {
-			c := 0
-			for rows := 2; rows <= top; rows++ {
-				if rows <= upto[i] {
-					c += vec(rows, ts[i])
-				} else {
-					c += mat(rows)
-				}
-			}
-			if upto[i] > 1 && (pick < 0 || c < least) {
-				pick, least = i, c
-			}
-		}
-		if pick >= 0 {
-			t, v = ts[pick], upto[pick]
+	var opts []band
+	for t := 2; t <= most; t *= 2 {
+		opts = append(opts, band{vec: t})
+	}
+	for _, tile := range tiles {
+		if tile.Rows < R {
+			opts = append(opts, band{tile: tile})
 		}
 	}
-	// The bands run up from the vector form's; the first call ks' own form
-	// is the least costly at ends them, and a tile met again starts none.
+	price := func(o band, rows int) int {
+		if o.vec > 0 {
+			return vec(rows, o.vec)
+		}
+		return at(o.tile, rows)
+	}
+	var out []band
 	seen := map[int]bool{}
 	cur := -1
-	for rows := max(v, 1) + 1; rows <= R; rows++ {
-		b, _ := best(rows)
+	for rows := 1; rows <= R; rows++ {
+		b, c := -1, own(rows)
+		for i, o := range opts {
+			if x := price(o, rows); x < c {
+				b, c = i, x
+			}
+		}
 		if b < 0 || seen[b] && b != cur {
 			break
 		}
 		if b == cur {
-			narrow[len(narrow)-1].upto = rows
+			out[len(out)-1].upto = rows
 			continue
 		}
 		cur, seen[b] = b, true
-		narrow = append(narrow, narrowBand{tiles[b], rows})
+		o := opts[b]
+		o.upto = rows
+		out = append(out, o)
 	}
-	if len(narrow) > 0 && narrow[len(narrow)-1].upto >= R {
-		narrow = narrow[:len(narrow)-1]
+	if len(out) > 0 && out[len(out)-1].upto >= R {
+		out = out[:len(out)-1]
 	}
-	return t, v, narrow
+	return out
 }
 
 // alternatives is one form of a request formed two ways at one capacity:
