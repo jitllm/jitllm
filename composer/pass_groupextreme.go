@@ -11,7 +11,11 @@ import (
 // its first largest and the value carried with it, and the workgroup keeps
 // the largest of the threads' and, of equal ones, the value of the earliest
 // term. G is the fewest threads, a power of two from a subgroup to 1024,
-// that take at most Trips terms each.
+// that take at most Trips terms each. A loop keeping only the largest of its
+// terms (a row's largest magnitude) runs the same way: a largest is the same
+// whichever thread took a term and however often, so its value is the
+// loop's, bit for bit, and a kernel of a form's capacity takes it too, a
+// workgroup a row held to the call's rows as any workgroup a row.
 type GroupExtreme struct {
 	Trips int
 	Kinds []PrimKind
@@ -24,11 +28,17 @@ func (s GroupExtreme) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 func (s GroupExtreme) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
-	if d.Kind != DeviceGPU || n.Work || !covers(s.Kinds, n.Kind) || n.Few > 0 || n.Many > 0 || n.Capacity > 0 {
+	if d.Kind != DeviceGPU || n.Work || !covers(s.Kinds, n.Kind) {
 		return nil, false, nil
 	}
+	if n.Capacity > 0 {
+		return s.largest(n, d)
+	}
 	c, ext, car, vs, cs, ok := extremeSplittable(n)
-	if !ok || n.Nodes[ext].Type != ir.F32 || n.Nodes[n.Nodes[ext].A].Op != OpMax {
+	if !ok {
+		return s.largest(n, d)
+	}
+	if n.Nodes[ext].Type != ir.F32 || n.Nodes[n.Nodes[ext].A].Op != OpMax {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.Elements()
@@ -81,6 +91,66 @@ func (s GroupExtreme) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	g.Stores[cs].Val = got
 	if vs >= 0 {
 		g.Stores[vs].Val = best
+	}
+	return []*Kernel{g}, true, nil
+}
+
+// groupOf is the fewest threads, a power of two from a subgroup to the most a
+// workgroup takes, that take at most s.Trips of t terms each.
+func (s GroupExtreme) groupOf(t int, d Device) int {
+	G := ir.SubgroupLanes
+	for G < d.groupMost() && G*s.Trips < t {
+		G *= 2
+	}
+	return G
+}
+
+// largest is n, one loop keeping the largest of its terms in one fold and
+// storing what it makes of it, as a workgroup an element: each thread folds
+// the terms t, t+G, ... (a thread past the last re-reading it), and the
+// workgroup's largest stands for the fold wherever it is read.
+func (s GroupExtreme) largest(n *Kernel, d Device) ([]*Kernel, bool, error) {
+	if len(n.Loops) != 1 || len(n.Stores) == 0 || n.Spans != 0 || n.Tile != 0 || n.Running != nil || n.Seq != nil {
+		return nil, false, nil
+	}
+	fs := n.foldsOf(0)
+	if len(fs) != 1 || n.Loops[0].Parent != -1 || n.Loops[0].Count != 0 {
+		return nil, false, nil
+	}
+	f := fs[0]
+	step := n.Nodes[f].A
+	term := n.extremeTerm(f)
+	if term < 0 || n.Nodes[f].Type != ir.F32 || n.Nodes[step].Op != OpMax || n.reaches(term)[f] {
+		return nil, false, nil
+	}
+	for _, st := range n.Stores {
+		if st.At != -1 || st.Barrier || st.Run || !n.storesOwn(st) {
+			return nil, false, nil
+		}
+	}
+	T, E := n.Loops[0].Trip, n.Elements()
+	if T <= s.Trips || T >= 1<<24 || d.Slots > 0 && E >= d.Slots {
+		return nil, false, nil
+	}
+	it := n.iterOf(0)
+	if it < 0 {
+		return nil, false, nil
+	}
+	G := s.groupOf(T, d)
+	U := ir.U32
+	g := n.clone()
+	g.Name = n.Name + ".group"
+	g.Work, g.Group = true, G
+	g.Loops[0].Trip = (T + G - 1) / G
+	tid := g.add(Node{Op: OpThread, Type: U})
+	at := g.bin(OpMul, U, it, g.u32(G))
+	g.redirect(it, g.bin(OpMin, U, g.bin(OpAdd, U, tid, at), g.u32(T-1)), at)
+	best := g.un(OpGroupMax, ir.F32, f)
+	g.redirect(f, best, best)
+	for _, p := range g.Operands(&g.Nodes[step]) {
+		if *p == best {
+			*p = f
+		}
 	}
 	return []*Kernel{g}, true, nil
 }
