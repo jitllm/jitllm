@@ -21,10 +21,8 @@ import (
 // retire, so the rows that run step together: every request completes, the
 // budget bound (admissions were put off), and joint steps ran in both waves.
 // Before admission every row was admitted, the oldest pages of most sessions
-// went home, and a step with two sequences' pages at home is refused as one
-// step, so each session ran alone and re-streamed its evicted prefix every
-// token, a Sync a pass. Its violation is
-// TestSixtyFourRequestsGateDiscriminates.
+// went home, and every step re-streamed the evicted prefixes, a Sync a pass.
+// Its violation is TestSixtyFourRequestsGateDiscriminates.
 func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 	for wave, w := range sixtyFour(t, 2, false) {
 		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d admissions put off for room, "+
@@ -45,7 +43,8 @@ func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 // TestSixtyFourRequestsGateDiscriminates runs one wave of the gate with every
 // waiting request admitted whatever the card has room for, and demands the
 // gate's checks fail and the card thrash as it did before admission: pages
-// sent home and joint steps refused.
+// sent home and streamed back. A step whose sequences hold pages at home is
+// not refused: the tier streams them all in one call.
 func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
 	w := sixtyFour(t, 1, true)[0]
 	t.Logf("violation: %d of 64 requests failed; %d joint steps, %d admissions put off, %d refusals, "+
@@ -54,9 +53,9 @@ func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
 	if w.waits != 0 {
 		t.Fatalf("%d admissions were put off with admission off", w.waits)
 	}
-	if w.evictions == 0 || w.refusals == 0 {
-		t.Fatalf("with every request admitted the card neither evicted (%d) nor refused a joint step (%d): "+
-			"the load does not bind and the gate cannot tell admission from none", w.evictions, w.refusals)
+	if w.evictions == 0 || w.passes == 0 {
+		t.Fatalf("with every request admitted the card sent %d page(s) home and streamed %d pass(es): "+
+			"the load does not bind and the gate cannot tell admission from none", w.evictions, w.passes)
 	}
 }
 
