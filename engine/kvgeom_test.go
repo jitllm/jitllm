@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -15,7 +16,10 @@ import (
 // positions, so the card names its pages by the keys of the positions up to
 // each one's end at its own page (nameApart, restoreApart): a second session
 // maps the first's prefix there, restores exactly the positions the two
-// prompts share, and answers as a session that never shared.
+// prompts share, and answers as a session that never shared: within four
+// times what a session that never shared moves by when it prefills the same
+// prompt split where the restore splits it, since a call's rows choose its
+// forms.
 //
 // VIOLATION SIGNATURE. Let restoreApart report a fill a chunk past the one it
 // mapped and the second session takes the first's suffix for its own: "the
@@ -64,6 +68,16 @@ func TestCardSharesPagesCutApartByItsOwnKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctl := open(false)
+	defer ctl.Close()
+	ids := sharePrompt(m, 1)
+	if _, err := ctl.Prefill(ids[:sharePrefix]); err != nil {
+		t.Fatal(err)
+	}
+	split, err := ctl.Prefill(ids[sharePrefix:])
+	if err != nil {
+		t.Fatal(err)
+	}
 	mapped := g.Stats().KVPagesMapped
 	b := open(true)
 	defer b.Close()
@@ -76,8 +90,14 @@ func TestCardSharesPagesCutApartByItsOwnKeys(t *testing.T) {
 			n, m.Cfg.NLayer, b.KVRestored(), sharePrefix, pc, sharePage)
 	}
 	for k := 0; ; k++ {
-		if e, _ := nmseOf(got, want); !(e < 1e-6) {
-			t.Fatalf("step %d: %.3e NMSE from a session that never shared", k, e)
+		e, _ := nmseOf(got, want)
+		c, _ := nmseOf(split, want)
+		if math.IsNaN(c) || math.IsInf(c, 0) {
+			t.Fatalf("step %d: the split control's NMSE is %v", k, c)
+		}
+		if bound := max(1e-6, 4*c); !(e < bound) {
+			t.Fatalf("step %d: %.3e NMSE from a session that never shared (bound %.3e, the same prompt split where the restore splits it %.3e)",
+				k, e, bound, c)
 		}
 		if k == shareGen {
 			break
@@ -87,6 +107,9 @@ func TestCardSharesPagesCutApartByItsOwnKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got, err = b.Forward(tok); err != nil {
+			t.Fatal(err)
+		}
+		if split, err = ctl.Forward(tok); err != nil {
 			t.Fatal(err)
 		}
 	}
