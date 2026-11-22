@@ -57,9 +57,9 @@ type Matrix struct {
 	// element on a unit, in the model's units (crossing): its read, and each
 	// row's product, of which a tile pays the greater.
 	Vector [2]int
-	// cut is the most segments a call's rows cut k in at launch (Cut), where
-	// the model chose the split and the form holds the call's rows.
-	cut int
+	// cut is k cut at launch by the call's rows (Cut), where the model
+	// chooses the split and the form holds the call's rows.
+	cut Cut
 }
 
 // MatrixTile is one form of Matrix: a workgroup's rows, outputs and warps,
@@ -143,20 +143,40 @@ func (p Matrix) splits(k *Kernel, depth int, d Device) (int, int) {
 	return best, least
 }
 
-// launchSplits is the most segments a call of few rows cuts k of k in,
-// where the form holds the call's rows (Kernel.Capacity): the model's least
-// costly at one row tile, held to the form's row tiles, whose planes the
-// segments of fewer tiles share (Cut).
-func (p Matrix) launchSplits(k *Kernel, depth int, d Device) int {
+// launchCut is k of k cut at launch by a call's rows, where the form holds
+// them (Kernel.Capacity): at each count of row tiles a call reaches, the
+// model's least costly segments, whatever the capacity's tiles, and at the
+// capacity's tiles its split (splits). A count of tiles is cut in the most
+// segments any count of as many tiles or more takes, so fewer tiles never
+// take fewer segments.
+func (p Matrix) launchCut(k *Kernel, depth, split int, d Device) Cut {
 	R, N, K := k.Space[0], k.Space[1], k.Loops[0].Trip
 	units := (R + p.Rows - 1) / p.Rows
-	best, least := 1, p.cost(p.Rows, N, K, 1, depth, d)
-	for S := 2; p.Plane > 0 && S <= units && K%(depth*S) == 0 && K/(depth*S) >= 2; S *= 2 {
-		if c := p.cost(p.Rows, N, K, S, depth, d); c < least {
-			best, least = S, c
+	best := make([]int, units+1)
+	for u := 1; u < units; u++ {
+		least := p.cost(u*p.Rows, N, K, 1, depth, d)
+		best[u] = 1
+		for S := 2; p.Plane > 0 && K%(depth*S) == 0 && K/(depth*S) >= 2; S *= 2 {
+			if c := p.cost(u*p.Rows, N, K, S, depth, d); c < least {
+				best[u], least = S, c
+			}
 		}
 	}
-	return best
+	best[units] = split
+	var upto []int
+	for x := 2; ; x *= 2 {
+		t := 0
+		for u := 1; u <= units; u++ {
+			if best[u] >= x {
+				t = u
+			}
+		}
+		if t == 0 {
+			break
+		}
+		upto = append(upto, t)
+	}
+	return Cut{Upto: upto, Most: 1 << len(upto), Units: units, Live: R}
 }
 
 // resident is the workgroups of p a unit holds at once on d: p.Resident
@@ -255,8 +275,10 @@ func (p Matrix) plan(k *Kernel, d Device) (Matrix, bilinear, bool) {
 		q.Split = 1
 	case q.Split == 0 && d.Units > 0:
 		q.Split, _ = q.splits(k, f.depth, d)
-		if q.Split == 1 && k.Capacity == k.Space[0] {
-			q.cut = q.launchSplits(k, f.depth, d)
+		if k.Capacity == k.Space[0] {
+			if c := q.launchCut(k, f.depth, q.Split, d); c.Most > 1 {
+				q.cut, q.Split = c, 1
+			}
 		}
 	case q.Split == 0:
 		q.Split = 1
@@ -666,10 +688,10 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	m.Nodes, m.Loops, m.Stores, m.Rows = nil, nil, nil, 0
 	S, NB := max(p.Split, 1), (N+TN-1)/TN
 	m.Space = []int{(R + TR - 1) / TR, NB * S}
-	cut := 0
-	if S == 1 && p.cut > 1 {
-		cut = p.cut
-		m.Cut = Cut{Most: cut, Units: m.Space[0], Live: R}
+	cut := S == 1 && p.cut.Most > 1
+	if cut {
+		m.Cut = p.cut
+		m.Space[0] = p.cut.Grid()
 	}
 	m.price = matrixPrice{p: p, depth: KC, split: S}
 	m.price.p.Tiles = nil
@@ -721,7 +743,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	// Cut at launch, the leading coordinate is a segment's row tile: the
 	// call's tiles, then the next segment's.
 	trips, seg, units, cs := m.u32(T), 0, 0, 0
-	if cut > 1 {
+	if cut {
 		units, cs = m.cutOf(m.Cut)
 		c0 := m.add(Node{Op: OpCoord, A: 0, Type: U})
 		r0 = m.bin(OpMul, U, m.bin(OpRem, U, c0, units), m.u32(TR))
@@ -866,13 +888,13 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		live := copyInto(m, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false })
 		trips = m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: r0, B: live}), B: trips, C: m.u32(0)})
 	}
-	if k.Rows > 0 || cut > 1 {
+	if k.Rows > 0 || cut {
 		m.Loops[P].Count, m.Loops[P].Capped = trips+1, true
 	}
 	it := m.add(Node{Op: OpIter, At: P, Type: U})
 	next := m.bin(OpAdd, U, it, m.u32(1))
 	lastTrip := m.u32(T - 1)
-	if cut > 1 {
+	if cut {
 		lastTrip = m.bin(OpSub, U, m.bin(OpDiv, U, m.u32(T), cs), m.u32(1))
 	}
 	kn := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpMin, U, next, lastTrip), m.u32(KC)), k0)
@@ -884,11 +906,11 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	// where k is cut, the sum to its segment's plane.
 	var planes Operand
 	pb := -1
-	if S > 1 || cut > 1 {
+	if S > 1 || cut {
 		out := k.Bufs[k.Stores[0].Buf].Operand
 		planes = Operand{Kind: OperandScratch, Name: out.Name + ".segments", Of: out.Of}
 		shape := []int{S, R, N}
-		if cut > 1 {
+		if cut {
 			shape = []int{m.Space[0] * TR, N}
 		}
 		pb = m.buf(Buf{Kind: BufOut, Elem: F, Operand: planes, Shape: shape})
@@ -913,7 +935,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	}
 	emit := func(r, n, sum, at int) {
 		sum = m.bin(OpMul, F, sum, m.unscale(expOf(r, m.u32(0))))
-		if cut > 1 {
+		if cut {
 			g := gate(at)
 			k.storesOf(m, f.fold, r, n, sum, g[0])
 			row := m.bin(OpAdd, U, m.bin(OpMul, U, seg, m.bin(OpMul, U, units, m.u32(TR))), r)
@@ -937,7 +959,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	switch {
 	case S > 1:
 		formed = append(formed, combine(k, planes, S))
-	case cut > 1:
+	case cut:
 		formed = append(formed, cutCombine(k, planes, m.Cut, TR))
 	}
 	if frag {
@@ -1075,7 +1097,8 @@ func combine(k *Kernel, planes Operand, S int) *Kernel {
 
 // cutCombine is k's stores of the sum of the segments a call is cut in at
 // launch (Cut): segment s's sums are rows s*units*rows of the planes on,
-// for the call's units row tiles of rows rows.
+// for the call's units row tiles of rows rows. It reads the call's segments
+// alone: the first, then a trip of a loop for each past it.
 func cutCombine(k *Kernel, planes Operand, cut Cut, rows int) *Kernel {
 	U, F := ir.U32, ir.F32
 	N := k.Space[1]
@@ -1088,18 +1111,16 @@ func cutCombine(k *Kernel, planes Operand, cut Cut, rows int) *Kernel {
 	}
 	r := c.add(Node{Op: OpCoord, A: 0, Type: U})
 	n := c.add(Node{Op: OpCoord, A: 1, Type: U})
-	in := c.buf(Buf{Kind: BufIn, Elem: F, Operand: planes, Shape: []int{cut.Units * rows, N}})
+	in := c.buf(Buf{Kind: BufIn, Elem: F, Operand: planes, Shape: []int{cut.Grid() * rows, N}})
 	units, cs := c.cutOf(cut)
 	stride := c.bin(OpMul, U, units, c.u32(rows))
-	most := c.bin(OpSub, U, cs, c.u32(1))
-	sum := c.add(Node{Op: OpLoad, Type: F, Buf: in, Ax: []int{r, n}})
-	for s := 1; s < cut.Most; s++ {
-		row := c.bin(OpAdd, U, c.bin(OpMul, U, c.bin(OpMin, U, c.u32(s), most), stride), r)
-		v := c.add(Node{Op: OpLoad, Type: F, Buf: in, Ax: []int{row, n}})
-		v = c.add(Node{Op: OpSelect, Type: F, A: c.add(Node{Op: OpLess, Type: ir.Pred, A: c.u32(s), B: cs}), B: v, C: c.f32(0)})
-		sum = c.bin(OpAdd, F, sum, v)
-	}
-	k.storesOf(c, k.foldsOf(0)[0], r, n, sum, -1)
+	l := c.loop(cut.Most-1, -1)
+	c.Loops[l].Count, c.Loops[l].Capped, c.Loops[l].Uniform = c.bin(OpSub, U, cs, c.u32(1))+1, true, true
+	s := c.bin(OpAdd, U, c.add(Node{Op: OpIter, At: l, Type: U}), c.u32(1))
+	row := c.bin(OpAdd, U, c.bin(OpMul, U, s, stride), r)
+	fold := c.add(Node{Op: OpFold, Type: F, At: l, B: c.add(Node{Op: OpLoad, Type: F, Buf: in, Ax: []int{r, n}})})
+	c.Nodes[fold].A = c.bin(OpAdd, F, fold, c.add(Node{Op: OpLoad, Type: F, Buf: in, Ax: []int{row, n}}))
+	k.storesOf(c, k.foldsOf(0)[0], r, n, fold, -1)
 	return c
 }
 
@@ -1108,10 +1129,9 @@ func cutCombine(k *Kernel, planes Operand, cut Cut, rows int) *Kernel {
 func (k *Kernel) cutOf(cut Cut) (int, int) {
 	U := ir.U32
 	units := k.liveElements([]int{cut.Units}, cut.Live)
-	q := k.bin(OpDiv, U, k.u32(cut.Units), units)
 	s := k.u32(1)
-	for x := 2; x <= cut.Most; x *= 2 {
-		s = k.add(Node{Op: OpSelect, Type: U, A: k.add(Node{Op: OpLess, Type: ir.Pred, A: q, B: k.u32(x)}), B: s, C: k.u32(x)})
+	for i, t := range cut.Upto {
+		s = k.add(Node{Op: OpSelect, Type: U, A: k.add(Node{Op: OpLess, Type: ir.Pred, A: units, B: k.u32(t + 1)}), B: k.u32(2 << i), C: s})
 	}
 	return units, s
 }

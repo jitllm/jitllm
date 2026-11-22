@@ -18,26 +18,44 @@ func (b Band) Runs(rows int) bool {
 	return true
 }
 
-// Cut is a matrix form's k cut at launch by the call's rows: at most Most
-// segments over Units row tiles at a capacity of Live rows. Sums marks the
-// combine, which a call cut in one segment does not run.
+// Cut is a matrix form's k cut at launch by the call's rows, over Units row
+// tiles at a capacity of Live rows: a call reaching u of the tiles is cut in
+// 2<<i segments for the last i whose Upto[i] is u or more, one where none
+// is, Most at the fewest tiles. Sums marks the combine, which a call cut in
+// one segment does not run.
 type Cut struct {
+	Upto              []int
 	Most, Units, Live int
 	Sums              bool
 }
 
-// Of is the segments a call of rows rows is cut in: the most, as a power
-// of two, whose tiles fit the form's, one at the capacity.
+// Of is the segments a call of rows rows is cut in (0 rows: the capacity).
 func (c Cut) Of(rows int) int {
-	if c.Most < 2 || rows <= 0 || rows >= c.Live {
-		return 1
+	u := c.Units
+	if rows > 0 && rows < c.Live {
+		u = (rows*c.Units + c.Live - 1) / c.Live
 	}
-	q := c.Units / ((rows*c.Units + c.Live - 1) / c.Live)
+	return c.at(u)
+}
+
+func (c Cut) at(units int) int {
 	s := 1
-	for s*2 <= c.Most && s*2 <= q {
-		s *= 2
+	for i, t := range c.Upto {
+		if units <= t {
+			s = 2 << i
+		}
 	}
 	return s
+}
+
+// Grid is the most row tiles of segments any call launches: its planes'
+// rows, a row tile's each.
+func (c Cut) Grid() int {
+	g := c.Units
+	for u := 1; u <= c.Units; u++ {
+		g = max(g, u*c.at(u))
+	}
+	return g
 }
 
 // Runs reports whether a call of rows rows launches c: its band takes the

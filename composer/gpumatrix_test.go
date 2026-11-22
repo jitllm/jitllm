@@ -83,8 +83,10 @@ func matrixWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []
 // rows: the projection must be formed on the matrix unit (its kernel the
 // matrix pass's, its tiles multiplied), and on a card stating its units
 // beside a vector form the calls of few rows run (alternatives), each form
-// launched at some call and k cut by the call's rows at one tile at least;
-// each row held to the oracle within
+// launched at some call and k cut by the call's rows at one tile at least,
+// a call of few rows cut in more row tiles of segments than the capacity's
+// row tiles and a capacity cut in segments of its own cut otherwise at a
+// call of fewer rows (Cut); each row held to the oracle within
 // binary16's rounding of both factors, rows whose magnitudes reach past
 // binary16's range among them (every fifth times 2^20), and every word past
 // the call's rows and the guard after them untouched. Two violations must fail: the
@@ -111,7 +113,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 			dev := gpuDevice(d)
 			dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 			rng := rand.New(rand.NewSource(53))
-			ran, cuts, banded, vecRan, matRan := 0, 0, 0, 0, 0
+			ran, cuts, banded, vecRan, matRan, past, apart := 0, 0, 0, 0, 0, 0, 0
 			calls100 := []int{1, 15, 33, 64, 100}
 			for _, typ := range formats {
 				// The last shape's row tiles and outputs fill the units at
@@ -122,7 +124,8 @@ func TestComposedGPUMatrix(t *testing.T) {
 				for _, sh := range []struct {
 					n, k, capacity int
 					calls          []int
-				}{{100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
+				}{{100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}},
+					{2048, 4096, 200, []int{1, 15, 33, 100, 150, 200}}} {
 					for _, tile := range splitTiles(gpuMatrixTiles()) {
 						n, k, capacity, calls := sh.n, sh.k, sh.capacity, sh.calls
 						own := gpuMatrixTiles()[0]
@@ -159,6 +162,14 @@ func TestComposedGPUMatrix(t *testing.T) {
 						for _, c := range formed {
 							if c.Cut.Most > 1 && !c.Cut.Sums {
 								cuts++
+								for _, L := range calls {
+									if c.LiveUnitsOf(L)*c.Cut.Of(L) > c.Cut.Units {
+										past++
+									}
+									if c.Cut.Of(0) > 1 && c.Cut.Of(L) != c.Cut.Of(0) {
+										apart++
+									}
+								}
 							}
 							if c.Band.Upto > 0 {
 								banded++
@@ -291,6 +302,9 @@ func TestComposedGPUMatrix(t *testing.T) {
 			}
 			if dev.Units > 0 && cuts == 0 {
 				t.Fatalf("%s: no projection's k was cut at launch: the calls of few rows never ran a cut", name)
+			}
+			if dev.Units > 0 && (past == 0 || apart == 0) {
+				t.Fatalf("%s: %d calls cut past the capacity's row tiles and %d cut apart from the capacity's segments: the launch cut followed the capacity", name, past, apart)
 			}
 			t.Logf("%s: %d projections formed on the matrix unit, %d cut at launch, held to the oracle at calls of 1 to their capacity's rows", name, ran, cuts)
 		})

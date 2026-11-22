@@ -375,6 +375,15 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			c.Live, c.LiveUnits, c.LiveInner, c.LiveGroup = k.Capacity, k.Space[0], k.Elements()/k.Space[0], k.Group
 			c.TileMajor = k.TileMajor
 		}
+		if k.Cut.Most > 1 && !k.Cut.Sums && len(k.Space) > 0 {
+			// The leading axis is every call's grid of segments' row tiles:
+			// the capacity's launch is its own segments' (Cut.Grid).
+			inner := k.Elements() / k.Space[0]
+			c.Groups = k.Cut.Units * k.Cut.Of(0) * inner
+			if c.Live > 0 {
+				c.LiveUnits = k.Cut.Units
+			}
+		}
 		for _, a := range k.Args {
 			if a.Buf >= 0 {
 				b := k.Bufs[a.Buf]
