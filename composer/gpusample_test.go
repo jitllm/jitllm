@@ -351,3 +351,84 @@ func TestComposedGPUSampleGreedy(t *testing.T) {
 		})
 	}
 }
+
+// TestComposedGPUSampleGreedyCallRows forms the greedy pick at a step of 512
+// rows, as the head's is, and runs it at calls of fewer rows, each row's
+// largest placed apart from the others' -- in the first term, the middle,
+// the last -- some tied with earlier and later terms in other segments; a
+// row's token is its first largest's. The violation: a combine that drops a
+// row's last segment misses the rows whose largest is in it.
+func TestComposedGPUSampleGreedyCallRows(t *testing.T) {
+	testlock.GPU(t)
+	devs := openDevices()
+	if len(devs) == 0 {
+		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
+	}
+	const capacity, guard = 512, 64
+	widths := []int{33, 4096, 151936}
+	calls := []int{1, 2, 3, 8, 64, capacity}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			dv := gpuDevice(d)
+			rng := rand.New(rand.NewSource(7))
+			held, cut := 0, false
+			for _, n := range widths {
+				g := (&graph.Sample{NVocab: n}).Build()
+				_, codes, err := composer.Default().Form(composer.Request{Graph: g, Step: composer.Step{Rows: capacity, Page: 64, Keys: 1}, Device: dv})
+				if err != nil {
+					t.Fatalf("width %d: forming: %v", n, err)
+				}
+				for _, c := range codes {
+					cut = cut || c.Cut.Most > 1
+				}
+				op, err := compileLone(d, codes)
+				if err != nil {
+					t.Fatalf("width %d: %v", n, err)
+				}
+				for _, rows := range calls {
+					x := make([]float32, capacity*n)
+					want := make([]int, rows)
+					for r := range rows {
+						l := x[r*n : (r+1)*n]
+						for i := range l {
+							l[i] = float32(rng.NormFloat64())
+						}
+						at := []int{0, n / 2, n - 1, rng.Intn(n)}[r%4]
+						l[at], want[r] = 9, at
+						if tie := at / 3; r%3 == 1 && tie < at {
+							l[tie], want[r] = 9, tie
+							for _, j := range []int{tie + 1, tie + n/7, n - 1} {
+								l[min(j, n-1)] = 9
+							}
+						}
+					}
+					res, tail, err := runGraphRows(d, codes, op.kerns, g.In[0], g.Out[0], x, capacity, guard, [3][]uint32{}, rows)
+					if err != nil {
+						t.Fatalf("width %d, %d rows: %v", n, rows, err)
+					}
+					for i, w := range tail {
+						if w != guardWord {
+							t.Fatalf("width %d, %d rows: word %#x written %d past the tokens", n, rows, w, i)
+						}
+					}
+					for r, w := range want {
+						if got := int(math.Float32bits(res[r])); got != w {
+							t.Errorf("width %d, %d rows: row %d's token %d, want %d", n, rows, r, got, w)
+							continue
+						}
+						held++
+					}
+				}
+				op.close()
+			}
+			if !cut {
+				t.Fatal("no code is cut by the call's rows: the gate does not run the cut")
+			}
+			if total := len(widths) * (1 + 2 + 3 + 8 + 64 + capacity); held != total {
+				t.Fatalf("%d of %d rows held", held, total)
+			}
+			t.Logf("%d rows held", held)
+		})
+	}
+}
