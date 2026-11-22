@@ -39,13 +39,8 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	T := n.Loops[c].Trip
 	// Parts is the work the split makes, over the kernel's elements: one row
 	// is cut Parts ways, rows that already fill it fewer, and as many rows
-	// as Parts not at all. A kernel of a form's capacity is cut for one row
-	// of a call: a step's picks run few of the rows it is formed for.
-	E := max(n.Elements(), 1)
-	if n.Capacity > 0 && len(n.Space) > 0 && n.Space[0] == n.Capacity {
-		E = max(E/n.Capacity, 1)
-	}
-	most := max(1, s.Parts/E)
+	// as Parts not at all.
+	most := max(1, s.Parts/max(n.Elements(), 1))
 	S := most
 	for S > 1 && T%S != 0 {
 		S /= 2

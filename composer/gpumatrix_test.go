@@ -112,6 +112,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 			dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 			rng := rand.New(rand.NewSource(53))
 			ran, cuts, banded, vecRan, matRan := 0, 0, 0, 0, 0
+			calls100 := []int{1, 15, 33, 64, 100}
 			for _, typ := range formats {
 				// The last shape's row tiles and outputs fill the units at
 				// its capacity and its k is long, so the model leaves k whole
@@ -121,7 +122,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 				for _, sh := range []struct {
 					n, k, capacity int
 					calls          []int
-				}{{100, 256, 100, matrixCalls}, {1056, 512, 100, matrixCalls}, {160, 2048, 100, matrixCalls}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
+				}{{100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
 					for _, tile := range splitTiles(gpuMatrixTiles()) {
 						n, k, capacity, calls := sh.n, sh.k, sh.capacity, sh.calls
 						own := gpuMatrixTiles()[0]
@@ -295,9 +296,6 @@ func TestComposedGPUMatrix(t *testing.T) {
 		})
 	}
 }
-
-// matrixCalls is the calls TestComposedGPUMatrix runs a form of 100 rows at.
-var matrixCalls = []int{1, 15, 33, 64, 100}
 
 // gpuMatrixTiles is the GPU profile's matrix tile, then its alternatives.
 func gpuMatrixTiles() []composer.MatrixTile {
