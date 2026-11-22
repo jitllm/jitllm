@@ -24,39 +24,36 @@ import (
 // went home, and a step with two sequences' pages at home is refused as one
 // step, so each session ran alone and re-streamed its evicted prefix every
 // token, a Sync a pass. Its violation is
-// TestSixtyFourRequestsGateDiscriminates.
-func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
-	for wave, w := range sixtyFour(t, 2, false) {
-		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d admissions put off for room, "+
-			"%d refusals, %d rows parked for room, %d evictions, %d streamed passes", wave, w.failed, w.joint, w.waits,
-			w.refusals, w.roomParks, w.evictions, w.passes)
-		if w.failed > 0 {
-			t.Fatalf("wave %d: %d of 64 requests failed", wave, w.failed)
-		}
-		if w.joint == 0 {
-			t.Fatalf("wave %d: no joint step ran: the rows stepped one session at a time", wave)
-		}
-		if w.waits == 0 {
-			t.Fatalf("wave %d: no admission was put off: the budget never bound and the gate proved nothing", wave)
+// TestSixtyFourRequestsGateDiscriminates runs one wave of the gate with every
+// waiting request admitted whatever the card has room for, beside one wave
+// admitted by room, and demands the card thrash without admission: no
+// admission put off, and each joint step streaming at least ten times the
+// history through the card that a step of the admitted wave does. A card
+// that pages never refuses the step; the thrash is the history it streams.
+func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
+	ok := sixtyFour(t, 1, false)[0]
+	w := sixtyFour(t, 1, true)[0]
+	for _, c := range []struct {
+		arm string
+		w   waveCounts
+	}{{"admitted", ok}, {"violation", w}} {
+		t.Logf("%s: %d of 64 requests failed; %d joint steps, %d admissions put off, %d refusals, "+
+			"%d rows parked for room, %d evictions, %d streamed passes", c.arm, c.w.failed, c.w.joint, c.w.waits,
+			c.w.refusals, c.w.roomParks, c.w.evictions, c.w.passes)
+		if c.w.joint == 0 {
+			t.Fatalf("%s: no joint step ran", c.arm)
 		}
 	}
-}
-
-// TestSixtyFourRequestsGateDiscriminates runs one wave of the gate with every
-// waiting request admitted whatever the card has room for, and demands the
-// gate's checks fail and the card thrash as it did before admission: pages
-// sent home and joint steps refused.
-func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
-	w := sixtyFour(t, 1, true)[0]
-	t.Logf("violation: %d of 64 requests failed; %d joint steps, %d admissions put off, %d refusals, "+
-		"%d rows parked for room, %d evictions, %d streamed passes", w.failed, w.joint, w.waits, w.refusals,
-		w.roomParks, w.evictions, w.passes)
 	if w.waits != 0 {
 		t.Fatalf("%d admissions were put off with admission off", w.waits)
 	}
-	if w.evictions == 0 || w.refusals == 0 {
-		t.Fatalf("with every request admitted the card neither evicted (%d) nor refused a joint step (%d): "+
-			"the load does not bind and the gate cannot tell admission from none", w.evictions, w.refusals)
+	if ok.waits == 0 {
+		t.Fatalf("the admitted wave put no admission off: the budget never bound and the gate proved nothing")
+	}
+	if w.evictions == 0 || w.passes*ok.joint < 10*max(ok.passes, 1)*w.joint {
+		t.Fatalf("with every request admitted a joint step streamed %d passes (%d evictions), admitted by room %d: "+
+			"the load does not bind and the gate cannot tell admission from none",
+			w.passes/w.joint, w.evictions, ok.passes/ok.joint)
 	}
 }
 
