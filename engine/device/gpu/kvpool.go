@@ -608,13 +608,9 @@ func (g *devTier) flushTabs() error {
 	return err
 }
 
-// growFree grows layer l until it holds n free ids. The growth waits for
-// the submissions in flight first, letting g.mu go, and another session's
-// reservation may take free ids or grow the layer meanwhile: counted before
-// the wait, a growth to l.n plus the shortfall could return with the ids gone
-// (two sessions crossing a page at once, one of them sent a block home). The
-// wait comes first here and the shortfall is counted after it, under g.mu
-// with nothing in flight.
+// growFree grows layer l until it holds n free ids. The wait for submissions
+// in flight lets g.mu go, so the shortfall is counted after it: counted
+// before, another session could take the ids meanwhile.
 func (g *devTier) growFree(kp *kvPool, l *kvLayerPool, n int) error {
 	g.quiesce()
 	l.fence()
