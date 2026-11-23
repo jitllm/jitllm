@@ -15,6 +15,7 @@ import (
 // and a key of a parenthesised value, (a ?? b).key. There are no loops, and
 // calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x),
 // at(x, i), and the lists' each_layer(n, members, first, inside, outside),
+// every(n, period, at, inside, outside), loop(n, start, end, passes),
 // partitions(n, first, a, b), each_match(list, value, inside, outside),
 // leading(list, value) and count(list, value), whose counts are bounded, so
 // an expression sizes nothing unchecked (RULE 9), and its depth is bounded.
@@ -442,6 +443,8 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 			return evalEachLayer(n.args, env)
 		case n.str == "loop" && len(n.args) == 4:
 			return evalLoop(n.args, env)
+		case n.str == "every" && len(n.args) == 5:
+			return evalEvery(n.args, env)
 		case n.str == "partitions" && len(n.args) == 4:
 			return evalPartitions(n.args, env)
 		case n.str == "each_match" && len(n.args) == 4:
@@ -569,6 +572,39 @@ func evalLayerCount(n *exprNode, env exprEnv) (int, error) {
 		return 0, fmt.Errorf("%s is %v, not a count of layers", exprText(n), f)
 	}
 	return int(f), nil
+}
+
+// evalEvery is every(n, period, at, inside, outside): n values, the i-th
+// inside where i % period is at and outside elsewhere -- a class's default
+// layer list of one kind every period layers.
+func evalEvery(args []*exprNode, env exprEnv) (any, error) {
+	var v [3]int
+	for i, a := range args[:3] {
+		var err error
+		if v[i], err = evalLayerCount(a, env); err != nil {
+			return nil, err
+		}
+	}
+	n, period, at := v[0], v[1], v[2]
+	if period < 1 || at >= period {
+		return nil, fmt.Errorf("every(%d, %d, %d): no position %d of a period of %d", n, period, at, at, period)
+	}
+	in, err := evalMJ(args[3], env)
+	if err != nil {
+		return nil, err
+	}
+	out, err := evalMJ(args[4], env)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]any, n)
+	for i := range res {
+		res[i] = out
+		if i%period == at {
+			res[i] = in
+		}
+	}
+	return res, nil
 }
 
 // evalLoop is loop(n, start, end, passes): the layer each block of n layers

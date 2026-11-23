@@ -82,8 +82,8 @@ func TestUnrollStatesALoop(t *testing.T) {
 			t.Errorf("%v: %v, want a refusal naming %q", bad.order, err, bad.why)
 		}
 	}
-	// A period the loop's passes keep: blocks 2 and 4 run layers 2 and 2,
-	// sliding alike, and a leading dense block stays the only dense one.
+	// A period the loop's passes keep: blocks 4 and 5 run layers 2 and 3,
+	// sliding as they do, and a leading dense block stays the only dense one.
 	s = src()
 	s.Config.SWAWindow, s.Config.SWAPeriod, s.Config.NExpert, s.Config.NDenseLead = 8, 2, 4, 1
 	if err := UnrollSource(s, []int{0, 1, 2, 3, 2, 3}); err != nil {
@@ -146,5 +146,32 @@ func TestFlipReversesAnAxis(t *testing.T) {
 	}
 	if _, err := mjRun(t, env, `[{"flip": 2}]`, mjF32([]uint64{2, 3}, 1, 2, 3, 4, 5, 6)); err == nil {
 		t.Fatal("a flip of an axis the tensor lacks was taken")
+	}
+}
+
+// TestEveryEvaluates holds every() to a class's default layer list, one
+// kind every period layers, and refuses a position outside the period.
+func TestEveryEvaluates(t *testing.T) {
+	env := mjEnv(map[string]any{"n": 8.0})
+	x, err := parseExpr("every(n, 3, 2, 'full', 'sliding')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := evalMJ(x, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{"sliding", "sliding", "full", "sliding", "sliding", "full", "sliding", "sliding"}
+	if !slices.Equal(v.([]any), want) {
+		t.Fatalf("every: %v, want %v", v, want)
+	}
+	for _, bad := range []string{"every(n, 3, 3, 1, 0)", "every(n, 0, 0, 1, 0)"} {
+		x, err := parseExpr(bad)
+		if err == nil {
+			_, err = evalMJ(x, env)
+		}
+		if err == nil {
+			t.Errorf("%s evaluated", bad)
+		}
 	}
 }

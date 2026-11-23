@@ -2,7 +2,7 @@
   "draft": [
     "NOT A LIBRARY FILE YET. It lives under convert/models/drafts/ because the library is embedded as models/*.json and one file that does not parse breaks every conversion (libraryFiles). Move it to convert/models/inkling2.json once every PLACEHOLDER below is filled and it parses.",
     "Reference: transformers' Inkling2LoopForConditionalGeneration (modeling_inkling2_loop.py), its conversion mapping inkling2_loop / inkling2_loop_text (core_model_loading.py), and the published config.json. Fixture: $JITLLM_MODELS/synth-hf-inkling2 (scripts/inkling2gold.py); golden testdata/golden/inkling2/synth-hf-inkling2.json, which moves to testdata/golden/hf/ when the class converts (TestSafetensorsMatchTransformers reads that directory and would go red until then).",
-    "Filled on ink2/integrate: the loop's weights (config 'unroll' over loop(), convert/unroll.go, jlm.Config.WeightsOf), the roles (format/jlm/rolesloop.go, convert/tensornames.json), the taps' flip (the 'flip' transform), and the op forms of attend-bias, row-sinks and row-taps below (graph.Attrs.Extent / RowSinks, OpStateConv's In[1]). Still PLACEHOLDER: the loop's streams (the restart and the messages, see graph.notes), the per-loop-layer gather of the model's message queries, the quant split of a fused verbatim w13, the 'each layer' keys, and the architecture's state statement (convert/mjstates.go: geometry per layer, windows, recurrent conv windows).",
+    "Filled on ink2/integrate: the loop's weights (config 'unroll' over loop(), convert/unroll.go, jlm.Config.WeightsOf), the roles (format/jlm/rolesloop.go, convert/tensornames.json), the taps' flip (the 'flip' transform), and the op forms of attend-bias, row-sinks and row-taps below (graph.Attrs.Extent / RowSinks, OpStateConv's In[1]). Still PLACEHOLDER: the loop's streams (the restart and the messages, see graph.notes), the per-loop-layer gather of the model's message queries, the quant split of a fused verbatim w13, and the architecture's state statement (convert/mjstates.go: geometry per layer, windows, recurrent conv windows).",
     "Placeholders name the piece that fills them: attend-bias (OpAttend's per-row, per-head additive score bias by backward distance), row-sinks (OpAttend's sinks per row from an input), row-taps (OpStateConv's per-row taps added to its static taps), loop (blocks of later passes sharing the first pass's weights, each pass its own history, the residual stream restarted from the pre-loop states), quant (NVFP4 and MXFP8 expert payloads), roles (new tensor roles in convert/tensornames.json)."
   ],
   "describe": {"Inkling2LoopForConditionalGeneration": "Inkling 2 Mini's text model, by convert/models/inkling2.json"},
@@ -44,13 +44,13 @@
       "expert_count": {"uint": "n_routed_experts"},
       "expert_used_count": {"uint": "num_experts_per_tok"},
       "expert_weights_scale": {"float": "route_scale"},
-      "attention.head_count": {"int32s": "each layer: hybrid_sliding -> swa_num_attention_heads, hybrid -> num_attention_heads"},
-      "attention.head_count_kv": {"int32s": "each layer: hybrid_sliding -> swa_num_key_value_heads, hybrid -> num_key_value_heads"},
-      "attention.key_length": {"int32s": "each layer: hybrid_sliding -> swa_head_dim, hybrid -> head_dim"},
+      "attention.head_count": {"int32s": "each_match((layer_types ?? every(num_hidden_layers, 6, 5, 'hybrid', 'hybrid_sliding')), 'hybrid', num_attention_heads, swa_num_attention_heads)"},
+      "attention.head_count_kv": {"int32s": "each_match((layer_types ?? every(num_hidden_layers, 6, 5, 'hybrid', 'hybrid_sliding')), 'hybrid', num_key_value_heads, swa_num_key_value_heads)"},
+      "attention.key_length": {"int32s": "each_match((layer_types ?? every(num_hidden_layers, 6, 5, 'hybrid', 'hybrid_sliding')), 'hybrid', head_dim, swa_head_dim)"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps"},
       "attention.sliding_window": {"uint": "sliding_window_size"},
       "attention.rel_width": {"uint": "d_rel"},
-      "attention.rel_extent": {"int32s": "each layer: hybrid_sliding -> sliding_window_size, hybrid -> rel_extent"},
+      "attention.rel_extent": {"int32s": "each_match((layer_types ?? every(num_hidden_layers, 6, 5, 'hybrid', 'hybrid_sliding')), 'hybrid', rel_extent, sliding_window_size)"},
       "attention.clip": {"float": "qk_l2_clip_threshold"},
       "attention.rel_clip": {"float": "rel_l2_clip_threshold"},
       "attention.log_floor": {"uint": "log_scaling_n_floor"},
@@ -63,8 +63,7 @@
       "loop.start": {"uint": "loop_config.core_start ?? loop_layer_index_start"},
       "loop.end": {"uint": "loop_config.core_end ?? loop_layer_index_end"},
       "loop.passes": {"uint": "loop_config.num_passes ?? loop_num_passes"},
-      "loop.gate_rank": {"uint": "loop_config.gate_rank ?? loop_gate_rank"},
-      "PLACEHOLDER(roles)": "the int32s 'each layer' forms above are written as prose; kimi_linear.json's each_layer(...) is the form to follow, keyed on layer_types with the class default when it is null"
+      "loop.gate_rank": {"uint": "loop_config.gate_rank ?? loop_gate_rank"}
     },
     "unroll": "loop(num_hidden_layers, loop_config.core_start ?? loop_layer_index_start, loop_config.core_end ?? loop_layer_index_end, loop_config.num_passes ?? loop_num_passes)",
     "vocab": "vocab_size",
