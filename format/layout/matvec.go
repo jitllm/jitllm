@@ -47,11 +47,16 @@ const (
 	// Its "pack" is a copy of the blocks, read through jlm.DecodeVerbatim.
 	// QuantOf never returns it; only the device tier asks, via VerbatimOf.
 	IQ4NL
+	// NVFP4 and MXFP8 are quant.NVFP4 and quant.MXFP8 as the container lays
+	// their rows out (jlm.TypeNV4, jlm.TypeMX8): verbatim like IQ4NL, read
+	// through jlm.DecodeVerbatim.
+	NVFP4
+	MXFP8
 )
 
 func (q Quant) String() string {
 	return [...]string{"Q4_0", "Q8_0", "Q4_K", "Q3_K", "Q5_K", "Q6_K", "Q5_0", "MXFP4",
-		"F32", "F16", "BF16", "Q5_1", "TQ2", "TQ2F", "IQ4_NL"}[q]
+		"F32", "F16", "BF16", "Q5_1", "TQ2", "TQ2F", "IQ4_NL", "NVFP4", "MXFP8"}[q]
 }
 
 // FloatOf maps an unquantized weight type to its device format.
@@ -70,8 +75,13 @@ func FloatOf(t quant.Type) (Quant, bool) {
 // VerbatimOf maps a blocked type the container carries verbatim to its
 // device format.
 func VerbatimOf(t quant.Type) (Quant, bool) {
-	if t == quant.IQ4_NL {
+	switch t {
+	case quant.IQ4_NL:
 		return IQ4NL, true
+	case quant.NVFP4:
+		return NVFP4, true
+	case quant.MXFP8:
+		return MXFP8, true
 	}
 	return 0, false
 }
@@ -82,13 +92,20 @@ func IsFloat(q Quant) bool { return q.info().float > 0 }
 
 // IsRaw reports whether q's device form is the container's own bytes, a row
 // a run of them: a float format's rows, or a verbatim format's blocks.
-func IsRaw(q Quant) bool { return IsFloat(q) || q == IQ4NL }
+func IsRaw(q Quant) bool { return IsFloat(q) || q == IQ4NL || q == NVFP4 || q == MXFP8 }
 
 // RawRowBytes is a row of k elements' bytes in raw format q (IsRaw): a
-// float format's elements, a verbatim format's 18-byte blocks of 32.
+// float format's elements, a verbatim format's blocks (IQ4NL's 18 bytes a
+// 32; NVFP4's f32 global and 9 bytes a 16, and MXFP8's 33 bytes a 32, each
+// padded to a word).
 func RawRowBytes(q Quant, k int) int {
-	if q == IQ4NL {
+	switch q {
+	case IQ4NL:
 		return k / 32 * 18
+	case NVFP4:
+		return (4 + k/16*9 + 3) &^ 3
+	case MXFP8:
+		return (k/32*33 + 3) &^ 3
 	}
 	return k * q.info().float
 }

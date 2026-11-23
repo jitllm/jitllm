@@ -50,10 +50,10 @@ func PackWeights(t Quant, src []byte, nrows, k int) (qs, d, sc []uint32, err err
 // d and sc are cleared here: packRows ORs its scale words (rows and sub-blocks
 // share words), so leftover contents would OR into the new scales.
 func PackWeightsInto(t Quant, src []byte, nrows, k int, qs, d, sc []uint32) error {
-	if t == IQ4NL {
-		n := nrows * k / 32 * 18
-		if k <= 0 || k%32 != 0 || nrows <= 0 || len(src) < n || len(qs) < (n+3)/4 {
-			return fmt.Errorf("kernels: PackWeights: IQ4_NL %dx%d from %d bytes into %d words", nrows, k, len(src), len(qs))
+	if blockedRaw(t) {
+		n := nrows * RawRowBytes(t, k)
+		if k <= 0 || k%rawBlock(t) != 0 || nrows <= 0 || len(src) < n || len(qs) < (n+3)/4 {
+			return fmt.Errorf("kernels: PackWeights: %s %dx%d from %d bytes into %d words", t, nrows, k, len(src), len(qs))
 		}
 		clear(qs)
 		for i, b := range src[:n] {
@@ -508,11 +508,11 @@ func DIndex(q Quant, super, nrows, r int) (idx, slot int) {
 // without building them, so a budget decision costs nothing.
 // TestPackedWordsMatchesPack holds it to PackWeights format by format.
 func PackedWords(t Quant, nrows, k int) (qs, d, sc int, err error) {
-	if t == IQ4NL {
-		if k <= 0 || k%32 != 0 {
-			return 0, 0, 0, fmt.Errorf("kernels: PackedWords: k=%d is not a multiple of 32", k)
+	if blockedRaw(t) {
+		if k <= 0 || k%rawBlock(t) != 0 {
+			return 0, 0, 0, fmt.Errorf("kernels: PackedWords: %s k=%d is not a multiple of %d", t, k, rawBlock(t))
 		}
-		return (nrows*k/32*18 + 3) / 4, 0, 0, nil
+		return (nrows*RawRowBytes(t, k) + 3) / 4, 0, 0, nil
 	}
 	qi := qtab(t)
 	// A float format is answered before the block check because it has no
@@ -554,4 +554,16 @@ func PackedWords(t Quant, nrows, k int) (qs, d, sc int, err error) {
 		sc = nrows * ((nsub + per - 1) / per)
 	}
 	return qs, d, sc, nil
+}
+
+// blockedRaw reports a verbatim format of blocks, whose "pack" is a copy of
+// its rows' bytes.
+func blockedRaw(t Quant) bool { return t == IQ4NL || t == NVFP4 || t == MXFP8 }
+
+// rawBlock is a blocked verbatim format's elements a block.
+func rawBlock(t Quant) int {
+	if t == NVFP4 {
+		return 16
+	}
+	return 32
 }

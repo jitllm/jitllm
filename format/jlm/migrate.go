@@ -158,7 +158,7 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 		planes = []plane{{e.QSOff, uint64(nq) * 4}, {e.DOff, uint64(nd) * 4}, {e.SCOff, uint64(nsc) * 4}}
 	} else {
-		per, err := verbatimBytes(e.Type, rows*e.Dims[0])
+		per, err := verbatimBytes(e.Type, rows, e.Dims[0])
 		if err != nil {
 			return nil, err
 		}

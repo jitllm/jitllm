@@ -1,6 +1,12 @@
 package jlm
 
-import "github.com/jitllm/jitllm/format/quant"
+import (
+	"encoding/binary"
+	"fmt"
+	"math"
+
+	"github.com/jitllm/jitllm/format/quant"
+)
 
 // The reading rules of a packed weight, stated once over an arithmetic the
 // caller supplies: a Go evaluator's values are numbers (DecodeElement), the
@@ -291,10 +297,25 @@ func (l TypeLayout) Words(rows, k int) (qs, d, sc int) {
 // nibble an element indexing its code table.
 func DecodeVerbatim[V any](a Arith[V], t Type, k int, r, c V) V {
 	u := a.U
+	byteAt := func(o V) V {
+		return a.Shr(a.Word(PlaneQS, a.Div(o, u(4))), a.Mul(a.Rem(o, u(4)), u(8)))
+	}
+	switch t {
+	case TypeNV4:
+		rb := uint32(NV4RowBytes(k))
+		o := a.Add(a.Mul(r, u(rb)), a.Add(u(4), a.Mul(a.Div(c, u(16)), u(9))))
+		j := a.Rem(c, u(16))
+		q := a.And(a.Shr(byteAt(a.Add(o, a.Add(u(1), a.Div(j, u(2))))), a.Mul(a.Rem(j, u(2)), u(4))), u(15))
+		codes := nv4Codes()
+		code := a.FSub(a.Float(a.Code(&codes, q)), a.FConst(nv4Bias))
+		blk := a.FMul(a.FMul(code, decodeE4M3(a, a.And(byteAt(o), u(255)))), a.FConst(0.5))
+		return a.FMul(blk, a.F32(a.Word(PlaneQS, a.Mul(r, u(rb/4)))))
+	case TypeMX8:
+		o := a.Add(a.Mul(r, u(uint32(MX8RowBytes(k)))), a.Mul(a.Div(c, u(32)), u(33)))
+		v := a.And(byteAt(a.Add(o, a.Add(u(1), a.Rem(c, u(32))))), u(255))
+		return a.FMul(decodeE4M3(a, v), decodeE8M0(a, a.And(byteAt(o), u(255))))
+	}
 	if t == TypeIQ4NL {
-		byteAt := func(o V) V {
-			return a.Shr(a.Word(PlaneQS, a.Div(o, u(4))), a.Mul(a.Rem(o, u(4)), u(8)))
-		}
 		j := a.Rem(c, u(32))
 		o := a.Add(a.Mul(r, u(uint32(k/32*18))), a.Mul(a.Div(c, u(32)), u(18)))
 		q := a.And(a.Shr(byteAt(a.Add(o, a.Add(u(2), a.Rem(j, u(16))))), a.Mul(a.Div(j, u(16)), u(4))), u(15))
@@ -318,11 +339,13 @@ func Verbatim(t Type) bool { return t == TypeF32 || t == TypeF16 || t == TypeBF1
 
 // VerbatimRows reports a type DecodeVerbatim reads, the blocked IQ4_NL with
 // the element types.
-func VerbatimRows(t Type) bool { return Verbatim(t) || t == TypeIQ4NL }
+func VerbatimRows(t Type) bool {
+	return Verbatim(t) || t == TypeIQ4NL || t == TypeNV4 || t == TypeMX8
+}
 
 // VerbatimWords is the words rows rows of k columns of verbatim type t take.
 func VerbatimWords(t Type, rows, k int) (int, error) {
-	b, err := verbatimBytes(t, uint64(k))
+	b, err := verbatimBytes(t, 1, uint64(k))
 	return (rows*int(b) + 3) / 4, err
 }
 
@@ -333,4 +356,86 @@ func iq4nlCodes() [16]uint8 {
 		t[i] = uint8(int(v) + 127)
 	}
 	return t
+}
+
+// decodeE4M3 is an FP8-E4M3 byte's value, a normal (8+m)*2^(e-10) and a
+// subnormal m*2^-9, so a zero exponent reads as one with no implicit bit.
+// The fn variant's one NaN pattern reads as 480.
+func decodeE4M3[V any](a Arith[V], b V) V {
+	u := a.U
+	e := a.And(a.Shr(b, u(3)), u(15))
+	n := a.Min(e, u(1))
+	pow := a.Add(a.Shl(a.Add(a.Sub(a.Add(e, u(1)), n), u(117)), u(23)), a.Shl(a.Shr(b, u(7)), u(31)))
+	return a.FMul(a.Float(a.Add(a.And(b, u(7)), a.Shl(n, u(3)))), a.F32(pow))
+}
+
+// decodeE8M0 is 2^(b-127) as an f32: the exponent field, and at b = 0 the
+// subnormal 2^-127. 255, the format's NaN, reads as infinity.
+func decodeE8M0[V any](a Arith[V], b V) V {
+	u := a.U
+	return a.F32(a.Add(a.Shl(b, u(23)), a.Shl(a.Sub(u(1), a.Min(b, u(1))), u(22))))
+}
+
+// NV4RowBytes is one TypeNV4 row of k elements: the f32 global scale, nine
+// bytes a 16-wide block, padded to a word.
+func NV4RowBytes(k int) uint64 { return uint64(4+k/16*9+3) &^ 3 }
+
+// MX8RowBytes is one TypeMX8 row of k elements: 33 bytes a 32-wide block,
+// padded to a word.
+func MX8RowBytes(k int) uint64 { return uint64(k/32*33+3) &^ 3 }
+
+// nv4Bias lifts the doubled e2m1 values (-12..12) into a table of bytes.
+const nv4Bias = 12
+
+// nv4Codes is the e2m1 code table, its values doubled and biased.
+func nv4Codes() (t [16]uint8) {
+	for i, v := range quant.MXFP4Values() {
+		t[i] = uint8(int(v) + nv4Bias)
+	}
+	return t
+}
+
+// NV4Rows lays sheets sheets of rows rows of k NVFP4 weights, as a
+// checkpoint stores them (codes two a byte, element 2j low; an E4M3 scale
+// per 16 of a row; one global scale a sheet), into TypeNV4 rows. Every byte
+// is moved, none recomputed.
+func NV4Rows(codes, scales []byte, global []float32, sheets, rows, k int) ([]byte, error) {
+	if k%16 != 0 || len(codes) != sheets*rows*k/2 || len(scales) != sheets*rows*k/16 || len(global) != sheets {
+		return nil, fmt.Errorf("jlm: nv4 %dx%dx%d wants %d code bytes, %d scales and %d globals, have %d, %d and %d",
+			sheets, rows, k, sheets*rows*k/2, sheets*rows*k/16, sheets, len(codes), len(scales), len(global))
+	}
+	rb := int(NV4RowBytes(k))
+	out := make([]byte, sheets*rows*rb)
+	for s := range sheets {
+		for r := range rows {
+			i := s*rows + r
+			dst := out[i*rb:]
+			binary.LittleEndian.PutUint32(dst, math.Float32bits(global[s]))
+			for b := range k / 16 {
+				dst[4+b*9] = scales[i*(k/16)+b]
+				copy(dst[5+b*9:5+b*9+8], codes[i*k/2+b*8:])
+			}
+		}
+	}
+	return out, nil
+}
+
+// MX8Rows lays rows rows of k MXFP8 weights, as a checkpoint stores them (an
+// E4M3 byte an element, an E8M0 exponent per 32 of a row), into TypeMX8
+// rows.
+func MX8Rows(vals, scales []byte, rows, k int) ([]byte, error) {
+	if k%32 != 0 || len(vals) != rows*k || len(scales) != rows*k/32 {
+		return nil, fmt.Errorf("jlm: mx8 %dx%d wants %d values and %d scales, have %d and %d",
+			rows, k, rows*k, rows*k/32, len(vals), len(scales))
+	}
+	rb := int(MX8RowBytes(k))
+	out := make([]byte, rows*rb)
+	for r := range rows {
+		dst := out[r*rb:]
+		for b := range k / 32 {
+			dst[b*33] = scales[r*(k/32)+b]
+			copy(dst[b*33+1:b*33+33], vals[r*k+b*32:])
+		}
+	}
+	return out, nil
 }

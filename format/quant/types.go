@@ -53,6 +53,13 @@ const (
 	// MXFP4 is the OCP microscaling format gpt-oss ships its expert banks in:
 	// 32 e2m1 codes and one E8M0 exponent per block.
 	MXFP4 Type = 39
+	// NVFP4 is e2m1 codes with an FP8-E4M3 scale per 16 and an f32 scale
+	// per sheet: the weight is e2m1 * e4m3 * global. MXFP8 is FP8-E4M3
+	// values with an E8M0 exponent per 32. Neither is a GGUF type nor has a
+	// fixed block: the container lays their rows out (jlm.TypeNV4,
+	// jlm.TypeMX8), and they are decoded only there and by the oracle.
+	NVFP4 Type = EngineTypes + 40
+	MXFP8 Type = EngineTypes + 41
 )
 
 // blockInfoOf is elements-per-block and bytes-per-block. A type absent from this
@@ -201,6 +208,10 @@ func typeName(t Type) (string, bool) {
 		return "TQ2_F32", true
 	case MXFP4:
 		return "MXFP4", true
+	case NVFP4:
+		return "NVFP4", true
+	case MXFP8:
+		return "MXFP8", true
 	}
 	return "", false
 }
