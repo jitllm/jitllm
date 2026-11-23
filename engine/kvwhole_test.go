@@ -22,8 +22,8 @@ import (
 // no page by a fill it was not sealed at, restores the whole pages under
 // the bound.
 func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
-	const page, pages, gen = 32, 2, 8
-	m, err := model.Open(jlmOf(t, testmodels.Path(shareModels()[0])))
+	const page, pages, gen = 64, 2, 8
+	m, err := model.Open(jlmOf(t, testmodels.Path(shareModels()[1])))
 	if err != nil {
 		t.Fatal(err)
 	}
