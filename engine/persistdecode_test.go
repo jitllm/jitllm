@@ -96,6 +96,8 @@ func TestPersistentDecodeMatchesPerOp(t *testing.T) {
 					switch {
 					case !persist && st.PersistLaunches != 0:
 						t.Fatalf("the per-op arm launched %d persistent kernels", st.PersistLaunches)
+					case persist && st.PersistUnplanned != 0:
+						t.Fatalf("seam %d: %d of %d runs found no plan composed at placement (%s): a step met launches the placement did not", c.seam, st.PersistUnplanned, st.PersistRuns, st.PersistWhy)
 					case persist && st.PersistLaunches == 0:
 						t.Fatalf("seam %d: no persistent kernel was launched (%s): the per-op path answered", c.seam, st.PersistWhy)
 					case deps && st.PersistDepLaunches == 0:

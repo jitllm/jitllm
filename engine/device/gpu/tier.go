@@ -567,10 +567,15 @@ type Stats struct {
 	// and PersistFallbacks those that failed and ran per-op; PersistWhy is
 	// why the path is declined on this device.
 	// PersistDepLaunches counts those launched with dependency counters
-	// (Config.PersistDeps), PersistDepTiles their tile-wise edges.
+	// (Config.PersistDeps), PersistDepTiles their tile-wise edges;
+	// PersistUnplanned the runs a step found no plan for, composed at the
+	// block's placement, and issued per-op.
 	PersistRuns, PersistLaunches, PersistParts, PersistPhases, PersistCompiles, PersistFallbacks int
-	PersistDepLaunches, PersistDepTiles                                                          int
+	PersistDepLaunches, PersistDepTiles, PersistUnplanned                                        int
 	PersistWhy                                                                                   string
+	// PersistUnplannedWhy names the first unplanned run: its first kernel
+	// and its length.
+	PersistUnplannedWhy string
 	// RagHeadOne counts ragged steps whose head projected only the one row
 	// that wanted logits, by decode's own projection or the composer's head at
 	// one row, rather than a batched twin over every row (a prompt chunk's
@@ -967,8 +972,12 @@ func (s *Stats) add(o Stats) {
 	s.PersistFallbacks += o.PersistFallbacks
 	s.PersistDepLaunches += o.PersistDepLaunches
 	s.PersistDepTiles += o.PersistDepTiles
+	s.PersistUnplanned += o.PersistUnplanned
 	if o.PersistWhy != "" {
 		s.PersistWhy = o.PersistWhy
+	}
+	if o.PersistUnplannedWhy != "" {
+		s.PersistUnplannedWhy = o.PersistUnplannedWhy
 	}
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
