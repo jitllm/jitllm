@@ -360,8 +360,9 @@ func lanesGraph(n, chains, deep, trips int, plain bool) *graph.Graph {
 	return b.G
 }
 
-// lanesCalls is the calls each of lanesDelay's chains is timed over.
-const lanesCalls = 4 * iterateCalls
+// lanesCalls is the calls each of lanesDelay's chains is timed over, and
+// lanesRounds the most times the two are timed in turn.
+const lanesCalls, lanesRounds = 4 * iterateCalls, 3
 
 // lanesRate is the lanes class's rate, one thread's and every worker's
 // together (lanesStepRate), and its delay (lanesDelay).
@@ -389,26 +390,32 @@ func lanesStepRate(fm former, lanes, threads int) (float64, error) {
 // lanesDelay is the seconds an exchange across lanes waits for the one
 // before: one value through delaySteps sums over pairs of its lanes a trip,
 // less the same chain of adds alone, over the exchanges. An exchange waits a
-// cycle and an add several, so each chain is timed over lanesCalls calls:
-// the difference of two waits is as noisy as both.
+// cycle and an add several, so each chain is timed over lanesCalls calls and
+// the two are timed in turn up to lanesRounds times, each keeping its least:
+// another tenant only adds to a time. An exchange the clock cannot tell from
+// its add waits nothing more.
 func lanesDelay(fm former, lanes int) (float64, error) {
 	var n, secs [2]float64
-	for i, plain := range [2]bool{false, true} {
-		cl := cost.ClassLanes
-		if plain {
-			cl = cost.ClassFloat
+	for round := range lanesRounds {
+		for i, plain := range [2]bool{false, true} {
+			cl := cost.ClassLanes
+			if plain {
+				cl = cost.ClassFloat
+			}
+			ni, si, err := hostWork(fm, func(trips int) *graph.Graph { return lanesGraph(lanes, 1, delaySteps, trips, plain) }, 0,
+				tripsShort, tripsLong, lanesCalls, 1, func(f *formed) float64 { return f.count(cl) }, float64((tripsLong-tripsShort)*delaySteps))
+			if err != nil {
+				return 0, err
+			}
+			if round == 0 || si < secs[i] {
+				n[i], secs[i] = ni, si
+			}
 		}
-		var err error
-		n[i], secs[i], err = hostWork(fm, func(trips int) *graph.Graph { return lanesGraph(lanes, 1, delaySteps, trips, plain) }, 0,
-			tripsShort, tripsLong, lanesCalls, 1, func(f *formed) float64 { return f.count(cl) }, float64((tripsLong-tripsShort)*delaySteps))
-		if err != nil {
-			return 0, err
+		if secs[0] > secs[1] {
+			break
 		}
 	}
-	if !(secs[0] > secs[1]) {
-		return 0, fmt.Errorf("probe: a chain of sums over lanes took %v seconds, its adds alone %v", secs[0], secs[1])
-	}
-	return (secs[0] - secs[1]) / n[0], nil
+	return max(secs[0]-secs[1], 0) / n[0], nil
 }
 
 // issued is every instruction of f the estimator counts.
