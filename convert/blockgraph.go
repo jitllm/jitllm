@@ -1232,6 +1232,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 			if err != nil {
 				return fmt.Errorf("op %d (stream_writes): %w", i, err)
 			}
+			unalias(b, out)
 			lists[o.Out] = out
 			continue
 		case "stream_join":
@@ -1292,6 +1293,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 				}
 				out[k] = bank
 			}
+			unalias(b, out)
 			b.Out(out...)
 			continue
 		}
@@ -1832,6 +1834,22 @@ func fnNamed(name string) jlm.Fn {
 		}
 	}
 	return 0
+}
+
+// unalias writes a copy into each stream of xs, a block's streams, that
+// holds another stream's input or a value an earlier stream holds: a
+// stream's input and output are one buffer, so a value two streams hold
+// would be written to one of them alone. A copy taken where the streams are
+// written reads the input before any output is written over it.
+func unalias(b *graph.Builder, xs []graph.ValueID) {
+	for k, v := range xs {
+		j := slices.Index(b.G.In, v)
+		if (j < 0 || j == k || j >= len(xs)) && slices.Index(xs, v) == k {
+			continue
+		}
+		w := b.G.Values[v].Width
+		xs[k] = b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: "stream", Width: w}}, nil, graph.Attrs{Width: w}, nil, nil)[0]
+	}
 }
 
 // blockFacts are what a block's graph is stated over: the block's tensors

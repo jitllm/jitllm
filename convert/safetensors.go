@@ -1214,8 +1214,11 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 		}
 		return nil
 	}
-	qrows := uint64(c.NHead) * uint64(c.HeadDim)
-	kvrows := uint64(c.NKVHead) * uint64(c.HeadDim)
+	// A block's attention geometry is its own where the config states one
+	// per block (jlm.Config.Geoms).
+	g := c.GeomAt(int(e.Block))
+	qrows := uint64(c.NHead) * uint64(g.HeadDim)
+	kvrows := uint64(g.NKVHead) * uint64(g.HeadDim)
 	// The output projection reads the value head, which differs from the key
 	// head only under MLA (HeadDimV is zero elsewhere).
 	vrows := uint64(c.NHead) * uint64(hfHeadDimV(c))
@@ -1269,7 +1272,7 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 	case jlm.RoleAttnK:
 		return want(embd, kvrows)
 	case jlm.RoleAttnV:
-		return want(embd, uint64(c.NKVHead)*uint64(hfHeadDimV(c)))
+		return want(embd, uint64(g.NKVHead)*uint64(hfHeadDimV(c)))
 	case jlm.RoleAttnOut:
 		return want(vrows, embd)
 

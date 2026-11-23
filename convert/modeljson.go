@@ -1733,6 +1733,14 @@ func (mj *modelJSON) modelStandIns(env exprEnv, shapes map[string][]uint64, name
 		if shape == nil {
 			continue
 		}
+		if pts, at, ok := mj.placedTargets(n); ok {
+			more, err := placedStandIns(env, n, shape, pts, at, have)
+			if err != nil {
+				return nil, err
+			}
+			ts = append(ts, more...)
+			continue
+		}
 		for _, t := range mj.Tensors.Model[n] {
 			if have[t.Role] {
 				continue
