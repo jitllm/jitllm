@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -42,8 +43,10 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 // Q8_0 weights at a prompt chunk's rows -- ragged counts among them, whose
 // last tile is guarded -- with int8 and with float activations, on a device
 // of CUDA's statement and one of Vulkan's: from 128 rows on the largest
-// kernel's op count stays within 1% (an address constant's form, a tail's
-// guard), from two rows on every projection is tiled, and no kernel passes
+// kernel's op count stays within 1% at capacities the tiles divide (an
+// address constant's form, a tail's guard; at one they do not, its rows
+// keep their clamps),
+// from two rows on every projection is tiled, and no kernel passes
 // 1,000 ops. At one row nothing is tiled. No projection has a second
 // kernel for few rows (a width tier): a call of any rows runs the one form,
 // held to its rows. With the pass off every row loads the weight itself, at
@@ -90,7 +93,7 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 					case largest > 1000:
 						t.Fatalf("%s at %d rows: a kernel of %d ops", name, R, largest)
 					}
-					if R >= 128 {
+					if R >= 128 && R&(R-1) == 0 {
 						held = append(held, largest)
 					}
 					t.Logf("%s at %d rows: %d kernels, the largest %d ops, %d tiled", name, R, len(codes), largest, tiled)
@@ -263,8 +266,9 @@ func tiledWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []b
 	return raw
 }
 
-// TestComposedGPURowTiles forms a projection of 2048 rows of 256 once at a
-// capacity of 512 rows and once at decode's one row, on every device
+// TestComposedGPURowTiles forms a projection of 2048 rows of 256 at a
+// capacity of 512 rows, at one of 100 (its tiles' last starting a tile
+// before its end) and at decode's one row, on every device
 // present, over a float matrix and every packed format of the served
 // models, with int8 and with float activations, and runs the one form at
 // every count of rows a call may state -- 1, 3, 7, 31, 33, 100, 511 and 512,
@@ -337,7 +341,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 					} else {
 						want = int8Projection(t, typ, w, x, n, k, 32, false)
 					}
-					for _, R := range []int{1, capacity} {
+					for _, R := range []int{1, 100, capacity} {
 						name := fmt.Sprintf("%v %dx%d/float %v/%d rows", typ, n, k, float, R)
 						b := graph.New()
 						in := b.In("x", k)
@@ -431,5 +435,48 @@ func TestComposedGPURowTiles(t *testing.T) {
 			}
 			t.Logf("%s: %d calls right against the oracle and bit for bit against the capacity's call, %d of them tiled, every violation seen", d.API(), ran, tiledRan)
 		})
+	}
+}
+
+// TestTiledRowsShareTheirAddresses forms a Llama-3.1-8B-shaped MLP at
+// calls of 4, 8 and 16 rows on a V100's statement: every tile of rows
+// whose sums a workgroup splits (".tiled.group") reads each row past its
+// first at the second's address and a constant past it, so its loads are
+// more than two to an index -- a row held to the call's last row with a
+// clamp of its own is an index of its own, and the form clamping every row
+// reads fewer than two to one. TestComposedGPURowTiles holds what the rows past a
+// call's write: nothing.
+func TestTiledRowsShareTheirAddresses(t *testing.T) {
+	d := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Regs: 32, Shared: 96 << 10,
+		ExactDiv: true, Matrix: [3]int{16, 16, 16}, HalfPairs: true, VectorLoads: true}
+	formats := map[jlm.Role]jlm.Type{jlm.RoleFFNGate: jlm.TypeQ4S, jlm.RoleFFNUp: jlm.TypeQ4S, jlm.RoleFFNDown: jlm.TypeQ6S, jlm.RoleFFNNorm: jlm.TypeF32}
+	for _, R := range []int{4, 8, 16} {
+		_, codes, err := composer.Default().Form(composer.Request{Graph: ffnBlock(4096, 14336), Formats: formats,
+			Step: composer.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: d})
+		if err != nil {
+			t.Fatalf("%d rows: %v", R, err)
+		}
+		tiled := 0
+		for _, c := range codes {
+			if c.GPU == nil || !strings.Contains(c.Name, ".tiled.group") {
+				continue
+			}
+			tiled++
+			type at struct{ buf, ix ir.Value }
+			loads, ixs := 0, map[at]bool{}
+			for _, op := range c.GPU.Ops {
+				if op.Kind == ir.OpLoad || op.Kind == ir.OpLoadV {
+					loads++
+					ixs[at{op.Args[0], op.Args[1]}] = true
+				}
+			}
+			if loads <= 2*len(ixs) {
+				t.Fatalf("%d rows: %s reads %d loads at %d indices: its tile's rows are not one address", R, c.Name, loads, len(ixs))
+			}
+			t.Logf("%d rows: %s reads %d loads at %d indices", R, c.Name, loads, len(ixs))
+		}
+		if tiled == 0 {
+			t.Fatalf("%d rows: no tile of rows split in a workgroup was formed: the gate checked nothing", R)
+		}
 	}
 }
