@@ -105,3 +105,28 @@ func TestLoopEvaluates(t *testing.T) {
 		}
 	}
 }
+
+// TestFlipReversesAnAxis holds flip to an axis's indices last first, and to
+// the taps the dynamic convolution's flip makes of a reference's newest-first
+// (head, tap) rows: the other axes stay where they are.
+func TestFlipReversesAnAxis(t *testing.T) {
+	env := mjEnv(map[string]any{"heads": 2.0, "k": 3.0})
+	v, err := mjRun(t, env, `[{"flip": 1}]`, mjF32([]uint64{2, 3}, 1, 2, 3, 4, 5, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mjFloats(v); !slices.Equal(got, []float32{3, 2, 1, 6, 5, 4}) || !slices.Equal(v.shape, []uint64{2, 3}) {
+		t.Fatalf("flipped to %v %v", v.shape, got)
+	}
+	v, err = mjRun(t, env, `[{"reshape": ["heads", "k", -1]}, {"flip": 1}, {"reshape": ["heads * k", -1]}]`,
+		mjF32([]uint64{6, 2}, 10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mjFloats(v); !slices.Equal(got, []float32{30, 31, 20, 21, 10, 11, 60, 61, 50, 51, 40, 41}) || !slices.Equal(v.shape, []uint64{6, 2}) {
+		t.Fatalf("rows flipped within each head to %v %v", v.shape, got)
+	}
+	if _, err := mjRun(t, env, `[{"flip": 2}]`, mjF32([]uint64{2, 3}, 1, 2, 3, 4, 5, 6)); err == nil {
+		t.Fatal("a flip of an axis the tensor lacks was taken")
+	}
+}
