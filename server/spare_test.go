@@ -10,14 +10,15 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
-// TestASpareSessionServesTheNextRequest: a model_id request's session is kept,
-// reset, and the next model_id request runs on it under an id of its own --
-// its reply a fresh session's, whatever the first one's prompt left, its
-// sampler seed its own -- on the
-// CPU and a card. The model holds no more sessions, open and spare, than it
-// was loaded for, two requests at once included, and an unload without force
-// closes its spares rather than refusing. Against a server that opens every
-// request's session anew, the second request runs on another session.
+// TestASpareSessionServesTheNextRequest: a model_id request's session is
+// kept, reset -- it holds no history while it waits -- and the next model_id
+// request runs on it under an id and a sampler seed of its own, its reply a
+// fresh session's, on the CPU and a card. The model holds no more sessions,
+// open and spare, than it was loaded for, two requests at once included, and
+// an unload without force closes its spares rather than refusing. Against a
+// server that opens every request's session anew, the second request runs on
+// another session; against a spare kept with its history, it holds the first
+// request's.
 func TestASpareSessionServesTheNextRequest(t *testing.T) {
 	for _, arm := range []string{"cpu", "card"} {
 		t.Run(arm, func(t *testing.T) {
@@ -74,6 +75,9 @@ func TestASpareSessionServesTheNextRequest(t *testing.T) {
 			if len(kept) != 1 || kept[0] != first.on {
 				t.Fatalf("after a model_id request the model keeps %d spares, the request's session among them %v", len(kept),
 					len(kept) == 1 && kept[0] == first.on)
+			}
+			if pos, kv := first.on.ms.Pos(), first.on.snapKV.Load(); pos != 0 || kv != 0 {
+				t.Fatalf("a spare holds %d positions of history, %d bytes of it: it is kept reset", pos, kv)
 			}
 			firstID, firstSeed := first.on.id, first.on.sampling.Seed
 			second := run(GenerateOptions{ModelID: "m", Prompt: text(" and then the dog")})
