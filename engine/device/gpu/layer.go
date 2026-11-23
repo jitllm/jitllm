@@ -4082,36 +4082,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				continue
 			}
 			{
-				out := bs.x
-				if cp != nil {
-					out = bs.h
-				}
-				// A second input is the rows' per-layer inputs (blockServes);
-				// a block of several streams reads and writes each at its
-				// offset in x.
-				in := []backend.Buf{bs.x, bs.pleIn}
-				outs := []backend.Buf{out}
-				if l.cut > 0 {
-					if cerr := g.cutScratch(bs, R*l.cut*4); cerr != nil {
-						if err == nil {
-							err = cerr
-						}
-						continue
+				var inA [2]backend.Buf
+				var outA [1]backend.Buf
+				in, outs, ioErr := g.blockIO(bs, l, cp != nil, R, &inA, &outA)
+				if ioErr != nil {
+					if err == nil {
+						err = ioErr
 					}
-					outs[0] = bs.cut
-				}
-				if len(l.graph.Out) > 1 {
-					var verr error
-					streams := bs.servedStreams
-					if cp != nil {
-						streams = bs.servedStreamsApart
-					}
-					if in, outs, verr = streams(R, len(l.graph.Out)); verr != nil {
-						if err == nil {
-							err = verr
-						}
-						continue
-					}
+					continue
 				}
 				// A failure injected at this block (jitllmfault): it and the
 				// blocks after it do not run, as a kernel failing here leaves
@@ -4153,6 +4131,10 @@ func (g *devTier) layersSession(s backend.Session) {
 				continue
 			}
 		}
+		// The last block's held launches go out before the head's: a
+		// persistent plan is one block's, composed at its placement
+		// (persistPlaceBlock), and the head is not part of it.
+		lc.persistBlock(false)
 		// The head the composer serves: the step fails if it does not
 		// form, every stage its graph states applied.
 		if head != nil && (rag != nil || allRows) {
