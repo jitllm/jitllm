@@ -80,11 +80,11 @@ func codes(ss []string) string {
 }
 
 func render(d lines) ([]byte, error) {
-	names, err := convert.Architectures()
+	l, err := convert.ReadLists()
 	if err != nil {
 		return nil, err
 	}
-	classes := convert.HFClasses()
+	names, classes := l.Architectures, l.Classes
 	projectors := convert.Projectors()
 	if err := covered("GGUF architecture", names, d.gguf); err != nil {
 		return nil, err
@@ -116,10 +116,7 @@ func render(d lines) ([]byte, error) {
 		}
 		return g
 	}
-	graphOf, err := convert.GraphsOf(append(append([]string(nil), names...), classes...))
-	if err != nil {
-		return nil, err
-	}
+	graphOf := l.Graphs
 	var towers []string
 	textNames := 0
 	for _, n := range names {

@@ -35,7 +35,7 @@ func statedCuts(names tensorNames, n string, ts mjTargets) ([]statedCut, error) 
 	for i, t := range ts {
 		r, ok := names.roleOf(t.Role)
 		if !ok {
-			r, ok = rolesByName()[t.Role]
+			r, ok = names.role(t.Role)
 		}
 		if !ok {
 			return nil, fmt.Errorf("%s's target %q is neither a tensor name nor a role the container knows", n, t.Role)

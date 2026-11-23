@@ -603,6 +603,11 @@ func modelLibrary() (map[string]*modelJSON, error) {
 	if err != nil {
 		return nil, err
 	}
+	return libraryOf(files)
+}
+
+// libraryOf is modelLibrary over the library's files.
+func libraryOf(files []*modelJSON) (map[string]*modelJSON, error) {
 	lib := map[string]*modelJSON{}
 	for _, mj := range files {
 		for _, c := range mj.Classes {

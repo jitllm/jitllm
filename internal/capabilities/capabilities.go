@@ -247,24 +247,19 @@ func assemble(a API) (Manifest, error) {
 		Backends:     mt.Backends,
 		API:          a,
 	}
-	names, err := convert.Architectures()
+	l, err := convert.ReadLists()
 	if err != nil {
 		return Manifest{}, err
 	}
-	classes := convert.HFClasses()
-	graphs, err := convert.GraphsOf(append(append([]string(nil), names...), classes...))
-	if err != nil {
-		return Manifest{}, err
-	}
-	for _, n := range names {
-		g, ok := graphs[n]
+	for _, n := range l.Architectures {
+		g, ok := l.Graphs[n]
 		if !ok {
 			g = n
 		}
 		m.Architectures = append(m.Architectures, Graph{Name: n, Graph: g})
 	}
-	for _, c := range classes {
-		m.SafetensorsClasses = append(m.SafetensorsClasses, Graph{Name: c, Graph: graphs[c]})
+	for _, c := range l.Classes {
+		m.SafetensorsClasses = append(m.SafetensorsClasses, Graph{Name: c, Graph: l.Graphs[c]})
 	}
 	m.Projectors = convert.Projectors()
 	m.Quantization = quantization()
