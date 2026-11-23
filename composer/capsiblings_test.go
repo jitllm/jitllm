@@ -60,10 +60,10 @@ func projectionLaunches(codes []composer.Code, rows int, together ...[]jlm.Role)
 // TestCapacitySiblingsLaunchAsOneRow forms a Llama-3.1-8B-shaped block at a
 // joint step's capacity of 512 rows on a device of a V100's CUDA statement,
 // and counts the projections' launches a call of 1, 2, 4, 8 and 16 rows
-// makes: the forms at the capacity run q, k and v as one launch and gate and
-// up as one (Siblings, row tile by row tile), so a call of the vector form's
-// few rows launches the projections a form of one row does, and the matrix
-// form's calls run k and v as one launch and gate and up as one.
+// makes: the vector form at the capacity runs q, k and v as one launch and
+// gate and up as one (Siblings, row tile by row tile), so a call of its few
+// rows launches the projections a form of one row does, and the matrix
+// form's calls launch each projection apart, as they do without Siblings.
 func TestCapacitySiblingsLaunchAsOneRow(t *testing.T) {
 	d := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32,
 		Matrix: [3]int{16, 16, 16}, Fragment: ir.MMAVolta(), HalfPairs: true, VectorLoads: true, Shared: 96 << 10, Buffers: 32}
@@ -88,21 +88,24 @@ func TestCapacitySiblingsLaunchAsOneRow(t *testing.T) {
 		t.Fatalf("a form of one row launches %d projections, q, k and v and gate and up together %v: want 4, together", one, joined)
 	}
 	codes, apart := form(composer.Default(), 512, 2), form(without("siblings"), 512, 2)
-	for _, rows := range []int{1, 2, 4, 8, 16} {
+	for _, rows := range []int{1, 2, 4, 8, 12, 16} {
 		n, together := projectionLaunches(codes, rows, kv, gu)
 		a, _ := projectionLaunches(apart, rows)
-		all := 0
+		all, matrix := 0, false
 		for _, c := range codes {
 			if c.Runs(rows) {
 				all++
+				matrix = matrix || c.Matrix != [2]int{}
 			}
 		}
-		t.Logf("%d rows: %d projection launches (%d apart), %d launches in all", rows, n, a, all)
-		if !together {
+		t.Logf("%d rows: %d projection launches (%d apart), %d launches in all, the matrix form %v", rows, n, a, all, matrix)
+		switch {
+		case !matrix && !together:
 			t.Errorf("a call of %d rows runs k and v, or gate and up, as launches of their own", rows)
-		}
-		if n >= a {
+		case !matrix && n >= a:
 			t.Errorf("a call of %d rows launches %d projections, the siblings apart %d", rows, n, a)
+		case matrix && n != a:
+			t.Errorf("a call of %d rows, the matrix form's, launches %d projections, the siblings apart %d", rows, n, a)
 		}
 	}
 	for _, rows := range []int{2, 4} {
@@ -126,8 +129,9 @@ type capacityProjections struct {
 // every output: each output's rows the oracle's (the norm, then the int8
 // matvec over 32-wide windows the vector form runs or the float one the
 // matrix unit does), nothing past the call's rows written, and k and v and
-// gate and up one launch at every call (Siblings over a form of a
-// capacity). Three violations must fail: v's weight words moved by one, up's
+// gate and up one launch at every call the vector form runs (Siblings over
+// a form of a capacity) and launches of their own where the matrix unit
+// does. Three violations must fail: v's weight words moved by one, up's
 // likewise, and a call stating a row more than its input holds, whose
 // launch must write that row.
 func TestComposedGPUCapacitySiblings(t *testing.T) {
@@ -264,13 +268,17 @@ func TestComposedGPUCapacitySiblings(t *testing.T) {
 						}
 					}
 					n, together := projectionLaunches(codes, L, []jlm.Role{jlm.RoleAttnK, jlm.RoleAttnV}, []jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp})
-					if together {
+					matrix := slices.ContainsFunc(codes, func(c composer.Code) bool { return c.Runs(L) && c.Matrix != [2]int{} })
+					switch {
+					case together == matrix:
+						t.Errorf("%s: a call of %d rows, the matrix unit's %v, runs k and v and gate and up together %v", name, L, matrix, together)
+					case !matrix:
 						merged++
 					}
 					t.Logf("%s: %s: a call of %d rows: %d projection launches, k and v and gate and up together %v", d.API(), name, L, n, together)
 				}
-				if merged != len(calls) {
-					t.Errorf("%s: k and v and gate and up run together at %d of %d calls", name, merged, len(calls))
+				if merged == 0 {
+					t.Errorf("%s: no call ran the vector form, whose siblings this gate is", name)
 				}
 				for _, r := range []jlm.Role{jlm.RoleAttnV, jlm.RoleFFNUp} {
 					i := slices.Index(roles, r)

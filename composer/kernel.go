@@ -130,9 +130,6 @@ type Kernel struct {
 	// price is a matrix kernel's model (crossing): its form, depth and
 	// segments.
 	price matrixPrice
-	// priced, where set, is the matrix kernels a launch of several runs
-	// (Siblings), each as the model prices it.
-	priced []pricedMatrix
 	// Share, where set, is the rows a kernel's calls (Workers) hold, a
 	// call's first row its coordinate's ShareUnit rows on and its rows a
 	// length the caller sizes to the workers it runs, a multiple of them.

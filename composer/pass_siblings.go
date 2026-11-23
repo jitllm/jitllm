@@ -1,10 +1,6 @@
 package composer
 
-import (
-	"slices"
-
-	"github.com/jitllm/jitllm/composer/ir"
-)
+import "github.com/jitllm/jitllm/composer/ir"
 
 // Siblings runs consecutive kernels that touch nothing of each other's and
 // read one activation -- the projections of one row -- or together fill no
@@ -21,9 +17,7 @@ import (
 // workgroup's own. Forms of a capacity (Kernel.Capacity) join forms of its
 // capacity and row tiling (Space[0]) and cut (Kernel.Cut) alone, their
 // launch laid out row tile by row tile (merge) so CallRows holds it to a
-// call's rows as it held each, and their run passes over a kernel reading a
-// sibling's output -- a projection's combine -- which then follows the
-// launch. A guard is a scope to the lowering:
+// call's rows as it held each. A guard is a scope to the lowering:
 // what a share reads is made inside its guard and dies there, so the launch
 // holds one share's values at a time.
 type Siblings struct{}
@@ -33,65 +27,21 @@ func (Siblings) Name() string { return "siblings" }
 func (s Siblings) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	var out []*Kernel
 	for i := 0; i < len(ks); {
-		run, between, last := []*Kernel{ks[i]}, []*Kernel(nil), i
-		for j := i + 1; j < len(ks); j++ {
-			k := ks[j]
-			if sibling(run, k, d) && apart(between, k) {
-				run, last = append(run, k), j
-				continue
-			}
-			if !after(run, k) {
-				break
-			}
-			between = append(between, k)
+		j := i + 1
+		for j < len(ks) && sibling(ks[i:j], ks[j], d) {
+			j++
 		}
-		if len(run) < 2 {
+		if j-i < 2 {
 			out = append(out, ks[i])
 			i++
 			continue
 		}
-		k := s.merge(run)
+		k := s.merge(ks[i:j])
 		k.compact()
 		out = append(out, k)
-		for _, b := range ks[i+1 : last+1] {
-			if !slices.Contains(run, b) {
-				out = append(out, b)
-			}
-		}
-		i = last + 1
+		i = j
 	}
 	return out, nil
-}
-
-// after says k, a kernel of a form of a capacity's run that is no sibling,
-// may follow the run's launch: it reads what a sibling before it writes --
-// the combine of a projection's segments. A sibling after it joins only
-// where it touches nothing of k's (apart).
-func after(run []*Kernel, k *Kernel) bool {
-	if run[0].Capacity == 0 || k.Capacity != run[0].Capacity {
-		return false
-	}
-	reads := false
-	for _, m := range run {
-		reads = reads || writesInto(m, k)
-	}
-	for _, st := range k.Stores {
-		if st.Barrier {
-			return false
-		}
-	}
-	return reads
-}
-
-// apart says k touches nothing of the kernels a run's launch moves it
-// before.
-func apart(between []*Kernel, k *Kernel) bool {
-	for _, b := range between {
-		if writesInto(b, k) || writesInto(k, b) {
-			return false
-		}
-	}
-	return true
 }
 
 // sibling says k joins run: a launch like run's first, independent of all,
@@ -117,10 +67,12 @@ func sibling(run []*Kernel, k *Kernel, d Device) bool {
 // nothing a fact about its space, no store running a loop. A form of a
 // capacity's kernel joins before its launch is held to a call's rows
 // (CallRows), which holds the launch by its leading axis alone, so it binds
-// no history a row past the call's would address.
+// no history a row past the call's would address. A matrix kernel stays a
+// launch of its own: gate and up's joined ran a step of 16 rows 2% slower
+// on a V100.
 func joinable(k *Kernel) bool {
 	if k.Capacity > 0 {
-		if _, ok := k.history(); ok || k.RowsHeld || len(k.Space) == 0 || k.Space[0] == 0 {
+		if _, ok := k.history(); ok || k.RowsHeld || len(k.Space) == 0 || k.Space[0] == 0 || k.Matrix != [2]int{} {
 			return false
 		}
 	}
@@ -188,9 +140,6 @@ func (s Siblings) merge(ms []*Kernel) *Kernel {
 	total := 0
 	for _, m := range ms {
 		total += m.Elements() / unit
-		if f.Capacity > 0 {
-			k.priced = append(k.priced, m.matrices()...)
-		}
 	}
 	k.Space = []int{total}
 	lead := -1

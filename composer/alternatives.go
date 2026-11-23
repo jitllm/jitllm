@@ -61,27 +61,6 @@ type matrixPrice struct {
 	depth, split int
 }
 
-// pricedMatrix is one matrix kernel as bands prices it: its shape, its cut
-// at launch, its model and its weight's bits (weightBits).
-type pricedMatrix struct {
-	matrix [2]int
-	cut    Cut
-	price  matrixPrice
-	bits   int
-}
-
-// matrices is the matrix kernels k runs, each as the model prices it: its
-// shares' where it runs several (Siblings), else its own where it is one.
-func (k *Kernel) matrices() []pricedMatrix {
-	if len(k.priced) > 0 {
-		return k.priced
-	}
-	if k.price.p.Rows == 0 {
-		return nil
-	}
-	return []pricedMatrix{{matrix: k.Matrix, cut: k.Cut, price: k.price, bits: weightBits(k)}}
-}
-
 // band is a form a call's projections run at when its live rows are more
 // than the band below's and at most upto: the vector form at a tile of vec
 // rows, or, where vec is 0, the matrix unit at tile.
@@ -102,9 +81,11 @@ type band struct {
 // form met again after another starts none.
 func (r *Registry) bands(ks []*Kernel, req Request) []band {
 	d, R := req.Device, req.Step.Rows
-	var ms []pricedMatrix
+	var ms []*Kernel
 	for _, k := range ks {
-		ms = append(ms, k.matrices()...)
+		if k.price.p.Rows > 0 {
+			ms = append(ms, k)
+		}
 	}
 	most := 0
 	var tiles []MatrixTile
@@ -123,10 +104,10 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		c := 0
 		for _, k := range ms {
 			s := k.price.split
-			if k.cut.Most > 1 {
-				s = k.cut.Of(rows)
+			if k.Cut.Most > 1 {
+				s = k.Cut.Of(rows)
 			}
-			c += k.price.p.cost(rows, k.matrix[0], k.matrix[1], s, k.price.depth, d)
+			c += k.price.p.cost(rows, k.Matrix[0], k.Matrix[1], s, k.price.depth, d)
 		}
 		return c
 	}
@@ -134,7 +115,7 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		c := 0
 		for _, k := range ms {
 			q := k.price.p.with(tile)
-			n, kk := k.matrix[0], k.matrix[1]
+			n, kk := k.Matrix[0], k.Matrix[1]
 			least := q.cost(rows, n, kk, 1, k.price.depth, d)
 			for s := 2; s <= R/tile.Rows && kk%(s*k.price.depth) == 0 && kk/s >= 2*k.price.depth; s *= 2 {
 				least = min(least, q.cost(rows, n, kk, s, k.price.depth, d))
@@ -147,7 +128,7 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		c := 0
 		for _, k := range ms {
 			v := k.price.p.Vector
-			c += (rows + t - 1) / t * max(v[0], v[1]*t) * (k.matrix[0] * k.matrix[1] / d.Units) * k.bits / 256
+			c += (rows + t - 1) / t * max(v[0], v[1]*t) * (k.Matrix[0] * k.Matrix[1] / d.Units) * weightBits(k) / 256
 		}
 		return c
 	}
