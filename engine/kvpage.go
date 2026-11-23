@@ -491,6 +491,13 @@ type kvCache struct {
 	keys []int
 	// chunked is how far aliasChunks has named this sequence's shared pages.
 	chunked int
+	// pins are the store's pages a parked sharing session let go of and
+	// holds for its Resume (parkShared).
+	pins []*sharedPage
+	// sealedAt is where the last prompt this sequence sealed ended
+	// (SealPrompt): the fill a repeat of it asks for in the page it ended
+	// in, named there when a sharing session lets that page go.
+	sealedAt int
 	// endsAt is Instance.endsAt, the prompt ends kept past a chunk boundary,
 	// set with recAt.
 	endsAt func(c int) [kvEndSeats]uint8
@@ -1499,6 +1506,7 @@ func (s *Instance) SealPrompt(lg []float32) error {
 	// Seal the prompt's own partial page too: seal only offers pages the
 	// position has passed, and a short prompt would store nothing.
 	s.kv.tailStored += int64(s.kv.sealTail(s.pos))
+	s.kv.sealedAt = s.pos
 	s.aliasMark(s.kvSkipped, s.pos)
 	if s.kv.share != nil {
 		// A prompt ending inside a chunk names its page on the card by its
@@ -2064,8 +2072,9 @@ func (kc *kvCache) cardPage(li int) nn.KVShareDevice {
 // flushPublish sends the queued names to the device, in one call.
 func (kc *kvCache) flushPublish() {
 	if len(kc.pubLi) > 0 {
-		if d := kc.devAt(int(kc.pubLi[0])); d != nil {
-			d.PublishKVs(kc.pubLi, kc.pubPage, kc.pubKey)
+		if d := kc.devAt(int(kc.pubLi[0])); d != nil && d.PublishKVs(kc.pubLi, kc.pubPage, kc.pubKey) &&
+			kc.share != nil {
+			kc.share.countCard(0, 0, 2*len(kc.pubLi))
 		}
 	}
 	kc.pubLi, kc.pubPage = kc.pubLi[:0], kc.pubPage[:0]
@@ -2083,6 +2092,13 @@ func (kc *kvCache) retireTail(pos int) {
 	}
 	kc.publishTail(pos, false)
 	for li := kc.lo; li < len(kc.layers); li++ {
+		// The prompt's own end, inside a page of this cache's: a card named
+		// its fill when the prompt was sealed (SealPrompt).
+		if e := kc.sealedAt; kc.dev(li) == nil && e > 0 && e <= pos {
+			if p := kc.layers[li].p; p > 0 && e%p != 0 {
+				kc.aliasPage(li, e/p, kc.pageKeyFill(li, e/p, e%p))
+			}
+		}
 		p := kc.namedPage(li)
 		if p == 0 || p%kvChunk != 0 {
 			continue
@@ -2624,7 +2640,8 @@ func (kc *kvCache) reset() {
 		kc.bh[p] = kc.bh[p][:0]
 	}
 	kc.ck = kc.ck[:0]
-	kc.chunked = 0
+	kc.chunked, kc.sealedAt = 0, 0
+	kc.unpinAll()
 }
 
 // keepOnReset lets page n go as reset does, its memory kept in spare for the

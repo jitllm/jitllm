@@ -366,6 +366,7 @@ func (s *Session) Lease() *Lease { return s.lease }
 func (s *Session) Close() {
 	s.Release()
 	if s.on != nil {
+		s.on.retire(s)
 		s.on.forget(s)
 		s.on = nil
 	}

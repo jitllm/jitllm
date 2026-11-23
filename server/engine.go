@@ -1219,6 +1219,9 @@ type Session struct {
 	// storeOn says the instance is attached to the model's memory cache for the
 	// generate in hand (attachStore). Guarded by mu.
 	storeOn bool
+	// shares says it shares the model's pages held once (attachStore), which
+	// ending takes the instance's references back (unshare). Guarded by mu.
+	shares bool
 	// spec is the session's speculation for generates that carry none, and
 	// specRan a generate that stopped inside a speculative round: the model
 	// ran rows past the last token the reply kept, so the session cannot be
@@ -2302,7 +2305,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if err := s.reset(ctx); err != nil {
 			return err
 		}
-		if err := s.attachStore(store); err != nil {
+		if err := s.attachStore(ctx, store); err != nil {
 			return err
 		}
 		clear(s.rows)
@@ -3531,13 +3534,25 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 	// The pooled sessions' history (above) and the memory cache are committed
 	// host memory too. The store's bound is a share of the model's budget,
 	// set here so it follows every re-division.
-	if st := lm.ttft.store; st != nil {
-		st.SetLimit(e.storeLimit(avail, st.Bytes()))
-		kv += st.Bytes()
-	}
-	if sh := lm.ttft.shared; sh != nil {
-		sh.Trim(e.storeLimit(avail, sh.Bytes()))
-		kv += sh.Bytes()
+	// The two stores are one memory cache, held to one bound: the pages held
+	// once are trimmed to what the copying cache leaves of it, and the
+	// copying cache bounded by what they then hold. The copying cache evicts
+	// as it takes a page, but the pages held once grow until this trim, and
+	// a bound read off what they held before it is a bound on more than
+	// they keep: it is read again after each trim until it holds.
+	if st, sh := lm.ttft.store, lm.ttft.shared; st != nil && sh != nil {
+		lim := e.storeLimit(avail, st.Bytes()+sh.Bytes())
+		for {
+			sh.Trim(lim - min(lim, st.Bytes()))
+			next := e.storeLimit(avail, st.Bytes()+sh.Bytes())
+			if next >= lim {
+				break
+			}
+			lim = next
+		}
+		lm.ttft.limit.Store(lim)
+		st.SetLimit(max(lim-min(lim, sh.Bytes()), 1))
+		kv += st.Bytes() + sh.Bytes()
 	}
 	if kv < avail {
 		avail -= kv

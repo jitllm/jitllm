@@ -1406,6 +1406,7 @@ input	engine/kvshare.go	"model: ShareKV wants a fresh sequence, this one is at p
 input	engine/kvshare.go	"model: ShareKV wants a namespace (SetCacheKey): a page is named by its tokens only inside one"
 input	engine/kvshare.go	"model: ShareKV wants a store"
 bug	engine/kvshare.go	"model: a kv page of %d bytes is not float32 slots"
+bug	engine/kvshare.go	"model: a shared kv page unpinned more often than it was pinned"
 bug	engine/kvshare.go	"model: a shared kv page released more often than it was taken"
 bug	engine/kvshare.go	"model: a shared kv page released that the store does not hold"
 input	engine/listed.go	"blocks %v fit no card resident and this device cannot page a block"	the caller's list leaves the CPU out (WithCPU)
