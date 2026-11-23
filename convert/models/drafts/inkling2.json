@@ -2,6 +2,7 @@
   "draft": [
     "NOT A LIBRARY FILE YET. It lives under convert/models/drafts/ because the library is embedded as models/*.json and one file that does not parse breaks every conversion (libraryFiles). Move it to convert/models/inkling2.json once every PLACEHOLDER below is filled and it parses.",
     "Reference: transformers' Inkling2LoopForConditionalGeneration (modeling_inkling2_loop.py), its conversion mapping inkling2_loop / inkling2_loop_text (core_model_loading.py), and the published config.json. Fixture: $JITLLM_MODELS/synth-hf-inkling2 (scripts/inkling2gold.py); golden testdata/golden/inkling2/synth-hf-inkling2.json, which moves to testdata/golden/hf/ when the class converts (TestSafetensorsMatchTransformers reads that directory and would go red until then).",
+    "Filled on ink2/integrate: the loop's weights (config 'unroll' over loop(), convert/unroll.go, jlm.Config.WeightsOf), the roles (format/jlm/rolesloop.go, convert/tensornames.json), the taps' flip (the 'flip' transform), and the op forms of attend-bias, row-sinks and row-taps below (graph.Attrs.Extent / RowSinks, OpStateConv's In[1]). Still PLACEHOLDER: the loop's streams (the restart and the messages, see graph.notes), the per-loop-layer gather of the model's message queries, the quant split of a fused verbatim w13, the 'each layer' keys, and the architecture's state statement (convert/mjstates.go: geometry per layer, windows, recurrent conv windows).",
     "Placeholders name the piece that fills them: attend-bias (OpAttend's per-row, per-head additive score bias by backward distance), row-sinks (OpAttend's sinks per row from an input), row-taps (OpStateConv's per-row taps added to its static taps), loop (blocks of later passes sharing the first pass's weights, each pass its own history, the residual stream restarted from the pre-loop states), quant (NVFP4 and MXFP8 expert payloads), roles (new tensor roles in convert/tensornames.json)."
   ],
   "describe": {"Inkling2LoopForConditionalGeneration": "Inkling 2 Mini's text model, by convert/models/inkling2.json"},
@@ -65,6 +66,7 @@
       "loop.gate_rank": {"uint": "loop_config.gate_rank ?? loop_gate_rank"},
       "PLACEHOLDER(roles)": "the int32s 'each layer' forms above are written as prose; kimi_linear.json's each_layer(...) is the form to follow, keyed on layer_types with the class default when it is null"
     },
+    "unroll": "loop(num_hidden_layers, loop_config.core_start ?? loop_layer_index_start, loop_config.core_end ?? loop_layer_index_end, loop_config.num_passes ?? loop_num_passes)",
     "vocab": "vocab_size",
     "head": {"tensor": "model.llm.unembed.weight", "tied": "false", "rows": "unpadded_vocab_size"},
     "layers": {"key": "layer_types", "kinds": {"hybrid_sliding": "attention", "hybrid": "attention"}},
@@ -106,8 +108,8 @@
       "attn.v_sconv.weight": {"role": "attn_v_conv.weight", "do": [{"reshape": [-1, "sconv_kernel_size ?? conv_kernel_size"]}]},
       "attn.k_sconv.static_w": {"role": "attn_k_conv.weight", "do": [{"transpose": [1, 0]}, {"flip": 1}], "why": "(k, C), tap 0 the NEWEST row (the dynamic convolution's windows are flipped): to channel-major oldest-first, OpStateConv's order"},
       "attn.v_sconv.static_w": {"role": "attn_v_conv.weight", "do": [{"transpose": [1, 0]}, {"flip": 1}]},
-      "attn.k_sconv.weight_proj": {"role": "attn_k_conv_proj.weight", "do": [{"reshape": ["kv_heads", "k", -1]}, {"flip": 1}, {"reshape": ["kv_heads * k", -1]}], "why": "rows are (kv head, tap), tap 0 the newest"},
-      "attn.v_sconv.weight_proj": {"role": "attn_v_conv_proj.weight", "do": [{"reshape": ["kv_heads", "k", -1]}, {"flip": 1}, {"reshape": ["kv_heads * k", -1]}]},
+      "attn.k_sconv.weight_proj": {"role": "attn_k_conv_proj.weight", "do": [{"reshape": ["num_key_value_heads", "sconv_kernel_size ?? conv_kernel_size", -1]}, {"flip": 1}, {"reshape": ["num_key_value_heads * (sconv_kernel_size ?? conv_kernel_size)", -1]}], "why": "rows are (kv head, tap), tap 0 the newest; full layers only, so the kv heads are num_key_value_heads"},
+      "attn.v_sconv.weight_proj": {"role": "attn_v_conv_proj.weight", "do": [{"reshape": ["num_key_value_heads", "sconv_kernel_size ?? conv_kernel_size", -1]}, {"flip": 1}, {"reshape": ["num_key_value_heads * (sconv_kernel_size ?? conv_kernel_size)", -1]}]},
       "attn_sconv.weight": {"role": "attn_post_conv.weight", "do": [{"reshape": [-1, "sconv_kernel_size ?? conv_kernel_size"]}]},
       "mlp_sconv.weight": {"role": "ffn_post_conv.weight", "do": [{"reshape": [-1, "sconv_kernel_size ?? conv_kernel_size"]}]},
       "mlp.gate.weight": "ffn_gate_inp.weight",
@@ -117,6 +119,7 @@
         {"role": "ffn_up_exps.weight", "do": [{"reshape": ["n_routed_experts", "intermediate_size ?? moe_intermediate_size", 2, "hidden_size"]}, {"slice": [2, 1, 1]}, {"reshape": ["n_routed_experts", "intermediate_size ?? moe_intermediate_size", "hidden_size"]}]}
       ],
       "mlp.experts.w2_weight": "ffn_down_exps.weight",
+      "quant": "convert/hffp8.go's mergeFP8 joins X, X_scale, X_amax and X_outer_scale_denominator into one NV4 or MX8 tensor named X before the map reads it, so the four names below never reach this map. PLACEHOLDER(quant): w13's even/odd row split above is a transform over a verbatim-row tensor, which the converter refuses for a block-quantized source today (as for MXFP4); NV4/MX8 rows are self-contained, so the split is a byte gather per row, owed in mjtransforms.",
       "mlp.experts.w13_weight_scale": "PLACEHOLDER(quant): NVFP4 (with _amax and _outer_scale_denominator: e2m1 codes two a byte, even element low nibble, an E4M3 scale per 16, a per-expert factor amax / denominator) or MXFP8 (without them: E4M3 values, a ue8m0 scale per 32); deinterleaved like w13",
       "mlp.experts.w13_weight_amax": "PLACEHOLDER(quant)",
       "mlp.experts.w13_weight_outer_scale_denominator": "PLACEHOLDER(quant)",
@@ -135,7 +138,8 @@
       "controllers.mlp.down_weight": "loop_ffn_down.weight",
       "controllers.mlp.forget_weight": "loop_ffn_forget.weight",
       "controllers.mlp.gain_weight": "loop_ffn_gain.weight",
-      "PLACEHOLDER(roles)": "attn_k_in_norm, attn_v_in_norm, attn_sinks_proj, attn_q_clip_scale, attn_rel, attn_rel_clip_scale, attn_rel_proj, attn_k_conv(_proj), attn_v_conv(_proj), attn_post_conv, ffn_post_conv, attn_res_score_{q,k,v}, loop_* are new roles; reuse an existing role wherever tensornames.json has one with the same meaning"
+      "roles": "DONE: the new roles are format/jlm/rolesloop.go (codes 900-931) with their names in convert/tensornames.json.",
+      "was PLACEHOLDER(roles)": "attn_k_in_norm, attn_v_in_norm, attn_sinks_proj, attn_q_clip_scale, attn_rel, attn_rel_clip_scale, attn_rel_proj, attn_k_conv(_proj), attn_v_conv(_proj), attn_post_conv, ffn_post_conv, attn_res_score_{q,k,v}, loop_* are new roles; reuse an existing role wherever tensornames.json has one with the same meaning"
     },
     "ignore_prefix": ["model.visual.", "mtp."]
   },
@@ -145,6 +149,7 @@
       "Residual stream = the attention-residual banks (latent_delta.json's streams, Kimi's): bank 0 the embedding output, one bank per block boundary (layer % B == 0) holding that layer's INPUT, and the running partial 'run'. Three departures from latent_delta's 'bank' def: the eps is 1e-6 (UnweightedRMSNorm's default, not rms_norm_eps); the score is q . rmsnorm(s) with q pre-scaled by H ** -0.5 at conversion; and the VALUES are the normed states (attn_res_normalize_values: the reference attends over the normed stack), so the def sums p_j * rmsnorm(@j), not p_j * @j.",
       "Boundary layer (layer % B == 0): the bank receives the layer's input, and the residual after attention is the attention output ALONE (not input + attention); elsewhere input + attention. latent_delta's join_if/join states the same.",
       "Full layers read three inputs (q, k, v) from the banks with three queries; sliding layers one. In passes > 1 every loop layer gates its q, k, v and MLP inputs with messages, so even a sliding loop layer's q, k, v inputs differ there.",
+      "The loop's streams (design, PLACEHOLDER(loop-streams)): the stream framework is graph values carried between blocks (graph/streams.go), so the loop is slot arithmetic in the statement, no new op. Give every boundary of every pass a bank stream of its own (real model: 1 pre-loop bank, 2 a pass x 3 passes, 1 post-loop, plus the run and one 'previous final' stream: 10 of uint8's 255), and one stream P for the previous pass's final hidden. The first block of pass p > 1 states a Pre (qwen3_5.json's stream_pre / stream_writes / stream_at form): Pre writes P := run and stream 0 := the first loop bank of pass 1 (that bank holds the pre-loop hidden, since core_start is a boundary), and the block's x is stream_at 0 after it. Its attention-input and FFN-input reads then list the pre-loop banks and this pass's banks (block var 'page' is the source layer, 'layer' the block; the pass is (layer - start) // (end - start) + 1 inside the loop). The messages of a pass-p block read the previous pass's banks past its first, plus P, through the bank def with the block's four loop_msg_* queries (H ** -0.5 at conversion) and normed values -- one read whose program outputs [input | message] side by side (a read's output width is its program's), the gates (rms_norm, concat, matvec loop_*_down, tanh of matvec forget/gain, (1 - f) * h + a * m) being ordinary block ops. A full layer's three inputs read with attn_res_score_q/k/v the same way.",
       "All arithmetic below is f32 (the reference upcasts every step and the fixture's golden is f32)."
     ],
     "block_outline": [
@@ -163,7 +168,7 @@
       {"op": "stated", "in": ["q", "pos"], "expr": "x * (1 + log_alpha * log(max((y + 1) / log_floor, 1)))", "out": "q", "if": "full"},
       {"op": "matvec", "in": "nk", "w": "attn_k", "rows": "kv_heads * head_dim", "out": "k"},
       {"op": "emit", "kind": "state_conv", "in": "k", "attr": {"Taps": "conv"}, "bind": [{"w": "attn_k_conv", "k": "conv", "rows": "kv_heads * head_dim"}], "outs": [{"name": "k.conv", "width": "kv_heads * head_dim"}], "out": "kc", "if": "sliding"},
-      {"op": "PLACEHOLDER(row-taps)", "what": "full layers: taps = static (attn_k_conv) + matvec(nk, attn_k_conv_proj) per row, one set of conv taps per kv head broadcast over its head_dim channels; scale 1 / sqrt(2 * conv + 1) instead of 1 / sqrt(conv + 1)", "if": "full"},
+      {"op": "emit", "kind": "state_conv", "in": ["k", "ktaps"], "attr": {"Taps": "conv"}, "bind": [{"w": "attn_k_conv", "k": "conv", "rows": "kv_heads * head_dim"}], "outs": [{"name": "k.conv", "width": "kv_heads * head_dim"}], "out": "kc", "if": "full", "pre": "ktaps = matvec(nk, attn_k_conv_proj, rows kv_heads * conv): OpStateConv's In[1], groups = width / Taps = kv_heads (ink2/conv); the window needs a StateRecState Offset/Span of its own (four convs a full block)", "what": "full layers: taps = static (attn_k_conv) + matvec(nk, attn_k_conv_proj) per row, one set of conv taps per kv head broadcast over its head_dim channels; scale 1 / sqrt(2 * conv + 1) instead of 1 / sqrt(conv + 1)", "if": "full"},
       {"op": "stated", "in": ["kc", "k"], "expr": "(x + y) / sqrt(conv + 1)", "out": "k", "why": "the convolution's residual and scale; full layers sqrt(2 * conv + 1)"},
       {"op": "stated-per-head", "what": "k: unscaled L2 clip per head at the same clip"},
       {"op": "matvec", "in": "nv", "w": "attn_v", "rows": "kv_heads * head_dim", "out": "v"},
@@ -171,9 +176,9 @@
       {"op": "kv_append", "in": ["k", "v"], "out": "kv"},
       {"op": "matvec", "in": "nq", "w": "attn_rel", "rows": "heads * rel_width", "out": "r"},
       {"op": "stated-per-head", "what": "r: attn_rel_clip_scale, L2 clip at rel_clip per head of rel_width; full layers the log scaling too"},
-      {"op": "PLACEHOLDER(attend-bias)", "what": "per head h and backward distance d in [0, extent): bias[h][d] = r[h] . attn_rel_proj[:, d], extent = sliding_window_size on sliding layers and rel_extent on full; zero at d >= extent. A matvec of r against attn_rel_proj gives the (heads, extent) table per row; OpAttend adds table[h][q_pos - k_pos] to the score after the 1/sqrt(head_dim) scale"},
+      {"op": "matvec", "in": "r", "w": "attn_rel_proj", "rows": "extent", "sheets": "heads", "out": "bias", "why": "per head the extent-wide table r[h] . proj[:, d]: attn_rel_proj stored transposed to (extent, d_rel), one matvec a head (expert_matvec with sheets, or a heads-major matvec); the op form, not yet converted", "what": "per head h and backward distance d in [0, extent): bias[h][d] = r[h] . attn_rel_proj[:, d], extent = sliding_window_size on sliding layers and rel_extent on full; zero at d >= extent. A matvec of r against attn_rel_proj gives the (heads, extent) table per row; OpAttend adds table[h][q_pos - k_pos] to the score after the 1/sqrt(head_dim) scale"},
       {"op": "matvec", "in": "nq", "w": "attn_sinks_proj", "rows": "heads", "out": "sink"},
-      {"op": "PLACEHOLDER(row-sinks)", "what": "OpAttend's sink logit per head from the row's 'sink' (softmax over [scores, sink], the sink's weight dropped), in place of a per-head weight"},
+      {"op": "attend-form", "form": {"op": "attend", "in": ["q", "bias", "sink"], "hist": "kv", "attr": {"Extent": "extent", "RowSinks": "true", "Window": "window if sliding"}, "out": "att"}, "why": "ink2/attend: OpAttend's operands q, [selection], [bias NHead*Extent], [sinks NHead]; the bias goes on after the scale", "what": "OpAttend's sink logit per head from the row's 'sink' (softmax over [scores, sink], the sink's weight dropped), in place of a per-head weight"},
       {"op": "attend", "in": "q", "hist": "kv", "out": "att", "why": "scale head_dim ** -0.5, window sliding_window_size on sliding layers (q_pos - k_pos < window), causal full otherwise; plus the bias and the sinks above"},
       {"op": "matvec", "in": "nq", "w": "attn_gate", "rows": "heads * head_dim", "out": "g"},
       {"op": "stated", "in": ["att", "g"], "expr": "x * sigmoid(y)", "out": "att"},
