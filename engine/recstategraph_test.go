@@ -20,6 +20,12 @@ func TestRecurrentStateIsTheGraphs(t *testing.T) {
 		if _, _, ok := restatedFixture(name); ok {
 			continue
 		}
+		// Inkling 2's state is its short convolutions' windows, which no
+		// recurrent geometry of the config describes: the graph states them
+		// alone (TestSafetensorsMatchTransformers holds them to the class).
+		if name == "synth-hf-inkling2" {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			m, err := model.Open(jlmOf(t, testmodels.Path(name)))
 			if err != nil {
