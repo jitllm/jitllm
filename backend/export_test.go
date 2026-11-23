@@ -57,3 +57,15 @@ func VulkanGroups(d Device) (limit uint32, dispatches uint64, ok bool) {
 // MetalKernelWrites overrides the write mask a Metal kernel was compiled
 // with: the violation arm of the concurrent encoder's gate.
 func MetalKernelWrites(k Kernel, m uint64) { k.(*mtlKern).k.SetWrites(m) }
+
+// CUDAIdleQueues is how many drained streams a CUDA device keeps for its next
+// NewQueue (cudaDev.idle), and false for any other device.
+func CUDAIdleQueues(d Device) (int, bool) {
+	c, ok := d.(*cudaDev)
+	if !ok {
+		return 0, false
+	}
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
+	return len(c.idle), true
+}
