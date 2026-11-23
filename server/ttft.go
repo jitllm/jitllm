@@ -274,13 +274,18 @@ func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 }
 
 // releaseEphemeral ends a model_id request's session: unregistered as
-// CloseSession does, and its instance reset into the pool when there is room
-// and the model is still loaded, closed otherwise.
+// CloseSession does, and kept for the next request when there is room and
+// the model is still loaded (spareSession), closed otherwise.
 func (e *Engine) releaseEphemeral(s *Session) {
 	e.mu.Lock()
 	delete(e.sessions, s.id)
 	delete(s.lm.sessions, s.id)
 	e.mu.Unlock()
+	if e.spareSession(s) {
+		// Its history went with the reset: the pager takes the room back.
+		e.applyPageBudget(s.lm, nil)
+		return
+	}
 	if s.closed.Swap(true) {
 		return
 	}
@@ -294,6 +299,87 @@ func (e *Engine) releaseEphemeral(s *Session) {
 	s.mu.Unlock()
 	s.lm.ttft.sessionsClosed.Add(1)
 	e.applyPageBudget(s.lm, nil)
+}
+
+// spareSession keeps a model_id request's session for the next one
+// (takeSpare), its history reset where it is. Its device view, its arenas and
+// the graphs the card recorded for it come with it, and a session opened anew
+// pays for each again (Llama-3.1-8B on a V100, a repeated 512-token
+// /v1/completions: 26 ms on a session kept, 33 on one opened). The model holds
+// at most as many sessions, open and spare, as it was loaded for
+// (LoadOptions.Sessions), so a spare holds room the load planned. A closed or
+// parked session, or one whose model is gone, is not kept.
+func (e *Engine) spareSession(s *Session) bool {
+	lm := s.lm
+	room := func() bool {
+		return e.models[lm.id] == lm && len(lm.sessions)+len(lm.spare) < max(lm.open.Sessions, 1)
+	}
+	e.mu.RLock()
+	ok := room()
+	e.mu.RUnlock()
+	if !ok || s.closed.Load() || s.parked.Load() {
+		return false
+	}
+	ctx := context.Background()
+	s.mu.Lock()
+	err := s.attachStore(ctx, false)
+	if err == nil {
+		err = s.reset(ctx)
+	}
+	clear(s.rows)
+	s.ms.Release()
+	s.refresh()
+	s.mu.Unlock()
+	if err != nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !room() {
+		return false
+	}
+	lm.spare = append(lm.spare, s)
+	return true
+}
+
+// takeSpare is a spare session of the model o names (spareSession),
+// registered under an id of its own with what a session opened for o starts
+// with: its own sampler seed, unpinned, at the default priority. A spare left
+// on a tier the model has since left, or at another default length, is
+// closed.
+func (e *Engine) takeSpare(o GenerateOptions) *Session {
+	lm := e.loadedNamed(o.ModelID)
+	if lm == nil {
+		return nil
+	}
+	dev, maxSeq := lm.device(), e.defaultMaxSeq(lm)
+	e.mu.Lock()
+	var s *Session
+	for len(lm.spare) > 0 && s == nil {
+		s = lm.spare[len(lm.spare)-1]
+		lm.spare = lm.spare[:len(lm.spare)-1]
+		if b := s.tier.Load(); b == nil || b.d != dev || s.maxSeq != maxSeq {
+			e.mu.Unlock()
+			s.close()
+			e.mu.Lock()
+			s = nil
+		}
+	}
+	if s == nil {
+		e.mu.Unlock()
+		return nil
+	}
+	s.id, s.created = e.nextID("s"), time.Now()
+	s.sampling, s.undrawn = sessionSampler(nil, lm, s.maxSeq, o.ModelName)
+	s.generated.Store(0)
+	s.prefilled.Store(0)
+	s.priority.Store(0)
+	s.pinned.Store(false)
+	s.lastUsed.Store(time.Now().UnixMilli())
+	e.sessions[s.id] = s
+	lm.sessions[s.id] = s
+	e.mu.Unlock()
+	return s
 }
 
 // closeIdle closes the memory cache. The model is already unpublished.

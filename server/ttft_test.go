@@ -215,8 +215,9 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 // TestSessionsAnswerAsFreshOnes alternates two prompts whose answers differ
 // on one engine and, each on an engine of its own, on fresh ones: the answers
 // agree request for request (no history leaks from one request's session into
-// the next on the model's one instance), every request opens a session and
-// closes it, and after the first none asks the composer for anything.
+// the next on the model's one instance), the first request opens the one
+// session every request runs on, each leaving it reset as the model's spare
+// (spareSession), and after the first none asks the composer for anything.
 func TestSessionsAnswerAsFreshOnes(t *testing.T) {
 	shared, slm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
 	x := shared.encodeText(t, slm, "Once upon a time")
@@ -242,12 +243,21 @@ func TestSessionsAnswerAsFreshOnes(t *testing.T) {
 	if n := slm.inst.Account(nn.CPU).Asks - composed; n != 0 {
 		t.Fatalf("five requests after the first asked the composer %d times", n)
 	}
-	if st := shared.MemCacheStats(slm); st.SessionsOpened != 6 || st.SessionsClosed != 6 {
-		t.Fatalf("%+v; want six sessions opened and six closed", st)
+	if st := shared.MemCacheStats(slm); st.SessionsOpened != 1 || st.SessionsClosed != 0 {
+		t.Fatalf("%+v; want one session opened and none closed: the first request's, kept for the rest", st)
 	}
 	if n := len(shared.Sessions()); n != 0 {
 		t.Fatalf("a request's session is listed as %d open session(s)", n)
 	}
+	if n := spareCount(shared, slm); n != 1 {
+		t.Fatalf("the model keeps %d spare sessions after six requests, want the one they ran on", n)
+	}
+}
+
+func spareCount(e *Engine, lm *LoadedModel) int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(lm.spare)
 }
 
 func (e *Engine) encodeText(t *testing.T, lm *LoadedModel, s string) []int32 {
@@ -260,13 +270,14 @@ func (e *Engine) encodeText(t *testing.T, lm *LoadedModel, s string) []int32 {
 }
 
 // TestAWarmLoadRunsOnTheModelsInstance: a load with Warm runs its prefill
-// and decode step in a session on the model's instance, so the first request
-// composes nothing; it stores nothing and counts nothing as served.
+// and decode step in a session on the model's instance, kept as the model's
+// spare, so the first request composes nothing and runs on that session; it
+// stores nothing and counts nothing as served.
 func TestAWarmLoadRunsOnTheModelsInstance(t *testing.T) {
 	e, lm := ttftEngine(t, smallModel, Config{}, LoadOptions{Warm: true})
 	st := e.MemCacheStats(lm)
-	if !st.Warmed || st.SessionsOpened != 1 || st.SessionsClosed != 1 {
-		t.Fatalf("after a warm load: %+v; want one session opened and closed", st)
+	if !st.Warmed || st.SessionsOpened != 1 || st.SessionsClosed != 0 || spareCount(e, lm) != 1 {
+		t.Fatalf("after a warm load: %+v, %d spare; want one session opened and kept as the spare", st, spareCount(e, lm))
 	}
 	if st.Store.Sets != 0 || lm.tokensPrefilled.Load() != 0 || lm.tokensGenerated.Load() != 0 {
 		t.Fatalf("the warm-up was counted as served or stored: %+v, %d prefilled", st, lm.tokensPrefilled.Load())
@@ -275,6 +286,9 @@ func TestAWarmLoadRunsOnTheModelsInstance(t *testing.T) {
 	generate(t, e, GenerateOptions{ModelID: "m", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 4})
 	if n := lm.inst.Account(nn.CPU).Asks - composed; n != 0 {
 		t.Fatalf("the first request after a warm load asked the composer %d times", n)
+	}
+	if st := e.MemCacheStats(lm); st.SessionsOpened != 1 {
+		t.Fatalf("the first request after a warm load opened a session beside the warm one: %+v", st)
 	}
 
 	_, cold := ttftEngine(t, smallModel, Config{}, LoadOptions{})
