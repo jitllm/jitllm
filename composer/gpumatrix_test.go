@@ -123,6 +123,11 @@ func TestComposedGPUMatrix(t *testing.T) {
 					n, k, capacity int
 					calls          []int
 				}{{100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
+					// One weight, one call and their oracles a format and shape:
+					// every tile runs the same projection.
+					var w []byte
+					var qs, dw, sc []uint32
+					var x, want, big, wantBig, want8 []float32
 					for _, tile := range splitTiles(gpuMatrixTiles()) {
 						n, k, capacity, calls := sh.n, sh.k, sh.capacity, sh.calls
 						own := gpuMatrixTiles()[0]
@@ -141,10 +146,12 @@ func TestComposedGPUMatrix(t *testing.T) {
 							t.Fatalf("%v has no container type or kernel format", typ)
 						}
 						what := fmt.Sprintf("%v/%d outputs of %d at %v", typ, n, k, tile)
-						w := matrixWeights(typ, q, n, k, rng)
-						qs, dw, sc, err := layout.PackWeights(q, w, n, k)
-						if err != nil {
-							t.Fatal(err)
+						if w == nil {
+							w = matrixWeights(typ, q, n, k, rng)
+							var err error
+							if qs, dw, sc, err = layout.PackWeights(q, w, n, k); err != nil {
+								t.Fatal(err)
+							}
 						}
 						b := graph.New()
 						in := b.In("x", k)
@@ -192,13 +199,29 @@ func TestComposedGPUMatrix(t *testing.T) {
 						if err != nil {
 							t.Fatalf("%s: %v", what, err)
 						}
-						x := make([]float32, capacity*k)
-						for i := range x {
-							x[i] = float32(rng.NormFloat64())
-						}
-						want := make([]float32, capacity*n)
-						if err := oracle.MatMul(want, typ, w, x, capacity, n, k); err != nil {
-							t.Fatal(err)
+						if x == nil {
+							x = make([]float32, capacity*k)
+							for i := range x {
+								x[i] = float32(rng.NormFloat64())
+							}
+							want = make([]float32, capacity*n)
+							if err := oracle.MatMul(want, typ, w, x, capacity, n, k); err != nil {
+								t.Fatal(err)
+							}
+							// Rows past binary16's range, every fifth times
+							// 2^20: scaled into it and their sums back, as
+							// exactly as the rest.
+							big = slices.Clone(x)
+							for r := 2; r < capacity; r += 5 {
+								for i := r * k; i < (r+1)*k; i++ {
+									big[i] *= 1 << 20
+								}
+							}
+							wantBig = make([]float32, capacity*n)
+							if err := oracle.MatMul(wantBig, typ, w, big, capacity, n, k); err != nil {
+								t.Fatal(err)
+							}
+							want8 = int8Projection(t, typ, w, x, n, k, 32, false)
 						}
 						runX := func(x []float32, L int, planes [3][]uint32) []float32 {
 							xs := make([]float32, capacity*k)
@@ -224,18 +247,6 @@ func TestComposedGPUMatrix(t *testing.T) {
 						}
 						run := func(L int, planes [3][]uint32) []float32 { return runX(x, L, planes) }
 						planes := [3][]uint32{qs, dw, sc}
-						// Rows past binary16's range, every fifth times 2^20:
-						// scaled into it and their sums back, as exactly as the rest.
-						big := slices.Clone(x)
-						for r := 2; r < capacity; r += 5 {
-							for i := r * k; i < (r+1)*k; i++ {
-								big[i] *= 1 << 20
-							}
-						}
-						wantBig := make([]float32, capacity*n)
-						if err := oracle.MatMul(wantBig, typ, w, big, capacity, n, k); err != nil {
-							t.Fatal(err)
-						}
 						if e := gpuNMSE(runX(big, capacity, planes), wantBig); math.IsNaN(e) || !(e < 2e-6) {
 							t.Fatalf("%s: rows past binary16's range read NMSE %.3e against the oracle", what, e)
 						}
@@ -243,7 +254,6 @@ func TestComposedGPUMatrix(t *testing.T) {
 						// matrix form (alternatives): the int8 matvec over the
 						// step's activation window where the format takes one,
 						// else the decoded weight's.
-						want8 := int8Projection(t, typ, w, x, n, k, 32, false)
 						vectorAt := func(L int) bool {
 							for _, c := range formed {
 								if c.Band.Upto > 0 && c.Runs(L) {
