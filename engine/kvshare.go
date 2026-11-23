@@ -57,6 +57,9 @@ type SharedStore struct {
 	// order is the held pages oldest first, for Trim; a forgotten one is
 	// passed over there.
 	order []*sharedPage
+	// The counters Stats reports, and the bound the last Trim held it to.
+	hits, misses, sets, evicted int64
+	limit                       uint64
 }
 
 // sharedPage is one page's single copy: refs sessions alias it. key is the
@@ -67,6 +70,10 @@ type sharedPage struct {
 	aka  []kvStoreKey
 	b    []float32
 	refs int
+	// pins are parked sessions holding the page for their Resume (pin): it
+	// is kept against Trim and Prune as a reference is, though no page
+	// table points at it.
+	pins int
 	// arena and slot are the arena slot b is, held for the entry, nil where
 	// b is memory of its own.
 	arena *history.Arena
@@ -94,6 +101,7 @@ func NewSharedStore() *SharedStore {
 func (m *SharedStore) Get(cacheId string, layer, index int, page io.Writer) error {
 	m.mu.Lock()
 	e := m.pages[kvStoreKey{cacheId, layer, index}]
+	m.count(e != nil)
 	m.mu.Unlock()
 	if e == nil {
 		return ErrNoPage
@@ -113,8 +121,9 @@ func (m *SharedStore) Set(cacheId string, layer, index int, page io.Reader) erro
 	if r, ok := page.(lenReader); ok {
 		m.mu.Lock()
 		e := m.pages[kvStoreKey{cacheId, layer, index}]
-		if e != nil && e.refs == 0 && len(e.b)*4 == r.Len() && e.key == (kvStoreKey{cacheId, layer, index}) {
+		if e != nil && e.free() && len(e.b)*4 == r.Len() && e.key == (kvStoreKey{cacheId, layer, index}) {
 			defer m.mu.Unlock()
+			m.sets++
 			_, err := io.ReadFull(r, kvBytesOf(e.b))
 			return err
 		}
@@ -133,7 +142,7 @@ func (m *SharedStore) Set(cacheId string, layer, index int, page io.Reader) erro
 	defer m.mu.Unlock()
 	k := kvStoreKey{cacheId, layer, index}
 	if e := m.pages[k]; e != nil {
-		if e.refs > 0 {
+		if !e.free() {
 			return nil
 		}
 		m.forget(e)
@@ -162,8 +171,9 @@ func (m *SharedStore) Prune() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.pages {
-		if e.refs == 0 {
+		if e.free() {
 			m.retire(e)
+			m.evicted++
 		}
 	}
 }
@@ -220,6 +230,7 @@ func (m *SharedStore) acquire(k kvStoreKey, n int) []float32 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e := m.pages[k]
+	m.count(e != nil && len(e.b) == n)
 	if e == nil || len(e.b) != n {
 		return nil
 	}
@@ -242,12 +253,88 @@ func (m *SharedStore) release(b []float32) {
 	if e.refs < 0 {
 		panic("model: a shared kv page released more often than it was taken")
 	}
+	m.let(e)
+}
+
+// let forgets or retires e once nothing holds it: Drop or Prune took it out
+// of the index, or a card holds it now. Callers hold m.mu.
+func (m *SharedStore) let(e *sharedPage) {
 	switch {
-	case e.refs == 0 && e.gone:
+	case !e.free():
+	case e.gone:
 		m.forget(e)
-	case e.refs == 0 && e.idle:
+	case e.idle:
 		m.retire(e)
 	}
+}
+
+// free says no session holds e: no page table points at it and no parked
+// session will fault it back.
+func (e *sharedPage) free() bool { return e.refs == 0 && e.pins == 0 }
+
+// pin holds the page b, which a session is letting go of as it parks, for
+// its Resume to fault back by name: the store keeps it against Trim and
+// Prune until unpin. It returns the page held, nil when b is not the
+// store's.
+func (m *SharedStore) pin(b []float32) *sharedPage {
+	if len(b) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.held[&b[0]]
+	if e == nil || e.gone {
+		return nil
+	}
+	e.pins++
+	return e
+}
+
+// unpin lets go of what pin held.
+func (m *SharedStore) unpin(e *sharedPage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e.pins--; e.pins < 0 {
+		panic("model: a shared kv page unpinned more often than it was pinned")
+	}
+	m.let(e)
+}
+
+// count records a lookup that found a page or missed. Callers hold m.mu.
+func (m *SharedStore) count(hit bool) {
+	if hit {
+		m.hits++
+	} else {
+		m.misses++
+	}
+}
+
+// countCard records what a session did with the store's pages on a card,
+// which names its own (engine/device/gpu/kvshare.go): pages mapped from a
+// name, names asked for and missed, and names given.
+func (m *SharedStore) countCard(hits, misses, sets int) {
+	m.mu.Lock()
+	m.hits += int64(hits)
+	m.misses += int64(misses)
+	m.sets += int64(sets)
+	m.mu.Unlock()
+}
+
+// Stats reports the store as a MemStore reports itself: lookups that found
+// a page (a card's mapped names among them) and missed, pages and names
+// taken, pages Trim and Prune let go, the pages held once and their bytes,
+// the bound the last Trim held it to, and the pages parked sessions hold.
+func (m *SharedStore) Stats() MemStoreStats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pinned := 0
+	for _, e := range m.held {
+		if e.pins > 0 {
+			pinned++
+		}
+	}
+	return MemStoreStats{Hits: m.hits, Misses: m.misses, Sets: m.sets, Evicted: m.evicted,
+		Pages: len(m.held), Bytes: m.bytes, Limit: m.limit, Pinned: pinned}
 }
 
 // idle marks the held page b as one a card holds now: its other holders keep
@@ -289,13 +376,15 @@ func (m *SharedStore) alias(k kvStoreKey, b []float32) {
 func (m *SharedStore) Trim(limit uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.limit = limit
 	keep := m.order[:0]
 	for _, e := range m.order {
 		if m.held[&e.b[0]] != e {
 			continue // forgotten already
 		}
-		if e.refs == 0 && m.bytes > limit {
+		if e.free() && m.bytes > limit {
 			m.retire(e)
+			m.evicted++
 			continue
 		}
 		keep = append(keep, e)
@@ -311,6 +400,7 @@ func (m *SharedStore) add(k kvStoreKey, b []float32) *sharedPage {
 	m.held[&b[0]] = e
 	m.order = append(m.order, e)
 	m.bytes += 4 * uint64(len(b))
+	m.sets++
 	return e
 }
 
@@ -319,7 +409,7 @@ func (m *SharedStore) add(k kvStoreKey, b []float32) *sharedPage {
 func (m *SharedStore) retire(e *sharedPage) {
 	m.unindex(e)
 	e.gone = true
-	if e.refs == 0 {
+	if e.free() {
 		m.forget(e)
 	}
 }
@@ -784,9 +874,11 @@ func (kc *kvCache) faultShared(li, n int, key string) error {
 	// byte moved.
 	if d := kc.dev(li); d != nil {
 		if kc.cardPage(li) == nil || !d.MapKV(kc.key(li), n, key, kc.mapEnd) {
+			kc.share.countCard(0, 2, 0)
 			return ErrNoPage
 		}
 		kc.mapped += 2
+		kc.share.countCard(2, 0, 0)
 		return nil
 	}
 	return kc.faultHost(li, n, key)
@@ -846,9 +938,59 @@ func (kc *kvCache) copyShared(s *kvPages, n int, k, v []float32) {
 	kc.fetched += 2
 }
 
+// parkShared lets go of every sealed page of a block on the CPU device that
+// the store holds, for a session parking: each is pinned in the store and
+// marked out, and Resume faults it back by its name (fault) and unpins it. A
+// page is held once either way; what goes is the session's hold on it. A
+// block on a card keeps its history where Park put it. It returns the pages
+// let go (a key and a value page each count).
+func (kc *kvCache) parkShared() int {
+	out := 0
+	for li := kc.lo; li < len(kc.layers); li++ {
+		s := &kc.layers[li]
+		if s.p == 0 || kc.dev(li) != nil {
+			continue
+		}
+		for n := 0; n < s.lastSealed; n++ {
+			if !s.isShared(n) || n >= s.mem.Len() || s.mem.K(n) == nil {
+				continue
+			}
+			k := kc.share.pin(s.mem.K(n))
+			if k == nil {
+				continue
+			}
+			v := k
+			if !s.latent {
+				if v = kc.share.pin(s.mem.V(n)); v == nil {
+					kc.share.unpin(k)
+					continue
+				}
+				kc.pins = append(kc.pins, v)
+			}
+			kc.pins = append(kc.pins, k)
+			s.unshare(n)
+			s.mem.Release(n, 0)
+			s.out[n] = true
+			kc.evicted += 2
+			out += 2
+		}
+	}
+	return out
+}
+
+// unpinAll lets go of what parkShared pinned.
+func (kc *kvCache) unpinAll() {
+	for i, e := range kc.pins {
+		kc.share.unpin(e)
+		kc.pins[i] = nil
+	}
+	kc.pins = kc.pins[:0]
+}
+
 // unshareAll drops every shared page's reference, for Close: the pool must
 // never take a page others read.
 func (kc *kvCache) unshareAll() {
+	kc.unpinAll()
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
 		for n := range s.shared {

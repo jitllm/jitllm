@@ -415,3 +415,41 @@ func TestKVPoolKeepsPagesAcrossAResize(t *testing.T) {
 		})
 	}
 }
+
+// TestMigratedHistoryCanGoHome holds a history sent up from the host to the
+// pages a submission's would be: a restored prefix waiting for its first step
+// is cold history, and a call short of room sends its full pages home rather
+// than refusing. Without the written mark the migration leaves, the call is
+// refused with every page held by a sequence that could give them back.
+func TestMigratedHistoryCanGoHome(t *testing.T) {
+	dev := &fakeDev{}
+	g, err := New([]Slot{{Dev: dev, Bytes: 1 << 30}}, WithDeviceTune(TuneOff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	d := g.devs[0]
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	const p, row = 64, 16
+	kp := newKVPool(p, 0)
+	d.kvp = kp
+	if err := d.addKVLayer(kp, 0, kvGeom{kvRow: row}, 1); err != nil {
+		t.Fatal(err)
+	}
+	l := kp.layers[0]
+	up, cur := seqID{2, 0}, seqID{1, 0}
+	k, v := make([]float32, 3*p*row), make([]float32, 3*p*row)
+	if err := d.pagedMigrate(up.sid, 0, 0, k, v, 3*p, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.shrinkKVLayer(kp, l); err != nil {
+		t.Fatal(err)
+	}
+	d.limit = d.used
+	if err := d.allocPages(cur.sid, kp, l, cur, 1); err != nil || len(l.home[up]) == 0 {
+		t.Fatalf("a call short of room beside a migrated history: %v, %d of its page(s) sent home, %d free",
+			err, len(l.home[up]), len(l.free))
+	}
+}

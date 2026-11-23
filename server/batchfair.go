@@ -206,10 +206,13 @@ func (lp *stepLoop) victims(r *row, need, room, page int) []*row {
 func (lp *stepLoop) parkRow(r *row) error {
 	// The next token is sampled from these logits after the resume; the
 	// instance's buffer behind them may be reused meanwhile.
-	r.held = append(r.held[:0], r.logits...)
-	r.logits = r.held
+	if r.logits != nil {
+		r.held = append(r.held[:0], r.logits...)
+		r.logits = r.held
+	}
 	if lp.parkDropsLogits {
 		clear(r.held)
+		r.tok = 0
 	}
 	before, t0 := lp.room(), time.Now()
 	if lp.parkFault != nil {

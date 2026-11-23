@@ -892,6 +892,13 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 				return err
 			}
 		}
+		// The positions sent up are written: their full pages may go home
+		// like any a submission wrote (evictable), or a restored history
+		// waiting for its first step holds the card against every other.
+		if kp.written == nil {
+			kp.written = map[seqID]int{}
+		}
+		kp.written[s] = max(kp.written[s], pos)
 		return nil
 	}
 	// widened is one of the pools' pages widened on the card a page at a

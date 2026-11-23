@@ -21,11 +21,21 @@ import (
 // A GGUF weight matrix has ne0 = input features (the contiguous, fastest-varying
 // axis) and ne1 = output features, so nrows is ne1 and k is ne0.
 func MatVec(out []float32, wt quant.Type, w []byte, x []float32, nrows, k int) error {
-	if len(out) < nrows {
-		return fmt.Errorf("oracle: MatVec: out has %d elements, need %d", len(out), nrows)
-	}
 	if len(x) != k {
 		return fmt.Errorf("oracle: MatVec: x has %d elements, need %d", len(x), k)
+	}
+	return MatMul(out, wt, w, x, 1, nrows, k)
+}
+
+// MatMul is MatVec for rows activation rows of k each: out[i*nrows+r] =
+// dot(row r of w, row i of x), every sum MatVec's, each weight row decoded
+// once for all of them.
+func MatMul(out []float32, wt quant.Type, w []byte, x []float32, rows, nrows, k int) error {
+	if len(out) < rows*nrows {
+		return fmt.Errorf("oracle: MatVec: out has %d elements, need %d", len(out), rows*nrows)
+	}
+	if len(x) < rows*k {
+		return fmt.Errorf("oracle: MatVec: x has %d elements, need %d", len(x), rows*k)
 	}
 	if uint64(k)%wt.BlockElems() != 0 {
 		return fmt.Errorf("oracle: MatVec: k=%d is not a multiple of %s's %d elements per block", k, wt, wt.BlockElems())
@@ -40,24 +50,30 @@ func MatVec(out []float32, wt quant.Type, w []byte, x []float32, nrows, k int) e
 		if err := quant.Dequant32(wt, w[lo:lo+rowBytes], row); err != nil {
 			return err
 		}
-		// Neumaier-compensated: ~2*eps independent of k, where a naive
-		// sequential f32 sum drifts ~sqrt(k)*eps and would force the NMSE bound
-		// open wide enough to hide real kernel bugs. It also keeps the oracle a
-		// different method (compensated scalar) from the kernel (vector FMA).
-		var sum, comp float32
-		for i, v := range row {
-			p := v * x[i]
-			t := sum + p
-			if abs32(sum) >= abs32(p) {
-				comp += (sum - t) + p // sum is larger: p's low bits are lost
-			} else {
-				comp += (p - t) + sum
-			}
-			sum = t
+		for i := range rows {
+			out[i*nrows+r] = dot(row, x[i*k:(i+1)*k])
 		}
-		out[r] = sum + comp
 	}
 	return nil
+}
+
+// dot is Neumaier-compensated: ~2*eps independent of k, where a naive
+// sequential f32 sum drifts ~sqrt(k)*eps and would force the NMSE bound open
+// wide enough to hide real kernel bugs. It also keeps the oracle a different
+// method (compensated scalar) from the kernel (vector FMA).
+func dot(row, x []float32) float32 {
+	var sum, comp float32
+	for i, v := range row {
+		p := v * x[i]
+		t := sum + p
+		if abs32(sum) >= abs32(p) {
+			comp += (sum - t) + p // sum is larger: p's low bits are lost
+		} else {
+			comp += (p - t) + sum
+		}
+		sum = t
+	}
+	return sum + comp
 }
 
 func abs32(x float32) float32 {
