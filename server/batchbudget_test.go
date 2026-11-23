@@ -68,24 +68,20 @@ func TestStepBudgetFollowsTheMeasurement(t *testing.T) {
 	if seen := drive(slow, 60, line(ms/2)); seen[len(seen)-1] < 20/2 {
 		t.Fatalf("cheap prompt tokens after slow ones left the budget %v, want it back within half of 20", seen)
 	}
-	// A fit whose intercept came out near zero, the budget at its floor:
-	// decode-only steps between the prompt's measure the decode step, and
-	// steps at 2 ms and 5 us a token are within their cost again, so the
-	// budget leaves the floor. Against the fitted intercept, every step reads
-	// as over its cost and it stays there.
+	// Decode-only steps of 2 ms, then a fit across noisy widths that left an
+	// intercept near zero and the budget at its floor, the steps that spread
+	// the widths decayed out of the fit: steps at 2 ms and 5 us a token are
+	// within their cost, and the budget leaves the floor. Against the fitted
+	// intercept every step reads as over its cost, and with the widths at the
+	// floor no fit comes again: it stays there (stories15M on a V100, 0.02 ms
+	// beside 2.7 ms decode-only steps, a round at half the rate).
 	stuck := newStepBudget(0, 512, 4)
-	stuck.fitted, stuck.icept, stuck.cur = true, float64(ms)/50, budgetFloor
-	var seen []int
-	for i := range 60 {
-		if i%4 == 0 {
-			stuck.observe(64, 0, 2*ms)
-			continue
-		}
-		p := stuck.tokens()
-		stuck.observe(8, p, 2*ms+time.Duration(p)*5*time.Microsecond)
-		seen = append(seen, stuck.tokens())
+	for range 8 {
+		stuck.observe(64, 0, 2*ms)
 	}
-	if seen[len(seen)-1] < 256 {
+	stuck.n, stuck.x, stuck.y, stuck.xx, stuck.xy = 0, 0, 0, 0, 0
+	stuck.fitted, stuck.icept, stuck.cur = true, float64(ms)/50, budgetFloor
+	if seen := drive(stuck, 60, func(p int) time.Duration { return 2*ms + time.Duration(p)*5*time.Microsecond }); seen[len(seen)-1] < 256 {
 		t.Fatalf("a near-zero intercept beside 2 ms decode-only steps held the budget %v, want it off the floor", seen)
 	}
 	if got := newStepBudget(16, 512, 2).tokens(); got != 16 {
