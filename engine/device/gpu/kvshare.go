@@ -157,7 +157,7 @@ func (g *devTier) cowPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, star
 		// one, not a copy.
 		fresh := j*P >= start
 		if len(l.free) < 1 && l.reclaimNamed(1) == 0 {
-			if err := g.growKVLayer(kp, l, l.n+1); err != nil && !g.evictForRoom(sid, kp, l, 1) {
+			if err := g.growFree(kp, l, 1); err != nil && !g.evictForRoom(sid, kp, l, 1) {
 				return err
 			}
 		}
