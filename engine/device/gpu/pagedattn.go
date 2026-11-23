@@ -323,7 +323,7 @@ func (g *devTier) allocAt(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, j int
 	if len(l.free) < 1 {
 		l.fence()
 	}
-	if len(l.free) < 1 && !g.keepNamed(kp, l, 1) {
+	if len(l.free) < 1 {
 		l.reclaimNamed(1)
 	}
 	if len(l.free) < 1 {
@@ -695,6 +695,7 @@ func (g *devTier) pagedLeave(li int, sid uint64, bl *layer) {
 		}
 	}
 	l.fence()
+	g.keepAhead(g.kvp, l)
 	if bl != nil {
 		// The seat goes with the session: pagedSeat recounts.
 		if err := g.pagedSeat(g.kvp, li, bl); err != nil {

@@ -113,6 +113,7 @@ func (g *devTier) prewarmKV(positions int) {
 	if !g.paged || kp == nil || positions <= 0 || kp.p <= 0 {
 		return
 	}
+	g.kvAhead = max(g.kvAhead, positions)
 	pages := (positions + kp.p - 1) / kp.p
 	for _, l := range kp.layers {
 		if len(l.free) >= pages {

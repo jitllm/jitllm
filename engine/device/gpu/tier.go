@@ -1611,6 +1611,9 @@ type devShared struct {
 	// kvPromise is the positions of history a scheduler has admitted rows
 	// for and they have not yet taken (GPU.PromiseKV, kvroom.go).
 	kvPromise int
+	// kvAhead is the positions PrewarmKV grew the pool ahead by, the most it
+	// was asked: the free pages keepAhead grows a layer back to.
+	kvAhead int
 	// kvTight says the driver refused the KV pool a growth the budget
 	// allowed: the card holds less than the budget says (other processes on
 	// it, or a budget set past what was free), so KVRoom counts growth only

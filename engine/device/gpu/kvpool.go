@@ -521,10 +521,9 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 	if len(l.free) < count {
 		l.fence()
 	}
-	// The prefix cache's unheld pages next, where the card cannot grow for
-	// them beside its scratches (keepNamed): they are a cache, and room for
+	// The prefix cache's unheld pages first: they are a cache, and room for
 	// them is the first a sequence takes back (kvshare.go).
-	if len(l.free) < count && !g.keepNamed(kp, l, count) {
+	if len(l.free) < count {
 		l.reclaimNamed(count - len(l.free))
 	}
 	if len(l.free) < count {
