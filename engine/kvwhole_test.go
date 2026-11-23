@@ -12,13 +12,15 @@ import (
 // pages that a session before it ran, restored by a session that runs its
 // last position (RestorePrefix, the step loop's restore), takes every
 // position but that one from the shared store, the last page at the fill
-// under it, and answers as it does alone -- on the CPU and with every block
-// on a card, after a session that decoded past its prompt and after one
-// that stopped at its prompt's end and closed (a server's request of one
-// token, which runs no step past its prompt and closes its session). Against a restore that gives up the page its bound falls inside, it
-// restores a page short; against one that stops at the chunk under the
-// bound, a chunk short. A copying store, which names no page by a fill it
-// was not sealed at, restores the whole pages under the bound.
+// under it, and answers as it does alone. It does so on the CPU and with
+// every block on a card, the card paging as the host does (a server's
+// geometry) and apart from it, after a session that decoded past its
+// prompt and after one that stopped at its prompt's end and closed (a
+// server's request of one token). Against a restore that gives up the page
+// its bound falls inside, it restores a page short; against one that stops
+// at the chunk under the bound, a chunk short. A copying store, which names
+// no page by a fill it was not sealed at, restores the whole pages under
+// the bound.
 func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 	const page, pages, gen = 32, 2, 8
 	m, err := model.Open(jlmOf(t, testmodels.Path(shareModels()[0])))
@@ -30,12 +32,10 @@ func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 	for j := range prompt {
 		prompt[j] = int32((300 + j*7) % m.Cfg.NVocab)
 	}
-	for _, card := range []bool{false, true} {
+	for _, where := range []string{"cpu", "card", "card-apart"} {
 		for _, first := range []int{gen, 0} {
-			name := "cpu"
-			if card {
-				name = "card"
-			}
+			card := where != "cpu"
+			name := where
 			if first == 0 {
 				name += "/stopped-and-closed"
 			}
@@ -44,7 +44,11 @@ func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 				var g *gpu.GPU
 				if card {
 					var err error
-					if g, err = openGPU(t); err != nil || g == nil {
+					var o []gpu.Option
+					if where == "card" {
+						o = append(o, gpu.WithConfig(func(c *gpu.Config) { c.KVPage = page }))
+					}
+					if g, err = openGPU(t, o...); err != nil || g == nil {
 						testmodels.Missing(t, "no card: %v", err)
 					}
 					t.Cleanup(func() { g.Close() })
