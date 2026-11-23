@@ -178,10 +178,23 @@ func TestComposedGPUExperts(t *testing.T) {
 						}
 						want := func(shift uint32) []float32 {
 							out := make([]float32, capacity*P*rows)
-							for s := range capacity * P {
-								e := (sels[s] + shift) % uint32(E)
-								if err := oracle.MatVec(out[s*rows:(s+1)*rows], typ, sheets[e], xs[s*K:(s+1)*K], rows, K); err != nil {
+							for e := range E {
+								var at []int
+								for s := range capacity * P {
+									if (sels[s]+shift)%uint32(E) == uint32(e) {
+										at = append(at, s)
+									}
+								}
+								xe := make([]float32, len(at)*K)
+								for j, s := range at {
+									copy(xe[j*K:], xs[s*K:(s+1)*K])
+								}
+								oe := make([]float32, len(at)*rows)
+								if err := oracle.MatMul(oe, typ, sheets[e], xe, len(at), rows, K); err != nil {
 									t.Fatal(err)
+								}
+								for j, s := range at {
+									copy(out[s*rows:(s+1)*rows], oe[j*rows:(j+1)*rows])
 								}
 							}
 							return out
