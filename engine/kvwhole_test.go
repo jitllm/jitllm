@@ -11,16 +11,15 @@ import (
 // TestARepeatedPromptOfWholePagesRestoresAllButItsLast: a prompt of whole
 // pages that a session before it ran, restored by a session that runs its
 // last position (RestorePrefix, the step loop's restore), takes every
-// position but that one from the shared store, the last page at the fill
-// under it, and answers as it does alone. It does so on the CPU and with
-// every block on a card, the card paging as the host does (a server's
-// geometry) and apart from it, after a session that decoded past its
-// prompt and after one that stopped at its prompt's end and closed (a
-// server's request of one token). Against a restore that gives up the page
-// its bound falls inside, it restores a page short; against one that stops
-// at the chunk under the bound, a chunk short. A copying store, which names
-// no page by a fill it was not sealed at, restores the whole pages under
-// the bound.
+// position but that one from the store, the last page at the fill under
+// it, and answers as it does alone. It does so from a shared store and from
+// a copying one (a server's memory cache), on the CPU and with every block
+// on a card, the card paging as the host does (a server's geometry) and
+// apart from it, after a session that decoded past its prompt and after one
+// that stopped at its prompt's end and closed (a server's request of one
+// token). Against a restore that gives up the page its bound falls inside,
+// it restores a page short; against one that stops at the chunk under the
+// bound, a chunk short.
 func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 	const page, pages, gen = 64, 2, 8
 	m, err := model.Open(jlmOf(t, testmodels.Path(shareModels()[1])))
@@ -104,25 +103,21 @@ func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 					return n, toks
 				}
 				_, solo := run(nil, false, gen)
-				st := NewSharedStore()
-				if n, _ := run(st, true, first); n != 0 {
-					t.Fatalf("the first session restored %d positions from an empty store", n)
+				for _, share := range []bool{true, false} {
+					var st KVStore = NewMemStore()
+					kind := "copying"
+					if share {
+						st, kind = NewSharedStore(), "shared"
+					}
+					if n, _ := run(st, share, first); n != 0 {
+						t.Fatalf("the first session restored %d positions from an empty %s store", n, kind)
+					}
+					n, toks := run(st, share, gen)
+					if n != len(prompt)-1 {
+						t.Fatalf("the repeated prompt of %d positions restored %d from the %s store, want %d", len(prompt), n, kind, len(prompt)-1)
+					}
+					sameTokens(t, "restored all but its last from the "+kind+" store, against solo", solo, toks)
 				}
-				n, toks := run(st, true, gen)
-				if n != len(prompt)-1 {
-					t.Fatalf("the repeated prompt of %d positions restored %d from the shared store, want %d", len(prompt), n, len(prompt)-1)
-				}
-				sameTokens(t, "restored all but its last against solo", solo, toks)
-				if card {
-					return
-				}
-				mem := NewMemStore()
-				run(mem, false, first)
-				n, toks = run(mem, false, gen)
-				if n != len(prompt)-page {
-					t.Fatalf("the repeated prompt restored %d positions from a copying store, want the %d of its whole pages under the bound", n, len(prompt)-page)
-				}
-				sameTokens(t, "copied against solo", solo, toks)
 			})
 		}
 	}

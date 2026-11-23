@@ -1956,19 +1956,28 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 		}
 		return ErrNoPage
 	}
+	row := s.pp / s.p
+	if fill >= s.p || fill <= 0 {
+		return ErrNoPage
+	}
+	s.extend(n)
+	if key := kc.wholeAt(s.p, n, n*s.p+fill); key != "" && kc.readPage(li, n, key, s.pp) == nil {
+		return nil
+	}
 	key := kc.pageKeyFill(li, n, fill)
 	if key == "" {
 		return ErrNoPage
 	}
-	s.extend(n)
+	// The read is the page's filled prefix; restore's coverage stops before
+	// the zero tail.
+	return kc.readPage(li, n, key, fill*row)
+}
+
+// readPage reads want elements of page n of layer li, stored under key,
+// into a whole page of the layer's, or reports a miss.
+func (kc *kvCache) readPage(li, n int, key string, want int) error {
+	s := &kc.layers[li]
 	s.setPage(n, nil, nil)
-	// The buffer is a whole page and the read is its filled prefix; restore's
-	// coverage stops before the zero tail.
-	row := s.pp / s.p
-	want := fill * row
-	if fill >= s.p || want <= 0 || want > s.pp {
-		return ErrNoPage
-	}
 	// Into a slot of the layer's arena where it has one, zero past the fill.
 	k, v := s.mem.Take()
 	switch {
@@ -2541,11 +2550,12 @@ const kvNames = 1 << 16
 // wholeAt is the key of page j of p positions where the last restore was
 // bounded inside it, at end, and this prompt holds the page whole; "" where
 // not. A page holds every fill of it, the positions past the fill this
-// prompt's own, never read and copied away before a write (kvPages.cow), so
-// a repeated prompt that gives its last position back takes its last page
-// at the bound rather than giving the page up.
+// prompt's own and never read before the session writes them (a copy, or
+// copied away first where shared, kvPages.cow), so a repeated prompt that
+// gives its last position back takes its last page at the bound rather than
+// giving the page up.
 func (kc *kvCache) wholeAt(p, j, end int) string {
-	if kc.share == nil || end != kc.cut || end%p == 0 || end/p != j {
+	if end != kc.cut || end%p == 0 || end/p != j {
 		return ""
 	}
 	return kc.pageKeyP(p, j)
