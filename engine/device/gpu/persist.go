@@ -313,6 +313,14 @@ func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
 	plan := g.persistFind(h, ps)
 	if plan == nil {
 		g.PersistUnplanned++
+		if g.PersistUnplannedWhy == "" {
+			// Once: a message built every token would be a heap object a token.
+			name := "?"
+			if src := ps.pend[0].src; src != nil {
+				name = src.Name
+			}
+			g.PersistUnplannedWhy = fmt.Sprintf("%d launches from %s", n, name)
+		}
 		return g.persistPlain(t, ps, 0, n)
 	}
 	for _, s := range plan.segs {

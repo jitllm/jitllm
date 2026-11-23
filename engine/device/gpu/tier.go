@@ -573,6 +573,9 @@ type Stats struct {
 	PersistRuns, PersistLaunches, PersistParts, PersistPhases, PersistCompiles, PersistFallbacks int
 	PersistDepLaunches, PersistDepTiles, PersistUnplanned                                        int
 	PersistWhy                                                                                   string
+	// PersistUnplannedWhy names the first unplanned run: its first kernel
+	// and its length.
+	PersistUnplannedWhy string
 	// RagHeadOne counts ragged steps whose head projected only the one row
 	// that wanted logits, by decode's own projection or the composer's head at
 	// one row, rather than a batched twin over every row (a prompt chunk's
@@ -972,6 +975,9 @@ func (s *Stats) add(o Stats) {
 	s.PersistUnplanned += o.PersistUnplanned
 	if o.PersistWhy != "" {
 		s.PersistWhy = o.PersistWhy
+	}
+	if o.PersistUnplannedWhy != "" {
+		s.PersistUnplannedWhy = o.PersistUnplannedWhy
 	}
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads

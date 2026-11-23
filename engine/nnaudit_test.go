@@ -73,6 +73,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 		heldAfter(t, g, last, &held)
 		last = src.name
 		t.Run(src.name, func(t *testing.T) {
+			persistPlanned(t, g)
 			path := src.path
 			if src.hf {
 				path = jlmOfSafetensors(t, src.path)

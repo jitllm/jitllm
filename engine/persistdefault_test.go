@@ -43,3 +43,18 @@ func openGPU(t testing.TB, opts ...gpu.Option) (*gpu.GPU, error) {
 	})
 	return g, err
 }
+
+// persistPlanned fails t, a model's subtest on a tier openGPU opened, if
+// under JITLLM_TEST_PERSIST any of its steps met launches no placement had
+// planned: the tier's own check sums every model it ran.
+func persistPlanned(t *testing.T, g *gpu.GPU) {
+	if os.Getenv("JITLLM_TEST_PERSIST") == "" {
+		return
+	}
+	_, _, _, before := g.PersistLaunched()
+	t.Cleanup(func() {
+		if _, _, _, n := g.PersistLaunched(); n != before {
+			t.Errorf("%d runs of a block's launches found no plan composed at the block's placement (first: %s)", n-before, g.Stats().PersistUnplannedWhy)
+		}
+	})
+}
