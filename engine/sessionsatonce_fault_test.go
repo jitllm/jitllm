@@ -25,7 +25,7 @@ func TestSessionsEvictAtOnceDiscriminates(t *testing.T) {
 		t.Run(spec, func(t *testing.T) {
 			var f gpu.Faults
 			f.SetPagedFault("stream")
-			a := evictAtOnce(t, m, spec, true, true, gpu.WithFaults(&f))
+			a := evictAtOnce(t, m, atOncePrompts(m), spec, true, true, gpu.WithFaults(&f))
 			t.Logf("violation: %d page(s) home, %d streamed passes, worst NMSE %.3e against each alone, bound %.3e (%.3e with no budget in one call)",
 				a.ev, a.passes, a.worst, a.bound(), a.ctl)
 			if a.ev == 0 || a.passes == 0 {

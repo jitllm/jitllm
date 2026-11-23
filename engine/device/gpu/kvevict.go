@@ -185,6 +185,14 @@ func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int)
 	if short <= 0 {
 		return true
 	}
+	// Each page sent home waits for the submissions in flight, letting g.mu
+	// go, and another session could take the ids freed before it: the wait
+	// comes first, and what is short is counted after it (growFree).
+	g.quiesce()
+	l.fence()
+	if short = want + through() - len(l.free); short <= 0 {
+		return true
+	}
 	if g.evictableIn(sid, kp, l) < short {
 		return false
 	}
@@ -216,6 +224,12 @@ func (g *devTier) evictForBytes(sid uint64, kp *kvPool, l *kvLayerPool, count in
 	}
 	short := count + through - len(l.free)
 	if short <= 0 {
+		return true
+	}
+	// As evictForRoom: the wait first, the shortfall after it.
+	g.quiesce()
+	l.fence()
+	if short = count + through - len(l.free); short <= 0 {
 		return true
 	}
 	keys := slices.Sorted(maps.Keys(kp.layers))
@@ -287,7 +301,7 @@ func (g *devTier) streamRoom(sid uint64) error {
 		return nil
 	}
 	return g.heldLayers(sid, func(li int, l *kvLayerPool) error {
-		if len(l.free) == 0 && kp.readsHome(l, 0) && g.growKVLayer(kp, l, l.n+1) != nil && !g.evictForRoom(sid, kp, l, 0) &&
+		if len(l.free) == 0 && kp.readsHome(l, 0) && g.growFree(kp, l, 1) != nil && !g.evictForRoom(sid, kp, l, 0) &&
 			!g.evictForBytes(sid, kp, l, 0) {
 			return fmt.Errorf("%w: block %d has no free page to stream evicted history through", ErrKVCapacity, li)
 		}
