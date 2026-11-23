@@ -125,6 +125,17 @@ func (s *TelemetryService) GetServerInfo(ctx context.Context, req *connect.Reque
 		OpenSessions:      int32(len(s.E.Sessions())),
 		Features:          Features(),
 	}
+	// The first answer builds the manifest and probes the devices; neither
+	// waits on the other.
+	type built struct {
+		m   capabilities.Manifest
+		err error
+	}
+	mc := make(chan built, 1)
+	go func() {
+		m, err := s.E.manifest()
+		mc <- built{m, err}
+	}()
 	if devs, err := s.E.Devices(false); err == nil {
 		for _, d := range devs {
 			if d.Available {
@@ -133,16 +144,17 @@ func (s *TelemetryService) GetServerInfo(ctx context.Context, req *connect.Reque
 			info.Devices = append(info.Devices, s.E.pbDevice(d))
 		}
 	}
-	m, err := s.E.manifest()
-	if err != nil {
-		return nil, connectErr(err)
+	b := <-mc
+	if b.err != nil {
+		return nil, connectErr(b.err)
 	}
+	m := b.m
 	m.ServerAPI = localserver.APIVersion
-	b, err := json.Marshal(m)
+	js, err := json.Marshal(m)
 	if err != nil {
 		return nil, connectErr(err)
 	}
-	info.CapabilitiesJson = string(b)
+	info.CapabilitiesJson = string(js)
 	return connect.NewResponse(&v1.GetServerInfoResponse{Info: info}), nil
 }
 

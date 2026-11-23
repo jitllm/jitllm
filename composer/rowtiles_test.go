@@ -327,10 +327,8 @@ func TestComposedGPURowTiles(t *testing.T) {
 					}
 					want := make([]float32, capacity*n)
 					if float || typ == quant.F32 {
-						for row := range capacity {
-							if err := oracle.MatVec(want[row*n:(row+1)*n], typ, w, x[row*k:(row+1)*k], n, k); err != nil {
-								t.Fatal(err)
-							}
+						if err := oracle.MatMul(want, typ, w, x, capacity, n, k); err != nil {
+							t.Fatal(err)
 						}
 					} else {
 						want = int8Projection(t, typ, w, x, n, k, 32, false)

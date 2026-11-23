@@ -96,10 +96,8 @@ func gateComposedCPUMatVec(t *testing.T, cpuOn cpuArm) {
 						ref = int8Row(x, win)
 					}
 					want := make([]float32, tokens*rows)
-					for tk := range tokens {
-						if err := oracle.MatVec(want[tk*rows:(tk+1)*rows], typ, w, ref[tk*k:(tk+1)*k], rows, k); err != nil {
-							t.Fatal(err)
-						}
+					if err := oracle.MatMul(want, typ, w, ref, tokens, rows, k); err != nil {
+						t.Fatal(err)
 					}
 					t.Logf("forming %s", name)
 					req := Request{

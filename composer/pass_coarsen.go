@@ -237,7 +237,9 @@ type coarse struct {
 	classes map[string]int
 	host    *Kernel
 	hostVal map[Operand]Store
-	err     error
+	// perRow is a host of one workgroup a row: unit r*P+q is row r's q.
+	perRow bool
+	err    error
 
 	// under is a guard's phase computed in it, the unit its iteration: the
 	// warps past the last unit skip the phase. exchanged is an exchange
@@ -276,42 +278,54 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool, out
 	for _, n := range members {
 		k.size += len(n.Nodes)
 	}
+	local := -1
 	if host != nil {
-		// The phase reads what the host's whole row wrote: one workgroup.
-		if host.Elements() != 1 || T > host.Group {
+		// The phase reads what the host's row wrote: one workgroup, or one
+		// workgroup a row of the members' rows, row r's units period r.
+		rows := host.Elements()
+		if rows != 1 && (len(host.Space) != 1 || rows != R) || T/rows > host.Group {
 			return nil, false
 		}
+		P := T / rows
 		k.m = host.clone()
 		k.m.Name = host.Name + "+quantized"
-		k.host, k.hostVal = host, map[Operand]Store{}
+		k.host, k.hostVal, k.perRow = host, map[Operand]Store{}, rows > 1
 		for _, s := range host.Stores {
 			if s.At >= 0 && !s.Barrier && !s.Run && host.Loops[s.At].Elem > 0 && s.Ax != nil {
 				k.hostVal[host.Bufs[s.Buf].Operand] = s
 			}
 		}
-		if warp > 0 && T%warp == 0 && host.Group%warp == 0 {
+		unit := func(j int) int {
+			if !k.perRow {
+				return j
+			}
+			local = j
+			row := k.m.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+			return k.m.bin(OpAdd, ir.U32, k.m.bin(OpMul, ir.U32, row, k.m.u32(P)), j)
+		}
+		if warp > 0 && P%warp == 0 && host.Group%warp == 0 {
 			// The units dealt over the workgroup in whole warps, and only a
 			// real one stores, so a window combines within a warp by its
 			// lanes. The phase is the guard's, the unit its iteration: the
 			// warps past the last unit skip it. Where it exchanges through
 			// workgroup slots every thread computes a unit, a surplus one the
 			// last, and the warps past the last unit hold copies.
-			sp := k.m.loop(T, -1)
+			sp := k.m.loop(P, -1)
 			k.m.Loops[sp].Spread = true
 			it := k.m.add(Node{Op: OpIter, At: sp, Type: ir.U32})
 			k.guard = k.m.loop(1, sp)
-			in := k.m.add(Node{Op: OpLess, Type: ir.Pred, A: it, B: k.m.u32(T)})
+			in := k.m.add(Node{Op: OpLess, Type: ir.Pred, A: it, B: k.m.u32(P)})
 			count := k.m.add(Node{Op: OpSelect, Type: ir.U32, A: in, B: k.m.u32(1), C: k.m.u32(0)})
 			k.m.Loops[k.guard].Count, k.m.Loops[k.guard].Kept = count+1, true
 			k.under = under
 			if under {
-				k.u = k.m.bin(OpAdd, ir.U32, it, k.m.add(Node{Op: OpIter, At: k.guard, Type: ir.U32}))
+				k.u = unit(k.m.bin(OpAdd, ir.U32, it, k.m.add(Node{Op: OpIter, At: k.guard, Type: ir.U32})))
 			} else {
-				k.u = k.m.bin(OpMin, ir.U32, it, k.m.u32(T-1))
+				k.u = unit(k.m.bin(OpMin, ir.U32, it, k.m.u32(P-1)))
 			}
 		} else {
 			th := k.m.add(Node{Op: OpThread, Type: ir.U32})
-			k.u = k.m.bin(OpMin, ir.U32, k.m.bin(OpAdd, ir.U32, th, k.m.u32(0)), k.m.u32(T-1))
+			k.u = unit(k.m.bin(OpMin, ir.U32, k.m.bin(OpAdd, ir.U32, th, k.m.u32(0)), k.m.u32(P-1)))
 		}
 	} else {
 		// The widest workgroup, in whole warps, the units fill: no thread is
@@ -336,7 +350,10 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool, out
 			k.m.Capacity = 0
 		}
 	}
-	k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})
+	k.local = local
+	if local < 0 {
+		k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})
+	}
 	for _, n := range members {
 		for _, s := range n.Stores {
 			if o := n.Bufs[s.Buf].Operand; s.Barrier || s.Run || o.Temp && !outside[o] || k.err != nil {
@@ -440,6 +457,12 @@ func (k *coarse) read(n *Kernel, i int, nd Node, coords []int) (int, bool) {
 		}
 		jc := k.host.Loops[s.At].Elem - 1
 		row := s.Ax[0]
+		if k.perRow && (k.host.Nodes[row].Op != OpCoord || k.host.Nodes[row].A != 0 || !k.unitRow(ax[0])) {
+			if k.err == nil {
+				k.err = fmt.Errorf("%s, which the host stores a row a workgroup, read at another row", o.Name)
+			}
+			return 0, true
+		}
 		sub := map[int]int{jc: ax[len(ax)-1]}
 		if h := k.host.Nodes[row]; h.Op == OpCoord && k.m.Nodes[ax[0]].Op == OpConst {
 			sub[row] = ax[0]
@@ -619,6 +642,23 @@ func (k *coarse) whole(v *uval) bool {
 	top := uint64(v.c) * uint64(k.R-1)
 	for _, x := range v.a {
 		if uint64(x)+top > 1<<32-1 {
+			return false
+		}
+	}
+	return true
+}
+
+// unitRow says node i is each unit's row, t/P at unit t.
+func (k *coarse) unitRow(i int) bool {
+	v, ok := k.value(i)
+	if !ok {
+		return false
+	}
+	if v.full == nil {
+		return v.c == 1 && !slices.ContainsFunc(v.a, func(x uint32) bool { return x != 0 })
+	}
+	for t, x := range v.full {
+		if x != uint32(t/k.P) {
 			return false
 		}
 	}
@@ -1045,7 +1085,7 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	// would land on the last output beside the real one.
 	whole := k.T%m.Group == 0
 	if k.host != nil {
-		whole = k.T == m.Group || k.guard >= 0
+		whole = k.T == m.Group || k.perRow && k.P == m.Group || k.guard >= 0
 	}
 	if whole && k.warp > 0 && m.Group%k.warp == 0 && slots&(slots-1) == 0 && k.lanes%slots == 0 {
 		v := acc
