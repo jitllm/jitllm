@@ -209,7 +209,13 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 		vals[biasIn] = f32w(bias)
 	}
 	if c.rowSinks {
-		vals[sinkIn] = f32w(rnd(capRows * heads))
+		// Sinks near e^4 take a share of a hundred keys' mass a zeroed sink
+		// cannot hide.
+		sk := rnd(capRows * heads)
+		for i := range sk {
+			sk[i] = 4 + sk[i]
+		}
+		vals[sinkIn] = f32w(sk)
 	}
 	base := map[string][]uint32{"rows.n": {uint32(R)}, "pages": pages, "kv.k": kpool, "kv.v": vpool, "q.off": make([]uint32, capRows*4)}
 
