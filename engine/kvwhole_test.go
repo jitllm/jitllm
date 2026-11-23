@@ -14,8 +14,8 @@ import (
 // position but that one from the shared store, the last page at the fill
 // under it, and answers as it does alone -- on the CPU and with every block
 // on a card, after a session that decoded past its prompt and after one
-// that stopped at its prompt's end (a reply of one token runs no step past
-// it). Against a restore that gives up the page its bound falls inside, it
+// that stopped at its prompt's end and closed (a server's request of one
+// token, which runs no step past its prompt and closes its session). Against a restore that gives up the page its bound falls inside, it
 // restores a page short; against one that stops at the chunk under the
 // bound, a chunk short. A copying store, which names no page by a fill it
 // was not sealed at, restores the whole pages under the bound.
@@ -37,7 +37,7 @@ func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 				name = "card"
 			}
 			if first == 0 {
-				name += "/stopped-at-the-prompt"
+				name += "/stopped-and-closed"
 			}
 			t.Run(name, func(t *testing.T) {
 				opts := []Option{sharedCPU(t), withKVPage(page)}
@@ -52,7 +52,11 @@ func TestARepeatedPromptOfWholePagesRestoresAllButItsLast(t *testing.T) {
 				run := func(store KVStore, share bool, steps int) (int, []int32) {
 					t.Helper()
 					s := testInstance(t, m, len(prompt)+gen+16, opts...)
-					t.Cleanup(func() { s.Close() })
+					if steps == 0 {
+						defer s.Close()
+					} else {
+						t.Cleanup(func() { s.Close() })
+					}
 					if g != nil {
 						if err := s.SetDeviceLayers(g, -1); err != nil {
 							t.Fatal(err)
