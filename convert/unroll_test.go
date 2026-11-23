@@ -78,3 +78,30 @@ func TestUnrollStatesALoop(t *testing.T) {
 		t.Error("an unroll naming layer 0.5 was taken")
 	}
 }
+
+// TestLoopEvaluates holds loop() to the order a looped model's blocks run its
+// layers in, and refuses a loop outside the model or of no pass.
+func TestLoopEvaluates(t *testing.T) {
+	env := mjEnv(map[string]any{"n": 8.0})
+	x, err := parseExpr("loop(n, 2, 6, 2)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := evalMJ(x, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := exprInts("loop", v)
+	if err != nil || !slices.Equal(got, []int{0, 1, 2, 3, 4, 5, 2, 3, 4, 5, 6, 7}) {
+		t.Fatalf("loop(8, 2, 6, 2) is %v (%v)", got, err)
+	}
+	for _, bad := range []string{"loop(n, 6, 2, 2)", "loop(n, 2, 9, 2)", "loop(n, 2, 6, 0)"} {
+		x, err := parseExpr(bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, err := evalMJ(x, env); err == nil {
+			t.Errorf("%s evaluated to %v", bad, v)
+		}
+	}
+}
