@@ -890,6 +890,31 @@ func (cw convWindow) slot(x *exprs, j, w int) int {
 	return x.op(OpAdd, ir.U32, x.recSlot(j, w, cw.stride), x.u(uint32(cw.off)))
 }
 
+// rowTapGroup is the channels sharing one group of a state convolution's
+// per-row taps (In[1]: each row's groups' Taps taps side by side, in the
+// static taps' order), 0 where the op has none.
+func rowTapGroup(o graph.Op, c *Context, C, T int) (int, error) {
+	if len(o.In) < 2 {
+		return 0, nil
+	}
+	w := c.width(o.In[1])
+	if w < T || w%T != 0 || C%(w/T) != 0 {
+		return 0, fmt.Errorf("per-row taps %d wide for %d taps over %d channels", w, T, C)
+	}
+	return C / (w / T), nil
+}
+
+// rowTap is tap t of channel ch at row r: the static tap v plus the row's
+// tap t of the channel's group (operand 3), where the op has per-row taps.
+func rowTap(x *exprs, v, gw, R, C, T, r, ch, t int) int {
+	if gw == 0 {
+		return v
+	}
+	U := ir.U32
+	at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, ch, x.u(uint32(gw))), x.u(uint32(T))), x.u(uint32(t)))
+	return x.op(OpAdd, ir.F32, v, x.at(3, []int{R, C / gw * T}, r, at))
+}
+
 // decomposeStateConv is a causal depthwise convolution over the part's
 // window state (Taps-1 rows of the channels, Dil times as many where the
 // taps are dilated): each channel's row and window against its taps, the
@@ -897,7 +922,7 @@ func (cw convWindow) slot(x *exprs, j, w int) int {
 // the window less its oldest row and with the row, into a scratch row and
 // to the slot written, so no kernel reads the window while writing it.
 func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows < 1 {
+	if len(o.In) < 1 || len(o.In) > 2 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows < 1 {
 		return nil, fmt.Errorf("a state convolution of %d operands over %d rows", len(o.In), c.Step.Rows)
 	}
 	if c.Step.Rows > 1 || o.Attr.Keeps {
@@ -907,6 +932,10 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	C, T := c.width(o.In[0]), o.Attr.Taps
 	if T < 2 || o.Weight[0].K != T || o.Weight[0].Rows != C {
 		return nil, fmt.Errorf("a state convolution of %d taps over %d channels", T, C)
+	}
+	gw, err := rowTapGroup(o, c, C, T)
+	if err != nil {
+		return nil, err
 	}
 	wo, err := c.weight(o.Weight[0])
 	if err != nil {
@@ -928,10 +957,13 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	ch := x.coord(1)
 	tapIn := []Operand{in, cw.in, TableRecRows.op()}
+	if gw > 0 {
+		tapIn = append(tapIn, c.value(o.In[1]))
+	}
 	facts := Facts{Extents: map[int]int{1: cw.extent, 2: 3}}
 	tap := func(t int) int {
 		v, _ := weightElement(&x, wo, C, T, &tapIn, &facts, ch, x.u(uint32(t)))
-		return v
+		return rowTap(&x, v, gw, 1, C, T, x.coord(0), ch, t)
 	}
 	base := cw.slot(&x, 2, 1)
 	acc := x.op(OpMul, F, x.at(0, []int{1, C}, x.coord(0), ch), tap(T-1))
@@ -978,6 +1010,10 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 	R, C, T := c.Step.Rows, c.width(o.In[0]), o.Attr.Taps
 	if T < 2 || o.Weight[0].K != T || o.Weight[0].Rows != C {
 		return nil, fmt.Errorf("a state convolution of %d taps over %d channels", T, C)
+	}
+	gw, err := rowTapGroup(o, c, C, T)
+	if err != nil {
+		return nil, err
 	}
 	wo, err := c.weight(o.Weight[0])
 	if err != nil {
@@ -1027,6 +1063,9 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, ch := x.coord(0), x.coord(1)
 	tapIn := []Operand{src, cw.in, TableRecRows.op()}
+	if gw > 0 {
+		tapIn = append(tapIn, c.value(o.In[1]))
+	}
 	facts := Facts{Extents: maps.Clone(ext)}
 	n := x.load(desc, x.u(0))
 	rr := x.op(OpMin, U, r, x.op(OpSub, U, x.op(OpMax, U, n, x.u(1)), x.u(1)))
@@ -1042,6 +1081,7 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 		if err != nil {
 			return nil, err
 		}
+		tap = rowTap(&x, tap, gw, R, C, T, rr, ch, t)
 		v := x.op(OpMul, F, value(&x, a, x.op(OpSub, U, p, x.u(uint32((T-1-t)*D))), ch), tap)
 		if acc < 0 {
 			acc = v
