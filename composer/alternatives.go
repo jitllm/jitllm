@@ -78,7 +78,12 @@ type band struct {
 // the least costly of the vector form at each tile of rows up to RowTiles'
 // most, ks' form and the profile's matrix tiles. The bands run up from one
 // row: the first call ks' own form is the least costly at ends them, and a
-// form met again after another starts none.
+// form met again after another starts none. The matrix forms are priced
+// here by their rounds alone, not floored at the weight's read as the
+// Matrix pass prices them: the vector form's price per row is a fit that
+// does not count a tile's loads, and against the floor it takes calls its
+// rows' products bind (an output head's 4 rows at Q6_K ran 1061 us in it
+// against the matrix unit's 720 on a V100).
 func (r *Registry) bands(ks []*Kernel, req Request) []band {
 	d, R := req.Device, req.Step.Rows
 	var ms []*Kernel
@@ -107,7 +112,7 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 			if k.Cut.Most > 1 {
 				s = k.Cut.Of(rows)
 			}
-			c += k.price.p.cost(rows, k.Matrix[0], k.Matrix[1], s, k.price.depth, d)
+			c += k.price.p.cost(rows, k.Matrix[0], k.Matrix[1], s, k.price.depth, 0, d)
 		}
 		return c
 	}
@@ -116,9 +121,9 @@ func (r *Registry) bands(ks []*Kernel, req Request) []band {
 		for _, k := range ms {
 			q := k.price.p.with(tile)
 			n, kk := k.Matrix[0], k.Matrix[1]
-			least := q.cost(rows, n, kk, 1, k.price.depth, d)
+			least := q.cost(rows, n, kk, 1, k.price.depth, 0, d)
 			for s := 2; s <= R/tile.Rows && kk%(s*k.price.depth) == 0 && kk/s >= 2*k.price.depth; s *= 2 {
-				least = min(least, q.cost(rows, n, kk, s, k.price.depth, d))
+				least = min(least, q.cost(rows, n, kk, s, k.price.depth, 0, d))
 			}
 			c += least
 		}

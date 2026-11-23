@@ -141,3 +141,53 @@ func TestMatrixBandsFollowTheModel(t *testing.T) {
 		}
 	}
 }
+
+// TestMatrixFewRowsPayTheWeightsRead forms an output head's projection,
+// 128256 outputs of 4096 at Q6_K, at a 130-row step for a V100's stated
+// units, and holds a call of few rows on the matrix unit to k uncut: its grid
+// is as wide as the weight, so cutting k shortens rounds the weight's read
+// already outlasts and adds only the combine. The matrix unit must run those
+// calls, and every call launches one form's projection.
+func TestMatrixFewRowsPayTheWeightsRead(t *testing.T) {
+	dev := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Shared: 96 << 10, Matrix: [3]int{16, 16, 16}}
+	b := graph.New()
+	in := b.In("x", 4096)
+	b.Out(b.MatVec(in, jlm.RoleOutput, 128256))
+	_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeQ6S},
+		Step: composer.Step{Rows: 130, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows := 1; rows <= 130; rows++ {
+		vec, mat, combine := 0, 0, ""
+		for _, c := range codes {
+			if !c.Runs(rows) {
+				continue
+			}
+			if strings.Contains(c.Name, "combine") {
+				combine = c.Name
+			}
+			if !strings.Contains(c.Name, "reduce") || strings.Contains(c.Name, "combine") ||
+				strings.Contains(c.Name, "halves") || strings.Contains(c.Name, "rowscale") {
+				continue
+			}
+			if c.Matrix == [2]int{} {
+				vec++
+			} else {
+				mat++
+			}
+		}
+		if vec > 0 && mat > 0 || vec+mat == 0 {
+			t.Fatalf("%d rows: %d vector and %d matrix projection codes launch, want one form's", rows, vec, mat)
+		}
+		if rows > 16 {
+			continue
+		}
+		if mat == 0 {
+			t.Fatalf("a call of %d rows of the head runs no matrix code: the case the gate covers was not formed", rows)
+		}
+		if combine != "" {
+			t.Fatalf("a call of %d rows of the head cuts k (%s runs): its rounds were priced below the weight's read", rows, combine)
+		}
+	}
+}

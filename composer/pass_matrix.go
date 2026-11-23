@@ -114,29 +114,38 @@ func (p Matrix) chosen(k *Kernel, d Device) Matrix {
 // segments: each unit runs its share of the workgroups in rounds of those it
 // holds at once, which share its matrix unit, a round paying Latency besides
 // their products and the weight rows they decode, a k; and a cut's combine
-// its launch and the planes' words, written and read, and the sums'.
-func (p Matrix) cost(R, N, K, S, depth int, d Device) int {
+// its launch and the planes' words, written and read, and the sums'. The
+// rounds take no less than a read of the weight, of bits a sixteenth of a
+// bit an element (weightBits), each row tile's.
+func (p Matrix) cost(R, N, K, S, depth, bits int, d Device) int {
 	groups := (R + p.Rows - 1) / p.Rows * ((N + p.Cols - 1) / p.Cols) * S
 	share := (groups + d.Units - 1) / d.Units
 	held := min(share, p.resident(depth, d))
 	c := (share + held - 1) / held * (p.Latency + held*(p.Rows*p.Cols+p.Decode*p.Cols)) * (K / S)
+	c = max(c, (R+p.Rows-1)/p.Rows*p.reads(p.Vector[0], N, K, bits, d))
 	if S > 1 {
 		c += p.Launch + p.Plane*(2*S+1)*R*N/d.Units
 	}
 	return c
 }
 
+// reads is a pass over an N by K weight of bits at per, the model's price
+// of each element's read on a unit's share.
+func (p Matrix) reads(per, N, K, bits int, d Device) int {
+	return per * (N * K / d.Units) * bits / 256
+}
+
 // splits is the segments k of k is cut in at p, and the model's cost: the
 // tile's where it states them, else the least costly of the powers of two
 // leaving each segment two trips or more.
 func (p Matrix) splits(k *Kernel, depth int, d Device) (int, int) {
-	R, N, K := k.Space[0], k.Space[1], k.Loops[0].Trip
+	R, N, K, b := k.Space[0], k.Space[1], k.Loops[0].Trip, weightBits(k)
 	if p.Split > 0 {
-		return p.Split, p.cost(R, N, K, p.Split, depth, d)
+		return p.Split, p.cost(R, N, K, p.Split, depth, b, d)
 	}
-	best, least := 1, p.cost(R, N, K, 1, depth, d)
+	best, least := 1, p.cost(R, N, K, 1, depth, b, d)
 	for S := 2; p.Plane > 0 && K%(depth*S) == 0 && K/(depth*S) >= 2; S *= 2 {
-		if c := p.cost(R, N, K, S, depth, d); c < least {
+		if c := p.cost(R, N, K, S, depth, b, d); c < least {
 			best, least = S, c
 		}
 	}
@@ -148,11 +157,11 @@ func (p Matrix) splits(k *Kernel, depth int, d Device) (int, int) {
 // costly at one row tile, held to the form's row tiles, whose planes the
 // segments of fewer tiles share (Cut).
 func (p Matrix) launchSplits(k *Kernel, depth int, d Device) int {
-	R, N, K := k.Space[0], k.Space[1], k.Loops[0].Trip
+	R, N, K, b := k.Space[0], k.Space[1], k.Loops[0].Trip, weightBits(k)
 	units := (R + p.Rows - 1) / p.Rows
-	best, least := 1, p.cost(p.Rows, N, K, 1, depth, d)
+	best, least := 1, p.cost(p.Rows, N, K, 1, depth, b, d)
 	for S := 2; p.Plane > 0 && S <= units && K%(depth*S) == 0 && K/(depth*S) >= 2; S *= 2 {
-		if c := p.cost(p.Rows, N, K, S, depth, d); c < least {
+		if c := p.cost(p.Rows, N, K, S, depth, b, d); c < least {
 			best, least = S, c
 		}
 	}
