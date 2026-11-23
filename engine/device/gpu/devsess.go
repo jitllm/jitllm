@@ -521,6 +521,50 @@ func (g *devTier) takeLane(ds *devSess) *lane {
 	}
 }
 
+// BuildLanes makes every device hold n lanes, building the clones past lane0
+// now, at placement, rather than at the step where sessions first meet on a
+// card. A device whose budget has no room for another keeps the lanes it has.
+func (g *GPU) BuildLanes(n int) {
+	for _, d := range g.devs {
+		d.mu.Lock()
+		var held []*lane
+		for range n {
+			l := d.freeLane(&devSess{})
+			if l == nil {
+				break
+			}
+			held = append(held, l)
+		}
+		for _, l := range held {
+			l.held = false
+		}
+		d.idle.Broadcast()
+		d.mu.Unlock()
+	}
+}
+
+// HoldLane0 holds every device's lane0 until release, so the calls made
+// meanwhile run on the clones BuildLanes made: a session's first step in a
+// lane records its launches there, at a step of the caller's choosing.
+func (g *GPU) HoldLane0() (release func()) {
+	for _, d := range g.devs {
+		d.mu.Lock()
+		for d.lane0.held {
+			d.idle.Wait()
+		}
+		d.lane0.held = true
+		d.mu.Unlock()
+	}
+	return func() {
+		for _, d := range g.devs {
+			d.mu.Lock()
+			d.lane0.held = false
+			d.idle.Broadcast()
+			d.mu.Unlock()
+		}
+	}
+}
+
 // freeLane holds a lane for ds if one is free or can be built, nil if not.
 // Callers hold g.mu.
 func (g *devTier) freeLane(ds *devSess) *lane {
