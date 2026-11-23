@@ -491,6 +491,8 @@ type kvCache struct {
 	keys []int
 	// chunked is how far aliasChunks has named this sequence's shared pages.
 	chunked int
+	// cut is the position the last restore was bounded at (wholeAt).
+	cut int
 	// pins are the store's pages a parked sharing session let go of and
 	// holds for its Resume (parkShared).
 	pins []*sharedPage
@@ -997,9 +999,10 @@ func (s *Session) CacheNamespace() string { return s.kv.ns }
 // lastSealed would stop seal() offering the rewritten pages and the store
 // would keep serving stale ones. A linear layer's summary is restored
 // separately (Instance.faultRecurrentAt).
-// A hybrid restores no further than limit: its summaries are at given
-// positions and cannot be shortened, so it asks for the points at or under
-// it rather than clamping a longer prefix (restoreKV).
+// It restores no further than limit: whole pages under it, and the page it
+// falls inside at the longest fill stored (a page this prompt holds whole
+// at limit itself, wholeAt). A hybrid's summaries are at given positions
+// and cannot be shortened, so it asks for the points at or under limit.
 func (kc *kvCache) restore(limit int) (int, int, error) {
 	if _, ok := kc.store.(NoStore); ok {
 		return 0, 0, nil
@@ -1023,6 +1026,7 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 			return 0, 0, nil
 		}
 	}
+	kc.cut = min(limit, len(kc.seq))
 	best := -1
 	kc.apartWalked = false
 	for li := kc.lo; li < len(kc.layers); li++ {
@@ -1042,9 +1046,10 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 			// coverage is known.
 			continue
 		}
+		// Whole pages up to the limit; the page it falls inside is the tail's.
 		n := 0
 		for {
-			if kc.recurrent && (n+1)*pg.p > limit {
+			if (n+1)*pg.p > limit {
 				break
 			}
 			err := kc.fault(li, n)
@@ -1081,10 +1086,7 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 		if probe >= 0 {
 			pg := &kc.layers[probe]
 			n := best / pg.p
-			max := len(kc.seq) - n*pg.p
-			if kc.recurrent {
-				max = min(len(kc.seq), limit) - n*pg.p
-			}
+			max := min(len(kc.seq), limit) - n*pg.p
 			if max > pg.p-1 {
 				max = pg.p - 1
 			}
@@ -1667,32 +1669,13 @@ func (s *Instance) syncKVFromDevice() error {
 // token to actually run: a prompt entirely in cache still has to produce
 // logits, and Prefill of nothing is an error.
 func (s *Instance) restoreKV(max int) (int, error) {
-	n, tail, err := s.kv.restore(max)
+	n, _, err := s.kv.restore(max)
 	if err != nil {
 		return 0, err
 	}
+	// restore stops at max: whole pages under it, and the page it falls
+	// inside at the longest fill there is.
 	cover := n
-	// Clamp in positions for a partial page and in whole pages otherwise. A
-	// hybrid gives the tail up rather than clamping it: its recurrent summary
-	// covers exactly the positions it was taken after, and resuming earlier
-	// would apply a token twice.
-	if n > max {
-		if tail > 0 && s.recurrent() && s.recurrentBoundary() > 0 {
-			s.kv.dropTail(n)
-			n, tail = n-tail, 0
-		}
-		if n > max {
-			if tail > 0 {
-				n = max
-			} else {
-				for li := s.kv.lo; li < len(s.kv.layers); li++ {
-					if p := s.kv.layers[li].p; p > 0 {
-						n = (max / p) * p
-					}
-				}
-			}
-		}
-	}
 	if n <= 0 {
 		return 0, nil
 	}
@@ -1947,6 +1930,9 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 		// (kvPages.cow).
 		s.extend(n)
 		kc.mapEnd = n*s.p + fill
+		if key := kc.wholeAt(s.p, n, n*s.p+fill); key != "" && kc.faultShared(li, n, key) == nil {
+			return nil
+		}
 		// A fill on a chunk boundary is named by its chunk wherever its fill
 		// name was given (retireTail and aliasChunks name every chunk a
 		// page holds), and the chunk's key is kept (chunkKey) where the
@@ -2544,6 +2530,19 @@ func (kc *kvCache) digestName(x hash.Hash) string {
 
 // kvNames bounds the keys a cache keeps named: past it they are named again.
 const kvNames = 1 << 16
+
+// wholeAt is the key of page j of p positions where the last restore was
+// bounded inside it, at end, and this prompt holds the page whole; "" where
+// not. A page holds every fill of it, the positions past the fill this
+// prompt's own, never read and copied away before a write (kvPages.cow), so
+// a repeated prompt that gives its last position back takes its last page
+// at the bound rather than giving the page up.
+func (kc *kvCache) wholeAt(p, j, end int) string {
+	if kc.share == nil || end != kc.cut || end%p == 0 || end/p != j {
+		return ""
+	}
+	return kc.pageKeyP(p, j)
+}
 
 // chunkKey names the kvChunk of history that ends at position end, by every
 // id before end: a page size no layer has (-kvChunk) keeps it apart from

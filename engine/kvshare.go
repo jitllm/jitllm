@@ -789,7 +789,7 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 			first = li
 		}
 		n := 0
-		for !kc.recurrent || (n+1)*pc <= limit {
+		for (n+1)*pc <= limit {
 			key := kc.pageKeyP(pc, n)
 			if key == "" || !d.MapKV(kc.key(li), n, key, (n+1)*pc) {
 				break
@@ -806,14 +806,17 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 	tail := 0
 	if !kc.recurrent && best < len(kc.seq) {
 		j := best / pc
-		kc.probes = appendProbes(kc.probes, min(len(kc.seq)-best, pc-1), kvChunk)
+		kc.probes = appendProbes(kc.probes, min(min(len(kc.seq), limit)-best, pc-1), kvChunk)
 		for _, f := range kc.probes {
-			key := kc.pageKeyFillP(pc, j, f)
-			if f%kvChunk == 0 && pc%kvChunk == 0 {
-				key = kc.chunkKey(best + f)
-			}
+			key := kc.wholeAt(pc, j, best+f)
 			if key == "" || !kc.dev(first).MapKV(kc.key(first), j, key, best+f) {
-				continue
+				key = kc.pageKeyFillP(pc, j, f)
+				if f%kvChunk == 0 && pc%kvChunk == 0 {
+					key = kc.chunkKey(best + f)
+				}
+				if key == "" || !kc.dev(first).MapKV(kc.key(first), j, key, best+f) {
+					continue
+				}
 			}
 			tail = f
 			for li := first + 1; li < len(kc.layers) && tail > 0; li++ {
@@ -858,6 +861,9 @@ func (kc *kvCache) mapApart(li, n, cover int) bool {
 			key = kc.chunkKey(cover)
 		default:
 			key = kc.pageKeyFillP(pc, j, fill)
+		}
+		if w := kc.wholeAt(pc, j, cover); w != "" && d.MapKV(kc.key(li), j, w, n) {
+			continue
 		}
 		if key == "" || !d.MapKV(kc.key(li), j, key, n) {
 			return false
