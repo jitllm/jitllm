@@ -21,35 +21,46 @@ var tensorNamesFS embed.FS
 // tensor by (Role, Block, Index), so a conversion reads it once. An
 // unrecognised name is a refusal, not a skip, because a tensor dropped at
 // conversion is a model that loads and is wrong.
-type tensorNames map[string]jlm.Role
+type tensorNames struct {
+	vocab map[string]jlm.Role
+	// roles is the container's own name for each role it defines
+	// (rolesByName), read once with the vocabulary: building it walks
+	// every code.
+	roles map[string]jlm.Role
+}
 
 // readTensorNames reads tensornames.json, refusing a role the container does
 // not name.
 func readTensorNames() (tensorNames, error) {
 	b, err := tensorNamesFS.ReadFile("tensornames.json")
 	if err != nil {
-		return nil, err
+		return tensorNames{}, err
 	}
 	var named map[string]string
 	if err := json.Unmarshal(b, &named); err != nil {
-		return nil, fmt.Errorf("convert: tensornames.json: %w", err)
+		return tensorNames{}, fmt.Errorf("convert: tensornames.json: %w", err)
 	}
-	roles := rolesByName()
-	v := make(tensorNames, len(named))
+	v := tensorNames{vocab: make(map[string]jlm.Role, len(named)), roles: rolesByName()}
 	for n, rn := range named {
-		r, ok := roles[rn]
+		r, ok := v.roles[rn]
 		if !ok {
-			return nil, fmt.Errorf("convert: tensornames.json: %q is role %q, which the container does not know", n, rn)
+			return tensorNames{}, fmt.Errorf("convert: tensornames.json: %q is role %q, which the container does not know", n, rn)
 		}
-		v[n] = r
+		v.vocab[n] = r
 	}
 	return v, nil
+}
+
+// role is name's role by the container's own name for it.
+func (v tensorNames) role(name string) (jlm.Role, bool) {
+	r, ok := v.roles[name]
+	return r, ok
 }
 
 // roleOf is name's role: the vocabulary's, a fused input projection's, or a
 // decision head's.
 func (v tensorNames) roleOf(name string) (jlm.Role, bool) {
-	if r, ok := v[name]; ok {
+	if r, ok := v.vocab[name]; ok {
 		return r, true
 	}
 	// A fused input projection is split at conversion (unfuseScan,

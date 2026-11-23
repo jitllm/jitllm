@@ -64,7 +64,7 @@ func TestTensorNamesAreOneVocabulary(t *testing.T) {
 		t.Errorf("%q is named more than once", n)
 	}
 	v := testNames(t)
-	if len(v) == 0 {
+	if len(v.vocab) == 0 {
 		t.Fatal("the vocabulary holds no name: this gate proved nothing")
 	}
 	ruled := []string{"ssm_in.weight", "shortconv.in_proj.weight"}
@@ -74,9 +74,9 @@ func TestTensorNamesAreOneVocabulary(t *testing.T) {
 		}
 	}
 	for _, n := range ruled {
-		if r, ok := v[n]; ok {
+		if r, ok := v.vocab[n]; ok {
 			t.Errorf("%q is %v in tensornames.json, which a rule reads", n, r)
 		}
 	}
-	t.Logf("%d names, %d read by rule", len(v), len(ruled))
+	t.Logf("%d names, %d read by rule", len(v.vocab), len(ruled))
 }

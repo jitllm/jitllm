@@ -506,7 +506,7 @@ func (mj *modelJSON) checkStates() error {
 			}
 		}
 		for _, m := range st.Retarget {
-			named := rolesByName()
+			named := mj.names.roles
 			if _, ok := named[m.From]; !ok || m.Why == "" {
 				return fmt.Errorf("convert: %s: %s: retarget %+v: not a container role read with a reason", mj.name, arch, m)
 			}

@@ -82,7 +82,7 @@ func towerVocabOf(v *jlm.Vision, text tensorNames) (*towerVocab, error) {
 	}
 	n := &towerVocab{unread: t.Unread, p: t.Projectors[v.Projector.String()], roles: map[string]jlm.Role{},
 		indexed: map[string]map[string]jlm.Role{}, blocks: v.NLayer, text: text, proj: v.Projector.String()}
-	named := rolesByName()
+	named := text.roles
 	for _, ix := range n.p.Indexed {
 		if ix.Prefix == "" || !strings.HasSuffix(ix.Prefix, ".") || len(ix.Roles) == 0 {
 			return nil, fmt.Errorf("convert: towertensors.json: %s states an indexed prefix %q with no roles or no trailing dot", v.Projector, ix.Prefix)
