@@ -234,15 +234,15 @@ type arenaKey struct {
 }
 
 // For is block li's arena for pages of pp floats, made on the first ask with
-// slots pages.
-func (as *Arenas) For(li, pp int, latent bool, slots int) (*Arena, error) {
+// slots() pages.
+func (as *Arenas) For(li, pp int, latent bool, slots func() int) (*Arena, error) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 	k := arenaKey{li, pp, latent}
 	if a := as.m[k]; a != nil {
 		return a, nil
 	}
-	a, err := MapArena(pp, slots, latent)
+	a, err := MapArena(pp, slots(), latent)
 	if err != nil {
 		return nil, err
 	}

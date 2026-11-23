@@ -6,10 +6,12 @@ import (
 
 // kvArenaFor is the model's arena for layer li's pages of pp floats
 // (history.Arenas), made on the first ask: reserved for what the host's memory
-// budget can hold of that layer and no fewer than minSlots pages.
+// budget can hold of that layer and no fewer than minSlots pages. The budget
+// reads the machine's memory, so it is read only when the arena is made.
 func (s *Instance) kvArenaFor(li, pp int, latent bool, minSlots int) (*history.Arena, error) {
-	slots := max(minSlots, int(min(s.m.Gc.Budget()/uint64(4*pp), history.ArenaElems/uint64(pp))))
-	return s.storage().ArenaFor(li, pp, latent, slots)
+	return s.storage().ArenaFor(li, pp, latent, func() int {
+		return max(minSlots, int(min(s.m.Gc.Budget()/uint64(4*pp), history.ArenaElems/uint64(pp))))
+	})
 }
 
 // useArena gives the layer the model's arena for its pages and a table for
