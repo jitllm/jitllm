@@ -15,7 +15,9 @@ import (
 
 // rowTapShapes are ragged state convolutions with per-row taps: taps,
 // channels and the groups sharing a row's taps.
-var rowTapShapes = [][3]int{{2, 3, 1}, {3, 8, 2}, {4, 7, 7}, {4, 33, 3}, {3, 64, 4}, {5, 9, 3}}
+func rowTapShapes() [][3]int {
+	return [][3]int{{2, 3, 1}, {3, 8, 2}, {4, 7, 7}, {4, 33, 3}, {3, 64, 4}, {5, 9, 3}}
+}
 
 // rowTapGraph is an OpStateConv of C channels over a window in the
 // recurrent convolution's state, each row's taps of G groups added to its
@@ -91,7 +93,7 @@ func TestComposedCPUStateConvRowTaps(t *testing.T) {
 	rng := rand.New(rand.NewSource(17))
 	parted := [rowTapArms]int{}
 	interleavable := 0
-	for _, sh := range rowTapShapes {
+	for _, sh := range rowTapShapes() {
 		T, C, G := sh[0], sh[1], sh[2]
 		if G > 1 && C/G > 1 {
 			interleavable++
@@ -175,8 +177,8 @@ func TestComposedCPUStateConvRowTaps(t *testing.T) {
 			}
 		}
 	}
-	if parted[rowTapDropped] != 2*len(rowTapShapes) {
-		t.Fatalf("the per-row taps dropped parted %d of %d times: the gate cannot see them", parted[rowTapDropped], 2*len(rowTapShapes))
+	if parted[rowTapDropped] != 2*len(rowTapShapes()) {
+		t.Fatalf("the per-row taps dropped parted %d of %d times: the gate cannot see them", parted[rowTapDropped], 2*len(rowTapShapes()))
 	}
 	if parted[rowTapInterleaved] < 2*interleavable {
 		t.Fatalf("the groups interleaved parted %d of %d times: the gate cannot see the grouping", parted[rowTapInterleaved], 2*interleavable)
@@ -195,7 +197,7 @@ func TestComposedCPUStateConvRowTaps(t *testing.T) {
 		}
 	}
 	t.Logf("%d shapes held to the oracle at one row and eight; the dropped taps parted %d, the interleaved groups %d",
-		len(rowTapShapes), parted[rowTapDropped], parted[rowTapInterleaved])
+		len(rowTapShapes()), parted[rowTapDropped], parted[rowTapInterleaved])
 }
 
 // runRowTapStep runs one step of eight rows of the shape's convolution with
