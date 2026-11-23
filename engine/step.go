@@ -52,7 +52,17 @@ type Run struct {
 	Tokens   []int32
 	Spans    []model.Span
 	Logits   bool
+	// Argmax says a run that wants its logits takes their largest alone: a
+	// joint step whose every such run says so, on a device whose head sets
+	// each row's greedy token (nn.RowTokens), reads no logits back, hands
+	// back nil for the run and leaves the token in the session
+	// (Session.StepArgmax).
+	Argmax bool
 }
+
+// StepArgmax is the greedy token the session's last step left in place of
+// its logits (Run.Argmax), false where that step read its logits back.
+func (s *Session) StepArgmax() (int32, bool) { return s.argmax, s.argmaxSet }
 
 // MaxStepRows is the most rows -- every run's tokens together -- one joint
 // step carries; a StepRuns over more goes one instance after another.
@@ -634,14 +644,18 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		s0.stepTok = append(s0.stepTok, tok)
 		return nil
 	}
-	nlogit := 0
+	nlogit, argmax := 0, true
 	for i := range runs {
 		if r := &runs[i]; r.Logits {
 			if err := addRow(r, len(r.Tokens)-1); err != nil {
 				return nil, err
 			}
 			nlogit++
+			argmax = argmax && r.Argmax
 		}
+	}
+	if rt, ok := ss.(nn.RowTokens); !ok || !rt.RowTokens() {
+		argmax = false
 	}
 	for i := range runs {
 		r := &runs[i]
@@ -665,7 +679,15 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	// from runs no head.
 	var h *nn.Head
 	var logits []float32
-	if nlogit > 0 {
+	switch {
+	case nlogit > 0 && argmax:
+		// Every wanted row takes its greedy token: the device's head sets
+		// it, and no row's logits come back.
+		h = s0.head
+		keep := h.Logits
+		h.RowLogits, h.Logits, h.LogitRows = false, nil, nlogit
+		defer func() { h.Logits, h.LogitRows = keep, 0 }()
+	case nlogit > 0:
 		h = s0.head
 		s0.stepLogits = slices.Grow(s0.stepLogits[:0], nlogit*c.NVocab)[:nlogit*c.NVocab]
 		logits = s0.stepLogits
@@ -693,7 +715,12 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		st, k := r.Instance, len(r.Tokens)
 		st.Session = r.sess()
 		st.kv.note(st.bpos[0], r.Tokens...)
-		if r.Logits {
+		st.argmaxSet = false
+		switch {
+		case r.Logits && argmax:
+			st.argmax, st.argmaxSet = h.Tokens[at], true
+			at++
+		case r.Logits:
 			copy(st.logits, logits[at*c.NVocab:(at+1)*c.NVocab])
 			out[i] = st.logits
 			at++

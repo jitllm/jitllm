@@ -1418,6 +1418,11 @@ type SessionStepper interface {
 	LayersSessions(lo, hi int, sess []LayerRunner, pos []int, x []float32, cs RopeTables, head *Head) bool
 }
 
+// RowTokens is a SessionStepper whose head, with RowLogits off, sets Tokens
+// to each wanted row's greedy token (Head.LogitRows): a step whose rows take
+// their largest logit alone reads no logits back.
+type RowTokens interface{ RowTokens() bool }
+
 // Pipeliner says how many devices a prompt chunk crosses. A device that
 // answers more than one takes chunks wider than MaxDevicePrefillChunk and runs
 // them in pieces of it, each piece one device behind the next, so the cards

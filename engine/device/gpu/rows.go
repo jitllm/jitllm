@@ -1082,6 +1082,11 @@ func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []int
 	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, sid, 0, x, cs, head)
 }
 
+// RowTokens reports that a joint step's head sets each wanted row's greedy
+// token (nn.RowTokens): readHeadChunk reads the tokens whatever RowLogits
+// says.
+func (s *gpuSession) RowTokens() bool { return true }
+
 // ResetRecRows is resetRecRows for the zero session: a caller that never attached.
 func (g *devTier) ResetRecRows(rows []int) bool {
 	return g.resetRecRows(0, rows)

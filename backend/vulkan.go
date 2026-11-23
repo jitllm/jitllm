@@ -429,7 +429,9 @@ func (s *vkSession) Read(b Buf, p []byte) error {
 		return err
 	}
 	if s.l != nil {
-		return s.l.Read(b.(*vkBuf).b, p)
+		vb := b.(*vkBuf)
+		vb.ctr.countRead(len(p))
+		return s.l.Read(vb.b, p)
 	}
 	return b.Read(p)
 }
