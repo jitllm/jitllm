@@ -858,6 +858,11 @@ func (s *Instance) Close() error {
 	if s.pending != nil {
 		s.pending.Cancel()
 	}
+	// A sharing session hands the page it was writing to the store as it
+	// lets the sequence go, as Reset does; once, since a second Close finds
+	// nothing at position 0.
+	s.kv.retireTail(s.pos)
+	s.pos = 0
 	// The session's history on the device goes back to the tier, which keeps
 	// the model's weights for whoever else is using them.
 	if d, ok := s.ld.(nn.Session); ok {
@@ -3036,6 +3041,7 @@ func (s *Instance) lowPos() int {
 // positions: either left behind would give the next sequence the previous
 // one's history.
 func (s *Instance) Reset() {
+	s.kv.retireTail(s.pos)
 	s.pos = 0
 	for i := range s.bpos {
 		s.bpos[i] = 0
@@ -3043,7 +3049,6 @@ func (s *Instance) Reset() {
 	}
 	s.ResetRecurrent(0)
 	s.aliasMark(0, s.pos+1)
-	s.kv.retireTail(s.pos)
 	s.kv.reset()
 	s.kv.err.Store(nil)
 	s.kvRoom = 0

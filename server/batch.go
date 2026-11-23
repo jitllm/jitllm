@@ -334,6 +334,12 @@ type row struct {
 	slice, resumedAt int
 	parked           bool
 	held             []float32
+	// tok is the greedy token the row's last step left in place of its
+	// logits (engine.Run.Argmax), set where tokSet: what the next token is
+	// taken from when the step read no logits back, held through a park as
+	// the logits are.
+	tok    int32
+	tokSet bool
 	// refeed says the row's next token was sampled and sent before a step
 	// that had no room for it: the row feeds that token again on resume.
 	refeed bool
@@ -644,10 +650,10 @@ func rowPages(r *row, pos, page int) int {
 // host, or no history on the card to price.
 //
 // Admission keeps the rows' histories on the card. A row admitted past the
-// room would send the oldest pages of others to host memory, and a step with two
-// sequences' pages in host memory is refused as one step: every row then runs alone
-// and re-streams its evicted prefix each token -- 172 of 256 requests failed
-// at 64 concurrent on a V100 that way. A row that does not fit waits for the
+// room would send the oldest pages of others to host memory, and every step
+// then re-streams the evicted prefixes, a Sync a pass (172 of 256 requests
+// failed at 64 concurrent on a V100 when such a step was refused and every row
+// ran alone). A row that does not fit waits for the
 // rows ahead of it to retire, or above fairness level 0 for rows past their
 // time slice to be parked (batchfair.go); the first row is
 // always admitted, so nothing waits on a card that holds none. The promise
@@ -704,6 +710,9 @@ type unit struct {
 	r      *row
 	tokens []int32
 	logits bool
+	// argmax is a decoding row that takes its greedy token alone
+	// (stepLoop.argmaxRow): its step may leave the logits on the device.
+	argmax bool
 	prompt bool
 	// alone is a pipelined prompt chunk: it runs as its instance's own prefill,
 	// never as rows of the joint step.
@@ -830,11 +839,11 @@ func (lp *stepLoop) decodeUnits() []unit {
 		}
 		if r.refeed {
 			r.refeed = false
-			units = append(units, unit{r: r, tokens: r.next[:], logits: true})
+			units = append(units, unit{r: r, tokens: r.next[:], logits: true, argmax: lp.argmaxRow(r)})
 			continue
 		}
 		if lp.nextToken(r) {
-			units = append(units, unit{r: r, tokens: r.next[:], logits: true})
+			units = append(units, unit{r: r, tokens: r.next[:], logits: true, argmax: lp.argmaxRow(r)})
 		}
 	}
 	return units
@@ -858,7 +867,10 @@ func (lp *stepLoop) nextToken(r *row) bool {
 		lp.finish(r, FinishError, "", err)
 		return false
 	}
-	next, err := in.Sample(&r.sampler, r.logits)
+	next := r.tok
+	if !r.tokSet {
+		next, err = in.Sample(&r.sampler, r.logits)
+	}
 	var tlp *TokenLogprob
 	switch {
 	case err == nil && r.sampled:
@@ -901,6 +913,13 @@ func (lp *stepLoop) nextToken(r *row) bool {
 	}
 	r.next[0] = next
 	return true
+}
+
+// argmaxRow reports a row whose next token is its logits' largest and
+// nothing else reads them: a greedy sampler with nothing moving the row, no
+// logprobs and no tap.
+func (lp *stepLoop) argmaxRow(r *row) bool {
+	return r.sampler.Argmax() && r.logprobs == nil && !r.sampled && lp.sampleTap == nil
 }
 
 // promptUnits is admission: the admitted prompts' next chunks, the fairness
@@ -1161,7 +1180,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 	defer func() { clear(runs); lp.runs = runs[:0] }()
 	rows := 0
 	for _, u := range units {
-		runs = append(runs, engine.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits})
+		runs = append(runs, engine.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits, Argmax: u.argmax})
 		rows += len(u.tokens)
 	}
 	gpu := lp.lm.gpuTier()
@@ -1235,6 +1254,10 @@ func (lp *stepLoop) stepRouted(units []unit, runs []engine.Run, rows int) bool {
 // decoding row, its GenerateStarted queued.
 func (lp *stepLoop) ran(u unit, logits []float32) {
 	r := u.r
+	r.tok, r.tokSet = 0, false
+	if logits == nil && u.logits {
+		r.tok, r.tokSet = r.s.ms.StepArgmax()
+	}
 	if !u.prompt {
 		r.logits = logits
 		r.n++

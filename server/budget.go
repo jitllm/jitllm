@@ -121,6 +121,9 @@ func (e *Engine) heldLocked() uint64 {
 		if st := lm.ttft.store; st != nil {
 			n += st.Bytes()
 		}
+		if sh := lm.ttft.shared; sh != nil {
+			n += sh.Bytes()
+		}
 		for _, s := range lm.sessions {
 			n += s.snapKV.Load()
 		}

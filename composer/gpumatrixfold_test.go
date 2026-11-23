@@ -83,10 +83,8 @@ func TestComposedGPUMatrixFoldedRows(t *testing.T) {
 						x[i] = float32(rng.NormFloat64())
 					}
 					want := make([]float32, rows*n)
-					for r := range rows {
-						if err := oracle.MatVec(want[r*n:(r+1)*n], typ, w, x[r*k:(r+1)*k], n, k); err != nil {
-							t.Fatal(err)
-						}
+					if err := oracle.MatMul(want, typ, w, x, rows, n, k); err != nil {
+						t.Fatal(err)
 					}
 					want8 := int8Projection(t, typ, w, x, n, k, 32, false)
 					for _, L := range []int{1, 5, 64, 300, capacity} {

@@ -142,6 +142,10 @@ const storeShare = 8
 
 // MemCacheStats is a model's memory cache and its sessions, as counted.
 type MemCacheStats struct {
+	// Store is the memory cache: the pages held once that generates share
+	// (engine.SharedStore, its lookups counting a card's mapped names) with
+	// the copying cache a layered server and a session on a device that
+	// names no pages use, and what parked sessions hold in either.
 	Store engine.MemStoreStats
 	// Restored and Computed are prompt positions taken from the store and
 	// prefilled, over every generate that started its sequence.
@@ -161,10 +165,16 @@ type ttft struct {
 	// shared is the model's pages held once (engine.SharedStore), which its
 	// Deciders share through: nil with Config.NoMemCache.
 	shared *engine.SharedStore
+	// layered says kv writes through to a prompt store on disk, which the
+	// shared store does not: a generate then keeps the copying cache.
+	layered bool
 	// kv is what an instance is pointed at: the memory cache, or the memory cache
 	// over Config.PromptStore (layered) when the server has one.
 	kv engine.KVStore
 	ns string
+
+	// limit is the bound the two stores were last held to between them.
+	limit atomic.Uint64
 
 	inflight atomic.Int32
 	queueCap int
@@ -187,6 +197,7 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 		t.kv = t.store
 		if e.cfg.PromptStore != nil {
 			t.kv = &layered{mem: t.store, disk: e.cfg.PromptStore}
+			t.layered = true
 		}
 	}
 	switch {
@@ -242,6 +253,13 @@ func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 	if t.store != nil {
 		st = t.store.Stats()
 	}
+	if t.shared != nil {
+		sh := t.shared.Stats()
+		st.Hits, st.Misses, st.Sets, st.Evicted = st.Hits+sh.Hits, st.Misses+sh.Misses, st.Sets+sh.Sets, st.Evicted+sh.Evicted
+		st.Pages, st.Bytes, st.Pinned = st.Pages+sh.Pages, st.Bytes+sh.Bytes, st.Pinned+sh.Pinned
+		// The two are held to one bound between them (applyPageBudget).
+		st.Limit = t.limit.Load()
+	}
 	return MemCacheStats{
 		Store:          st,
 		Restored:       t.restored.Load(),
@@ -294,9 +312,19 @@ func (e *Engine) useStore(s *Session, o GenerateOptions) bool {
 
 // attachStore points s's instance at the model's store for one generate, or
 // takes it away. The instance is at position 0 (the caller reset it).
-func (s *Session) attachStore(on bool) error {
+//
+// The prefix a generate restores is the shared store's pages, held once
+// (engine.SharedStore): on a card the session maps the card's named pages
+// into its table, on the host it aliases the store's, and what it seals
+// becomes the store's -- no history copied home and back up. A server with a
+// prompt store on disk keeps the copying cache, which is what writes through
+// to that disk, and so does a session placed on a device that names no pages.
+func (s *Session) attachStore(ctx context.Context, on bool) error {
 	if !on {
 		if s.storeOn {
+			if err := s.unshare(ctx); err != nil {
+				return err
+			}
 			s.ms.SetKVStore(nil)
 			if err := s.ms.SetCacheKey(""); err != nil {
 				return err
@@ -305,11 +333,39 @@ func (s *Session) attachStore(on bool) error {
 		}
 		return nil
 	}
-	s.ms.SetKVStore(s.lm.ttft.kv)
 	if err := s.ms.SetCacheKey(s.lm.ttft.ns); err != nil {
 		return err
 	}
+	if t := &s.lm.ttft; t.shared != nil && !t.layered {
+		in, err := s.ms.Hold(ctx, engine.PhasePrefill)
+		if err != nil {
+			return err
+		}
+		err = in.ShareKV(t.shared)
+		s.ms.Unhold(in)
+		if err == nil {
+			s.shares, s.storeOn = true, true
+			return nil
+		}
+	}
+	s.ms.SetKVStore(s.lm.ttft.kv)
 	s.storeOn = true
+	return nil
+}
+
+// unshare ends the session's sharing, if it shares: its references to the
+// store's pages go and the sequence starts over.
+func (s *Session) unshare(ctx context.Context) error {
+	if !s.shares {
+		return nil
+	}
+	in, err := s.ms.Hold(ctx, engine.PhasePrefill)
+	if err != nil {
+		return err
+	}
+	in.UnshareKV()
+	s.ms.Unhold(in)
+	s.shares = false
 	return nil
 }
 

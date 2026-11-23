@@ -46,10 +46,8 @@ func TestCPUCallWordsRunOut(t *testing.T) {
 			ref = int8Row(x, 32)
 		}
 		want := make([]float32, sh.tokens*sh.rows)
-		for tk := range sh.tokens {
-			if err := oracle.MatVec(want[tk*sh.rows:(tk+1)*sh.rows], typ, w, ref[tk*sh.k:(tk+1)*sh.k], sh.rows, sh.k); err != nil {
-				t.Fatal(err)
-			}
+		if err := oracle.MatMul(want, typ, w, ref, sh.tokens, sh.rows, sh.k); err != nil {
+			t.Fatal(err)
 		}
 		req := Request{
 			Graph:   graph.MatVec(jlm.RoleOutput, sh.rows, sh.k),

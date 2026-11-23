@@ -31,6 +31,10 @@ type Session struct {
 	pos   int
 	// logits is what the session's last step ended on.
 	logits []float32
+	// argmax is the greedy token a joint step's head left for the session's
+	// last row in place of its logits (Run.Argmax), where argmaxSet.
+	argmax    int32
+	argmaxSet bool
 	// parked is Park's: the session is preempted. ParkedOut and ParkedIn
 	// count the KV pages Park sent to the store and Resume brought back
 	// (park.go).
@@ -393,6 +397,26 @@ func (s *Instance) forget(sess *Session) {
 		return
 	}
 	s.bindOwn()
+}
+
+// retire is sess, sharing its history (ShareKV) and closing, handing the
+// page it was writing to the store, as Reset and Close do for the bound
+// session (kvCache.retireTail). A history that is not where the instance
+// places its blocks (parked, or moved since) keeps it: the names would go
+// to the wrong device.
+func (s *Instance) retire(sess *Session) {
+	if sess.kv == nil || sess.kv.share == nil || sess.pos == 0 {
+		return
+	}
+	s.As(sess, func(in *Instance) {
+		// As marks an unbound session away; its held is where it left its
+		// history.
+		if sess.ld != nil && (sess.parked || sess.away && !slices.Equal(sess.held, in.blockRoutes)) {
+			return
+		}
+		in.kv.retireTail(in.pos)
+		in.pos = 0
+	})
 }
 
 // bindOwn binds the instance's own session, the bound one's place taken

@@ -212,7 +212,7 @@ func (b *Batcher) Step() ([]*Seq, error) {
 			}
 		}
 		g := b.group(s.sess.lease.Instance)
-		g.runs = append(g.runs, Run{Session: s.sess, Tokens: s.Out[len(s.Out)-1:], Logits: true})
+		g.runs = append(g.runs, Run{Session: s.sess, Tokens: s.Out[len(s.Out)-1:], Logits: true, Argmax: s.Sample == nil})
 		g.of = append(g.of, s)
 		g.decoding++
 		live = append(live, s)
@@ -402,6 +402,9 @@ func (b *Batcher) end(s *Seq) *Seq {
 func byAdmission(a, b *Seq) int { return a.adm - b.adm }
 
 func (s *Seq) pick(in *Instance, logits []float32) (int32, error) {
+	if t, ok := s.sess.StepArgmax(); ok && logits == nil {
+		return t, nil
+	}
 	if s.Sample != nil {
 		return s.Sample(logits), nil
 	}

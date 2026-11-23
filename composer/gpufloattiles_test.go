@@ -101,10 +101,8 @@ func TestComposedGPUFloatTiles(t *testing.T) {
 						x[i] = float32(rng.NormFloat64())
 					}
 					want := make([]float32, capacity*n)
-					for r := range capacity {
-						if err := oracle.MatVec(want[r*n:(r+1)*n], quant.F32, w, x[r*k:(r+1)*k], n, k); err != nil {
-							t.Fatal(err)
-						}
+					if err := oracle.MatMul(want, quant.F32, w, x, capacity, n, k); err != nil {
+						t.Fatal(err)
 					}
 					run := func(L int, planes [3][]uint32) []float32 {
 						xs := make([]float32, capacity*k)

@@ -105,6 +105,11 @@ type waveCounts struct {
 // sixtyFour loads Llama 3.2 1B wholly onto gpu:0 with the budget 1 GiB past
 // what placement spent, and sends waves of 64 concurrent greedy completions,
 // half of 128 words and half of 512; admitAll is the violation.
+//
+// Each request's prompt opens with its own number and wave: prompts that
+// agree on a prefix hold its pages once on the card (Instance.ShareKV), and
+// 64 histories of one text would take a fraction of the room this load is
+// about -- the gate's pressure is 64 histories of their own.
 func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCounts {
 	const name = "Llama-3.2-1B-Instruct-Q4_K_M.jlm"
 	requireDevice(t, "gpu:0")
@@ -147,7 +152,7 @@ func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCount
 				if i%2 == 1 {
 					w = 512
 				}
-				errs[i] = complete64(c.url, strings.Join(words[:w], " "))
+				errs[i] = complete64(c.url, fmt.Sprintf("%d.%d ", wave, i)+strings.Join(words[:w], " "))
 			}()
 		}
 		wg.Wait()
