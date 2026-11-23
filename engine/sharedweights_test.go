@@ -4,8 +4,10 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -94,6 +96,17 @@ func TestBlocksShareTheirWeights(t *testing.T) {
 	copied := open("copied", unrolled(nil))
 	shared := open("shared", unrolled(own))
 	wrong := open("swapped", unrolled(swapped))
+	// The converter's own statement of the loop (convert.UnrollSource, what a
+	// library file's unroll states) reads the pages the hand-made one does.
+	stated := open("stated", func(s *jlm.Source) {
+		order := make([]int, 2*s.Config.NLayer)
+		for i := range order {
+			order[i] = i % int(s.Config.NLayer)
+		}
+		if err := convert.UnrollSource(s, order); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	n := copied.Cfg.NLayer / 2
 	if n < 2 {
@@ -123,6 +136,18 @@ func TestBlocksShareTheirWeights(t *testing.T) {
 	want, cFaults, cPages := cpu(copied)
 	got, sFaults, sPages := cpu(shared)
 	bad, _, _ := cpu(wrong)
+	byStatement, _, stPages := cpu(stated)
+	read := make([]uint32, 2*n)
+	for i := range read {
+		read[i] = uint32(stated.Container.PageOf(i))
+	}
+	if int(stated.Container.H.NBlocks) != int(n) || stPages != int(n) || !slices.Equal(read, own(int(n))) {
+		t.Fatalf("the stated loop: %d pages, %d resident, pages %v; want %d and %v",
+			stated.Container.H.NBlocks, stPages, read, n, own(int(n)))
+	}
+	if !slices.Equal(byStatement, got) {
+		t.Fatalf("the stated loop's logits differ from the hand-made sharing's by %.3g", maxAbsDiff(byStatement, got))
+	}
 	if !allFinite(want) {
 		t.Fatal("the copied model's logits are not finite")
 	}

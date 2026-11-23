@@ -604,6 +604,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 	if err := StateActivations(cfg, s); err != nil {
 		return nil, err
 	}
+	if err := unrollBlocks(cfg, s); err != nil {
+		return nil, err
+	}
 	g := ha.graph
 	if g == nil {
 		var err error

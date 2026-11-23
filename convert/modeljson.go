@@ -93,6 +93,10 @@ type mjConfig struct {
 	Gating string `json:"gating"`
 	// RotaryLayers states which layers rotate.
 	RotaryLayers *mjRotaryLayers `json:"rotary_layers"`
+	// Unroll states a loop: a list of the source layer each block runs, a
+	// layer named again a later pass reading the first pass's weights with
+	// a history of its own (unrollBlocks); null is every layer once.
+	Unroll string `json:"unroll"`
 	// Require holds the config to what the class's reference computes and
 	// the container does not vary.
 	Require []mjRequire `json:"require"`
@@ -1531,6 +1535,15 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 			cfg.Flags |= mjFlags()[f]
 		} else {
 			cfg.Flags &^= mjFlags()[f]
+		}
+	}
+	if mj.Config.Unroll != "" {
+		v, err := eval("unroll", mj.Config.Unroll)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Unroll, err = exprInts("unroll", v); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 		}
 	}
 	if r := mj.Config.RotaryLayers; r != nil {

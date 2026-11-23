@@ -23,7 +23,7 @@ func sourceStores(s *jlm.Source) func(jlm.Role, int32) bool {
 	for _, t := range s.Tensors {
 		held[[2]int32{int32(t.Role), t.Block}] = true
 	}
-	return func(r jlm.Role, li int32) bool { return held[[2]int32{int32(r), li}] }
+	return func(r jlm.Role, li int32) bool { return held[[2]int32{int32(r), int32(s.Config.PageOf(int(li)))}] }
 }
 
 // StateDelta states the delta rule's decay and output gate where the

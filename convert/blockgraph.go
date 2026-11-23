@@ -1880,6 +1880,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 	}
 	return map[string]jinja.Value{
 		"layer":                  jinja.NewInt(int64(li)),
+		"page":                   jinja.NewInt(int64(c.PageOf(li))),
 		"trunk":                  i(c.NLayer),
 		"head_blocks":            i(c.HeadBlocks()),
 		"decision_heads":         i(c.DecisionHeads),
