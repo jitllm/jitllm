@@ -1,7 +1,6 @@
 package convert
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -107,17 +106,4 @@ func ggufValue(v meta.Value) (jinja.Value, bool) {
 	}
 	i, ok := v.Int()
 	return jinja.NewInt(i), ok
-}
-
-// hfKeys is a config.json's top-level keys as a recipe reads them (the fact
-// src).
-func hfKeys(c *hfConfig) jinja.Value {
-	d := jinja.NewDict()
-	for k, raw := range c.keys {
-		var x any
-		if json.Unmarshal(raw, &x) == nil {
-			d.AsDict().Set(k, jinja.FromGoValue(x))
-		}
-	}
-	return d
 }

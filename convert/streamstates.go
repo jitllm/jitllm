@@ -170,12 +170,20 @@ func stateGraphStreams(c *jlm.Config, s *jlm.Source, g *mjGraph, src jinja.Value
 	if err != nil {
 		return err
 	}
+	var ferr error
 	facts := func(li int) (*blockFacts, map[string]jinja.Value) {
 		bf := blockFactsOf(c, s, li, names)
 		bf.src = src
-		return bf, bf.vars()
+		vars, err := g.withFacts(bf.vars())
+		if err != nil && ferr == nil {
+			ferr = fmt.Errorf("convert: block %d's streams: %w", li, err)
+		}
+		return bf, vars
 	}
 	_, f0 := facts(0)
+	if ferr != nil {
+		return ferr
+	}
 	if st.If != "" {
 		on, err := g.flag(st.If, f0)
 		if err != nil {
@@ -228,6 +236,9 @@ func stateGraphStreams(c *jlm.Config, s *jlm.Source, g *mjGraph, src jinja.Value
 	c.Streams.Blocks = make([]jlm.BlockStreams, c.NLayer+predictionBlocks(c, s.Tensors))
 	for li := range c.Streams.Blocks {
 		bf, vars := facts(li)
+		if ferr != nil {
+			return ferr
+		}
 		sp, held := builder(bf, vars, fmt.Sprintf("block %d's streams", li))
 		b := &c.Streams.Blocks[li]
 		if st.Block.Bank != "" {

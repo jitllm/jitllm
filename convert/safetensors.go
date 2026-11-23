@@ -516,6 +516,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		}
 		parts := []jlm.Tensor{e}
 		sp := ha.split[ha.blockRest(name)]
+		if p, _, ok := ha.placedOf(name); ok && sp == nil {
+			sp = p.split
+		}
 		// A split reads elements, which a block of MXFP4 is not; only a plain
 		// matrix, a bank member or a row concatenation may arrive packed. An
 		// NVFP4 or MXFP8 row holds its own scales, so a split that moves
@@ -616,7 +619,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 			return nil, err
 		}
 	}
-	if err := stateGraphStreams(cfg.Config, s, g, hfKeys(hc)); err != nil {
+	if err := stateGraphStreams(cfg.Config, s, g, cfg.keys); err != nil {
 		return nil, err
 	}
 	storeRowTables(cfg.Config, s)
@@ -643,7 +646,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		stated(s)
 	}
 	if g != nil {
-		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc), taken); err != nil {
+		if err := StateBlockGraphs(cfg, s, g, cfg.keys, taken); err != nil {
 			return nil, err
 		}
 		if err := StateFront(s.Config, s, taken); err != nil {
@@ -1025,6 +1028,8 @@ type hfArch struct {
 	// already as two halves, both producing the same two roles, so a role key
 	// would re-cut a tensor that is already whole.
 	split map[string]hfSplit
+	// placed are model-level sources cut into blocks' tensors (addPlaced).
+	placed []hfPlaced
 	// fuseOrder is split run backwards: it names, in row order, the
 	// block-relative source tensors that concatenate into one container role
 	// (several sources map to the same role in block/blockLinear). It is an
@@ -1169,6 +1174,9 @@ func (a *hfArch) identify(name string, kinds []jlm.LayerKind) (role jlm.Role, bl
 	}
 	if rr, ok := a.model[rest]; ok {
 		return rr, jlm.DenseBlock, -1, false, nil
+	}
+	if p, _, ok := a.placedOf(name); ok {
+		return p.role, jlm.DenseBlock, -1, false, nil
 	}
 	return 0, 0, -1, false, fmt.Errorf("convert: tensor %q has no role in this container's "+
 		"vocabulary; a tensor dropped at conversion is a model that loads and is wrong, "+

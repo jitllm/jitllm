@@ -522,7 +522,7 @@ func TestDeepseekRefusals(t *testing.T) {
 		{"a mixture block with a dense feed-forward", func(m *synthModel) {
 			m.tensors[L(2, "mlp.gate_proj.weight")] = &synthTensor{safetensors.F32,
 				[]uint64{dsFFN, dsEmbd}, f32Bytes(dsFFN*dsEmbd, 1)}
-		}, "block 2's stated graph: the block stores [ffn_gate], which its graph does not bind"},
+		}, "block 2's stated graph: the block stores [ffn_gate], which no graph of its page binds"},
 		{"a dense block with a router", func(m *synthModel) {
 			m.tensors[L(0, "mlp.gate.weight")] = &synthTensor{safetensors.F32,
 				[]uint64{dsExp, dsEmbd}, f32Bytes(dsExp*dsEmbd, 2)}

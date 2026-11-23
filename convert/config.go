@@ -11,6 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // This file is the only place the source format's key vocabulary lives. A
@@ -42,6 +43,10 @@ type Config struct {
 	// Unroll is, per block, the source layer whose weights it reads, where
 	// the library states a loop (mjConfig.Unroll); nil is every layer once.
 	Unroll []int
+	// keys are the source's keys as the library's graph reads them (src):
+	// a GGUF's, or those a class's config maps onto (config.keys); nil
+	// where the source is not a class's.
+	keys jinja.Value
 	// took is the statement tables' choices reading the source made (a
 	// rotary method's reading, a readout and its bands), which FeaturesOf
 	// counts.
