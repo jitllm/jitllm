@@ -126,9 +126,11 @@ type capacityProjections struct {
 // present, a Llama-3.1-8B shape and Qwen2-1.5B's ragged one (outputs of
 // 1536, 256 and 8960), and runs them at calls of 1, 2, 3, 4, 5, 8 and 9
 // rows, the input's rows past the call's poisoned and guard words after
-// every output: each output's rows the oracle's (the norm, then the int8
-// matvec over 32-wide windows the vector form runs or the float one the
-// matrix unit does), nothing past the call's rows written, and k and v and
+// every output, on the device's statement with no matrix unit, where every
+// call runs the vector form, and with the one it lowers: each output's rows
+// the oracle's (the norm, then the int8 matvec over 32-wide windows the
+// vector form runs or the float one the matrix unit does), nothing past the
+// call's rows written, and k and v and
 // gate and up one launch at every call the vector form runs (Siblings over
 // a form of a capacity) and launches of their own where the matrix unit
 // does. Three violations must fail: v's weight words moved by one, up's
@@ -145,160 +147,165 @@ func TestComposedGPUCapacitySiblings(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			dev := gpuDevice(d)
-			if ok, _ := backend.LowersTile(d, matrixTile()); ok {
-				dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
-			}
-			for _, sh := range []capacityProjections{{4096, 4096, 1024, 14336}, {1536, 1536, 256, 8960}} {
-				name := fmt.Sprintf("%d: %d/%d/%d, %d/%d", sh.embd, sh.q, sh.kv, sh.kv, sh.ffn, sh.ffn)
-				rng := rand.New(rand.NewSource(int64(sh.embd + sh.ffn)))
-				b := graph.New()
-				b.G.Block = 0
-				x1, x2 := b.In("x", sh.embd), b.In("x2", sh.embd)
-				n1, n2 := b.Norm(x1, jlm.RoleAttnNorm, 1e-5), b.Norm(x2, jlm.RoleFFNNorm, 1e-5)
-				roles := []jlm.Role{jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleFFNGate, jlm.RoleFFNUp}
-				widths := []int{sh.q, sh.kv, sh.kv, sh.ffn, sh.ffn}
-				var outs []graph.ValueID
-				for i, r := range roles {
-					in := n1
-					if i >= 3 {
-						in = n2
+			for _, unit := range []bool{false, true} {
+				dev := gpuDevice(d)
+				if unit {
+					if ok, _ := backend.LowersTile(d, matrixTile()); !ok {
+						continue
 					}
-					outs = append(outs, b.MatVec(in, r, widths[i]))
+					dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 				}
-				b.Out(outs...)
-				formats := map[jlm.Role]jlm.Type{jlm.RoleAttnNorm: jlm.TypeF32, jlm.RoleFFNNorm: jlm.TypeF32}
-				raw, weights := map[jlm.Role][]byte{}, map[jlm.Role][3][]uint32{}
-				for i, r := range roles {
-					formats[r] = jlm.TypeQ4S
-					raw[r] = tiledWeights(quant.Q4_K, layout.Q4_K, widths[i], sh.embd, rng)
-					qs, dw, sc, err := layout.PackWeights(layout.Q4_K, raw[r], widths[i], sh.embd)
-					if err != nil {
-						t.Fatal(err)
-					}
-					weights[r] = [3][]uint32{qs, dw, sc}
-				}
-				vec := func(n int, mean, sd float64) []float32 {
-					v := make([]float32, n)
-					for i := range v {
-						v[i] = float32(mean + sd*rng.NormFloat64())
-					}
-					return v
-				}
-				vecs := map[jlm.Role][]float32{jlm.RoleAttnNorm: vec(sh.embd, 1, 0.1), jlm.RoleFFNNorm: vec(sh.embd, 1, 0.1)}
-				xs := map[graph.ValueID][]float32{x1: vec(capacity*sh.embd, 0, 1), x2: vec(capacity*sh.embd, 0, 1)}
-				// The oracle's rows: each norm's, then each projection's float
-				// and int8 matvecs over them.
-				normed := map[graph.ValueID][]float32{}
-				for _, c := range []struct {
-					x graph.ValueID
-					r jlm.Role
-				}{{x1, jlm.RoleAttnNorm}, {x2, jlm.RoleFFNNorm}} {
-					y := make([]float32, most*sh.embd)
-					for row := range most {
-						oracle.RMSNorm32(y[row*sh.embd:(row+1)*sh.embd], xs[c.x][row*sh.embd:(row+1)*sh.embd], vecs[c.r], 1e-5)
-					}
-					normed[c.x] = y
-				}
-				want, want8 := map[graph.ValueID][]float32{}, map[graph.ValueID][]float32{}
-				for i, o := range outs {
-					y := normed[x1]
-					if i >= 3 {
-						y = normed[x2]
-					}
-					w := make([]float32, most*widths[i])
-					if err := oracle.MatMul(w, quant.Q4_K, raw[roles[i]], y, most, widths[i], sh.embd); err != nil {
-						t.Fatal(err)
-					}
-					want[o], want8[o] = w, int8Projection(t, quant.Q4_K, raw[roles[i]], y, widths[i], sh.embd, 32, false)
-				}
-				_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: formats,
-					Step: composer.Step{Rows: capacity, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
-				if err != nil {
-					t.Fatalf("%s: forming: %v", name, err)
-				}
-				op, err := compileLone(d, codes)
-				if err != nil {
-					t.Fatalf("%s: %v", name, err)
-				}
-				// run is a call of L rows of the input stating stated rows: each
-				// output's L rows, and whether a word past them was written.
-				run := func(L, stated int, weights map[jlm.Role][3][]uint32) (map[graph.ValueID][]float32, bool) {
-					ins := map[graph.ValueID][]float32{}
-					for x, v := range xs {
-						in := slices.Clone(v)
-						for i := L * sh.embd; i < len(in); i++ {
-							in[i] = math.Float32frombits(guardWord)
+				for _, sh := range []capacityProjections{{4096, 4096, 1024, 14336}, {1536, 1536, 256, 8960}} {
+					name := fmt.Sprintf("%d: %d/%d/%d, %d/%d, matrix unit %v", sh.embd, sh.q, sh.kv, sh.kv, sh.ffn, sh.ffn, unit)
+					rng := rand.New(rand.NewSource(int64(sh.embd + sh.ffn)))
+					b := graph.New()
+					b.G.Block = 0
+					x1, x2 := b.In("x", sh.embd), b.In("x2", sh.embd)
+					n1, n2 := b.Norm(x1, jlm.RoleAttnNorm, 1e-5), b.Norm(x2, jlm.RoleFFNNorm, 1e-5)
+					roles := []jlm.Role{jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleFFNGate, jlm.RoleFFNUp}
+					widths := []int{sh.q, sh.kv, sh.kv, sh.ffn, sh.ffn}
+					var outs []graph.ValueID
+					for i, r := range roles {
+						in := n1
+						if i >= 3 {
+							in = n2
 						}
-						ins[x] = in
+						outs = append(outs, b.MatVec(in, r, widths[i]))
 					}
-					sizes := map[graph.ValueID]int{}
+					b.Out(outs...)
+					formats := map[jlm.Role]jlm.Type{jlm.RoleAttnNorm: jlm.TypeF32, jlm.RoleFFNNorm: jlm.TypeF32}
+					raw, weights := map[jlm.Role][]byte{}, map[jlm.Role][3][]uint32{}
+					for i, r := range roles {
+						formats[r] = jlm.TypeQ4S
+						raw[r] = tiledWeights(quant.Q4_K, layout.Q4_K, widths[i], sh.embd, rng)
+						qs, dw, sc, err := layout.PackWeights(layout.Q4_K, raw[r], widths[i], sh.embd)
+						if err != nil {
+							t.Fatal(err)
+						}
+						weights[r] = [3][]uint32{qs, dw, sc}
+					}
+					vec := func(n int, mean, sd float64) []float32 {
+						v := make([]float32, n)
+						for i := range v {
+							v[i] = float32(mean + sd*rng.NormFloat64())
+						}
+						return v
+					}
+					vecs := map[jlm.Role][]float32{jlm.RoleAttnNorm: vec(sh.embd, 1, 0.1), jlm.RoleFFNNorm: vec(sh.embd, 1, 0.1)}
+					xs := map[graph.ValueID][]float32{x1: vec(capacity*sh.embd, 0, 1), x2: vec(capacity*sh.embd, 0, 1)}
+					// The oracle's rows: each norm's, then each projection's float
+					// and int8 matvecs over them.
+					normed := map[graph.ValueID][]float32{}
+					for _, c := range []struct {
+						x graph.ValueID
+						r jlm.Role
+					}{{x1, jlm.RoleAttnNorm}, {x2, jlm.RoleFFNNorm}} {
+						y := make([]float32, most*sh.embd)
+						for row := range most {
+							oracle.RMSNorm32(y[row*sh.embd:(row+1)*sh.embd], xs[c.x][row*sh.embd:(row+1)*sh.embd], vecs[c.r], 1e-5)
+						}
+						normed[c.x] = y
+					}
+					want, want8 := map[graph.ValueID][]float32{}, map[graph.ValueID][]float32{}
 					for i, o := range outs {
-						sizes[o] = capacity * widths[i]
+						y := normed[x1]
+						if i >= 3 {
+							y = normed[x2]
+						}
+						w := make([]float32, most*widths[i])
+						if err := oracle.MatMul(w, quant.Q4_K, raw[roles[i]], y, most, widths[i], sh.embd); err != nil {
+							t.Fatal(err)
+						}
+						want[o], want8[o] = w, int8Projection(t, quant.Q4_K, raw[roles[i]], y, widths[i], sh.embd, 32, false)
 					}
-					words, err := runRolesAt(d, op, ins, weights, vecs, sizes, stated, guard)
+					_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: formats,
+						Step: composer.Step{Rows: capacity, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
+					if err != nil {
+						t.Fatalf("%s: forming: %v", name, err)
+					}
+					op, err := compileLone(d, codes)
 					if err != nil {
 						t.Fatalf("%s: %v", name, err)
 					}
-					res, past := map[graph.ValueID][]float32{}, false
-					for i, o := range outs {
-						w, n := words[o], L*widths[i]
-						if w == nil {
-							t.Fatalf("%s: no code writes %v", name, roles[i])
+					// run is a call of L rows of the input stating stated rows: each
+					// output's L rows, and whether a word past them was written.
+					run := func(L, stated int, weights map[jlm.Role][3][]uint32) (map[graph.ValueID][]float32, bool) {
+						ins := map[graph.ValueID][]float32{}
+						for x, v := range xs {
+							in := slices.Clone(v)
+							for i := L * sh.embd; i < len(in); i++ {
+								in[i] = math.Float32frombits(guardWord)
+							}
+							ins[x] = in
 						}
-						past = past || slices.ContainsFunc(w[n:], func(v uint32) bool { return v != guardWord })
-						res[o] = make([]float32, n)
-						for j := range n {
-							res[o][j] = math.Float32frombits(w[j])
+						sizes := map[graph.ValueID]int{}
+						for i, o := range outs {
+							sizes[o] = capacity * widths[i]
+						}
+						words, err := runRolesAt(d, op, ins, weights, vecs, sizes, stated, guard)
+						if err != nil {
+							t.Fatalf("%s: %v", name, err)
+						}
+						res, past := map[graph.ValueID][]float32{}, false
+						for i, o := range outs {
+							w, n := words[o], L*widths[i]
+							if w == nil {
+								t.Fatalf("%s: no code writes %v", name, roles[i])
+							}
+							past = past || slices.ContainsFunc(w[n:], func(v uint32) bool { return v != guardWord })
+							res[o] = make([]float32, n)
+							for j := range n {
+								res[o][j] = math.Float32frombits(w[j])
+							}
+						}
+						return res, past
+					}
+					merged := 0
+					for _, L := range calls {
+						got, past := run(L, L, weights)
+						if past {
+							t.Fatalf("%s: a call of %d rows wrote past them", name, L)
+						}
+						for i, o := range outs {
+							n := L * widths[i]
+							e := min(gpuNMSE(got[o], want[o][:n]), gpuNMSE(got[o], want8[o][:n]))
+							if math.IsNaN(e) || !(e < 2e-6) {
+								t.Fatalf("%s: a call of %d rows: %v reads NMSE %.3e against the oracle", name, L, roles[i], e)
+							}
+						}
+						n, together := projectionLaunches(codes, L, []jlm.Role{jlm.RoleAttnK, jlm.RoleAttnV}, []jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp})
+						matrix := slices.ContainsFunc(codes, func(c composer.Code) bool { return c.Runs(L) && c.Matrix != [2]int{} })
+						switch {
+						case together == matrix:
+							t.Errorf("%s: a call of %d rows, the matrix unit's %v, runs k and v and gate and up together %v", name, L, matrix, together)
+						case !matrix:
+							merged++
+						}
+						t.Logf("%s: %s: a call of %d rows: %d projection launches, k and v and gate and up together %v", d.API(), name, L, n, together)
+					}
+					if !unit && merged != len(calls) {
+						t.Errorf("%s: %d of %d calls ran the vector form, with no matrix unit to run", name, merged, len(calls))
+					}
+					for _, r := range []jlm.Role{jlm.RoleAttnV, jlm.RoleFFNUp} {
+						i := slices.Index(roles, r)
+						moved := maps.Clone(weights)
+						qs := weights[r][0]
+						moved[r] = [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), weights[r][1], weights[r][2]}
+						for _, L := range []int{3, most} {
+							got, _ := run(L, L, moved)
+							n := L * widths[i]
+							if e := gpuNMSE(got[outs[i]], want[outs[i]][:n]); !(e > 1e-4) {
+								t.Fatalf("%s: a call of %d rows with %v's weight words moved by one reads NMSE %.3e: the gate cannot see its share", name, L, r, e)
+							}
 						}
 					}
-					return res, past
-				}
-				merged := 0
-				for _, L := range calls {
-					got, past := run(L, L, weights)
-					if past {
-						t.Fatalf("%s: a call of %d rows wrote past them", name, L)
-					}
-					for i, o := range outs {
-						n := L * widths[i]
-						e := min(gpuNMSE(got[o], want[o][:n]), gpuNMSE(got[o], want8[o][:n]))
-						if math.IsNaN(e) || !(e < 2e-6) {
-							t.Fatalf("%s: a call of %d rows: %v reads NMSE %.3e against the oracle", name, L, roles[i], e)
+					for _, L := range []int{3, 5, 8} {
+						if _, past := run(L, L+1, weights); !past {
+							t.Fatalf("%s: a call stating %d rows over %d wrote nothing past them: the gate cannot see a launch not held", name, L+1, L)
 						}
 					}
-					n, together := projectionLaunches(codes, L, []jlm.Role{jlm.RoleAttnK, jlm.RoleAttnV}, []jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp})
-					matrix := slices.ContainsFunc(codes, func(c composer.Code) bool { return c.Runs(L) && c.Matrix != [2]int{} })
-					switch {
-					case together == matrix:
-						t.Errorf("%s: a call of %d rows, the matrix unit's %v, runs k and v and gate and up together %v", name, L, matrix, together)
-					case !matrix:
-						merged++
-					}
-					t.Logf("%s: %s: a call of %d rows: %d projection launches, k and v and gate and up together %v", d.API(), name, L, n, together)
+					op.close()
 				}
-				if merged == 0 {
-					t.Errorf("%s: no call ran the vector form, whose siblings this gate is", name)
-				}
-				for _, r := range []jlm.Role{jlm.RoleAttnV, jlm.RoleFFNUp} {
-					i := slices.Index(roles, r)
-					moved := maps.Clone(weights)
-					qs := weights[r][0]
-					moved[r] = [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), weights[r][1], weights[r][2]}
-					for _, L := range []int{3, most} {
-						got, _ := run(L, L, moved)
-						n := L * widths[i]
-						if e := gpuNMSE(got[outs[i]], want[outs[i]][:n]); !(e > 1e-4) {
-							t.Fatalf("%s: a call of %d rows with %v's weight words moved by one reads NMSE %.3e: the gate cannot see its share", name, L, r, e)
-						}
-					}
-				}
-				for _, L := range []int{3, 5, 8} {
-					if _, past := run(L, L+1, weights); !past {
-						t.Fatalf("%s: a call stating %d rows over %d wrote nothing past them: the gate cannot see a launch not held", name, L+1, L)
-					}
-				}
-				op.close()
 			}
 		})
 	}
