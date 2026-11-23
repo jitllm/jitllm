@@ -1,6 +1,7 @@
 package composer_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,7 +13,8 @@ import (
 
 // TestProjectionsOfOneRowShareTheirHalves forms three projections of one
 // input over a step of rows the matrix unit runs, and holds the row's
-// binary16 words to one kernel the three read.
+// binary16 words to one kernel the three read, each projection where
+// Siblings runs it, alone or beside another.
 func TestProjectionsOfOneRowShareTheirHalves(t *testing.T) {
 	const K, R = 1024, 128
 	b := graph.New()
@@ -34,8 +36,11 @@ func TestProjectionsOfOneRowShareTheirHalves(t *testing.T) {
 		if strings.HasSuffix(c.Name, ".halves") {
 			halves++
 		}
-		for _, bd := range c.Binds {
-			if strings.HasSuffix(bd.Operand.Name, ".halves") && !bd.Writes {
+		reads := slices.ContainsFunc(c.Binds, func(bd composer.Binding) bool {
+			return strings.HasSuffix(bd.Operand.Name, ".halves") && !bd.Writes
+		})
+		for _, r := range []jlm.Role{jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV} {
+			if reads && bindsRole(c, r) {
 				readers++
 			}
 		}
