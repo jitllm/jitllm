@@ -80,6 +80,38 @@ func Architectures() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return architecturesIn(files), nil
+}
+
+// Lists is the library's lists from one read of it: the GGUF architectures
+// (Architectures), the safetensors classes (HFClasses) and the graph each
+// converts to (GraphOf), absent for a name the library states no graph for.
+type Lists struct {
+	Architectures, Classes []string
+	Graphs                 map[string]string
+}
+
+// ReadLists reads the library once for every list a caller describing it
+// reads.
+func ReadLists() (Lists, error) {
+	files, err := libraryFiles()
+	if err != nil {
+		return Lists{}, err
+	}
+	lib, err := libraryOf(files)
+	if err != nil {
+		return Lists{}, err
+	}
+	l := Lists{Architectures: architecturesIn(files), Classes: slices.Sorted(maps.Keys(lib)), Graphs: map[string]string{}}
+	for _, n := range slices.Concat(l.Architectures, l.Classes) {
+		if g, ok := graphIn(files, n); ok {
+			l.Graphs[n] = g
+		}
+	}
+	return l, nil
+}
+
+func architecturesIn(files []*modelJSON) []string {
 	out := []string{towerArch}
 	for _, mj := range files {
 		for _, n := range mj.GGUF {
@@ -89,7 +121,7 @@ func Architectures() ([]string, error) {
 		}
 	}
 	sort.Strings(out)
-	return out, nil
+	return out
 }
 
 // GraphOf is the library file whose graph a GGUF architecture name or a
@@ -102,22 +134,6 @@ func GraphOf(name string) (string, bool) {
 		return "", false
 	}
 	return graphIn(files, name)
-}
-
-// GraphsOf is GraphOf for every name in names, the library read once: a name
-// the library states no graph for is absent.
-func GraphsOf(names []string) (map[string]string, error) {
-	files, err := libraryFiles()
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(names))
-	for _, n := range names {
-		if g, ok := graphIn(files, n); ok {
-			out[n] = g
-		}
-	}
-	return out, nil
 }
 
 // graphIn is GraphOf over the library's files.

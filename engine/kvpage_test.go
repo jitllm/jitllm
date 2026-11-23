@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"hash"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -262,4 +264,57 @@ func TestChunkKeysAreTheirDigests(t *testing.T) {
 	if len(kc.ck) != len(kc.seq)/kvChunk {
 		t.Fatalf("%d chunk keys kept for %d positions", len(kc.ck), len(kc.seq))
 	}
+}
+
+// resets counts a hasher's Resets: one for each key digest names.
+type resets struct {
+	hash.Hash
+	n int
+}
+
+func (r *resets) Reset() { r.n++; r.Hash.Reset() }
+
+// TestTailKeysAreTheirDigests: every layer of a page size names the same
+// partial page, and it is hashed once for all of them -- the key each layer
+// gets is the digest of what it names, across a growing sequence, a rollback
+// that rewrites the tail and two page sizes. Against a key
+// hashed for each layer that asks, 32 layers hash it 32 times.
+func TestTailKeysAreTheirDigests(t *testing.T) {
+	h := &resets{Hash: sha256.New()}
+	kc := &kvCache{ns: "t", geom: []byte("g"), bh: map[int][]string{}, hasher: h}
+	const layers = 32
+	check := func(p int) {
+		t.Helper()
+		n, fill := len(kc.seq)/p, len(kc.seq)%p
+		if fill == 0 {
+			n, fill = n-1, p-1
+		}
+		h.n = 0
+		var keys [layers]string
+		for li := range keys {
+			keys[li] = kc.pageKeyFillP(p, n, fill)
+		}
+		if h.n != 1 {
+			t.Fatalf("p %d: %d layers hashed the partial page %d times, want once", p, layers, h.n)
+		}
+		want := kc.digest(p, fill, n*p+fill)
+		for li, k := range keys {
+			if k != want {
+				t.Fatalf("p %d, layer %d: the partial page ending at %d of %d is %q, its digest %q", p, li, n*p+fill, len(kc.seq), k, want)
+			}
+		}
+	}
+	ids := make([]int32, 100)
+	for i := range ids {
+		ids[i] = int32(i * 7)
+	}
+	kc.note(0, ids[:40]...)
+	check(16)
+	check(32)
+	kc.note(40, ids[40:]...)
+	check(16)
+	check(32)
+	kc.note(33, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9) // a rollback rewrites the tail
+	check(16)
+	check(32)
 }

@@ -78,6 +78,11 @@ func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
 // TestSixtyFourRequestsTimeSliced is the same load at fairness level 100:
 // rows are parked for the requests waiting on the card's room, and every
 // request still completes, in both waves, with joint steps.
+//
+// The first wave parks: until a swap has been timed the slice is the
+// level's. Past that it is no shorter than keeps the rows' swaps within the
+// decode step's share (stepLoop.quantum), which at 64 rows can outlast the
+// 128 tokens a request generates, so a later wave may park none.
 func TestSixtyFourRequestsTimeSliced(t *testing.T) {
 	for wave, w := range sixtyFour(t, 2, false, 100) {
 		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d parks, %d resumes parked again, "+
@@ -86,8 +91,11 @@ func TestSixtyFourRequestsTimeSliced(t *testing.T) {
 		if w.failed > 0 {
 			t.Fatalf("wave %d: %d of 64 requests failed", wave, w.failed)
 		}
-		if w.joint == 0 || w.parks == 0 {
-			t.Fatalf("wave %d: %d joint steps, %d parks: the gate did not time-slice joint rows", wave, w.joint, w.parks)
+		if w.joint == 0 {
+			t.Fatalf("wave %d: no joint step", wave)
+		}
+		if wave == 0 && w.parks == 0 {
+			t.Fatal("wave 0: no row parked at the level's slice: the gate did not time-slice joint rows")
 		}
 	}
 }

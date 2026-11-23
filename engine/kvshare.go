@@ -449,7 +449,7 @@ func (s *Instance) UnshareKV() {
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		s.kv.layers[li].sh = nil
 	}
-	s.kv.ns = ""
+	s.kv.ns, s.kv.tails = "", s.kv.tails[:0]
 }
 
 // ShareKV makes this session hold the sealed pages of its history once with

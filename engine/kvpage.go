@@ -507,6 +507,10 @@ type kvCache struct {
 	// order, computed in one pass over seq (fillChunkKeys) and cut back with
 	// it, as bh is for a page size.
 	ck []string
+	// tails is pageKeyFillP's last key for each page size: every layer of
+	// that size names the same partial page, and each would hash the whole
+	// sequence for it. Cut with seq.
+	tails []tailKey
 	// hasher, hbuf and sum are digest's, kept; names is every key it has
 	// named, by digest (kvNames bounds it). probes is restore's probe list,
 	// and wr a page read's writer: kept, so a warm restore allocates nothing.
@@ -976,7 +980,7 @@ func (s *Session) SetCacheKey(ns string) error {
 			"position %d -- the tokens before it were never recorded and the pages "+
 			"after it would be named by a shifted window", s.pos)
 	}
-	s.kv.ns = ns
+	s.kv.ns, s.kv.tails = ns, s.kv.tails[:0]
 	return nil
 }
 
@@ -1550,7 +1554,7 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 		tokens = s.opt.staleKeyFault(key)
 	}
 	// The tokens come first: restore() names the pages by H(tokens[0:boundary]).
-	s.kv.seq = append(s.kv.seq[:0], tokens...)
+	s.kv.seq, s.kv.tails = append(s.kv.seq[:0], tokens...), s.kv.tails[:0]
 	for p := range s.kv.bh {
 		s.kv.bh[p] = s.kv.bh[p][:0]
 	}
@@ -1595,7 +1599,7 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 	// Past the restored prefix the sequence is whatever the caller goes on to
 	// generate, so the tail of the prompt stays and the rest is appended as it
 	// arrives. Trimming to n would lose the tail this call is about to prefill.
-	s.kv.seq = append(s.kv.seq[:0], tokens...)
+	s.kv.seq, s.kv.tails = append(s.kv.seq[:0], tokens...), s.kv.tails[:0]
 	// A restored prefix is pushed onto the card for placed blocks, whose
 	// history lives there (host pages are written only for host blocks). This
 	// runs before advance, which seals and trims, so gather finds the pages
@@ -2461,7 +2465,23 @@ func (kc *kvCache) pageKeyFillP(p, n, fill int) string {
 	if end > len(kc.seq) {
 		return ""
 	}
-	return kc.digest(p, fill, end)
+	for i := range kc.tails {
+		if t := &kc.tails[i]; t.p == p {
+			if t.fill != fill || t.end != end {
+				t.fill, t.end, t.key = fill, end, kc.digest(p, fill, end)
+			}
+			return t.key
+		}
+	}
+	kc.tails = append(kc.tails, tailKey{p: p, fill: fill, end: end, key: kc.digest(p, fill, end)})
+	return kc.tails[len(kc.tails)-1].key
+}
+
+// tailKey is a partial page's key: fill positions of a page of p, ending at
+// end.
+type tailKey struct {
+	p, fill, end int
+	key          string
 }
 
 func (kc *kvCache) pageKey(li, n int) string { return kc.pageKeyP(kc.layers[li].p, n) }
@@ -2619,6 +2639,7 @@ func (kc *kvCache) note(pos int, ids ...int32) {
 	}
 	if pos < len(kc.seq) {
 		kc.seq = kc.seq[:pos] // a rollback rewrites the tail
+		kc.tails = kc.tails[:0]
 		kc.chunked = min(kc.chunked, pos/kvChunk*kvChunk)
 		for p := range kc.bh {
 			if n := pos / p; n < len(kc.bh[p]) {
@@ -2648,7 +2669,7 @@ func (kc *kvCache) reset() {
 		s.out, s.lastSealed, s.written = s.out[:0], 0, 0
 		s.crossForget(0)
 	}
-	kc.seq, kc.named = kc.seq[:0], kc.named[:0]
+	kc.seq, kc.named, kc.tails = kc.seq[:0], kc.named[:0], kc.tails[:0]
 	if kc.bh == nil {
 		kc.bh = map[int][]string{}
 	}

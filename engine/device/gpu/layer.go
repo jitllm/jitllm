@@ -4059,6 +4059,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if R > 1 && sv != nil {
 					sv.rows = nrow
+					if cp != nil && !sv.f.apartAt(len(l.graph.Out), nrow) {
+						cp = nil
+					}
 					if cp != nil {
 						cp.rows = nrow
 					}

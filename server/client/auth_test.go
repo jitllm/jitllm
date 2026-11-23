@@ -86,6 +86,9 @@ func TestDiscoverFindsAServiceOnTheOldPort(t *testing.T) {
 	now := guarded(t, "")
 	a := now.Listener.Addr().String()
 	if c, err := client.Discover(ctx, a, localserver.WithDefaults(a, old.Listener.Addr().String())); err != nil || c.Legacy {
-		t.Fatalf("the default answers: %v, %v", c, err)
+		// Asked again alone, the default says why it was passed over: an
+		// error, or an answer that came too late the first time.
+		_, alone := client.Discover(ctx, a)
+		t.Fatalf("the default answers: legacy %v, %v; asked alone: %v", c != nil && c.Legacy, err, alone)
 	}
 }
