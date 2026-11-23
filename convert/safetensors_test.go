@@ -241,7 +241,7 @@ func TestSafetensorsRefusals(t *testing.T) {
 	}{
 		{"unknown architecture", func(m *synthModel) {
 			m.cfg["architectures"] = []any{"MistralForCausalLM"}
-		}, "is not implemented from safetensors"},
+		}, "no class statement in convert/models"},
 		{"no config.json", func(m *synthModel) { m.cfg = nil },
 			"hyperparameters in config.json"},
 		{"no tokenizer.json", func(m *synthModel) { m.tokJSON = nil },

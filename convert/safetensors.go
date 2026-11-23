@@ -1082,8 +1082,8 @@ func classRefusal(c *hfConfig) error {
 	if have == "" {
 		have = "none, and model_type is " + strconv.Quote(c.ModelType)
 	}
-	return fmt.Errorf("convert: %s: architectures %s is not implemented from "+
-		"safetensors (implemented: %s)", c.path, have, strings.Join(HFClasses(), ", "))
+	return fmt.Errorf("convert: %s: architectures %s: no class statement in "+
+		"convert/models states its graph over ops (stated: %s)", c.path, have, strings.Join(HFClasses(), ", "))
 }
 
 // HFClasses is every Hugging Face class (config.json's architectures) the
