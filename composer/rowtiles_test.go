@@ -266,8 +266,9 @@ func tiledWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []b
 	return raw
 }
 
-// TestComposedGPURowTiles forms a projection of 2048 rows of 256 once at a
-// capacity of 512 rows and once at decode's one row, on every device
+// TestComposedGPURowTiles forms a projection of 2048 rows of 256 at a
+// capacity of 512 rows, at one of 100 (its tiles' last starting a tile
+// before its end) and at decode's one row, on every device
 // present, over a float matrix and every packed format of the served
 // models, with int8 and with float activations, and runs the one form at
 // every count of rows a call may state -- 1, 3, 7, 31, 33, 100, 511 and 512,
@@ -340,7 +341,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 					} else {
 						want = int8Projection(t, typ, w, x, n, k, 32, false)
 					}
-					for _, R := range []int{1, capacity} {
+					for _, R := range []int{1, 100, capacity} {
 						name := fmt.Sprintf("%v %dx%d/float %v/%d rows", typ, n, k, float, R)
 						b := graph.New()
 						in := b.In("x", k)
