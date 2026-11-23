@@ -17,6 +17,13 @@ import (
 // power of two, that divide the trips; where those leave a loop not yet cut
 // more than Parts trips a segment, that many segments, the last ones reading
 // the last term again, which never wins.
+//
+// On a GPU, a kernel of a form's capacity whose rows are a call's is cut at
+// launch by the call's rows (Cut): the capacity's segments a row are those
+// above, and a call of fewer rows cuts each of its rows into more, up to
+// one row's, so the threads and the planes stay the capacity's while a call
+// of a few rows runs each row's terms across as many threads as the
+// capacity's rows would.
 type SplitExtreme struct {
 	Parts int
 	Kinds []PrimKind
@@ -25,10 +32,10 @@ type SplitExtreme struct {
 func (SplitExtreme) Name() string { return "splitextreme" }
 
 func (s SplitExtreme) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
-	return eachKernel(s.Name(), ks, s.apply)
+	return eachKernel(s.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) { return s.apply(k, d) })
 }
 
-func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
+func (s SplitExtreme) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	if n.Work || !covers(s.Kinds, n.Kind) {
 		return nil, false, nil
 	}
@@ -50,9 +57,11 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 		S = most
 		trip = (T + S - 1) / S
 	}
-	if S <= 1 {
+	cut := s.callCut(n, d, S, T)
+	if S <= 1 && cut.Most < 2 {
 		return nil, false, nil
 	}
+	S = max(S, 1)
 	cst := n.Stores[cs]
 	vst := Store{Ax: cst.Ax}
 	vt, ct := n.Nodes[ext].Type, n.Nodes[car].Type
@@ -76,24 +85,38 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 		}
 	}
 	seg := p.add(Node{Op: OpCoord, A: at, Type: ir.U32})
+	tripAt := p.u32(trip)
+	if cut.Most > 1 {
+		seg, tripAt = p.callSegments(cut, S, T)
+		trip = (T + S - 1) / S
+		p.Loops[c].Count, p.Loops[c].Capped = tripAt+1, true
+	}
 	p.Loops[c].Trip = trip
 	if it := p.iterOf(c); it >= 0 {
-		a := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, p.u32(trip)), it)
+		a := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, tripAt), it)
 		k := a
-		if trip*S != T {
+		if trip*S != T || cut.Most > 1 {
 			k = p.bin(OpMin, ir.U32, a, p.u32(T-1))
 		}
 		p.redirect(it, k, a)
 	}
 	vb := p.buf(Buf{Kind: BufOut, Elem: vt, Operand: vplanes, Shape: shape})
 	cb := p.buf(Buf{Kind: BufOut, Elem: ct, Operand: cplanes, Shape: shape})
-	vstore := Store{Buf: vb, Val: ext, At: -1, Ax: slices.Insert(slices.Clone(vst.Ax), at, seg)}
+	// A cut call's planes are its rows' segments in order, each row's s of
+	// them: the thread's own place in the capacity's planes.
+	planeAx := func(ax []int) []int {
+		if cut.Most < 2 {
+			return slices.Insert(slices.Clone(ax), at, seg)
+		}
+		return append([]int{p.add(Node{Op: OpCoord, A: 0, Type: ir.U32}), p.add(Node{Op: OpCoord, A: 1, Type: ir.U32})}, ax[1:]...)
+	}
+	vstore := Store{Buf: vb, Val: ext, At: -1, Ax: planeAx(vst.Ax)}
 	if vs >= 0 {
 		p.Stores[vs] = vstore
 	} else {
 		p.Stores = append(p.Stores, vstore)
 	}
-	p.Stores[cs] = Store{Buf: cb, Val: car, At: -1, Ax: slices.Insert(slices.Clone(cst.Ax), at, seg)}
+	p.Stores[cs] = Store{Buf: cb, Val: car, At: -1, Ax: planeAx(cst.Ax)}
 
 	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of,
 		Capacity: n.Capacity}
@@ -103,9 +126,16 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	}
 	vin := m.buf(Buf{Kind: BufIn, Elem: vt, Operand: vplanes, Shape: shape})
 	cin := m.buf(Buf{Kind: BufIn, Elem: ct, Operand: cplanes, Shape: shape})
-	l := m.loop(S, -1)
+	l := m.loop(S*max(cut.Most, 1), -1)
 	it := m.add(Node{Op: OpIter, At: l, Type: ir.U32})
 	idx := slices.Insert(slices.Clone(coords), at, it)
+	if cut.Most > 1 {
+		_, cs := m.cutOf(cut)
+		segs := m.bin(OpMul, ir.U32, cs, m.u32(S))
+		m.Loops[l].Count, m.Loops[l].Capped = segs+1, true
+		flat := m.bin(OpAdd, ir.U32, m.bin(OpMul, ir.U32, coords[0], segs), it)
+		idx = append([]int{m.bin(OpDiv, ir.U32, flat, m.u32(S)), m.bin(OpRem, ir.U32, flat, m.u32(S))}, coords[1:]...)
+	}
 	x := m.add(Node{Op: OpLoad, Type: vt, Buf: vin, Ax: idx})
 	y := m.add(Node{Op: OpLoad, Type: ct, Buf: cin, Ax: slices.Clone(idx)})
 	acc := m.add(Node{Op: OpFold, At: l, Type: vt, B: m.f32(math.Float32bits(float32(math.Inf(-1))))})
@@ -120,6 +150,56 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	out[cs] = Store{Buf: m.buf(n.Bufs[cst.Buf]), Val: carried, At: -1, Ax: append([]int(nil), coords...)}
 	m.Stores = out
 	return []*Kernel{p, m}, true, nil
+}
+
+// callCut is the cut at launch (Cut) of n's segments, S a row at its
+// capacity: on a GPU, where n's rows are a call's, at most the segments one
+// row of the call is cut in (Parts over a row's elements, no more than its
+// T terms) over S, as a power of two; none elsewhere.
+func (s SplitExtreme) callCut(n *Kernel, d Device, S, T int) Cut {
+	if d.Kind != DeviceGPU || n.Capacity < 2 || len(n.Space) == 0 || n.Space[0] != n.Capacity ||
+		n.Clamp != 0 || n.RowsHeld || n.Rows != 0 || n.Pick != nil || n.Cut != (Cut{}) {
+		return Cut{}
+	}
+	S = max(S, 1)
+	one := min(s.Parts/max(n.Elements()/n.Capacity, 1), T)
+	most := 1
+	for S*most*2 <= one {
+		most *= 2
+	}
+	if most < 2 {
+		return Cut{}
+	}
+	return Cut{Most: most, Units: n.Capacity, Live: n.Capacity}
+}
+
+// callSegments makes p, a part whose leading axes are the capacity's rows
+// and their S segments, run a call's rows cut at launch by cut: thread
+// (r, j) is place r*S+j of the call's rows' segments, s = S*cut.Of(rows) a
+// row, a row's segments ceil(T/s) terms each; the threads past the call's
+// segments recompute its last. The thread's row stands for every read of
+// the leading coordinate; it returns the nodes of its segment and of the
+// terms a segment takes.
+func (p *Kernel) callSegments(cut Cut, S, T int) (seg, trip int) {
+	U := ir.U32
+	var rows []int
+	for i, nd := range p.Nodes {
+		if nd.Op == OpCoord && nd.A == 0 {
+			rows = append(rows, i)
+		}
+	}
+	units, cs := p.cutOf(cut)
+	segs := p.bin(OpMul, U, cs, p.u32(S))
+	flat := p.bin(OpAdd, U, p.bin(OpMul, U, p.add(Node{Op: OpCoord, A: 0, Type: U}), p.u32(S)), p.add(Node{Op: OpCoord, A: 1, Type: U}))
+	row, seg := p.bin(OpDiv, U, flat, segs), p.bin(OpRem, U, flat, segs)
+	for _, r := range rows {
+		p.redirect(r, row, -1)
+	}
+	trip = p.bin(OpDiv, U, p.bin(OpAdd, U, p.u32(T-1), segs), segs)
+	inner := p.Elements() / (p.Space[0] * p.Space[1])
+	p.Clamp = p.bin(OpMul, U, p.bin(OpMul, U, units, segs), p.u32(inner)) + 1
+	p.RowsHeld, p.Cut = true, cut
+	return seg, trip
 }
 
 // extremeSplittable finds an element's argmax: a top-level loop whose only

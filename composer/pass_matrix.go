@@ -42,8 +42,8 @@ import (
 // (splits): each writes its sums to planes, and a combine sums them and
 // stores, at Launch for its launch and Plane a word it moves on one unit.
 // The stage converts the row's factor itself where the words the
-// workgroups read of it cost less than a halves kernel's launch and words
-// (rowCost); Convert, where set, states it (1) or not (-1).
+// workgroups read of it cost less than a halves kernel's words (rowCost);
+// Convert, where set, states it (1) or not (-1).
 type Matrix struct {
 	Rows, Cols, Depth int
 	Warps             [2]int
@@ -196,7 +196,7 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		sig := h.computes()
 		c := costs[sig]
 		if c == nil {
-			c = newRowCost(k, f, d)
+			c = newRowCost(k, f)
 			costs[sig] = c
 		}
 		c.add(k, q.Cols)
@@ -265,9 +265,10 @@ func (p Matrix) plan(k *Kernel, d Device) (Matrix, bilinear, bool) {
 }
 
 // rowCost is the words a row factor costs its projections: written as
-// halves by a kernel of its own -- a launch, its inputs read once and its
-// halves written, then each workgroup reading its rows' halves -- or
-// converted in each workgroup's stage, each reading its rows' inputs.
+// halves in the workgroups that find its rows' scales (rowScale, which runs
+// either way) -- its inputs read again and its halves written, then each
+// workgroup reading its rows' halves -- or converted in each workgroup's
+// stage, each reading its rows' inputs.
 type rowCost struct {
 	halves, convert int
 	// elem is the words an element of the factor reads along the row and
@@ -275,7 +276,7 @@ type rowCost struct {
 	elem, along int
 }
 
-func newRowCost(k *Kernel, f bilinear, d Device) *rowCost {
+func newRowCost(k *Kernel, f bilinear) *rowCost {
 	row := k.dependsOn(func(nd Node) bool { return nd.Op == OpCoord && nd.A == 0 })
 	iter := k.dependsOn(func(nd Node) bool { return nd.Op == OpIter && nd.At == 0 })
 	c := &rowCost{}
@@ -292,7 +293,7 @@ func newRowCost(k *Kernel, f bilinear, d Device) *rowCost {
 	if f.index > 0 {
 		RK = f.rows * k.Loops[0].Trip
 	}
-	c.halves = d.Launch + RK*c.elem + RK/2
+	c.halves = RK*c.elem + RK/2
 	return c
 }
 
@@ -550,12 +551,15 @@ func (k *Kernel) rowIndex(x int) (int, int) {
 // value is 65504: a row whose largest magnitude reaches 2^15 is scaled by a
 // power of two below it, and its sums by the inverse, both exact. A row
 // below it is scaled by one, so every row the format holds computes as it
-// did. A row's scale is its largest magnitude's biased exponent, held at
-// least scaleFloor (2^14's), and rowScale is the kernel writing it.
+// did. rowScale is the kernel writing each row's largest magnitude, and a
+// row's scale is that magnitude's biased exponent, held at least scaleFloor
+// (2^14's).
 const scaleFloor = 127 + 14
 
-// rowScale is a kernel writing each row's scale exponent of k's factor of
-// the row, over the rows halves writes, and its buffer.
+// rowScale is a kernel writing each row's largest magnitude of k's factor
+// of the row, over the rows halves writes, and its buffer: a trip takes the
+// two elements of a word of halves, so the map writing them over the same
+// row runs in its workgroup (WorkRow).
 func rowScale(k *Kernel, f bilinear) (*Kernel, Buf) {
 	U, F := ir.U32, ir.F32
 	R := k.Space[0]
@@ -563,31 +567,41 @@ func rowScale(k *Kernel, f bilinear) (*Kernel, Buf) {
 		R = f.rows
 	}
 	out := k.Bufs[k.Stores[0].Buf].Operand
-	b := Buf{Kind: BufOut, Elem: U, Shape: []int{R},
-		Operand: Operand{Kind: OperandScratch, Name: out.Name + ".rowscale", Elem: U, Temp: true, Of: out.Of}}
+	b := Buf{Kind: BufOut, Elem: F, Shape: []int{R},
+		Operand: Operand{Kind: OperandScratch, Name: out.Name + ".rowscale", Elem: F, Temp: true, Of: out.Of}}
 	h := &Kernel{Name: k.Name + ".rowscale", Kind: PrimReduce, Space: []int{R}, Part: k.Part, Apart: k.Apart, Of: k.Of, Capacity: k.Capacity}
 	if k.Rows > 0 && f.index == 0 {
 		h.Rows = copyInto(h, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false }) + 1
 	}
-	l := h.loop(k.Loops[0].Trip, -1)
+	l := h.loop(k.Loops[0].Trip/2, -1)
 	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
-	at := h.add(Node{Op: OpIter, At: l, Type: U})
-	x := copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
-		switch {
-		case f.index > 0 && i == f.index:
-			return r, true
-		case nd.Op == OpCoord && nd.A == 0:
-			return r, true
-		case nd.Op == OpIter && nd.At == 0:
-			return at, true
-		}
-		return 0, false
-	})
+	w := h.bin(OpMul, U, h.add(Node{Op: OpIter, At: l, Type: U}), h.u32(2))
+	magnitude := func(at int) int {
+		x := copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
+			switch {
+			case f.index > 0 && i == f.index:
+				return r, true
+			case nd.Op == OpCoord && nd.A == 0:
+				return r, true
+			case nd.Op == OpIter && nd.At == 0:
+				return at, true
+			}
+			return 0, false
+		})
+		return h.bin(OpMax, F, x, h.bin(OpSub, F, h.f32(0), x))
+	}
+	term := h.bin(OpMax, F, magnitude(w), magnitude(h.bin(OpAdd, U, w, h.u32(1))))
 	fold := h.add(Node{Op: OpFold, Type: F, At: l, B: h.f32(0)})
-	h.Nodes[fold].A = h.bin(OpMax, F, fold, h.bin(OpMax, F, x, h.bin(OpSub, F, h.f32(0), x)))
-	e := h.bin(OpAnd, U, h.bin(OpShr, U, h.add(Node{Op: OpBitcast, Type: U, A: fold}), h.u32(23)), h.u32(255))
-	h.Stores = append(h.Stores, Store{Buf: h.buf(b), Val: h.bin(OpMax, U, e, h.u32(scaleFloor)), At: -1, Ax: []int{r}})
+	h.Nodes[fold].A = h.bin(OpMax, F, fold, term)
+	h.Stores = append(h.Stores, Store{Buf: h.buf(b), Val: fold, At: -1, Ax: []int{r}})
 	return h, b
+}
+
+// scaleExp is the scale exponent of a row of largest magnitude v.
+func (m *Kernel) scaleExp(v int) int {
+	U := ir.U32
+	e := m.bin(OpAnd, U, m.bin(OpShr, U, m.add(Node{Op: OpBitcast, Type: U, A: v}), m.u32(23)), m.u32(255))
+	return m.bin(OpMax, U, e, m.u32(scaleFloor))
 }
 
 // scaleOf is the factor a row of scale exponent e is multiplied by before
@@ -613,8 +627,8 @@ func scaleIn(b Buf) Buf {
 // halves is a kernel writing the factor of the row of k as binary16 pairs,
 // a word of a row a thread, into a buffer of R rows of K/2 words, and that
 // buffer: the factor is rounded once, not once a workgroup of outputs, and a
-// trip stages it as words. Each row is scaled first by its exponent in
-// scale (rowScale).
+// trip stages it as words. Each row is scaled first by its largest
+// magnitude's exponent (rowScale), read at the row alone.
 func halves(k *Kernel, f bilinear, scale Buf) (*Kernel, Buf) {
 	U := ir.U32
 	R, W := k.Space[0], k.Loops[0].Trip/2
@@ -632,7 +646,8 @@ func halves(k *Kernel, f bilinear, scale Buf) (*Kernel, Buf) {
 	}
 	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
 	w := h.add(Node{Op: OpCoord, A: 1, Type: U})
-	s := h.scaleOf(h.add(Node{Op: OpLoad, Type: U, Buf: h.buf(scaleIn(scale)), A: r}))
+	scale.Kind = BufIn
+	s := h.scaleOf(h.scaleExp(h.add(Node{Op: OpLoad, Type: ir.F32, Buf: h.buf(scale), Ax: []int{r}})))
 	elem := func(at int) int {
 		return h.un(OpHalf, U, h.bin(OpMul, ir.F32, copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
 			switch {
@@ -773,7 +788,7 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 				return 0, false
 			})
 		}
-		return m.add(Node{Op: OpLoad, Type: U, Buf: sw, A: ri})
+		return m.scaleExp(m.add(Node{Op: OpLoad, Type: F, Buf: sw, A: ri}))
 	}
 	var h *Kernel
 	hw := -1

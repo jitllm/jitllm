@@ -530,8 +530,7 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 		// Growth first -- a page-out of streamed weights or more pool -- and
 		// when nothing can grow, cold history goes to host memory (kvevict.go). A
 		// driver's refusal inside the budget is no room either.
-		want := l.n + count - len(l.free)
-		err := g.growKVLayer(kp, l, want)
+		err := g.growFree(kp, l, count)
 		switch {
 		case err == nil:
 			g.kvTight = false
@@ -546,10 +545,10 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 			g.fail("KV growth: " + err.Error())
 		}
 		if err != nil && !g.evictForRoom(sid, kp, l, count) && !(errors.Is(err, ErrKVCapacity) && g.evictForBytes(sid, kp, l, count)) {
-			if !errors.Is(err, ErrKVCapacity) || g.asking || !g.streamForRoom(kp.pageBytes(l)*uint64(want-l.n)) {
+			if !errors.Is(err, ErrKVCapacity) || g.asking || !g.streamForRoom(kp.pageBytes(l)*uint64(count-min(count, len(l.free)))) {
 				return err
 			}
-			if err := g.growKVLayer(kp, l, want); err != nil {
+			if err := g.growFree(kp, l, count); err != nil {
 				return err
 			}
 		}
@@ -607,6 +606,18 @@ func (g *devTier) flushTabs() error {
 	clear(g.tabPend)
 	g.tabPend = g.tabPend[:0]
 	return err
+}
+
+// growFree grows layer l until it holds n free ids. The wait for submissions
+// in flight lets g.mu go, so the shortfall is counted after it: counted
+// before, another session could take the ids meanwhile.
+func (g *devTier) growFree(kp *kvPool, l *kvLayerPool, n int) error {
+	g.quiesce()
+	l.fence()
+	if len(l.free) >= n {
+		return nil
+	}
+	return g.growKVLayer(kp, l, l.n+n-len(l.free))
 }
 
 // growKVLayer makes layer l's buffers hold at least want pages: doubling when
