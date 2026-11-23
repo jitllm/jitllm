@@ -39,6 +39,10 @@ func (l *launcher) issue(k backend.Kernel, groups, width int, bufs ...backend.Bu
 		if *l.err != nil {
 			return *l.err
 		}
+		if ps.plan {
+			// A placement's collection: the launch is the step's to issue.
+			return nil
+		}
 	}
 	t.bufs = append(t.bufs[:0], bufs...)
 	err := t.s.Launch(k, groups, width, t.bufs...)

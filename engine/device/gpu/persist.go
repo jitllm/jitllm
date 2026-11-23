@@ -83,9 +83,9 @@ type persister struct {
 	bind [persistMaxPend][persistMaxArgs]int
 	sig  []uint64
 	args []backend.Buf
-	// plan is a placement's collection, which issues nothing: a launch past
-	// the last it holds marks it over, and no plan is composed from it.
-	plan, over bool
+	// plan is a placement's collection, which issues nothing: each run it
+	// cuts, where a step would issue it, is planned instead.
+	plan bool
 	// sync is the session's grid barrier buffer (ir.GridSyncWords words),
 	// dep its dependency counters (depWords words, Config.PersistDeps).
 	sync, dep backend.Buf
@@ -248,8 +248,7 @@ func (l *launcher) persistFlush() {
 // then flushes and launches it itself).
 func (ps *persister) add(k backend.Kernel, groups, width int, bufs []backend.Buf) bool {
 	if ps.n == persistMaxPend || len(bufs) > persistMaxArgs {
-		ps.over = ps.plan
-		return ps.plan
+		return false
 	}
 	p := &ps.pend[ps.n]
 	p.k, p.src, p.groups, p.width, p.nb = k, backend.IROf(k), groups, width, len(bufs)
@@ -303,8 +302,18 @@ func (g *devTier) persistSign(ps *persister, n int) (uint64, bool) {
 }
 
 // persistIssue issues n collected launches by the plan their block's
-// placement composed, or per-op where it composed none for them.
+// placement composed, or per-op where it composed none for them. A
+// placement's collection (persister.plan) plans them instead.
 func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
+	if ps.plan {
+		if h, ok := g.persistSign(ps, n); ok {
+			g.persistPlan(h, ps, n)
+		}
+		for i := range n {
+			clear(ps.pend[i].bufs[:ps.pend[i].nb])
+		}
+		return nil
+	}
 	g.PersistRuns++
 	h, ok := g.persistSign(ps, n)
 	if !ok {
@@ -388,7 +397,8 @@ func (g *devTier) persistFind(h uint64, ps *persister) *persistPlan {
 // persistPlace composes block li's persistent plan at its placement: the
 // launches its decode step issues at one row -- the same part, instance and
 // buffers (servedStep, blockIO), and the copy after a part that writes apart
-// -- collected without a session, and the plan built for their signature. A
+// -- collected without a session, and a plan built for each run the step
+// will cut them into (a launch the collection cannot hold goes alone). A
 // block whose step makes calls of its own between launches (rowsRun,
 // pagedRun, streamRun) gets none and runs per-op. Callers hold g.mu and
 // prewarming.
@@ -424,12 +434,7 @@ func (g *devTier) persistPlace(bs *blockScratch, l *layer, li int) {
 			return
 		}
 	}
-	if ps.over || ps.n == 0 {
-		return
-	}
-	if h, ok := g.persistSign(ps, ps.n); ok {
-		g.persistPlan(h, ps, ps.n)
-	}
+	lc.persistFlush()
 }
 
 // persistPlan builds the plan for the launches persistSign bound, where no
