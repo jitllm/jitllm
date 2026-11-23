@@ -834,7 +834,7 @@ func roleName(r Role) (string, bool) {
 func roleGroups() []func(Role) (string, bool) {
 	return []func(Role) (string, bool){
 		bitnetRoleName, visionRoleName, moe2RoleName, flagshipRoleName,
-		decisionRoleName, audioRoleName, visionFamRoleName,
+		decisionRoleName, audioRoleName, visionFamRoleName, loopRoleName,
 	}
 }
 
@@ -1005,5 +1005,5 @@ func (r Role) Expanded() bool {
 		return true
 	}
 	return r == RoleXIELU || r == RoleAttnSubNorm || r == RoleFFNSubNorm || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r) ||
-		audioExpanded(r)
+		audioExpanded(r) || loopExpanded(r)
 }
