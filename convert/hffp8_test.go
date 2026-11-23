@@ -62,14 +62,17 @@ func seqBytes(n, seed int) []byte {
 // formats to the rows the container holds them in: an NVFP4 bank's codes,
 // E4M3 scales and per-sheet amax over the denominator, and an MXFP8 weight's
 // values and E8M0 scales, merged into one tensor each and laid out by
-// NV4Rows and MX8Rows, every byte as stored. A cast group is passed over;
-// an unknown transform, an activation quantization of a form not known, a
-// missing amax and scales that do not cover the codes are refused.
+// NV4Rows and MX8Rows, every byte as stored. The groups' activation
+// quantization is the publisher's runtime: the engine runs the stored weights
+// and quantizes nothing, so both of the file's forms convert. A cast group is
+// passed over; an unknown transform, a missing amax and scales that do not
+// cover the codes are refused.
 func TestFP8GroupsConvertAsStored(t *testing.T) {
 	qc := `{"model": {"parameter_groups": [
 		{"tensors": ["e.w13"], "weight_transform": "nvfp4_nearest", "weight_block_shape": [1, 16], "weight_scale_format": "amax_denominator",
 		 "required_activation_quantization": {"format": "nvfp4_e2m1", "block_size": 16, "amax_type": "per_token", "scale_dtype": "float8_e4m3fn"}},
-		{"tensors": ["m.w"], "weight_transform": "mxfp8_nearest", "weight_block_shape": [32, 32]},
+		{"tensors": ["m.w"], "weight_transform": "mxfp8_nearest", "weight_block_shape": [32, 32],
+		 "required_activation_quantization": {"format": "mxfp8_e4m3", "block_size": 32, "scale_dtype": "ue8m0"}},
 		{"tensors": ["n.w"], "weight_transform": "cast"}]}}`
 	dir := hfDir{fstest.MapFS{"hf_quant_config.json": {Data: []byte(qc)}}, "test"}
 	groups, err := hfQuantGroupsOf(dir)
@@ -174,16 +177,6 @@ func TestFP8GroupsConvertAsStored(t *testing.T) {
 	bad := hfDir{fstest.MapFS{"hf_quant_config.json": {Data: []byte(strings.Replace(qc, `"mxfp8_nearest"`, `"mxfp6_nearest"`, 1))}}, "test"}
 	if _, err := hfQuantGroupsOf(bad); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("an unknown transform: %v, want ErrNotImplemented", err)
-	}
-	// An activation quantization of another form is refused, not dropped:
-	// the engine's activations are f32, which only the known form is
-	// converted to.
-	for _, from := range []string{`"block_size": 16`, `"per_token"`, `"nvfp4_e2m1"`} {
-		to := map[string]string{`"block_size": 16`: `"block_size": 32`, `"per_token"`: `"per_tensor"`, `"nvfp4_e2m1"`: `"mxfp8_e4m3"`}[from]
-		bad := hfDir{fstest.MapFS{"hf_quant_config.json": {Data: []byte(strings.Replace(qc, from, to, 1))}}, "test"}
-		if _, err := hfQuantGroupsOf(bad); !errors.Is(err, ErrNotImplemented) || !strings.Contains(err.Error(), "activations") {
-			t.Errorf("activations quantized with %s: %v, want ErrNotImplemented naming them", to, err)
-		}
 	}
 	if g, err := hfQuantGroupsOf(hfDir{fstest.MapFS{}, "test"}); g != nil || err != nil {
 		t.Errorf("no hf_quant_config.json: %v, %v", g, err)

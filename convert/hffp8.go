@@ -33,28 +33,10 @@ type hfQuantModel struct {
 }
 
 type hfQuantGroup struct {
-	Tensors     []string    `json:"tensors"`
-	Transform   string      `json:"weight_transform"`
-	Block       []int       `json:"weight_block_shape"`
-	ScaleFormat string      `json:"weight_scale_format"`
-	Act         *hfActQuant `json:"required_activation_quantization"`
-}
-
-// hfActQuant is how the publisher quantizes a group's input rows before
-// its product. The engine computes the product with f32 activations, so
-// a form it knows is converted and runs unquantized activations, and any
-// other is refused by name rather than dropped.
-type hfActQuant struct {
-	Format     string `json:"format"`
-	Block      int    `json:"block_size"`
-	Amax       string `json:"amax_type"`
-	ScaleDtype string `json:"scale_dtype"`
-}
-
-// known is an NVFP4 activation of a token's 16-element blocks, each with
-// its E4M3 scale: the form a checkpoint's NVFP4 weights are paired with.
-func (a *hfActQuant) known() bool {
-	return a == nil || a.Format == "nvfp4_e2m1" && a.Block == 16 && a.Amax == "per_token" && a.ScaleDtype == "float8_e4m3fn"
+	Tensors     []string `json:"tensors"`
+	Transform   string   `json:"weight_transform"`
+	Block       []int    `json:"weight_block_shape"`
+	ScaleFormat string   `json:"weight_scale_format"`
 }
 
 const (
@@ -82,10 +64,6 @@ func hfQuantGroupsOf(dir hfDir) (map[string]jlm.Type, error) {
 	out := map[string]jlm.Type{}
 	for part, m := range map[string]hfQuantModel{"model": qc.Model, "mtp": qc.MTP} {
 		for i, g := range m.Groups {
-			if !g.Act.known() {
-				return nil, fmt.Errorf("convert: %s: %s group %d quantizes its activations as %+v: %w",
-					dir.path(f), part, i, *g.Act, ErrNotImplemented)
-			}
 			var ty jlm.Type
 			switch {
 			case g.Transform == "cast":
