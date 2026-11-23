@@ -897,7 +897,10 @@ func (lp *stepLoop) nextToken(r *row) bool {
 		return false
 	}
 	r.out = append(r.out, next)
-	if !r.stops {
+	// The reply's last token is kept and not run: no step follows it for
+	// the helper to make its text beside.
+	last := r.n+1 >= r.maxTokens && !lp.dropMaxTokens
+	if !r.stops && !last {
 		// No stop string can end the row here, so its text is not
 		// needed to decide the step: the helper makes it while the
 		// step runs.
@@ -916,9 +919,8 @@ func (lp *stepLoop) nextToken(r *row) bool {
 			return false
 		}
 	}
-	if r.n+1 >= r.maxTokens && !lp.dropMaxTokens {
-		// The reply's last token: kept, and run only by what continues the
-		// history.
+	if last {
+		// Run only by what continues the history.
 		r.n++
 		r.unfed = true
 		lp.finish(r, FinishMaxTokens, "", nil)
