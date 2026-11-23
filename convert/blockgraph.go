@@ -2092,8 +2092,8 @@ func (bf *blockFacts) attend() graph.Attrs {
 	a := graph.Attrs{NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(bf.li)), HeadDim: bf.headDim, Scale: scale,
 		Softcap: float64(c.AttnSoftcap), Bidir: bidir, RowWindows: bidir && c.Flags2.Has(jlm.Flag2MediaPrefix),
 		NoRuns: bf.li < len(c.BidirLayers) && !c.BidirLayers[bf.li]}
-	if bf.c.Sliding(bf.li) {
-		a.Window, a.Chunked = int(c.SWAWindow), c.Flags.Has(jlm.FlagSWAChunked)
+	if w := bf.c.WindowAt(bf.li); w != 0 {
+		a.Window, a.Chunked = int(w), c.Flags.Has(jlm.FlagSWAChunked)
 	}
 	return a
 }

@@ -71,3 +71,24 @@ func (f *File) weightPagesValid() error {
 	}
 	return nil
 }
+
+// windowsValid refuses blocks' windows that are not one a block, or that
+// sit beside a period stating them too, or one wider than the model's
+// widest window.
+func (c *Config) windowsValid() error {
+	if len(c.Windows) == 0 {
+		return nil
+	}
+	if len(c.Windows) != int(c.NLayer) {
+		return fmt.Errorf("jlm: %d blocks' windows for %d blocks", len(c.Windows), c.NLayer)
+	}
+	if c.SWAPeriod != 0 {
+		return fmt.Errorf("jlm: the blocks' windows stated beside a period of %d", c.SWAPeriod)
+	}
+	for b, w := range c.Windows {
+		if w > c.SWAWindow {
+			return fmt.Errorf("jlm: block %d's window of %d is past the model's %d", b, w, c.SWAWindow)
+		}
+	}
+	return nil
+}

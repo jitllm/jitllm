@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -193,6 +194,13 @@ func TestDenseHFClassDefaults(t *testing.T) {
 			func(c *Config) string {
 				return denseOK(c.SWAWindow == 0 && !c.Flags.Has(jlm.FlagNoPEGlobal))
 			}},
+		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention",
+			"full_attention", "full_attention", "sliding_attention"]`, head, func(c *Config) string {
+			// Sliding layers no period describes: each block's own window,
+			// and the full layers' NoPE read off them.
+			return denseOK(c.SWAPeriod == 0 && c.SWAWindow == 4096 && slices.Equal(c.Windows, []uint32{4096, 0, 0, 4096}) &&
+				c.Sliding(0) && !c.Sliding(1) && !c.Sliding(2) && c.Sliding(3) && c.Flags.Has(jlm.FlagNoPEGlobal))
+		}},
 		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 5.0`, head, func(c *Config) string {
 			// No rope_parameters: the class's own YaRN dict, whose base is
 			// 1e6 whatever rope_theta says; head_dim 128.
@@ -337,8 +345,6 @@ func TestDenseHFRefusals(t *testing.T) {
 			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384, "partial_rotary_factor": 0.5}`,
 			"partial_rotary_factor is 0.5"},
 		{"SmolLM3ForCausalLM", `, "no_rope_layers": [1, 0, 1, 1], "tie_word_embeddings": false`, "not every"},
-		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention",
-			"full_attention", "full_attention", "sliding_attention"]`, "no period"},
 		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default"}`,
 			"llama_4_scaling_beta"},
 		{"ArceeForCausalLM", `, "hidden_act": "gelu"`, "activation gelu"},

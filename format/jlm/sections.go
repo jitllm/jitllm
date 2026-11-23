@@ -238,8 +238,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// blocks read their weights from, implies the first thirty-one, no
 	// parts' graphs standing for none; an older reader drops it and finds
 	// blocks whose graphs name weights they do not hold,
-	// which its Open refuses.
-	shared := len(c.WeightsOf) != 0
+	// which its Open refuses. The thirty-third, each block's window,
+	// implies the first thirty-two, no shared pages standing for none; an
+	// older reader drops it and reads the windows its blocks' graphs state.
+	windows := len(c.Windows) != 0
+	shared := windows || len(c.WeightsOf) != 0
 	front := shared || c.Front.Stated()
 	gen := front || c.Generation != nil
 	rope := gen || len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
@@ -464,6 +467,12 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.u32(uint32(len(c.WeightsOf)))
 		for _, p := range c.WeightsOf {
 			w.u32(p)
+		}
+	}
+	if windows {
+		w.u32(uint32(len(c.Windows)))
+		for _, n := range c.Windows {
+			w.u32(n)
 		}
 	}
 	return w.b
@@ -709,6 +718,11 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 			c.WeightsOf = append(c.WeightsOf, r.u32())
 		}
 	}
+	if r.err == nil && len(r.b) > 0 {
+		for range r.count(4) {
+			c.Windows = append(c.Windows, r.u32())
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -751,6 +765,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		return nil, err
 	}
 	if err := c.Blocks.valid(c.statedBlocks()); err != nil {
+		return nil, err
+	}
+	if err := c.windowsValid(); err != nil {
 		return nil, err
 	}
 	if err := c.weightsOfValid(); err != nil {

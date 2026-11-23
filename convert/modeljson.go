@@ -1480,9 +1480,17 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		if window != 0 {
 			p, first, err := windowPeriod(slides)
 			if err != nil {
-				return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+				// A pattern no period describes is each block's own window.
+				p, first = 0, false
+				cfg.Windows = make([]uint32, len(slides))
+				for i, sl := range slides {
+					if sl {
+						cfg.Windows[i] = uint32(window)
+					}
+				}
+				cfg.SWAWindow, cfg.SWAPeriod = uint32(window), 0
 			}
-			if p == 0 && cfg.Flags.Has(jlm.FlagNoPEGlobal) {
+			if p == 0 && cfg.Windows == nil && cfg.Flags.Has(jlm.FlagNoPEGlobal) {
 				return nil, fmt.Errorf("convert: %s: a window of %d slides no layer, and the global layers skip "+
 					"the rotary: no layer rotates: %w", c.path, window, ErrNotImplemented)
 			}
