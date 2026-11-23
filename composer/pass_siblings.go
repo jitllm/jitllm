@@ -1,6 +1,10 @@
 package composer
 
-import "github.com/jitllm/jitllm/composer/ir"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/composer/ir"
+)
 
 // Siblings runs consecutive kernels that touch nothing of each other's and
 // read one activation -- the projections of one row -- or together fill no
@@ -14,7 +18,12 @@ import "github.com/jitllm/jitllm/composer/ir"
 // A kernel joins when its element is a workgroup of the first's size, it
 // is of the first's kind, it carries no positions, heads or live rows, it
 // reads no index of the whole launch, and every store it makes is its
-// workgroup's own. A guard is a scope to the lowering:
+// workgroup's own. Forms of a capacity (Kernel.Capacity) join forms of its
+// capacity and row tiling (Space[0]) and cut (Kernel.Cut) alone, their
+// launch laid out row tile by row tile (merge) so CallRows holds it to a
+// call's rows as it held each, and their run passes over a kernel reading a
+// sibling's output -- a projection's combine -- which then follows the
+// launch. A guard is a scope to the lowering:
 // what a share reads is made inside its guard and dies there, so the launch
 // holds one share's values at a time.
 type Siblings struct{}
@@ -24,21 +33,65 @@ func (Siblings) Name() string { return "siblings" }
 func (s Siblings) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	var out []*Kernel
 	for i := 0; i < len(ks); {
-		j := i + 1
-		for j < len(ks) && sibling(ks[i:j], ks[j], d) {
-			j++
+		run, between, last := []*Kernel{ks[i]}, []*Kernel(nil), i
+		for j := i + 1; j < len(ks); j++ {
+			k := ks[j]
+			if sibling(run, k, d) && apart(between, k) {
+				run, last = append(run, k), j
+				continue
+			}
+			if !after(run, k) {
+				break
+			}
+			between = append(between, k)
 		}
-		if j-i < 2 {
+		if len(run) < 2 {
 			out = append(out, ks[i])
 			i++
 			continue
 		}
-		k := s.merge(ks[i:j])
+		k := s.merge(run)
 		k.compact()
 		out = append(out, k)
-		i = j
+		for _, b := range ks[i+1 : last+1] {
+			if !slices.Contains(run, b) {
+				out = append(out, b)
+			}
+		}
+		i = last + 1
 	}
 	return out, nil
+}
+
+// after says k, a kernel of a form of a capacity's run that is no sibling,
+// may follow the run's launch: it reads what a sibling before it writes --
+// the combine of a projection's segments. A sibling after it joins only
+// where it touches nothing of k's (apart).
+func after(run []*Kernel, k *Kernel) bool {
+	if run[0].Capacity == 0 || k.Capacity != run[0].Capacity {
+		return false
+	}
+	reads := false
+	for _, m := range run {
+		reads = reads || writesInto(m, k)
+	}
+	for _, st := range k.Stores {
+		if st.Barrier {
+			return false
+		}
+	}
+	return reads
+}
+
+// apart says k touches nothing of the kernels a run's launch moves it
+// before.
+func apart(between []*Kernel, k *Kernel) bool {
+	for _, b := range between {
+		if writesInto(b, k) || writesInto(k, b) {
+			return false
+		}
+	}
+	return true
 }
 
 // sibling says k joins run: a launch like run's first, independent of all,
@@ -46,7 +99,8 @@ func (s Siblings) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // workgroups -- launches each leaving the device idle.
 func sibling(run []*Kernel, k *Kernel, d Device) bool {
 	f := run[0]
-	if !joinable(k) || !joinable(f) || k.Group != f.Group || k.Kind != f.Kind || k.Part != f.Part || k.Of != f.Of || k.Least != f.Least {
+	if !joinable(k) || !joinable(f) || k.Group != f.Group || k.Kind != f.Kind || k.Part != f.Part || k.Of != f.Of || k.Least != f.Least ||
+		k.Capacity != f.Capacity || k.Capacity > 0 && (k.Space[0] != f.Space[0] || k.Cut != f.Cut) {
 		return false
 	}
 	shares, n := false, k.Elements()
@@ -61,10 +115,16 @@ func sibling(run []*Kernel, k *Kernel, d Device) bool {
 
 // joinable says k can be one share of a launch: a workgroup an element,
 // nothing a fact about its space, no store running a loop. A form of a
-// capacity's kernel holds a call's rows by its leading axis (CallRows), which
-// a share of one launch would lose.
+// capacity's kernel joins before its launch is held to a call's rows
+// (CallRows), which holds the launch by its leading axis alone, so it binds
+// no history a row past the call's would address.
 func joinable(k *Kernel) bool {
-	if !k.Work || k.Group <= 0 || k.Capacity > 0 || k.Positions != nil || k.Heads != nil || k.Quarter != nil || k.Rows != 0 || k.Clamp != 0 ||
+	if k.Capacity > 0 {
+		if _, ok := k.history(); ok || k.RowsHeld || len(k.Space) == 0 || k.Space[0] == 0 {
+			return false
+		}
+	}
+	if !k.Work || k.Group <= 0 || k.Positions != nil || k.Heads != nil || k.Quarter != nil || k.Rows != 0 || k.Clamp != 0 ||
 		k.Seq != nil || len(k.Args) > 0 || len(k.Ptrs) > 0 {
 		return false
 	}
@@ -112,21 +172,37 @@ func sharesActivation(a, b *Kernel) bool {
 	return false
 }
 
-// merge is ms as one launch of their workgroups in order.
+// merge is ms as one launch of their workgroups in order. Forms of a
+// capacity lie row tile by row tile: workgroup (u, r) is the shares'
+// workgroup r of row tile u, each share's in order, so a call's rows -- a
+// prefix of the row tiles -- launch every share's workgroups of them, as
+// each share's own launch did.
 func (s Siblings) merge(ms []*Kernel) *Kernel {
 	f := ms[0]
 	k := &Kernel{Name: f.Name, Work: true, Group: f.Group, Kind: f.Kind, Part: f.Part, Apart: f.Apart, Of: f.Of, Least: f.Least,
-		Passes: append(append([]string(nil), f.Passes...), s.Name())}
+		Capacity: f.Capacity, Cut: f.Cut, Passes: append(append([]string(nil), f.Passes...), s.Name())}
+	unit := 1
+	if f.Capacity > 0 {
+		unit = f.Space[0]
+	}
 	total := 0
 	for _, m := range ms {
-		total += m.Elements()
+		total += m.Elements() / unit
+		if f.Capacity > 0 {
+			k.priced = append(k.priced, m.matrices()...)
+		}
 	}
 	k.Space = []int{total}
-	e := k.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+	lead := -1
+	if f.Capacity > 0 {
+		k.Space = []int{unit, total}
+		lead = k.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+	}
+	e := k.add(Node{Op: OpCoord, A: len(k.Space) - 1, Type: ir.U32})
 	zero, one := k.u32(0), k.u32(1)
 	off := 0
 	for _, m := range ms {
-		n := m.Elements()
+		n := m.Elements() / unit
 		lo, hi := k.u32(off), k.u32(off+n)
 		below := k.add(Node{Op: OpLess, Type: ir.Pred, A: e, B: lo})
 		under := k.add(Node{Op: OpLess, Type: ir.Pred, A: e, B: hi})
@@ -135,22 +211,26 @@ func (s Siblings) merge(ms []*Kernel) *Kernel {
 		k.Loops[g].Count, k.Loops[g].Kept, k.Loops[g].Uniform = count+1, true, true
 		local := k.bin(OpSub, ir.U32, e, lo)
 		k.Stores = append(k.Stores, Store{Run: true, At: g})
-		s.share(k, m, g, local)
+		s.share(k, m, g, local, lead)
 		off += n
 	}
 	return k
 }
 
 // share is kernel m in loop g of k, its element local: its coordinates
-// unflattened from local, its loops inside g, its stores at g's trip.
-func (Siblings) share(k, m *Kernel, g, local int) {
+// unflattened from local, its loops inside g, its stores at g's trip. Where
+// lead is set it is m's leading coordinate, and local the element within
+// it.
+func (Siblings) share(k, m *Kernel, g, local, lead int) {
 	coord := make([]int, len(m.Space))
 	rest := local
 	for a := len(m.Space) - 1; a >= 0; a-- {
 		switch ext := m.Space[a]; {
+		case a == 0 && lead >= 0:
+			coord[a] = lead
 		case ext == 1:
 			coord[a] = k.u32(0)
-		case a == 0:
+		case a == 0, a == 1 && lead >= 0:
 			coord[a] = rest
 		default:
 			coord[a] = k.bin(OpRem, ir.U32, rest, k.u32(ext))
