@@ -2637,8 +2637,11 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	lm.finished(n, prefill, decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
-	// The history grew by what this generate committed.
-	e.applyPageBudget(lm, nil)
+	// The history grew by what this generate committed. An ephemeral
+	// session's release re-divides as it ends (releaseEphemeral).
+	if !ephemeral {
+		e.applyPageBudget(lm, nil)
+	}
 
 	rate := 0.0
 	if decode > 0 && n > 0 {
@@ -3541,10 +3544,11 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 	// a bound read off what they held before it is a bound on more than
 	// they keep: it is read again after each trim until it holds.
 	if st, sh := lm.ttft.store, lm.ttft.shared; st != nil && sh != nil {
-		lim := e.storeLimit(avail, st.Bytes()+sh.Bytes())
+		now := e.availNow()
+		lim := e.storeLimit(avail, st.Bytes()+sh.Bytes(), now)
 		for {
 			sh.Trim(lim - min(lim, st.Bytes()))
-			next := e.storeLimit(avail, st.Bytes()+sh.Bytes())
+			next := e.storeLimit(avail, st.Bytes()+sh.Bytes(), now)
 			if next >= lim {
 				break
 			}
