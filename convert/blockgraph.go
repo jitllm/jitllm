@@ -1817,7 +1817,7 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int, names tensorNames) *bloc
 			}
 			continue
 		}
-		if int(t.Block) != li || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
+		if int(t.Block) != c.PageOf(li) || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
 			continue
 		}
 		sh := graph.Shape{K: int(t.Dims[0])}

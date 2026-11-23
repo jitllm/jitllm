@@ -234,8 +234,13 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// twenty-nine, an empty table standing for none; an older reader drops it
 	// and generates as it did before the field existed. The thirty-first,
 	// the parts' graphs outside the blocks, implies the first thirty, no
-	// generation defaults standing for none.
-	front := c.Front.Stated()
+	// generation defaults standing for none. The thirty-second, the pages
+	// blocks read their weights from, implies the first thirty-one, no
+	// parts' graphs standing for none; an older reader drops it and finds
+	// blocks whose graphs name weights they do not hold,
+	// which its Open refuses.
+	shared := len(c.WeightsOf) != 0
+	front := shared || c.Front.Stated()
 	gen := front || c.Generation != nil
 	rope := gen || len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
 	graphs := rope || len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
@@ -454,6 +459,12 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if front {
 		encodeFrontGraphs(w, &c.Front)
+	}
+	if shared {
+		w.u32(uint32(len(c.WeightsOf)))
+		for _, p := range c.WeightsOf {
+			w.u32(p)
+		}
 	}
 	return w.b
 }
@@ -693,6 +704,11 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		c.Front = decodeFrontGraphs(r)
 	}
+	if r.err == nil && len(r.b) > 0 {
+		for range r.count(4) {
+			c.WeightsOf = append(c.WeightsOf, r.u32())
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -735,6 +751,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		return nil, err
 	}
 	if err := c.Blocks.valid(c.statedBlocks()); err != nil {
+		return nil, err
+	}
+	if err := c.weightsOfValid(); err != nil {
 		return nil, err
 	}
 	if err := c.olderStatements(); err != nil {

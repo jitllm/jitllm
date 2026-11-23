@@ -464,8 +464,12 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 			present[roleAt{es[i].Role, es[i].Block}] = true
 		}
 	}
-	if err := src.Config.CheckQKNorm(int(maxBlock+1), func(r Role, b int32) bool {
-		return present[roleAt{r, b}]
+	blocks := int(maxBlock + 1)
+	if n := len(src.Config.WeightsOf); n != 0 {
+		blocks = n
+	}
+	if err := src.Config.CheckQKNorm(blocks, func(r Role, b int32) bool {
+		return present[roleAt{r, int32(src.Config.PageOf(int(b)))}]
 	}); err != nil {
 		return nil, err
 	}

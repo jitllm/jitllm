@@ -243,7 +243,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 				if rb, err := jlm.RowBytes(e); err == nil && !slices.ContainsFunc(p.Tables, func(t nn.RowTable) bool { return t.Entry == e }) {
 					p.Tables = append(p.Tables, nn.RowTable{Entry: e, RowBytes: int(rb)})
 				}
-			} else if e, ok := f.Find(w.Role, int32(li), -1); ok {
+			} else if e, ok := f.Find(w.Role, int32(s.m.Container.PageOf(li)), -1); ok {
 				formats[w.Role] = e.Type
 				// A table the block lays out as float32 at load is read so.
 				if t := s.ws.matrix(li, s.layer(li), w.Role); w.Rows > 0 && t != nil && t.E == nil && t.Typ == quant.F32 {
