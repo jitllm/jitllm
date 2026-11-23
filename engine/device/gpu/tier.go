@@ -2079,6 +2079,10 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	if len(slots) == 0 {
 		return nil, fmt.Errorf("tier: no devices")
 	}
+	if p := cfg.KVPage; p < 0 || p > 0 && (p%64 != 0 || p&(p-1) != 0) {
+		closeAll()
+		return nil, fmt.Errorf("tier: KVPage %d: a page holds a power of two of positions, a multiple of 64", p)
+	}
 	g := &GPU{Config: cfg, own: map[int]*devTier{}, geo: map[int]geoKey{}, counters: o.counters}
 	if g.counters == nil {
 		g.counters = slotCounters(slots)
