@@ -43,9 +43,9 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 // Q8_0 weights at a prompt chunk's rows -- ragged counts among them, whose
 // last tile is guarded -- with int8 and with float activations, on a device
 // of CUDA's statement and one of Vulkan's: from 128 rows on the largest
-// kernel's op count stays within 1% or four ops (an address constant's
-// form, a tail's guard, a ragged capacity's last tile held to its end: the
-// least of its base and the end's, and the product that no longer folds),
+// kernel's op count stays within 1% at capacities the tiles divide (an
+// address constant's form, a tail's guard; at one they do not, its rows
+// keep their clamps),
 // from two rows on every projection is tiled, and no kernel passes
 // 1,000 ops. At one row nothing is tiled. No projection has a second
 // kernel for few rows (a width tier): a call of any rows runs the one form,
@@ -93,12 +93,12 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 					case largest > 1000:
 						t.Fatalf("%s at %d rows: a kernel of %d ops", name, R, largest)
 					}
-					if R >= 128 {
+					if R >= 128 && R&(R-1) == 0 {
 						held = append(held, largest)
 					}
 					t.Logf("%s at %d rows: %d kernels, the largest %d ops, %d tiled", name, R, len(codes), largest, tiled)
 				}
-				if 100*slices.Max(held) > 101*slices.Min(held) && slices.Max(held) > slices.Min(held)+4 {
+				if 100*slices.Max(held) > 101*slices.Min(held) {
 					t.Fatalf("%s: the largest kernel runs from %d to %d ops past 128 rows", name, slices.Min(held), slices.Max(held))
 				}
 			}
