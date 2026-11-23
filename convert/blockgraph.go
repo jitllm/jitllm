@@ -216,7 +216,7 @@ func graphSteps() map[string][4]int {
 		"history_pool":   {0, 0, 0, 0},
 		"kv_append":      {2, 2, 0, 0},
 		"kv_from":        {0, 0, 0, 0},
-		"attend":         {1, 2, 0, -1},
+		"attend":         {1, 4, 0, -1},
 		"indexer":        {2, 2, 0, 0},
 		"select":         {1, 2, 0, 0},
 		"act":            {1, -1, 0, 0},
@@ -1005,11 +1005,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 			if err != nil {
 				return fmt.Errorf("op %d (attend): %w", i, err)
 			}
-			if len(in) == 2 {
-				y = b.AttendSelected(in[0], reads[0], in[1], a, w...)
-			} else {
-				y = b.AttendOf(in[0], reads[0], a, w...)
-			}
+			y = b.AttendWith(in[0], reads[0], a, in[1:], w...)
 			at := &b.G.Ops[len(b.G.Ops)-1]
 			if at.Kind != graph.OpAttend || len(at.Out) != 1 || at.Out[0] != y {
 				return fmt.Errorf("op %d (attend): the attention is not the builder's last op", i)

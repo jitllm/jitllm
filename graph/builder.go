@@ -220,6 +220,16 @@ func (s *Builder) SelectPooled(q ValueID, h StateRef, a Attrs, norm jlm.Role) Va
 	return y
 }
 
+// AttendWith is AttendOf with in the inputs past the query, in
+// AttendInputs' order: a selection, a score bias (a.Extent), row sinks
+// (a.RowSinks).
+func (s *Builder) AttendWith(q ValueID, h StateRef, a Attrs, in []ValueID, sinks ...jlm.Role) ValueID {
+	y := s.AttendOf(q, h, a, sinks...)
+	o := &s.G.Ops[len(s.G.Ops)-1]
+	o.In = append(o.In, in...)
+	return y
+}
+
 // AttendSelected is AttendOf over the positions selection sel keeps.
 func (s *Builder) AttendSelected(q ValueID, h StateRef, sel ValueID, a Attrs, sinks ...jlm.Role) ValueID {
 	y := s.AttendOf(q, h, a, sinks...)
