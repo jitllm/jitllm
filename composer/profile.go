@@ -34,13 +34,16 @@ func gpuProfile() Profile {
 		// both maps' threads, and the value between them takes no buffer of
 		// every row (a softcapped head's chain held 64 MiB of it at 64 rows).
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap}, {From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
+		// Vector is fitted to where a V100 measures the vector form and the
+		// matrix unit cross: calls of up to 8 rows run the vector form, a
+		// tile of 8 rows at 5 to 8, and calls of more the matrix unit.
 		Matrix{Rows: 128, Cols: 64, Depth: 32, Warps: [2]int{2, 2}, Resident: 2, Tiles: []MatrixTile{
 			{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{4, 2}, Resident: 1},
 			{Rows: 64, Cols: 64, Depth: 32, Warps: [2]int{2, 2}, Resident: 4},
 			{Rows: 128, Cols: 32, Depth: 32, Warps: [2]int{4, 1}, Resident: 2},
 			{Rows: 128, Cols: 128, Depth: 32, Warps: [2]int{2, 2}, Resident: 2},
 			{Rows: 16, Cols: 128, Depth: 32, Warps: [2]int{1, 4}, Resident: 4},
-		}, Latency: 12000, Decode: 16, Launch: 3 << 20, Plane: 384, Vector: [2]int{171, 53}},
+		}, Latency: 12000, Decode: 16, Launch: 3 << 20, Plane: 384, Vector: [2]int{171, 30}},
 		FloatTiles{Depth: 16, Tiles: []FloatTile{{64, 64, [2]int{4, 4}}, {32, 64, [2]int{4, 4}}, {32, 32, [2]int{4, 4}}, {16, 32, [2]int{2, 4}}, {16, 16, [2]int{2, 2}}}},
 		ContractPairs{},
 		// Before Coarsen and Parts: a gather the matrix unit's halves read

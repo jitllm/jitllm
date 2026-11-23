@@ -56,7 +56,9 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 	for _, typ := range []jlm.Type{jlm.TypeQ4S, jlm.TypeQ6S, jlm.TypeQ8} {
 		for _, d := range []composer.Device{cuda, {Kind: composer.DeviceGPU, Lanes: 32}} {
 			for _, float := range []bool{false, true} {
-				reg := composer.Default()
+				// Siblings off: a launch of several projections holds the ops
+				// of each (TestCapacitySiblingsLaunchAsOneRow).
+				reg := without("siblings")
 				if float {
 					reg = reg.WithoutInt8(composer.DeviceGPU)
 				}
@@ -102,16 +104,18 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 	// What the pass saves is the weight's loads: a tile's rows read each
 	// word once. With it off every row loads the weight itself, and the
 	// projections' loads a row grow by the tile's rows: eight times or more.
+	// Siblings off: WeightLoads counts a launch's every thread at each
+	// share's loads.
 	for _, d := range []composer.Device{cuda, {Kind: composer.DeviceGPU, Lanes: 32}} {
 		for _, float := range []bool{false, true} {
 			loads := func(off bool) int {
-				reg := composer.Default()
+				reg := without("siblings")
 				if float {
 					reg = reg.WithoutInt8(composer.DeviceGPU)
 				}
 				if off {
 					p := reg.Profiles[composer.DeviceGPU]
-					p.Off = map[string]bool{"rowtiles": true}
+					p.Off = map[string]bool{"rowtiles": true, "siblings": true}
 					reg.Profiles[composer.DeviceGPU] = p
 				}
 				n, err := composer.WeightLoads(reg, composer.Request{Graph: ffnBlock(2048, 8192), Formats: formats(jlm.TypeQ4S),
