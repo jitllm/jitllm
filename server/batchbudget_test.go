@@ -16,7 +16,9 @@ import (
 // at 0.5 ms a token beside a 10 ms decode step it settles where the tokens
 // cost cost-1 decode steps (20 at a cost of 2, 60 at 4); a step the budget
 // did not limit does not raise it; slow tokens take it to its floor; and a
-// fixed budget ignores the clock. Against a budget that never reads its
+// fixed budget ignores the clock; and a stale fit's near-zero intercept does
+// not hold it at the floor where decode-only steps measure the decode step.
+// Against a budget that never reads its
 // measurements, every case after the first reads budgetStart.
 func TestStepBudgetFollowsTheMeasurement(t *testing.T) {
 	const ms = time.Millisecond
@@ -65,6 +67,22 @@ func TestStepBudgetFollowsTheMeasurement(t *testing.T) {
 	// stood whenever a step was within its cost, it stays at the floor.
 	if seen := drive(slow, 60, line(ms/2)); seen[len(seen)-1] < 20/2 {
 		t.Fatalf("cheap prompt tokens after slow ones left the budget %v, want it back within half of 20", seen)
+	}
+	// Decode-only steps of 2 ms, then a fit across noisy widths that left an
+	// intercept near zero and the budget at its floor, the steps that spread
+	// the widths decayed out of the fit: steps at 2 ms and 5 us a token are
+	// within their cost, and the budget leaves the floor. Against the fitted
+	// intercept every step reads as over its cost, and with the widths at the
+	// floor no fit comes again: it stays there (stories15M on a V100, 0.02 ms
+	// beside 2.7 ms decode-only steps, a round at half the rate).
+	stuck := newStepBudget(0, 512, 4)
+	for range 8 {
+		stuck.observe(64, 0, 2*ms)
+	}
+	stuck.n, stuck.x, stuck.y, stuck.xx, stuck.xy = 0, 0, 0, 0, 0
+	stuck.fitted, stuck.icept, stuck.cur = true, float64(ms)/50, budgetFloor
+	if seen := drive(stuck, 60, func(p int) time.Duration { return 2*ms + time.Duration(p)*5*time.Microsecond }); seen[len(seen)-1] < 256 {
+		t.Fatalf("a near-zero intercept beside 2 ms decode-only steps held the budget %v, want it off the floor", seen)
 	}
 	if got := newStepBudget(16, 512, 2).tokens(); got != 16 {
 		t.Fatalf("a fixed budget reads %d", got)
