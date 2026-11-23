@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,23 +15,31 @@ import (
 // TestASpareSessionServesTheNextRequest: a model_id request's session is
 // kept, reset -- it holds no history while it waits -- and the next model_id
 // request runs on it under an id and a sampler seed of its own, its reply a
-// fresh session's, on the CPU and a card. The model holds no more sessions,
-// open and spare, than it was loaded for, two requests at once included, and
-// an unload without force closes its spares rather than refusing. Against a
-// server that opens every request's session anew, the second request runs on
-// another session; against a spare kept with its history, it holds the first
-// request's.
+// fresh session's, on the CPU and a card, with the memory cache and without
+// (where a session shares no pages, and only the reset empties it). The
+// model holds no more sessions, open and spare, than it was loaded for, two
+// requests at once included, and an unload without force closes its spares
+// rather than refusing. Against a server that opens every request's session
+// anew, the second request runs on another session; against a spare kept
+// with its history, it holds the first request's.
 func TestASpareSessionServesTheNextRequest(t *testing.T) {
-	for _, arm := range []string{"cpu", "card"} {
+	for _, arm := range []string{"cpu/cache", "cpu/nocache", "card/cache", "card/nocache"} {
 		t.Run(arm, func(t *testing.T) {
 			devs := []string{"cpu"}
-			if arm == "card" {
+			if strings.HasPrefix(arm, "card") {
 				if !testdevices.Selected() {
 					t.Skip("JITLLM_TEST_DEVICES selects no card: the card arm runs where one is given")
 				}
 				devs = testdevices.Take(t, 1, "cuda:0")
 			}
-			e, lm, _ := loadedEngine(t, deviceModel, "m", LoadOptions{DeviceIDs: devs})
+			path := modelPath(t, deviceModel)
+			e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", NoOnDemand: true,
+				NoMemCache: strings.HasSuffix(arm, "nocache")}))
+			t.Cleanup(e.Close)
+			lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m", DeviceIDs: devs})
+			if err != nil {
+				t.Fatal(err)
+			}
 			spares := func() []*Session {
 				e.mu.RLock()
 				defer e.mu.RUnlock()
