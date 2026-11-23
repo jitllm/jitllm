@@ -335,8 +335,9 @@ func configOfFile(f *meta.File, class bool) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("convert: architecture %q is not implemented (%s): %w",
-			name, strings.Join(names, ", "), ErrNotImplemented)
+		return nil, fmt.Errorf("convert: GGUF architecture %q: its graph is not stated "+
+			"over ops in convert/models (stated: %s): %w",
+			name, strings.Join(names, ", "), ErrUnstated)
 	}
 	nhead, err := uniformCount(f, "attention.head_count", 0)
 	if err != nil {
@@ -793,8 +794,9 @@ func visionOf(f *meta.File) (*jlm.Vision, *projStates, error) {
 	}
 	p, ok := lib[name]
 	if !ok {
-		return nil, nil, fmt.Errorf("convert: projector_type %q unsupported (only %s): %w",
-			name, strings.Join(slices.Sorted(maps.Keys(lib)), ", "), ErrNotImplemented)
+		return nil, nil, fmt.Errorf("convert: projector_type %q: its tower is not stated "+
+			"in convert/projectors.json (stated: %s): %w",
+			name, strings.Join(slices.Sorted(maps.Keys(lib)), ", "), ErrUnstated)
 	}
 	if err := p.state(name, f, v); err != nil {
 		return nil, nil, err
