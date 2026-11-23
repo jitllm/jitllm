@@ -102,7 +102,7 @@ func (g *devTier) towerStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !sv.f.inPlace(0, 0) {
+	if !sv.f.inPlace(0, 0, 0) {
 		if cp, err = g.servedCopy(bs, R); err != nil {
 			return nil, nil, nil, err
 		}
