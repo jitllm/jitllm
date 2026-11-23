@@ -298,6 +298,11 @@ type row struct {
 	// has the row's prompt offered to the store once it has run.
 	restored int
 	seal     bool
+	// history is how many of ids open the prompt as the history's unfed
+	// token (Session.unfed), not the request's; unfed says the row ended
+	// keeping its last token unrun.
+	history int
+	unfed   bool
 	// fresh says the row's sequence starts with its prompt (no
 	// continue_session), so a prompt cut short is reset rather than kept.
 	fresh bool
@@ -686,7 +691,7 @@ func (r *row) started() {
 		SessionID:    r.s.id,
 		ModelID:      lm.id,
 		Ephemeral:    r.ephemeral,
-		PromptTokens: len(r.ids),
+		PromptTokens: len(r.ids) - r.history,
 		Restored:     r.restored,
 		QueuedFor:    r.waited,
 		QueueDepth:   r.depth,
@@ -699,7 +704,7 @@ func (r *row) started() {
 		Tools:        r.tools,
 	}})
 	if r.echo {
-		r.push(Event{Kind: EventToken, Token: &Token{ID: -1, Text: lm.m.Vocab.Decode(r.ids), Index: -1}})
+		r.push(Event{Kind: EventToken, Token: &Token{ID: -1, Text: lm.m.Vocab.Decode(r.ids[r.history:]), Index: -1}})
 	}
 	r.decodeStart = time.Now()
 }
@@ -910,6 +915,14 @@ func (lp *stepLoop) nextToken(r *row) bool {
 			lp.finish(r, FinishMaxTokens, "", nil)
 			return false
 		}
+	}
+	if r.n+1 >= r.maxTokens && !lp.dropMaxTokens {
+		// The reply's last token: kept, and run only by what continues the
+		// history.
+		r.n++
+		r.unfed = true
+		lp.finish(r, FinishMaxTokens, "", nil)
+		return false
 	}
 	r.next[0] = next
 	return true
@@ -1322,13 +1335,13 @@ func (lp *stepLoop) finish(r *row, reason FinishReason, stop string, err error) 
 // generateBatched is Generate's arm for a session that runs as a row. The
 // caller holds s.mu, so nothing but the loop touches s.st until r.done.
 func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, o GenerateOptions,
-	ids []int32, ephemeral, store bool, emit func(Event) error) error {
+	ids []int32, held int, ephemeral, store bool, emit func(Event) error) error {
 	lm := s.lm
 	sampler, err := s.draw(o.Sampling)
 	if err != nil {
 		return err
 	}
-	sampler.Prime(ids)
+	sampler.Prime(ids[held:])
 	// The row's prompt starts where the session is, or at 0 when it resets.
 	start := 0
 	if o.Continue {
@@ -1361,6 +1374,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		tools:       tools,
 		s:           s,
 		ids:         ids,
+		history:     held,
 		restored:    restored,
 		fed:         restored,
 		seal:        store,
@@ -1462,6 +1476,9 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	}
 
 	res := r.result
+	if r.unfed {
+		s.unfed = append(s.unfed[:0], r.out[len(r.out)-1])
+	}
 	s.generated.Add(int64(res.n))
 	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
@@ -1484,15 +1501,15 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	return emit(Event{Kind: EventFinished, Finished: &Finished{
 		Reason:           res.reason,
 		StopMatched:      res.stop,
-		PromptTokens:     len(ids),
+		PromptTokens:     len(ids) - held,
 		CompletionTokens: res.n,
 		Prefill:          r.prefill,
 		Decode:           res.decode,
 		TokensPerSecond:  rate,
 		BytesPerToken:    lm.m.BytesPerToken(),
-		Position:         s.ms.Pos(),
+		Position:         s.ms.Pos() + len(s.unfed),
 		Restored:         r.restored,
-		Truncated:        res.reason == FinishMaxTokens && s.ms.Pos() >= s.ms.Limit(),
+		Truncated:        res.reason == FinishMaxTokens && s.ms.Pos()+len(s.unfed) >= s.ms.Limit(),
 	}})
 }
 
