@@ -127,6 +127,9 @@ func (e *Engine) heldLocked() uint64 {
 		for _, s := range lm.sessions {
 			n += s.snapKV.Load()
 		}
+		for _, s := range lm.spare {
+			n += s.snapKV.Load()
+		}
 	}
 	return n
 }

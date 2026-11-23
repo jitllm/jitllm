@@ -415,6 +415,9 @@ type LoadedModel struct {
 	mu sync.Mutex
 
 	sessions map[string]*Session
+	// spare is the sessions model_id requests left, reset, for the next to
+	// take (Engine.spareSession). Guarded by e.mu.
+	spare []*Session
 
 	// embMu guards emb, the idle embedders Embed reuses (embed.go).
 	embMu sync.Mutex
@@ -1115,9 +1118,14 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 	for _, s := range victims {
 		delete(e.sessions, s.id)
 	}
+	spare := lm.spare
+	lm.spare = nil
 	e.mu.Unlock()
 
 	for _, s := range victims {
+		s.close()
+	}
+	for _, s := range spare {
 		s.close()
 	}
 	closed = len(victims)
@@ -2819,6 +2827,9 @@ func (e *Engine) resolveSession(o GenerateOptions) (*Session, bool, error) {
 	}
 	if o.ModelID == "" {
 		return nil, false, fmt.Errorf("%w: one of session_id or model_id is required", ErrInvalid)
+	}
+	if s := e.takeSpare(o); s != nil {
+		return s, true, nil
 	}
 	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, modelName: o.ModelName})
 	if err != nil {
