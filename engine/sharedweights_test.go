@@ -65,8 +65,9 @@ func unrolled(pages func(n int) []uint32) func(*jlm.Source) {
 // pass placed on the card and its owners on the CPU, and with the sharing
 // pass moved there mid-prompt. The sharers going to the card leave the pages
 // (and the expert pages) their owners read from host memory where they are:
-// after the move the owners read no page again (Instance.hostReadsPageOf).
-// The shared container holds half the pages, and a run reads each page
+// the CPU's lanes hold a page once for every block they run from it
+// (Instance.holdFrame, by PageOf), so after the move the owners read no
+// page again. The shared container holds half the pages, and a run reads each page
 // once. A second pass reading its pages in another order is the violation,
 // and differs.
 func TestBlocksShareTheirWeights(t *testing.T) {
@@ -236,6 +237,17 @@ func blocksShareTheirWeights(t *testing.T, name string) {
 				}
 				if !slices.Equal(mv.Moved, second) || !slices.Equal(st.placedOn(dev), second) {
 					t.Fatalf("moved %v (declined %v), on the card %v; want the second pass's %v", mv.Moved, mv.Declined, st.placedOn(dev), second)
+				}
+				// The copy's second pass gives its own pages back; the
+				// shared one's pages are the first pass's, which stay.
+				for li := 0; li < 2*int(n); li++ {
+					held := m.BlockResident(st.fr, li)
+					switch {
+					case li < int(n) && !held:
+						t.Fatalf("after the move block %d, on the CPU, has lost its page %d", li, m.Container.PageOf(li))
+					case li >= int(n) && held && m.Container.PageOf(li) == li:
+						t.Fatalf("after the move block %d's own page %d is still in host memory: the move released nothing, and the arm proves nothing", li, li)
+					}
 				}
 				before, _ = st.fr.Faults()
 			}

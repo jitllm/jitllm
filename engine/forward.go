@@ -2036,37 +2036,10 @@ func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 		if eh, ok := ld.(nn.ExpertHolder); ok {
 			keep = !eh.HoldsExperts(li)
 		}
-		// A block of this instance still running from host memory reads the
-		// same page (jlm.Config.WeightsOf): the page and its experts stay
-		// for it while this block's views go.
-		pg := -1
-		if s.hostReadsPageOf(li) {
-			pg = s.m.Container.PageOf(li)
-			s.fr.Keep(pg, 1)
-		}
 		s.bind.Lock()
 		model.ReleaseLayer(s.fr, li, l, keep)
 		s.bind.Unlock()
-		if pg >= 0 {
-			s.fr.Keep(pg, -1)
-		}
 	}
-}
-
-// hostReadsPageOf reports whether another block of this instance that runs
-// on the CPU's lanes reads block li's page.
-func (s *Instance) hostReadsPageOf(li int) bool {
-	c := s.m.Container
-	if c == nil {
-		return false
-	}
-	pg := c.PageOf(li)
-	for lj := s.lo; lj < s.hi; lj++ {
-		if lj != li && c.PageOf(lj) == pg && s.slotAt(lj) == routeLanes {
-			return true
-		}
-	}
-	return false
 }
 
 // blockOffer reads block li's page and gathers what a device is offered for
