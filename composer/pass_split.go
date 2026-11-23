@@ -608,8 +608,9 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 		}
 	}
 	g := n.clone()
-	if n.TileLast > 0 && n.TileRows%T == 0 {
-		g.unclampRows(n.TileBase-1, n.TileLast-1)
+	base := n.TileBase - 1
+	if n.TileLast > 0 {
+		base = g.unclampRows(base, n.TileLast-1, n.TileRows, T)
 	}
 	g.Name = n.Name + ".group"
 	g.Work, g.Group, g.Space = true, G, []int{U, E / rpg}
@@ -668,7 +669,7 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 			}
 			sum = g.bin(OpAdd, t, sum, x)
 		}
-		row := g.bin(OpAdd, I, n.TileBase-1, jj)
+		row := g.bin(OpAdd, I, base, jj)
 		if n.TileLast > 0 {
 			row = g.bin(OpMin, I, row, n.TileLast-1)
 		}
@@ -699,12 +700,14 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 // unclampRows reads the rows of a tile past its first at the tile's row
 // base plus their place, no longer held to the call's last row last: the
 // sums splitTile stores read the partials of no row past the call's, so a
-// row past it reads its own row of the capacity, within it where the tiles
-// cover the capacity's rows exactly. Each row's loads are then one address
-// and a constant past it (Affine), not an address and a clamp a row. Where
-// a row's load is indexed by a value it loads, its rows stay held: that
-// index past the call's rows is no row's.
-func (k *Kernel) unclampRows(base, last int) {
+// row past it reads its own row of the capacity's R. Where tiles of T rows
+// do not cover R exactly, the last starts T rows before R's end, its rows
+// the tile before's again where they overlap, each summed alike and stored
+// with the same value. Each row's loads are then one address and a
+// constant past it (Affine), not an address and a clamp a row. Where a
+// row's load is indexed by a value it loads, its rows stay held: that
+// index past the call's rows is no row's. It returns the tiles' row base.
+func (k *Kernel) unclampRows(base, last, R, T int) int {
 	same := map[int]int{}
 	for i, nd := range k.Nodes {
 		if nd.Op != OpMin || nd.Type != ir.U32 {
@@ -720,9 +723,24 @@ func (k *Kernel) unclampRows(base, last int) {
 		}
 	}
 	if len(same) == 0 || k.loadsIndexedByLoads(same) {
-		return
+		return base
+	}
+	if R%T != 0 {
+		b := k.bin(OpMin, ir.U32, base, k.u32(R-T))
+		for i := range k.Nodes {
+			if i == b {
+				continue
+			}
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				if *a == base {
+					*a = b
+				}
+			}
+		}
+		base = b
 	}
 	k.redirectMany(same)
+	return base
 }
 
 // loadsIndexedByLoads reports whether a load of k whose index depends on
