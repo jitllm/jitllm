@@ -321,6 +321,9 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 // submission.
 func (g *devTier) allocAt(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, j int) error {
 	if len(l.free) < 1 {
+		l.fence()
+	}
+	if len(l.free) < 1 && !g.keepNamed(kp, l, 1) {
 		l.reclaimNamed(1)
 	}
 	if len(l.free) < 1 {

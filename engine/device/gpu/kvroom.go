@@ -2,7 +2,8 @@ package gpu
 
 // KVRoom is how many more positions of attention history the devices can take
 // without evicting a page to host memory: in every layer a device's pool holds, the pages
-// it has free and the pages the budget lets it grow by, priced at one page of
+// it has free (the prefix cache's unheld pages among them, which a sequence
+// takes back) and the pages the budget lets it grow by, priced at one page of
 // every layer at once, and the fewest of any device, since a sequence grows in
 // every layer together. page is the pool's positions a page (0 with no pool);
 // a sequence takes whole pages, so a caller adding up sequences rounds each up
@@ -39,7 +40,7 @@ func (g *devTier) kvRoom() (positions, page int) {
 	free := -1
 	for _, l := range kp.layers {
 		per += kp.pageBytes(l)
-		if n := len(l.free) + len(l.fenced); free < 0 || n < free {
+		if n := len(l.free) + len(l.fenced) + l.unheldNamed(); free < 0 || n < free {
 			free = n
 		}
 	}
@@ -148,7 +149,7 @@ func (g *devTier) promisedBytes() uint64 {
 	free := -1
 	for _, l := range kp.layers {
 		per += kp.pageBytes(l)
-		if n := len(l.free) + len(l.fenced); free < 0 || n < free {
+		if n := len(l.free) + len(l.fenced) + l.unheldNamed(); free < 0 || n < free {
 			free = n
 		}
 	}

@@ -15,8 +15,12 @@ import "fmt"
 //     page on the card first (cowPages), and the sequence's table takes the
 //     copy.
 //   - A sequence letting a named page go drops its hold (releaseID); the page
-//     stays named, for the next prompt, until its room is wanted: then the
-//     unheld named pages go first (reclaimNamed), before the layer grows.
+//     stays named, for the next prompt, until its room is wanted. A layer
+//     that needs a page grows first where the card has the room beside the
+//     scratches (keepNamed), and only then do the unheld named pages go
+//     (reclaimNamed): a pool sized to its sequences' pages otherwise gave the
+//     cache none, and a restore's copy of the page it ends in took the page
+//     the next prompt restores from.
 //   - Eviction sends a sequence's view of a named page to host memory and drops its
 //     hold; compaction gives the unheld named pages back first and leaves a
 //     layer with held ones as it is.
@@ -79,6 +83,45 @@ func (l *kvLayerPool) reclaimNamed(want int) int {
 		l.fence()
 	}
 	return n
+}
+
+// unheldNamed counts the layer's named pages no sequence holds: the prefix
+// cache's, room a sequence may take back.
+func (l *kvLayerPool) unheldNamed() int {
+	n := 0
+	for _, h := range l.sh.holds {
+		if h == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// keepNamed grows layer l to n free pages where the card has the room
+// without reclaiming anything for it -- the grown pair and a scratch as large
+// as every one built so far fit the budget, and a streaming device keeps its
+// slot (prewarmKV's test) -- so the prefix cache keeps the unheld pages a
+// growth would otherwise reclaim. It reports whether l has n free pages; a
+// layer with no unheld named page is left to the caller's growth. Callers
+// hold g.mu, outside any submission.
+func (g *devTier) keepNamed(kp *kvPool, l *kvLayerPool, n int) bool {
+	if len(l.free) >= n {
+		return true
+	}
+	if l.unheldNamed() == 0 {
+		return false
+	}
+	need := l.n + n - len(l.free)
+	for _, want := range []int{max(need, 2*l.n), need} {
+		if want > kp.maxPages(l) || !g.room(kp.pageBytes(l)*uint64(want)+g.scratch) ||
+			!g.keepsSlot(kp.pageBytes(l)*uint64(want-l.n)) {
+			continue
+		}
+		if g.growKVLayer(kp, l, want) == nil {
+			return len(l.free) >= n
+		}
+	}
+	return false
 }
 
 // heldNamed says some named page of the layer is held by a sequence.
@@ -156,7 +199,10 @@ func (g *devTier) cowPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, star
 		// A page wholly past start holds nothing the sequence keeps: a fresh
 		// one, not a copy.
 		fresh := j*P >= start
-		if len(l.free) < 1 && l.reclaimNamed(1) == 0 {
+		if len(l.free) < 1 {
+			l.fence()
+		}
+		if len(l.free) < 1 && !g.keepNamed(kp, l, 1) && l.reclaimNamed(1) == 0 {
 			if err := g.growFree(kp, l, 1); err != nil && !g.evictForRoom(sid, kp, l, 1) {
 				return err
 			}
