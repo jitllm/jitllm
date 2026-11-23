@@ -806,7 +806,7 @@ func (kc *kvCache) restoreApart(limit int) (int, int) {
 	tail := 0
 	if !kc.recurrent && best < len(kc.seq) {
 		j := best / pc
-		kc.probes = appendProbes(kc.probes, min(min(len(kc.seq), limit)-best, pc-1), kvChunk)
+		kc.probes = appendProbes(kc.probes, min(len(kc.seq)-best, pc-1), kvChunk)
 		for _, f := range kc.probes {
 			key := kc.wholeAt(pc, j, best+f)
 			if key == "" || !kc.dev(first).MapKV(kc.key(first), j, key, best+f) {

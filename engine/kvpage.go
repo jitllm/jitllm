@@ -999,10 +999,11 @@ func (s *Session) CacheNamespace() string { return s.kv.ns }
 // lastSealed would stop seal() offering the rewritten pages and the store
 // would keep serving stale ones. A linear layer's summary is restored
 // separately (Instance.faultRecurrentAt).
-// It restores no further than limit: whole pages under it, and the page it
-// falls inside at the longest fill stored (a page this prompt holds whole
-// at limit itself, wholeAt). A hybrid's summaries are at given positions
-// and cannot be shortened, so it asks for the points at or under limit.
+// It restores whole pages no further than limit, and the page limit falls
+// inside at the longest fill stored, which restoreKV clamps to limit (a
+// page this prompt holds whole is taken at limit itself, wholeAt). A
+// hybrid's summaries are at given positions and cannot be shortened, so it
+// asks for the points at or under limit.
 func (kc *kvCache) restore(limit int) (int, int, error) {
 	if _, ok := kc.store.(NoStore); ok {
 		return 0, 0, nil
@@ -1086,7 +1087,12 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 		if probe >= 0 {
 			pg := &kc.layers[probe]
 			n := best / pg.p
-			max := min(len(kc.seq), limit) - n*pg.p
+			// The stored fill is this prompt's remainder when it repeats;
+			// restoreKV clamps a tail past limit. A hybrid probes under limit.
+			max := len(kc.seq) - n*pg.p
+			if kc.recurrent {
+				max = min(len(kc.seq), limit) - n*pg.p
+			}
 			if max > pg.p-1 {
 				max = pg.p - 1
 			}
@@ -1673,9 +1679,10 @@ func (s *Instance) restoreKV(max int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// restore stops at max: whole pages under it, and the page it falls
-	// inside at the longest fill there is.
+	// Whole pages stop at max; a partial tail past it is clamped in
+	// positions, its page copied away before it is written over.
 	cover := n
+	n = min(n, max)
 	if n <= 0 {
 		return 0, nil
 	}
