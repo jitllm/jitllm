@@ -381,6 +381,11 @@ func openAt(path string, want uint32) (*File, error) {
 		closeDirect(direct)
 		return nil, err
 	}
+	if err = f.weightPagesValid(); err != nil {
+		fh.Close()
+		closeDirect(direct)
+		return nil, err
+	}
 	if f.vis, err = decodeVision(f.meta[h.VisOff : h.VisOff+h.VisLen]); err != nil {
 		fh.Close()
 		closeDirect(direct)
@@ -418,8 +423,8 @@ func openAt(path string, want uint32) (*File, error) {
 		f.byID[id] = i
 	}
 	if f.cfg != nil {
-		if err := f.cfg.CheckQKNorm(int(h.NBlocks), func(r Role, b int32) bool {
-			return f.Has(r, b, -1)
+		if err := f.cfg.CheckQKNorm(f.TextSpace(), func(r Role, b int32) bool {
+			return f.Has(r, int32(f.cfg.PageOf(int(b))), -1)
 		}); err != nil {
 			fh.Close()
 			closeDirect(direct)

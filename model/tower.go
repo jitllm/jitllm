@@ -140,14 +140,14 @@ func audioBlocks(v *jlm.Vision) int {
 // matrix a descriptor recorded by its role (layer.mats), which an instance's
 // copy binds (BindDense, BindBlock).
 func (m *Model) bindTower(c *jlm.File) error {
-	if m.TowerBase > int(c.H.NBlocks) {
-		return fmt.Errorf("model: %d text blocks over a page array of %d: the tower's pages would be another block's",
-			m.TowerBase, c.H.NBlocks)
+	if m.TowerBase > c.TextSpace() {
+		return fmt.Errorf("model: %d text blocks over a block space of %d: the tower's pages would be another block's",
+			m.TowerBase, c.TextSpace())
 	}
 	// Blocks the container holds past the text model's (a decision model's
 	// head blocks) keep their pages: the tower's start after them.
-	m.Layers = m.Layers[:c.H.NBlocks]
-	m.TowerBase = int(c.H.NBlocks)
+	m.Layers = m.Layers[:c.TextSpace()]
+	m.TowerBase = c.TextSpace()
 	v := c.Vision()
 	// The tower's blocks are bound where they live: a matrix is recorded by a
 	// pointer into its layer (layer.mats), which a copy would leave behind.

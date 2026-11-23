@@ -32,7 +32,7 @@ func (m *Model) mtpEntryGraph(li int) (*graph.Graph, Uncovered, error) {
 	f := graph.Facts{Inventory: map[jlm.Role]graph.Shape{}}
 	for i := range m.Container.Entries() {
 		e := &m.Container.Entries()[i]
-		if e.Block != int32(li) || e.Index >= 0 {
+		if e.Block != int32(m.Container.PageOf(li)) || e.Index >= 0 {
 			continue
 		}
 		for _, r := range roles {

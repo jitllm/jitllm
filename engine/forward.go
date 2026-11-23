@@ -2275,7 +2275,7 @@ func (s *Instance) keep(lo, hi, d int) {
 		return
 	}
 	for li := lo; li < hi; li++ {
-		s.fr.Keep(li, d)
+		s.fr.Keep(s.m.Container.PageOf(li), d)
 	}
 }
 

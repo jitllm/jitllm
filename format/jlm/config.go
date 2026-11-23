@@ -421,6 +421,15 @@ type Config struct {
 	// Front are the graphs of the parts outside the blocks where the
 	// converter states them (FrontGraphs). The thirty-first optional tail.
 	Front FrontGraphs
+	// WeightsOf is, per block of the text's block space (the trunk, the
+	// head blocks and the prediction blocks), the page of the text page
+	// array holding the weights it reads, where some block reads another's:
+	// the passes of an unrolled loop past the first run the first pass's
+	// weights, each with its own history and state. Nil is every block its
+	// own page. A block's entries are its page's (Entry.Block is the page),
+	// read once and resident once on a device. The thirty-second optional
+	// tail.
+	WeightsOf []uint32
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:

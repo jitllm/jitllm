@@ -1405,7 +1405,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	defer func() {
 		pin.Release()
 		if fr != nil && (!placed || g.ReleasesHostPage(li)) {
-			fr.DropPage(li)
+			fr.DropPage(fr.File().PageOf(li))
 		}
 		if placed {
 			g.sizeFrames(p.File)
