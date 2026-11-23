@@ -233,7 +233,9 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 	for _, x := range past {
 		kept := vals[x]
 		vals[x] = make([]uint32, len(kept))
-		none, err := runner.run(whole, 0, len(whole), vals, base, full, nil)
+		fresh := newPassRunner(d)
+		none, err := fresh.run(whole, 0, len(whole), vals, base, full, nil)
+		fresh.close()
 		vals[x] = kept
 		if err != nil {
 			t.Fatal(err)
