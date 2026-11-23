@@ -239,7 +239,7 @@ type coarse struct {
 	hostVal map[Operand]Store
 	// perRow is a host of one workgroup a row: unit r*P+q is row r's q.
 	perRow bool
-	err     error
+	err    error
 
 	// under is a guard's phase computed in it, the unit its iteration: the
 	// warps past the last unit skip the phase. exchanged is an exchange
