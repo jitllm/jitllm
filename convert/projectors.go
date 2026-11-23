@@ -155,7 +155,7 @@ func (p *projStates) statement() (*Statement, error) {
 	for _, g := range t.Gather {
 		r, ok := names.roleOf(g.Role)
 		if !ok {
-			r, ok = rolesByName()[g.Role]
+			r, ok = names.role(g.Role)
 		}
 		if !ok || g.Every || g.Count != "" || len(g.From) == 0 {
 			return nil, fmt.Errorf("tensors: the gather of %s: a tower's gather is of a role the container knows, "+

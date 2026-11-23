@@ -78,8 +78,9 @@ func rowComesHome(t *testing.T, mode engine.DeviceSampleMode) {
 	if tok != max {
 		t.Fatalf("a plain generate made %d tokens, want %d", tok, max)
 	}
-	// Every token is followed by one ForwardSample, the last included.
-	steps, dev := int64(tok), c1.dev-c0.dev
+	// Every token but the last is followed by one ForwardSample: a reply that
+	// ends at its max_tokens leaves its last token unrun (Session.unfed).
+	steps, dev := int64(tok-1), c1.dev-c0.dev
 	if dev != steps {
 		t.Fatalf("mode %d: %d of %d tokens drawn on the device", mode, dev, steps)
 	}

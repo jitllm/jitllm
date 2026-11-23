@@ -1228,6 +1228,10 @@ type Session struct {
 	// continued (under mu).
 	spec    Speculation
 	specRan bool
+	// unfed is the token a generate that ended at its max_tokens kept and
+	// the model did not run: the history's next position, fed in front of
+	// whatever continues it (under mu).
+	unfed []int32
 	// rows are the pictures the history holds, by the key their rows were
 	// named by: what rebuilds the history on a fresh session (history).
 	// Guarded by mu.
@@ -1486,7 +1490,7 @@ type blockHistory struct {
 // refresh republishes the snapshot. The caller MUST hold s.mu.
 func (s *Session) refresh() {
 	s.in().As(s.ms, func(st *engine.Instance) {
-		s.snapPos.Store(int32(st.Pos()))
+		s.snapPos.Store(int32(st.Pos() + len(s.unfed)))
 		s.snapKV.Store(st.KVBytes())
 		s.snapHist.Store(st.HistoryBytes())
 		s.snapDevBlocks.Store(int32(st.GPULayers()))
@@ -1635,6 +1639,7 @@ func (s *Session) reset(ctx context.Context) error {
 	}
 	in.Reset()
 	s.ms.Unhold(in)
+	s.unfed = s.unfed[:0]
 	return nil
 }
 
@@ -2230,6 +2235,25 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if !spans && len(ids) == 0 {
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
+	// A continued history that ends on a token its last generate kept and did
+	// not run takes it as the prompt's first position. Nothing fed, it stays
+	// the history's next.
+	held := 0
+	if o.Continue && len(s.unfed) > 0 {
+		held = len(s.unfed)
+		if spans {
+			o.Prompt.Spans = append([]model.Span{{Tokens: slices.Clone(s.unfed)}}, o.Prompt.Spans...)
+		} else {
+			ids = append(slices.Clone(s.unfed), ids...)
+		}
+		prev, at := s.unfed, s.ms.Pos()
+		s.unfed = nil
+		defer func() {
+			if len(s.unfed) == 0 && s.ms.Pos() == at {
+				s.unfed = prev
+			}
+		}()
+	}
 
 	// A request whose client has already gone does no prompt work and sends
 	// no GenerateStarted, on whichever path would have run it.
@@ -2321,7 +2345,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 
 	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil && !(o.Echo && o.Logprobs) &&
 		o.from == 0 {
-		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, store, emit)
+		return e.generateBatched(ctx, lp, s, o, ids, held, ephemeral, store, emit)
 	}
 
 	// ---- recorded as running on its devices; nothing waits here.
@@ -2358,9 +2382,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return err
 	}
 	if spans {
-		sampler.PrimeSpans(o.Prompt.Spans)
+		sampler.PrimeSpans(o.Prompt.Spans[min(held, 1):])
 	} else {
-		sampler.Prime(ids)
+		sampler.Prime(ids[held:])
 	}
 	var logits []float32
 	var sp *engine.Speculator
@@ -2434,6 +2458,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	s.prefilled.Add(int64(prompted))
 	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
+	if held > 0 {
+		prompted -= held
+		if !spans {
+			ids = ids[held:]
+		}
+	}
 	if o.from > 0 {
 		prompted, restored = prompted-o.from, max(restored-o.from, 0)
 		if !spans {
@@ -2598,6 +2628,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if sp != nil {
 			continue
 		}
+		if n+1 == maxTokens {
+			// The reply's last token: kept, and run only by what continues
+			// the history.
+			s.unfed = append(s.unfed[:0], next)
+			continue
+		}
 		// A move between devices asked meanwhile is prepared and committed
 		// here, between two tokens (Engine.MoveBlocks).
 		s.serveMove(false)
@@ -2637,8 +2673,11 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	lm.finished(n, prefill, decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
-	// The history grew by what this generate committed.
-	e.applyPageBudget(lm, nil)
+	// The history grew by what this generate committed. An ephemeral
+	// session's release re-divides as it ends (releaseEphemeral).
+	if !ephemeral {
+		e.applyPageBudget(lm, nil)
+	}
 
 	rate := 0.0
 	if decode > 0 && n > 0 {
@@ -2654,9 +2693,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		TokensPerSecond:  rate,
 		// Bytes per token makes the rate checkable against the read wall.
 		BytesPerToken: lm.m.BytesPerToken(),
-		Position:      s.ms.Pos(),
+		Position:      s.ms.Pos() + len(s.unfed),
 		Restored:      restored,
-		Truncated:     reason == FinishMaxTokens && s.ms.Pos() >= s.ms.Limit(),
+		Truncated:     reason == FinishMaxTokens && s.ms.Pos()+len(s.unfed) >= s.ms.Limit(),
 	}})
 }
 
@@ -2801,10 +2840,14 @@ func (e *Engine) forkPrompt(named *Session, o GenerateOptions, hist []model.Span
 // from (engine.Session.HistorySpans), each picture the span it was
 // prefilled from. The caller holds mu.
 func (s *Session) history() ([]model.Span, error) {
-	return s.ms.HistorySpans(func(k model.RowsKey) (model.Span, bool) {
+	h, err := s.ms.HistorySpans(func(k model.RowsKey) (model.Span, bool) {
 		sp, ok := s.rows[k]
 		return sp, ok
 	})
+	if err != nil || len(s.unfed) == 0 {
+		return h, err
+	}
+	return append(h, model.Span{Tokens: slices.Clone(s.unfed)}), nil
 }
 
 // resolveSession returns the named session, or creates an ephemeral one for a
@@ -3541,10 +3584,11 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 	// a bound read off what they held before it is a bound on more than
 	// they keep: it is read again after each trim until it holds.
 	if st, sh := lm.ttft.store, lm.ttft.shared; st != nil && sh != nil {
-		lim := e.storeLimit(avail, st.Bytes()+sh.Bytes())
+		now := e.availNow()
+		lim := e.storeLimit(avail, st.Bytes()+sh.Bytes(), now)
 		for {
 			sh.Trim(lim - min(lim, st.Bytes()))
-			next := e.storeLimit(avail, st.Bytes()+sh.Bytes())
+			next := e.storeLimit(avail, st.Bytes()+sh.Bytes(), now)
 			if next >= lim {
 				break
 			}

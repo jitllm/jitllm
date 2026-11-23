@@ -85,19 +85,36 @@ func groupFits(E, T, S, G int) bool { return G%S == 0 && E%(G/S) == 0 && T%S == 
 
 // siblingWidths gives kernels reading one activation the narrowest of their
 // workgroups, so Siblings runs them as one launch; a segment keeps eight rows,
-// a 32-byte sector.
+// a 32-byte sector. Forms of a capacity whose threads each sum a tile of
+// rows (groupSplitRows) join only one another, of one capacity and one row
+// tiling of their leading axis, as Siblings runs them.
 func (s Split) siblingWidths(ks []*Kernel, d Device) map[*Kernel]int {
 	if s.Width > 0 {
 		return nil
 	}
+	segs := func(k *Kernel) (int, int, bool) {
+		if s.tilesRows(k) {
+			return s.rowSegments(k, d)
+		}
+		return s.groupSegments(k, d)
+	}
+	at := func(k *Kernel, S, G int) int {
+		if s.tilesRows(k) {
+			return rowSegmentsAt(k, S, G)
+		}
+		return segmentsAt(k, S, G)
+	}
+	alike := func(a, b *Kernel) bool {
+		return s.tilesRows(a) == s.tilesRows(b) && a.Capacity == b.Capacity && (!s.tilesRows(a) || a.Space[0] == b.Space[0])
+	}
 	var out map[*Kernel]int
 	for i := 0; i < len(ks); {
-		S0, G, ok := s.groupSegments(ks[i], d)
+		S0, G, ok := segs(ks[i])
 		if !ok {
 			i++
 			continue
 		}
-		run, segs, between := []*Kernel{ks[i]}, []int{S0}, []*Kernel(nil)
+		run, ss, between := []*Kernel{ks[i]}, []int{S0}, []*Kernel(nil)
 		j := i + 1
 		// A kernel after a sibling reading what it writes -- its bias, which
 		// Epilogue joins to it -- stands between siblings and not across them.
@@ -110,9 +127,9 @@ func (s Split) siblingWidths(ks []*Kernel, d Device) map[*Kernel]int {
 			for _, m := range between {
 				apart = apart && !writesInto(m, k) && !writesInto(k, m)
 			}
-			Sj, Gj, ok := s.groupSegments(k, d)
-			if ok && apart && sharesActivation(ks[i], k) {
-				run, segs, G = append(run, k), append(segs, Sj), min(G, Gj)
+			Sj, Gj, ok := segs(k)
+			if ok && apart && alike(ks[i], k) && sharesActivation(ks[i], k) {
+				run, ss, G = append(run, k), append(ss, Sj), min(G, Gj)
 				continue
 			}
 			if !ok && !sharesActivation(ks[i], k) && slices.ContainsFunc(run, func(m *Kernel) bool { return writesInto(m, k) }) &&
@@ -123,8 +140,8 @@ func (s Split) siblingWidths(ks []*Kernel, d Device) map[*Kernel]int {
 			break
 		}
 		fits := len(run) > 1
-		for x, S := range segs {
-			fits = fits && segmentsAt(run[x], S, G) > 0
+		for x, S := range ss {
+			fits = fits && at(run[x], S, G) > 0
 		}
 		if fits {
 			if out == nil {
@@ -152,8 +169,8 @@ func segmentsAt(k *Kernel, S, G int) int {
 }
 
 func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
-	if s.Parts == 0 && n.Tile > 1 && n.Capacity > 0 && !n.Work && covers(s.Kinds, n.Kind) && (!s.Matrix || readsMatrix(n)) {
-		if gs, ok := s.groupSplitRows(n, d); ok {
+	if s.tilesRows(n) {
+		if gs, ok := s.groupSplitRows(n, d, width); ok {
 			return gs, true, nil
 		}
 		return nil, false, nil
@@ -481,37 +498,78 @@ const splitShared = 8 << 10
 // call's last, its sum from that row's partials, so no row's value depends
 // on which of the tile's copies of it a driver computed. The launch keeps
 // the leading axis (Space: units, then the unit's workgroups), so a call
-// holds its rows' units whole (CallRows).
-func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
-	T := n.Tile
-	if T < 2 || len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
-		return nil, false
-	}
-	c, _, _, ok := rowsSplittable(n)
+// holds its rows' units whole (CallRows). Where width is set (siblings
+// reading one activation, siblingWidths) a workgroup is width threads, the
+// segments the most of S's halvings it takes.
+func (s Split) groupSplitRows(n *Kernel, d Device, width int) ([]*Kernel, bool) {
+	S, G, ok := s.rowSegments(n, d)
 	if !ok {
 		return nil, false
 	}
-	slots := s.slots(d)
-	K, U := n.Loops[c].Trip, n.Space[0]
-	E := n.Elements() / U
-	S := 1
-	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && groupWidth(S*2, d)*T <= splitShared {
-		S *= 2
-	}
-	if S == 1 {
-		return nil, false // rows wide enough to fill the device whole
-	}
-	// A workgroup's segments hold whole elements of one unit: fewer
-	// elements than a 128-thread workgroup's share take a narrower one.
-	G := groupWidth(S, d)
-	for G > 32*S && E%(G/S) != 0 {
-		G /= 2
+	if width > 0 && width < G {
+		G = width
+		if S = rowSegmentsAt(n, S, G); S == 0 {
+			return nil, false
+		}
 	}
 	g, ok := splitTile(n, S, G, s.Drop)
 	if !ok {
 		return nil, false
 	}
 	return []*Kernel{g}, true
+}
+
+// tilesRows says the split cuts n as a form of a capacity whose threads
+// each sum a tile of rows (groupSplitRows).
+func (s Split) tilesRows(n *Kernel) bool {
+	return s.Parts == 0 && n.Tile > 1 && n.Capacity > 0 && !n.Work && len(n.Space) > 0 && covers(s.Kinds, n.Kind) && (!s.Matrix || readsMatrix(n))
+}
+
+// rowSegments is the segments and the workgroup's threads groupSplitRows
+// cuts n in alone, where it cuts it.
+func (s Split) rowSegments(n *Kernel, d Device) (S, G int, ok bool) {
+	T := n.Tile
+	if !s.tilesRows(n) || len(n.Stores) != T || n.TileFirst == 0 || n.TileBase == 0 {
+		return 0, 0, false
+	}
+	c, _, _, ok := rowsSplittable(n)
+	if !ok {
+		return 0, 0, false
+	}
+	slots := s.slots(d)
+	K, U := n.Loops[c].Trip, n.Space[0]
+	E := n.Elements() / U
+	S = 1
+	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && groupWidth(S*2, d)*T <= splitShared {
+		S *= 2
+	}
+	if S == 1 {
+		return 0, 0, false // rows wide enough to fill the device whole
+	}
+	// A workgroup's segments hold whole elements of one unit: fewer
+	// elements than a 128-thread workgroup's share take a narrower one.
+	G = groupWidth(S, d)
+	for G > 32*S && E%(G/S) != 0 {
+		G /= 2
+	}
+	return S, G, true
+}
+
+// rowSegmentsAt is the most segments, S or a halving of it, that a tile of
+// rows of n takes in workgroups of G threads, a segment keeping eight rows;
+// 0 where none does.
+func rowSegmentsAt(n *Kernel, S, G int) int {
+	c, _, _, ok := rowsSplittable(n)
+	if !ok || G*n.Tile > splitShared {
+		return 0
+	}
+	K, E := n.Loops[c].Trip, n.Elements()/n.Space[0]
+	for ; S > 1; S /= 2 {
+		if G >= 8*S && G%S == 0 && E%(G/S) == 0 && K%S == 0 {
+			return S
+		}
+	}
+	return 0
 }
 
 // splitTile is n, whose threads each sum a tile of n.Tile rows (one where
@@ -550,6 +608,9 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 		}
 	}
 	g := n.clone()
+	if n.TileLast > 0 {
+		g.unclampRows(n.TileBase-1, n.TileLast-1, n.TileRows, T)
+	}
 	g.Name = n.Name + ".group"
 	g.Work, g.Group, g.Space = true, G, []int{U, E / rpg}
 	g.Tile, g.TileBase, g.TileLast, g.TileFirst, g.TileRows = 0, 0, 0, 0, 0
@@ -633,6 +694,73 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 		g.Stores = append(g.Stores, st)
 	}
 	return g, true
+}
+
+// unclampRows reads the rows of a tile past its first at the tile's row
+// base plus their place, no longer held to the call's last row last: the
+// sums splitTile stores read the partials of no row past the call's, so a
+// row past it reads its own row of the capacity's R. Each row's loads are
+// then one address and a constant past it (Affine), not an address and a
+// clamp a row. Rows stay held where tiles of T rows do not cover R: a last
+// tile started T rows before R's end recomputes rows of the tile before,
+// and on a SPIR-V card the two workgroups stored two values of a row.
+// They stay held too where a row's load is indexed by a value it loads:
+// that index past the call's rows is no row's.
+func (k *Kernel) unclampRows(base, last, R, T int) {
+	if R%T != 0 {
+		return
+	}
+	same := map[int]int{}
+	for i, nd := range k.Nodes {
+		if nd.Op != OpMin || nd.Type != ir.U32 {
+			continue
+		}
+		row, other := nd.A, nd.B
+		if other != last {
+			row, other = nd.B, nd.A
+		}
+		r := k.Nodes[row]
+		if other == last && r.Op == OpAdd && (r.A == base && k.Nodes[r.B].Op == OpConst || r.B == base && k.Nodes[r.A].Op == OpConst) {
+			same[i] = row
+		}
+	}
+	if len(same) == 0 || k.loadsIndexedByLoads(same) {
+		return
+	}
+	k.redirectMany(same)
+}
+
+// loadsIndexedByLoads reports whether a load of k whose index depends on
+// one of rows' nodes is indexed by a value a load of such a row reads.
+func (k *Kernel) loadsIndexedByLoads(rows map[int]int) bool {
+	dep := make([]bool, len(k.Nodes))
+	loaded := make([]bool, len(k.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i := range k.Nodes {
+			_, d := rows[i]
+			l := false
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				d = d || dep[*a]
+				l = l || loaded[*a]
+			}
+			l = l || d && k.Nodes[i].Op == OpLoad
+			if d != dep[i] || l != loaded[i] {
+				dep[i], loaded[i], changed = d || dep[i], l || loaded[i], true
+			}
+		}
+	}
+	for i := range k.Nodes {
+		if k.Nodes[i].Op != OpLoad || !dep[i] {
+			continue
+		}
+		for _, a := range k.Operands(&k.Nodes[i]) {
+			if loaded[*a] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rowsSplittable finds each store's sum in a kernel whose stores are each a

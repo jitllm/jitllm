@@ -2403,26 +2403,36 @@ func graphAttends(gr *graph.Graph) bool {
 	return false
 }
 
-// inPlace says the form may write output out over input in: every kernel
-// that reads in launches before the first that writes out. One kernel that
-// reads in at the elements it writes out at is not enough: a launch clamps
-// its surplus threads to the last element, and every lane storing an
-// element may store before another lane reads it, adding twice (RULE 13).
 // apart says a form of n residual streams (one where n < 2) writes some
 // stream's output before it last reads that stream's input: its outputs are
 // written apart, in bs.h, and copied over x after (servedCopy).
-func (f *partForm) apart(n int) bool {
+func (f *partForm) apart(n int) bool { return f.apartAt(n, 0) }
+
+// apartAt is apart at a call of rows rows, of the codes that call launches
+// alone: a form of bands writes over x at a call whose band reads x before
+// it writes the output, though a later band reads x. Zero rows is every
+// code.
+func (f *partForm) apartAt(n, rows int) bool {
 	for k := range max(n, 1) {
-		if !f.inPlace(k, k) {
+		if !f.inPlace(k, k, rows) {
 			return true
 		}
 	}
 	return false
 }
 
-func (f *partForm) inPlace(in, out int) bool {
+// inPlace says the form may write output out over input in at a call of
+// rows rows (zero: every code): every kernel the call launches that reads
+// in launches before the first that writes out. One kernel that reads in
+// at the elements it writes out at is not enough: a launch clamps its
+// surplus threads to the last element, and every lane storing an element
+// may store before another lane reads it, adding twice (RULE 13).
+func (f *partForm) inPlace(in, out, rows int) bool {
 	lastRead, firstWrite := -1, len(f.codes)
 	for i, args := range f.args {
+		if rows > 0 && !f.codes[i].geom.Runs(rows) {
+			continue
+		}
 		for _, a := range args {
 			if a.kind == partIn && a.i == in && a.read {
 				lastRead = i

@@ -65,6 +65,10 @@ type Vocab struct {
 	// first, so a byte that starts no special costs one lookup.
 	specialAt [256][]int32
 
+	// decoded is each token's decoded piece to its first id, built at the
+	// first lookup ID's raw text misses.
+	decoded func() map[string]int32
+
 	// eog is every id that ends a generation; see IsEOG.
 	eog []int32
 	// harmony is gpt-oss's message framing, looked up once; see DecodeChat.
@@ -168,6 +172,16 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 		AddEOS:         vc.AddEOS,
 		AddSpacePrefix: vc.AddSpacePrefix,
 	}
+	v.decoded = sync.OnceValue(func() map[string]int32 {
+		m := make(map[string]int32, len(v.text))
+		for i := range v.text {
+			d := v.Decode([]int32{int32(i)})
+			if _, dup := m[d]; !dup {
+				m[d] = int32(i)
+			}
+		}
+		return m
+	})
 	for i, str := range vc.Tokens {
 		v.text[i] = str
 		// First id wins. Duplicate token strings exist in some vocabularies.
@@ -262,12 +276,8 @@ func (v *Vocab) ID(text string) (int32, bool) {
 	if id, ok := v.ids[text]; ok {
 		return id, true
 	}
-	for i := range v.text {
-		if v.Decode([]int32{int32(i)}) == text {
-			return int32(i), true
-		}
-	}
-	return 0, false
+	id, ok := v.decoded()[text]
+	return id, ok
 }
 
 // Text returns the raw token string for an id.
