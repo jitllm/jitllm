@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -431,5 +432,48 @@ func TestComposedGPURowTiles(t *testing.T) {
 			}
 			t.Logf("%s: %d calls right against the oracle and bit for bit against the capacity's call, %d of them tiled, every violation seen", d.API(), ran, tiledRan)
 		})
+	}
+}
+
+// TestTiledRowsShareTheirAddresses forms a Llama-3.1-8B-shaped MLP at
+// calls of 4, 8 and 16 rows on a V100's statement: every tile of rows
+// whose sums a workgroup splits (".tiled.group") reads each row past its
+// first at the second's address and a constant past it, so its loads are
+// more than two to an index -- a row held to the call's last row with a
+// clamp of its own is an index of its own, and the form clamping every row
+// reads fewer than two to one. TestComposedGPURowTiles holds what the rows past a
+// call's write: nothing.
+func TestTiledRowsShareTheirAddresses(t *testing.T) {
+	d := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, Regs: 32, Shared: 96 << 10,
+		ExactDiv: true, Matrix: [3]int{16, 16, 16}, HalfPairs: true, VectorLoads: true}
+	formats := map[jlm.Role]jlm.Type{jlm.RoleFFNGate: jlm.TypeQ4S, jlm.RoleFFNUp: jlm.TypeQ4S, jlm.RoleFFNDown: jlm.TypeQ6S, jlm.RoleFFNNorm: jlm.TypeF32}
+	for _, R := range []int{4, 8, 16} {
+		_, codes, err := composer.Default().Form(composer.Request{Graph: ffnBlock(4096, 14336), Formats: formats,
+			Step: composer.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: d})
+		if err != nil {
+			t.Fatalf("%d rows: %v", R, err)
+		}
+		tiled := 0
+		for _, c := range codes {
+			if c.GPU == nil || !strings.Contains(c.Name, ".tiled.group") {
+				continue
+			}
+			tiled++
+			type at struct{ buf, ix ir.Value }
+			loads, ixs := 0, map[at]bool{}
+			for _, op := range c.GPU.Ops {
+				if op.Kind == ir.OpLoad || op.Kind == ir.OpLoadV {
+					loads++
+					ixs[at{op.Args[0], op.Args[1]}] = true
+				}
+			}
+			if loads <= 2*len(ixs) {
+				t.Fatalf("%d rows: %s reads %d loads at %d indices: its tile's rows are not one address", R, c.Name, loads, len(ixs))
+			}
+			t.Logf("%d rows: %s reads %d loads at %d indices", R, c.Name, loads, len(ixs))
+		}
+		if tiled == 0 {
+			t.Fatalf("%d rows: no tile of rows split in a workgroup was formed: the gate checked nothing", R)
+		}
 	}
 }

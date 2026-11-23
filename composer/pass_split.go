@@ -608,6 +608,9 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 		}
 	}
 	g := n.clone()
+	if n.TileLast > 0 && n.TileRows%T == 0 {
+		g.unclampRows(n.TileBase-1, n.TileLast-1)
+	}
 	g.Name = n.Name + ".group"
 	g.Work, g.Group, g.Space = true, G, []int{U, E / rpg}
 	g.Tile, g.TileBase, g.TileLast, g.TileFirst, g.TileRows = 0, 0, 0, 0, 0
@@ -691,6 +694,68 @@ func splitTile(n *Kernel, S, G int, drop bool) (*Kernel, bool) {
 		g.Stores = append(g.Stores, st)
 	}
 	return g, true
+}
+
+// unclampRows reads the rows of a tile past its first at the tile's row
+// base plus their place, no longer held to the call's last row last: the
+// sums splitTile stores read the partials of no row past the call's, so a
+// row past it reads its own row of the capacity, within it where the tiles
+// cover the capacity's rows exactly. Each row's loads are then one address
+// and a constant past it (Affine), not an address and a clamp a row. Where
+// a row's load is indexed by a value it loads, its rows stay held: that
+// index past the call's rows is no row's.
+func (k *Kernel) unclampRows(base, last int) {
+	same := map[int]int{}
+	for i, nd := range k.Nodes {
+		if nd.Op != OpMin || nd.Type != ir.U32 {
+			continue
+		}
+		row, other := nd.A, nd.B
+		if other != last {
+			row, other = nd.B, nd.A
+		}
+		r := k.Nodes[row]
+		if other == last && r.Op == OpAdd && (r.A == base && k.Nodes[r.B].Op == OpConst || r.B == base && k.Nodes[r.A].Op == OpConst) {
+			same[i] = row
+		}
+	}
+	if len(same) == 0 || k.loadsIndexedByLoads(same) {
+		return
+	}
+	k.redirectMany(same)
+}
+
+// loadsIndexedByLoads reports whether a load of k whose index depends on
+// one of rows' nodes is indexed by a value a load of such a row reads.
+func (k *Kernel) loadsIndexedByLoads(rows map[int]int) bool {
+	dep := make([]bool, len(k.Nodes))
+	loaded := make([]bool, len(k.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i := range k.Nodes {
+			_, d := rows[i]
+			l := false
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				d = d || dep[*a]
+				l = l || loaded[*a]
+			}
+			l = l || d && k.Nodes[i].Op == OpLoad
+			if d != dep[i] || l != loaded[i] {
+				dep[i], loaded[i], changed = d || dep[i], l || loaded[i], true
+			}
+		}
+	}
+	for i := range k.Nodes {
+		if k.Nodes[i].Op != OpLoad || !dep[i] {
+			continue
+		}
+		for _, a := range k.Operands(&k.Nodes[i]) {
+			if loaded[*a] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rowsSplittable finds each store's sum in a kernel whose stores are each a
