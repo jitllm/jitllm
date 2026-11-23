@@ -43,6 +43,15 @@ func atOncePrompts(m *model.Model) [2][]int32 {
 	}
 }
 
+// atOnceLevel are two prompts of one length: their histories cross each
+// page at the same step, so both sessions ask for room together.
+func atOnceLevel(m *model.Model) [2][]int32 {
+	return [2][]int32{
+		m.Vocab.Encode("Once upon a time, there was a little girl named", true),
+		m.Vocab.Encode("Once upon a time, there was a little boy named", true),
+	}
+}
+
 // atOnceTier opens spec with the tuners off, so every arm runs the same
 // kernels in the same reduction order.
 func atOnceTier(t *testing.T, spec string, cfg func(*gpu.Config), extra ...gpu.Option) *gpu.GPU {
@@ -496,7 +505,9 @@ func pageAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, l
 // band -- as are the same two sessions taking turns a step at a time on one
 // goroutine, what two sessions on one device did before they stepped at once.
 // Eviction under another session's step must neither lose a page nor hand one
-// to the wrong sequence. KVEvictions and KVStreamPasses during the run at once
+// to the wrong sequence, nor send a block home: prompts of one length cross
+// each page at the same step, so one session's growth or eviction waits for
+// the other's submission while that session takes the ids it made. KVEvictions and KVStreamPasses during the run at once
 // are the selection check. The greedy ids that differ are logged, not held:
 // a streamed pass's order flips a near tie (one in two hundred on CUDA, where
 // one session evicting alone already reads 8e-3). The two sessions stepped in
@@ -510,36 +521,46 @@ func TestSessionsEvictAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	level := atOnceLevel(m)
+	if len(level[0]) != len(level[1]) {
+		t.Fatalf("the level prompts are %d and %d tokens: they would not cross a page together", len(level[0]), len(level[1]))
+	}
+	pairs := []struct {
+		name    string
+		prompts [2][]int32
+	}{{"apart", atOncePrompts(m)}, {"level", level}}
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
-		t.Run(spec, func(t *testing.T) {
-			turns := evictAtOnce(t, m, spec, false, false)
-			both := evictAtOnce(t, m, spec, true, false)
-			joint := evictAtOnce(t, m, spec, true, true)
-			t.Logf("%s: in one call %d page(s) home, %d streamed passes, %d call(s) streaming both, worst NMSE %.3e, %d id(s) different "+
-				"(against each alone; %.3e with no budget in one call, %.3e against that call)",
-				spec, joint.ev, joint.passes, joint.joint, joint.worst, joint.flips, joint.ctl, joint.apart)
-			if joint.ev == 0 || joint.passes == 0 || joint.joint == 0 {
-				t.Fatalf("in one call %d evictions, %d streamed passes, %d calls streaming both: the joint step never streamed two histories",
-					joint.ev, joint.passes, joint.joint)
-			}
-			t.Logf("%s: taking turns %d page(s) home, %d streamed passes, worst NMSE %.3e, %d id(s) "+
-				"different; at once %d, %d, %.3e, %d (against each alone with no budget)", spec,
-				turns.ev, turns.passes, turns.worst, turns.flips, both.ev, both.passes, both.worst, both.flips)
-			if both.ev == 0 || both.passes == 0 {
-				t.Fatalf("%d evictions and %d streamed passes at once: the budget never bound", both.ev, both.passes)
-			}
-			// The control widens the band only by an order's reach: tenths
-			// with no budget is a broken call, not a band.
-			if !(joint.ctl < 10*evictNMSE) {
-				t.Fatalf("in one call with no budget worst NMSE %.3e against each alone: the control is not a band", joint.ctl)
-			}
-			for _, a := range []evictArm{turns, both, joint} {
-				if !a.held() {
-					t.Fatalf("worst logit NMSE %.3e against the runs with no budget, bound %.3e: a page was lost or "+
-						"read as another's", a.worst, a.bound())
+		for _, pr := range pairs {
+			t.Run(spec+"/"+pr.name, func(t *testing.T) {
+				turns := evictAtOnce(t, m, pr.prompts, spec, false, false)
+				both := evictAtOnce(t, m, pr.prompts, spec, true, false)
+				joint := evictAtOnce(t, m, pr.prompts, spec, true, true)
+				t.Logf("%s: in one call %d page(s) home, %d streamed passes, %d call(s) streaming both, worst NMSE %.3e, %d id(s) different "+
+					"(against each alone; %.3e with no budget in one call, %.3e against that call)",
+					spec, joint.ev, joint.passes, joint.joint, joint.worst, joint.flips, joint.ctl, joint.apart)
+				if joint.ev == 0 || joint.passes == 0 || joint.joint == 0 {
+					t.Fatalf("in one call %d evictions, %d streamed passes, %d calls streaming both: the joint step never streamed two histories",
+						joint.ev, joint.passes, joint.joint)
 				}
-			}
-		})
+				t.Logf("%s: taking turns %d page(s) home, %d streamed passes, worst NMSE %.3e, %d id(s) "+
+					"different; at once %d, %d, %.3e, %d (against each alone with no budget)", spec,
+					turns.ev, turns.passes, turns.worst, turns.flips, both.ev, both.passes, both.worst, both.flips)
+				if both.ev == 0 || both.passes == 0 {
+					t.Fatalf("%d evictions and %d streamed passes at once: the budget never bound", both.ev, both.passes)
+				}
+				// The control widens the band only by an order's reach: tenths
+				// with no budget is a broken call, not a band.
+				if !(joint.ctl < 10*evictNMSE) {
+					t.Fatalf("in one call with no budget worst NMSE %.3e against each alone: the control is not a band", joint.ctl)
+				}
+				for _, a := range []evictArm{turns, both, joint} {
+					if !a.held() {
+						t.Fatalf("worst logit NMSE %.3e against the runs with no budget, bound %.3e: a page was lost or "+
+							"read as another's", a.worst, a.bound())
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -572,9 +593,8 @@ func (a evictArm) held() bool { return a.worst <= a.bound() }
 // with no budget, then both teacher-forced through those runs' ids under a
 // budget that makes their histories evict -- at once, in one call (joint), or
 // taking turns a step at a time.
-func evictAtOnce(t *testing.T, m *model.Model, spec string, together, joint bool, extra ...gpu.Option) evictArm {
+func evictAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, together, joint bool, extra ...gpu.Option) evictArm {
 	t.Helper()
-	prompts := atOncePrompts(m)
 	const seq, gen = 128, 100
 	g := atOnceTier(t, spec, func(c *gpu.Config) {
 		c.KVPage = 64 // the smallest page: a short history is two
