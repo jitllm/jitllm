@@ -75,7 +75,7 @@ func predictFacts(c *jlm.Config, s *jlm.Source, names tensorNames, li int) *bloc
 	bf := frontFacts(c, s, names, frontPart{})
 	bf.facts = graph.Facts{Inventory: map[jlm.Role]graph.Shape{}}
 	for _, t := range s.Tensors {
-		if int(t.Block) != li || !predictRole(t.Role) || t.Index >= 0 {
+		if int(t.Block) != c.PageOf(li) || !predictRole(t.Role) || t.Index >= 0 {
 			continue
 		}
 		sh := graph.Shape{K: int(t.Dims[0])}
@@ -226,7 +226,7 @@ func StateFront(c *jlm.Config, s *jlm.Source, taken map[string]bool) error {
 func predictHeadFacts(c *jlm.Config, s *jlm.Source, names tensorNames, p frontPart, li int) *blockFacts {
 	bf := frontFacts(c, s, names, p)
 	for _, t := range s.Tensors {
-		if int(t.Block) != li || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
+		if int(t.Block) != c.PageOf(li) || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
 			continue
 		}
 		sh := graph.Shape{K: int(t.Dims[0])}
@@ -269,7 +269,7 @@ func headMixRoles(c *jlm.Config, s *jlm.Source, names tensorNames) map[jlm.Role]
 // storesAny reports whether s stores one of roles for block li.
 func storesAny(s *jlm.Source, li int, roles map[jlm.Role]bool) bool {
 	for _, t := range s.Tensors {
-		if int(t.Block) == li && t.Index < 0 && roles[t.Role] {
+		if int(t.Block) == s.Config.PageOf(li) && t.Index < 0 && roles[t.Role] {
 			return true
 		}
 	}

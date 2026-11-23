@@ -61,6 +61,17 @@ func TestUnrollStatesALoop(t *testing.T) {
 		{[]int{0, 1, 1, 3}, nil, "runs 3 of"},
 		{[]int{0, 1, 2, 3, 4}, nil, "runs layer 4"},
 		{[]int{0, 1, 2, 3, 1}, func(c *jlm.Config) { c.ActLayers = c.ActLayers[:3] }, "activation layers has 3"},
+		// Scalars read by a block's index: refused where the index would
+		// say otherwise than the layer's.
+		{[]int{0, 1, 2, 3, 1, 2}, func(c *jlm.Config) { c.SWAWindow, c.SWAPeriod = 8, 2 }, "sliding window's period"},
+		{[]int{0, 1, 2, 1, 2, 3}, func(c *jlm.Config) {
+			c.SWAWindow, c.SWAPeriod, c.Flags2 = 8, 3, c.Flags2|jlm.Flag2SWAGlobalFirst
+		}, "sliding window's period"},
+		{[]int{0, 1, 2, 1, 2, 3}, func(c *jlm.Config) { c.NExpert, c.NDenseLead = 4, 2 }, "leading dense blocks"},
+		{[]int{0, 1, 2, 3, 1, 2}, func(c *jlm.Config) { c.NExpert, c.MoEStep = 4, 2 }, "mixture's step"},
+		{[]int{0, 1, 2, 1, 2, 3}, func(c *jlm.Config) { c.NHashLayers = 2 }, "hash-routed"},
+		{[]int{0, 1, 2, 3, 1, 2, 3}, func(c *jlm.Config) { c.NKVShared = 1 }, "block count"},
+		{[]int{0, 1, 2, 3, 1, 2, 3}, func(c *jlm.Config) { c.AttnResBlock = 2 }, "residual checkpoint"},
 	} {
 		s := src()
 		if bad.edit != nil {
@@ -70,6 +81,13 @@ func TestUnrollStatesALoop(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), bad.why) {
 			t.Errorf("%v: %v, want a refusal naming %q", bad.order, err, bad.why)
 		}
+	}
+	// A period the loop's passes keep: blocks 2 and 4 run layers 2 and 2,
+	// sliding alike, and a leading dense block stays the only dense one.
+	s = src()
+	s.Config.SWAWindow, s.Config.SWAPeriod, s.Config.NExpert, s.Config.NDenseLead = 8, 2, 4, 1
+	if err := UnrollSource(s, []int{0, 1, 2, 3, 2, 3}); err != nil {
+		t.Errorf("a loop keeping the period's answer: %v", err)
 	}
 	if v, err := exprInts("unroll", nil); v != nil || err != nil {
 		t.Errorf("a null unroll: %v, %v", v, err)

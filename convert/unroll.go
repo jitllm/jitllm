@@ -55,6 +55,9 @@ func UnrollSource(s *jlm.Source, order []int) error {
 	if pages != n {
 		return fmt.Errorf("convert: unroll runs %d of the source's %d layers", pages, n)
 	}
+	if err := byIndexFollows(c, order); err != nil {
+		return err
+	}
 	for k := range c.HeadBlocks() + c.PredictionBlocks() {
 		weightsOf = append(weightsOf, uint32(pages)+k)
 	}
@@ -70,6 +73,9 @@ func UnrollSource(s *jlm.Source, order []int) error {
 	}
 	if follow("geometries", len(c.Geoms)) {
 		c.Geoms = byLayer(c.Geoms, order)
+	}
+	if follow("windows", len(c.Windows)) {
+		c.Windows = byLayer(c.Windows, order)
 	}
 	if follow("compression kinds", len(c.CompKinds)) {
 		c.CompKinds = byLayer(c.CompKinds, order)
@@ -95,6 +101,40 @@ func UnrollSource(s *jlm.Source, order []int) error {
 	}
 	c.NLayer = uint32(len(order))
 	c.WeightsOf = weightsOf
+	return nil
+}
+
+// byIndexFollows refuses a loop over a config whose scalars say by a
+// block's index what the block does, where a block's index says otherwise
+// than the index of the layer it runs: a sliding window's period (and the
+// NoPE layers it names; each block's own window, Windows, follows the
+// unroll), the leading dense blocks and the mixture's step,
+// the hash-routed blocks. A scalar whose meaning is the block count itself,
+// a residual checkpoint's period or the KV-sharing tail, is refused
+// whenever it is set: re-indexed, it would name other blocks.
+func byIndexFollows(c *jlm.Config, order []int) error {
+	switch {
+	case c.NKVShared != 0:
+		return fmt.Errorf("convert: unroll: the last %d blocks reading others' history are named by the block count: %w", c.NKVShared, ErrNotImplemented)
+	case c.AttnResBlock != 0:
+		return fmt.Errorf("convert: unroll: a residual checkpoint every %d blocks is named by the block index: %w", c.AttnResBlock, ErrNotImplemented)
+	}
+	for _, p := range []struct {
+		what string
+		at   func(int) bool
+	}{
+		{"the sliding window's period", func(li int) bool { return len(c.Windows) == 0 && c.Sliding(li) }},
+		{"the leading dense blocks and the mixture's step", func(li int) bool {
+			return c.NExpert != 0 && li >= int(c.NDenseLead) && (c.MoEStep <= 1 || (li+1)%int(c.MoEStep) == 0)
+		}},
+		{"the hash-routed blocks", func(li int) bool { return li < int(c.NHashLayers) }},
+	} {
+		for b, l := range order {
+			if p.at(b) != p.at(l) {
+				return fmt.Errorf("convert: unroll: %s says block %d does otherwise than layer %d, which it runs: %w", p.what, b, l, ErrNotImplemented)
+			}
+		}
+	}
 	return nil
 }
 
