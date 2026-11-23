@@ -76,6 +76,9 @@ func TestDecodeNV4AndMX8MatchTheOracle(t *testing.T) {
 		if dec(mut, r, e) == want[r*k+e] && want[r*k+e] != 0 {
 			t.Fatalf("nv4 k %d: a block's scale changed and its element did not", k)
 		}
+		// The codes laid out high nibble first decode as the oracle reads
+		// those codes, which are another row's values: a decoder reading the
+		// nibbles in the other order would answer as the unswapped codes do.
 		swapped := append([]byte(nil), codes...)
 		for i := range swapped {
 			swapped[i] = swapped[i]<<4 | swapped[i]>>4
@@ -84,14 +87,24 @@ func TestDecodeNV4AndMX8MatchTheOracle(t *testing.T) {
 		for s := range sheets {
 			oracle.DequantNVFP4(bad[s*rows*k:], swapped[s*rows*k/2:], scales[s*rows*k/16:], global[s], rows, k)
 		}
+		rawSw, err := NV4Rows(swapped, scales, global, sheets, rows, k)
+		if err != nil {
+			t.Fatal(err)
+		}
 		differ := 0
-		for i := range bad {
-			if bad[i] != want[i] {
-				differ++
+		for r := range sheets * rows {
+			for e := range k {
+				got := dec(rawSw, r, e)
+				if got != bad[r*k+e] {
+					t.Fatalf("nv4 k %d: swapped element %d of row %d decodes to %v, the oracle %v", k, e, r, got, bad[r*k+e])
+				}
+				if got != want[r*k+e] {
+					differ++
+				}
 			}
 		}
-		if differ == 0 {
-			t.Fatalf("nv4 k %d: the nibble order is not observed", k)
+		if differ < len(want)/4 {
+			t.Fatalf("nv4 k %d: %d of %d elements move with the nibble order: the decoder does not observe it", k, differ, len(want))
 		}
 
 		vals := make([]byte, rows*k)

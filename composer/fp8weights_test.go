@@ -15,9 +15,9 @@ import (
 
 // fp8Bank is sheets sheets of rows rows of k random weights of NVFP4
 // (jlm.TypeNV4) or MXFP8 (jlm.TypeMX8) as the container lays them out, its
-// words, and the oracle's dequantized values. Scales sit near one and each
-// sheet's global differs, so a kernel that reads one sheet's global for
-// another's rows parts from the oracle.
+// words, and the oracle's dequantized values. Each sheet's global differs,
+// so a kernel that reads one sheet's global for another's rows parts from
+// the oracle.
 func fp8Bank(t *testing.T, ty jlm.Type, sheets, rows, k int, rng *rand.Rand) ([]uint32, []float32) {
 	t.Helper()
 	want := make([]float32, sheets*rows*k)
@@ -28,13 +28,25 @@ func fp8Bank(t *testing.T, ty jlm.Type, sheets, rows, k int, rng *rand.Rand) ([]
 		for i := range codes {
 			codes[i] = byte(rng.Uint32())
 		}
+		// Each sheet's scales are one E4M3 band: normal (exponents 5 to
+		// 9), subnormal (exponent 0) or the top exponent (15), the band
+		// turning from a random first sheet, and the sheet's global puts
+		// its values near one, so no band's error hides under another's.
 		scales := make([]byte, sheets*rows*k/16)
-		for i := range scales {
-			scales[i] = byte(0x28 + rng.Intn(0x28))
-		}
 		global := make([]float32, sheets)
+		first := rng.Intn(3)
 		for s := range global {
-			global[s] = float32(0.1+rng.Float64()) / 2688 * 448
+			lo, n, g := 0x28, 0x28, float32(1)
+			switch (first + s) % 3 {
+			case 1:
+				lo, n, g = 0x01, 7, 512
+			case 2:
+				lo, n, g = 0x78, 7, 1.0/256
+			}
+			for i := s * rows * k / 16; i < (s+1)*rows*k/16; i++ {
+				scales[i] = byte(lo + rng.Intn(n))
+			}
+			global[s] = g * float32(0.1+rng.Float64()) / 2688 * 448
 			oracle.DequantNVFP4(want[s*rows*k:], codes[s*rows*k/2:], scales[s*rows*k/16:], global[s], rows, k)
 		}
 		raw, err = jlm.NV4Rows(codes, scales, global, sheets, rows, k)
