@@ -1521,8 +1521,10 @@ func entryTensor(e *jlm.Entry) (Tensor, error) {
 	if e.NDim < 2 {
 		return Tensor{}, fmt.Errorf("model: %v has %d dimensions, want 2", e.Role, e.NDim)
 	}
+	// A matrix is read by generated code: a type the decoders know, or
+	// rows DecodeVerbatim reads as stored (NVFP4, MXFP8).
 	typ, ok := jlm.SourceType(e.Type)
-	if !ok || !quant.Dequantable(typ) {
+	if !ok || !quant.Dequantable(typ) && !jlm.VerbatimRows(e.Type) {
 		return Tensor{}, fmt.Errorf("model: %v is %v, which has no dequantizer yet", e.Role, e.Type)
 	}
 	// rows is the product of every trailing dimension: for a 3-D expert
@@ -2572,10 +2574,9 @@ func bankExpert(b Tensor, role jlm.Role, nExpert, e int) (Tensor, error) {
 		return Tensor{}, fmt.Errorf("model: %v is %d x %d, want %d experts of %d rows",
 			role, b.K, b.Rows, nExpert, nrow)
 	}
-	be, bb := int(b.Typ.BlockElems()), int(b.Typ.BlockBytes())
-	if be == 0 || b.K%be != 0 {
-		return Tensor{}, fmt.Errorf("model: %v rows are %d elements, not a multiple of %s's %d",
-			role, b.K, b.Typ, be)
+	rb, err := rowBytes(b.Typ, b.K)
+	if err != nil {
+		return Tensor{}, fmt.Errorf("model: %v: %w", role, err)
 	}
 	// A packed bank is priced by the packer, not by the source block size:
 	// b.data is the payload span only.
@@ -2632,10 +2633,34 @@ func bankExpert(b Tensor, role jlm.Role, nExpert, e int) (Tensor, error) {
 	if len(b.Data) == 0 {
 		return Tensor{E: b.E, Typ: b.Typ, Rows: nrow, K: b.K}, nil
 	}
-	if want := nExpert * nrow * (b.K / be * bb); want != len(b.Data) {
+	if want := nExpert * nrow * rb; want != len(b.Data) {
 		return Tensor{}, fmt.Errorf("model: %v holds %d bytes, want %d", role, len(b.Data), want)
 	}
 	return rows(b, e*nrow, nrow)
+}
+
+// rowBytes is one stored row of k elements of type typ: whole blocks of a
+// block type, or a verbatim type's own row, NVFP4's and MXFP8's holding
+// their scales (layout.RawRowBytes).
+func rowBytes(typ quant.Type, k int) (int, error) {
+	w := 0
+	switch typ {
+	case quant.NVFP4:
+		w = 16
+	case quant.MXFP8:
+		w = 32
+	}
+	if q, ok := layout.VerbatimOf(typ); ok && w != 0 {
+		if k%w != 0 {
+			return 0, fmt.Errorf("rows of %d elements are not whole %s blocks of %d", k, typ, w)
+		}
+		return layout.RawRowBytes(q, k), nil
+	}
+	be, bb := int(typ.BlockElems()), int(typ.BlockBytes())
+	if be == 0 || k%be != 0 {
+		return 0, fmt.Errorf("rows are %d elements, not a multiple of %s's %d", k, typ, be)
+	}
+	return k / be * bb, nil
 }
 
 // rows returns the sub-tensor made of n rows of t starting at from.
@@ -2648,13 +2673,11 @@ func rows(t Tensor, from, n int) (Tensor, error) {
 	if t.Packed != nil {
 		return Tensor{}, fmt.Errorf("model: %s is packed: its rows are not a byte range", t.name())
 	}
-	be, bb := int(t.Typ.BlockElems()), int(t.Typ.BlockBytes())
-	if be == 0 || t.K%be != 0 {
-		return Tensor{}, fmt.Errorf("model: %s rows are %d elements, not a multiple of %s's %d",
-			t.name(), t.K, t.Typ, be)
+	rb, err := rowBytes(t.Typ, t.K)
+	if err != nil {
+		return Tensor{}, fmt.Errorf("model: %s: %w", t.name(), err)
 	}
-	rowBytes := t.K / be * bb
-	lo, hi := from*rowBytes, (from+n)*rowBytes
+	lo, hi := from*rb, (from+n)*rb
 	if from < 0 || n <= 0 || hi > len(t.Data) {
 		return Tensor{}, fmt.Errorf("model: %s: rows [%d,%d) of %d do not fit %d bytes",
 			t.name(), from, from+n, t.Rows, len(t.Data))
