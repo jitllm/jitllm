@@ -197,10 +197,8 @@ func TestComposedGPUMatrix(t *testing.T) {
 							x[i] = float32(rng.NormFloat64())
 						}
 						want := make([]float32, capacity*n)
-						for r := range capacity {
-							if err := oracle.MatVec(want[r*n:(r+1)*n], typ, w, x[r*k:(r+1)*k], n, k); err != nil {
-								t.Fatal(err)
-							}
+						if err := oracle.MatMul(want, typ, w, x, capacity, n, k); err != nil {
+							t.Fatal(err)
 						}
 						runX := func(x []float32, L int, planes [3][]uint32) []float32 {
 							xs := make([]float32, capacity*k)
@@ -235,10 +233,8 @@ func TestComposedGPUMatrix(t *testing.T) {
 							}
 						}
 						wantBig := make([]float32, capacity*n)
-						for r := range capacity {
-							if err := oracle.MatVec(wantBig[r*n:(r+1)*n], typ, w, big[r*k:(r+1)*k], n, k); err != nil {
-								t.Fatal(err)
-							}
+						if err := oracle.MatMul(wantBig, typ, w, big, capacity, n, k); err != nil {
+							t.Fatal(err)
 						}
 						if e := gpuNMSE(runX(big, capacity, planes), wantBig); math.IsNaN(e) || !(e < 2e-6) {
 							t.Fatalf("%s: rows past binary16's range read NMSE %.3e against the oracle", what, e)

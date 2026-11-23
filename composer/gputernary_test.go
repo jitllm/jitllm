@@ -47,9 +47,11 @@ func int8Projection(t *testing.T, typ quant.Type, w []byte, x []float32, rows, k
 	want := make([]float32, tokens*rows)
 	codes := make([]int8, k)
 	pairs := make([]float32, 2*k/32)
-	row := make([]float32, k)
+	q := make([]float32, tokens*k)
+	scale := make([]float32, tokens)
 	for tk := range tokens {
 		oracle.QuantizeQ8Window(codes, pairs, x[tk*k:(tk+1)*k], 0, 0, k/32, window)
+		row := q[tk*k : (tk+1)*k]
 		for i, c := range codes {
 			row[i] = float32(c)
 			if d := pairs[2*(i/32)]; even && d != 0 {
@@ -59,13 +61,15 @@ func int8Projection(t *testing.T, typ quant.Type, w []byte, x []float32, rows, k
 				row[i] *= pairs[2*(i/32)]
 			}
 		}
-		out := want[tk*rows : (tk+1)*rows]
-		if err := oracle.MatVec(out, typ, w, row, rows, k); err != nil {
-			t.Fatal(err)
-		}
-		if window == k {
-			for i := range out {
-				out[i] *= pairs[0]
+		scale[tk] = pairs[0]
+	}
+	if err := oracle.MatMul(want, typ, w, q, tokens, rows, k); err != nil {
+		t.Fatal(err)
+	}
+	if window == k {
+		for tk := range tokens {
+			for i := range rows {
+				want[tk*rows+i] *= scale[tk]
 			}
 		}
 	}
