@@ -412,3 +412,63 @@ func TestVerifierHoldsAnIterationsTypes(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifierHoldsAnAttentionsBiasAndSinks verifies an attention over a
+// selection with a score bias by distance and a row's sinks, reads each
+// input back in AttendInputs' order, and refuses each violation: a bias or
+// sinks of another width, row sinks beside a sink weight, a bias stated
+// without its input, and an input nothing states.
+func TestVerifierHoldsAnAttentionsBiasAndSinks(t *testing.T) {
+	const H, E = 4, 7
+	build := func(a Attrs, n int, cut func(g *Graph)) (*Graph, error) {
+		b := NewBlock(0)
+		k := b.In("k", 48)
+		h := StateRef{State: StateKV, Version: b.KVAppend(k, k, 0)}
+		sel := b.Select(b.In("iq", 32), h, Attrs{NHead: 2, NKVHead: 2, HeadDim: 16, Offset: 32, Width: 48, Span: 4, TopK: 2, Local: 1}, b.In("iw", 2))
+		in := []ValueID{sel, b.In("bias", H*E), b.In("sinks", H)}
+		b.Out(b.AttendWith(b.In("q", 64), h, a, in[:n]))
+		if cut != nil {
+			cut(b.G)
+		}
+		return b.G, Verify(b.G, Facts{})
+	}
+	good := Attrs{NHead: H, NKVHead: 2, HeadDim: 16, Width: 48, Extent: E, RowSinks: true}
+	g, err := build(good, 3, nil)
+	if err != nil {
+		t.Fatalf("a correct attention is refused: %v", err)
+	}
+	at := g.Ops[len(g.Ops)-1]
+	sel, bias, sinks, ok := AttendInputs(at)
+	if !ok || sel != at.In[1] || bias != at.In[2] || sinks != at.In[3] || g.Values[bias].Name != "bias" || g.Values[sinks].Name != "sinks" {
+		t.Fatalf("AttendInputs read %d %d %d %v of %v", sel, bias, sinks, ok, at.In)
+	}
+	alone := good
+	alone.RowSinks = false
+	if g, err := build(alone, 2, nil); err != nil {
+		t.Fatalf("a biased attention is refused: %v", err)
+	} else if _, b, s, ok := AttendInputs(g.Ops[len(g.Ops)-1]); !ok || b < 0 || s >= 0 || g.Values[b].Name != "bias" {
+		t.Fatalf("a bias alone reads back as %d, sinks %d", b, s)
+	}
+	for _, c := range []struct {
+		name, want string
+		a          func(a *Attrs)
+		n          int
+		cut        func(g *Graph)
+	}{
+		{"a bias of another width", "score bias", func(a *Attrs) { a.Extent = E + 1 }, 3, nil},
+		{"sinks of another width", "sinks of", func(a *Attrs) {}, 3, func(g *Graph) { g.Values[g.Ops[len(g.Ops)-1].In[3]].Width = H + 1 }},
+		{"row sinks beside a weight", "sinks of", func(a *Attrs) {}, 3,
+			func(g *Graph) {
+				o := &g.Ops[len(g.Ops)-1]
+				o.Weight = append(o.Weight, Binding{Role: jlm.RoleAttnSinks, K: H})
+			}},
+		{"a bias without its input", "inputs past the query", func(a *Attrs) { a.RowSinks = false }, 0, nil},
+		{"an input nothing states", "inputs past the query", func(a *Attrs) { a.Extent, a.RowSinks = 0, false }, 3, nil},
+	} {
+		a := good
+		c.a(&a)
+		if _, err := build(a, c.n, c.cut); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Verify said %v, want an error naming %q", c.name, err, c.want)
+		}
+	}
+}
