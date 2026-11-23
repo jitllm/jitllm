@@ -104,14 +104,23 @@ func (r *Registry) form(req Request) ([]Code, error) {
 		return nil, err
 	}
 	if alternated(req) {
-		if t, rows := r.crossing(ks, req); rows > 1 {
-			vr := req
-			vr.Device.Matrix, vr.Device.Tile, vr.Device.RowTile = [3]int{}, MatrixTile{}, t
-			_, vec, err := r.formCodes(vr)
+		bs := r.bands(ks, req)
+		for i := len(bs) - 1; i >= 0; i-- {
+			b := bs[i]
+			if b.vec == 0 && req.Device.Tile.Rows > 0 {
+				continue // the caller's tile is the matrix unit's at every call
+			}
+			br := req
+			if b.vec > 0 {
+				br.Device.Matrix, br.Device.Tile, br.Device.RowTile = [3]int{}, MatrixTile{}, b.vec
+			} else {
+				br.Device.Tile = b.tile
+			}
+			_, bc, err := r.formCodes(br)
 			if err != nil {
 				return nil, err
 			}
-			codes = alternatives(vec, codes, rows)
+			codes = alternatives(bc, codes, b.upto)
 		}
 	}
 	out := make([]Code, len(codes))
