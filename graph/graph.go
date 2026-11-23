@@ -171,8 +171,12 @@ const (
 	// dilated: tap t reads the row (Taps-1-t)*Dil back, the window the last
 	// (Taps-1)*Dil rows. The window is the recurrent convolution's state
 	// (StateRecConv), or where the op reads StateRecState, Offset floats into
-	// each of the state's slots of Span floats: a tail past a rule's state. A
-	// primitive with a state of its own: a recurrent mixer's convolution.
+	// each of the state's slots of Span floats: a tail past a rule's state.
+	// Where In[1] is given, it is each row's own taps added to the static
+	// ones: per group of channels (In[0]'s width over In[1]'s in Taps), the
+	// group's Taps taps side by side in the static taps' order, the oldest
+	// first. A primitive with a state of its own: a recurrent mixer's
+	// convolution, or a dynamic short convolution.
 	OpStateConv
 	// OpPool is the step's live rows of In[0] pooled into one row, Out[0]
 	// it in every row: their mean, the first's or the last's (Pooling, a
