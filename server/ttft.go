@@ -280,6 +280,8 @@ func (e *Engine) releaseEphemeral(s *Session) {
 	delete(s.lm.sessions, s.id)
 	e.mu.Unlock()
 	if e.spareSession(s) {
+		// Its history went with the reset: the pager takes the room back.
+		e.applyPageBudget(s.lm, nil)
 		return
 	}
 	if s.closed.Swap(true) {
