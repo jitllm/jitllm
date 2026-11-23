@@ -23,7 +23,7 @@ func principleFixtures() []string {
 		"synth-granitehybrid.gguf" + twoStateSuffix, "synth-granitehybrid.gguf" + twoWindowSuffix,
 		"synth-hunyuan.gguf", "synth-kimik3.gguf", "synth-lfm2.gguf", "synth-mamba2.gguf", "synth-minimaxm3.gguf",
 		"synth-nemotronh.gguf", "synth-nemotronhmoe.gguf", "synth-qwen4exp.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", readsTwoFixture,
-		"synth-hf-gptj"}
+		"synth-hf-gptj", "synth-olmo2.gguf" + loopSuffix}
 	for _, fx := range denseFixtures() {
 		names = append(names, fx.name+".gguf")
 	}
@@ -44,7 +44,8 @@ func principleModels() []string {
 // mixture's expert pages are another: their paging gate is
 // TestMoEFamiliesPageWithTheSameAnswer.
 func principleMixtures() []string {
-	names := []string{"synth-dbrx.gguf", "synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix}
+	names := []string{"synth-dbrx.gguf", "synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix,
+		"synth-qwen2moe.gguf" + loopSuffix}
 	for _, fx := range moe2Fixtures() {
 		names = append(names, fx.name+".gguf")
 	}

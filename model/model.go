@@ -1411,7 +1411,7 @@ func (m *Model) PageBytes(li int) uint64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Container.PageBytes(li)
+	return m.Container.PageBytes(m.Container.PageOf(li))
 }
 
 // PageStats is the budget in pages and what it has cost so far.
@@ -1440,7 +1440,7 @@ func (m *Model) PageIn(fr *jlm.Frames, li int, l *Layer) error {
 	//
 	// A model can have no block pages at all: an all-F32 model keeps
 	// everything in the dense region (jlm.alwaysResident).
-	if m.Container == nil || li >= len(m.Layers) {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return nil
 	}
 	// The block's own weights, not its experts: moe() ensures those after the
@@ -1458,7 +1458,7 @@ func (m *Model) PageIn(fr *jlm.Frames, li int, l *Layer) error {
 // ensure) reads it. A device deciding whether to take the block reads shapes
 // and lengths only, so it decides before anything is read.
 func (m *Model) BindBlock(fr *jlm.Frames, li int, l *Layer) error {
-	if m.Container == nil || li >= len(m.Layers) {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return nil
 	}
 	if err := fr.Claim(m.Container.PageOf(li)); err != nil {
@@ -1656,7 +1656,7 @@ func (m *Model) RolesPlan(li int, roles []jlm.Role) []jlm.Range {
 // PageInRanges is PageIn reading only ranges rs of block li's page, binding
 // l at the whole page: a span outside rs is the right length and unread.
 func (m *Model) PageInRanges(fr *jlm.Frames, li int, rs []jlm.Range, l *Layer) error {
-	if m.Container == nil || li >= len(m.Layers) {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return nil
 	}
 	if err := fr.EnsureRanges(m.Container.PageOf(li), rs); err != nil {
@@ -1746,7 +1746,7 @@ func (m *Model) EnsureBlockSelected(fr *jlm.Frames, li int, sel []uint32, base b
 // speculateExperts queues the experts sel of block li's bank for the
 // container's background readers, replacing the guesses not yet started.
 func (m *Model) SpeculateExperts(fr *jlm.Frames, li int, sel []uint32) {
-	if m.Container == nil || li >= len(m.Layers) {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return
 	}
 	if bank := m.Layers[li].ExpBank().E; bank != nil && m.Container.ExpertPaged(bank) {
@@ -2101,7 +2101,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	// A marker head's feed-forward is as wide as its blocks store it.
 	if h := cfg.Head; h != nil {
-		e, ok := c.Find(jlm.RoleFFNUp, int32(cfg.Trunk), -1)
+		e, ok := c.Find(jlm.RoleFFNUp, int32(c.PageOf(cfg.Trunk)), -1)
 		if !ok {
 			return nil, fmt.Errorf("model: the marker head's block %d stores no feed-forward", cfg.Trunk)
 		}
@@ -2123,7 +2123,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if cfg.MoE() {
 		cfg.routed = make([]bool, cfg.NLayer+cfg.NPredict)
 		for i := range cfg.routed {
-			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(i), -1)
+			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(c.PageOf(i)), -1)
 		}
 	}
 	m := &Model{Cfg: cfg}

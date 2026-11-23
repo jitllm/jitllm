@@ -523,6 +523,20 @@ func TestMoEFamiliesPageWithTheSameAnswer(t *testing.T) {
 			pagesWithTheSameAnswer(t, g.IDs, jlmOf(t, testmodels.Path(fx.name+".gguf")))
 		})
 	}
+	// A loop whose second pass reads the first pass's blocks' and experts'
+	// pages (jlm.Config.WeightsOf): an evicted expert page is read again for
+	// whichever pass's block selects it.
+	name := "synth-qwen2moe.gguf" + loopSuffix
+	t.Run(name, func(t *testing.T) {
+		src := jlmOf(t, testmodels.Path(name))
+		m, err := model.Open(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the river rose", true)
+		m.Close()
+		pagesWithTheSameAnswer(t, ids, src)
+	})
 }
 
 // TestHybridMixturesPageWithTheSameAnswer is the mixtures' paging gate on the
