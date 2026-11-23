@@ -650,10 +650,10 @@ func rowPages(r *row, pos, page int) int {
 // host, or no history on the card to price.
 //
 // Admission keeps the rows' histories on the card. A row admitted past the
-// room would send the oldest pages of others to host memory, and a step with two
-// sequences' pages in host memory is refused as one step: every row then runs alone
-// and re-streams its evicted prefix each token -- 172 of 256 requests failed
-// at 64 concurrent on a V100 that way. A row that does not fit waits for the
+// room would send the oldest pages of others to host memory, and every step
+// then re-streams the evicted prefixes, a Sync a pass (172 of 256 requests
+// failed at 64 concurrent on a V100 when such a step was refused and every row
+// ran alone). A row that does not fit waits for the
 // rows ahead of it to retire, or above fairness level 0 for rows past their
 // time slice to be parked (batchfair.go); the first row is
 // always admitted, so nothing waits on a card that holds none. The promise
