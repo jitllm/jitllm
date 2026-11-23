@@ -1633,6 +1633,7 @@ func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 	// stays visible.
 	var stale []string
 	var declined []string
+	var embedders []string
 	var usable []string
 	for _, p := range paths {
 		name := filepath.Base(p)
@@ -1668,8 +1669,12 @@ func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 				continue
 			}
 			t.Fatalf("%s: %v", name, err)
-		} else {
-			m.Close()
+		}
+		embeds := m.IsEmbedding()
+		m.Close()
+		if embeds {
+			embedders = append(embedders, name)
+			continue
 		}
 		usable = append(usable, p)
 	}
@@ -1680,6 +1685,10 @@ func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 	if len(declined) > 0 {
 		t.Logf("%d container(s) convert and are declined by name because their architecture "+
 			"is not implemented yet: %s", len(declined), strings.Join(declined, ", "))
+	}
+	if len(embedders) > 0 {
+		t.Logf("%d embedding model(s) have no head to decode with and page in the paging gates' embed arms: %s",
+			len(embedders), strings.Join(embedders, ", "))
 	}
 	if len(usable) == 0 {
 		t.Fatal("no readable container on this box")
