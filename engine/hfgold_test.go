@@ -22,6 +22,13 @@ import (
 // is what the graph will be gated against when it lands.
 func hfGoldDeclined() map[string]string { return map[string]string{} }
 
+// hfGoldBound is the bound of a golden whose reference's own float32
+// rounding is past hfNMSE, each measured. synth-hf-inkling2's second loop
+// pass amplifies rounding: transformers' float32 forward reads up to 1.6e-06
+// against its float64 forward of the same weights, and the engine up to
+// 2.4e-07 against the float64 one and 1.1e-06 against the float32 golden.
+func hfGoldBound() map[string]float64 { return map[string]float64{"synth-hf-inkling2": 4e-6} }
+
 // declinedRefusal reports whether err is Open declining an ARCHITECTURE this
 // engine converts and does not yet run, as opposed to any other failure.
 //
@@ -184,6 +191,10 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 			st := testInstance(t, m, len(gold.IDs)+1, instOpts...)
 			defer st.Close()
 			worst := 0.0
+			bound := hfNMSE
+			if b, ok := hfGoldBound()[name]; ok {
+				bound = b
+			}
 			for p, id := range gold.IDs {
 				lg, err := st.Forward(id)
 				if err != nil {
@@ -204,8 +215,8 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 					}
 				}
 				// Non-finite first: NaN > bound is false.
-				if math.IsNaN(nmse) || math.IsInf(nmse, 0) || nmse > hfNMSE {
-					t.Fatalf("pos %d: NMSE %.3e against transformers (bound %.0e)", p, nmse, hfNMSE)
+				if math.IsNaN(nmse) || math.IsInf(nmse, 0) || nmse > bound {
+					t.Fatalf("pos %d: NMSE %.3e against transformers (bound %.0e)", p, nmse, bound)
 				}
 				if best != want.Argmax {
 					t.Errorf("pos %d: argmax %d, transformers %d (max %.4f, ours %.4f)",

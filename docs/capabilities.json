@@ -415,6 +415,10 @@
       "graph": "mixtral"
     },
     {
+      "name": "Inkling2LoopForConditionalGeneration",
+      "graph": "inkling2"
+    },
+    {
       "name": "KimiK3ForConditionalGeneration",
       "graph": "latent_delta"
     },

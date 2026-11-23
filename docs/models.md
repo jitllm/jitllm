@@ -8,8 +8,8 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 `go run ./scripts/genmodels docs/models.md`.
 
 - **72** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **31** graphs
-- **36** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **25** graphs, **3** of them reached only from safetensors
-- **34** graphs in all (`convert.GraphOf`, each a library file)
+- **37** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **26** graphs, **4** of them reached only from safetensors
+- **35** graphs in all (`convert.GraphOf`, each a library file)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
 - **4** embedding encoders, and pooling on any decoder
@@ -37,6 +37,7 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `gptj` | -- | `GPTJForCausalLM` | GPT-J (safetensors only) |
 | `gptneox` | -- | `GPTNeoXForCausalLM` | Pythia, GPT-NeoX-20B (safetensors only) |
 | `hybrid` | `falcon-h1`, `granitehybrid`, `mamba2`, `nemotron_h`, `nemotron_h_moe` | -- | `falcon-h1`: Falcon-H1; `granitehybrid`: Granite 4.0 hybrids (Mamba-2 beside attention); `mamba2`: Mamba-2, Mamba-Codestral; `nemotron_h`: Nemotron-H, Nemotron Nano 2; `nemotron_h_moe`: Nemotron 3 Nano |
+| `inkling2` | -- | `Inkling2LoopForConditionalGeneration` | Inkling 2 Mini's text model, by convert/models/inkling2.json |
 | `latent` | `deepseek2`, `deepseek32` | `DeepseekV2ForCausalLM`, `DeepseekV3ForCausalLM`, `Glm4MoeLiteForCausalLM` | `deepseek2`: DeepSeek-V2, V2-Lite, Coder-V2, V3, R1; Kimi-K2; Moonlight; Kimi-VL's text model; `deepseek32`: DeepSeek V3.2 |
 | `latent_delta` | `kimi-k3`, `kimi-linear` | `KimiK3ForConditionalGeneration`, `KimiLinearForCausalLM` | `kimi-k3`: Kimi-K3; `kimi-linear`: Kimi-Linear 48B-A3B (Kimi Delta Attention beside MLA) |
 | `mixtral` | `bitnet-b1.58`, `gpt-oss`, `granite`, `granitemoe`, `hunyuan-dense`, `hunyuan-moe`, `hunyuan_vl`, `llama`, `llama4`, `minimax-m2`, `minimax-m3`, `mistral3` | `BitNetForCausalLM`, `Ernie4_5ForCausalLM`, `HunYuanDenseV1ForCausalLM`, `HunYuanMoEV1ForCausalLM`, `LlamaForCausalLM`, `Ministral3ForCausalLM`, `MixtralForCausalLM` | `bitnet-b1.58`: BitNet b1.58 2B-4T (its I2_S, F16 and F32 GGUFs); `gpt-oss`: gpt-oss 20B, 120B; `granite`: Granite 3.x and 4.0 dense; `granitemoe`: Granite 3.x mixtures; `hunyuan-dense`: Hunyuan dense (0.5B to 7B); `hunyuan-moe`: Hunyuan-A13B; `hunyuan_vl`: HunyuanOCR's text model (XD-RoPE); `llama`: Llama 2, 3, 3.1, 3.2, 3.3; Mistral 7B; Mixtral; SmolLM2; TinyLlama; the text model of SmolVLM, LLaVA and Janus-Pro; `llama4`: Llama 4 Scout, Maverick; `minimax-m2`: MiniMax-M2, M2.1, M2.5; `minimax-m3`: MiniMax-M3; `mistral3`: Ministral 3 |
@@ -81,6 +82,7 @@ classes; any other is refused, and `model_type` is not a fallback.
 | `Glm4MoeLiteForCausalLM` | `latent` | GLM-4.7-Flash |
 | `HunYuanDenseV1ForCausalLM` | `mixtral` | Hunyuan dense |
 | `HunYuanMoEV1ForCausalLM` | `mixtral` | Hunyuan-A13B |
+| `Inkling2LoopForConditionalGeneration` | `inkling2` | Inkling 2 Mini's text model, by convert/models/inkling2.json |
 | `KimiK3ForConditionalGeneration` | `latent_delta` | Kimi-K3's text model, its experts compressed-tensors MXFP4 |
 | `KimiLinearForCausalLM` | `latent_delta` | Kimi Linear (Kimi Delta Attention beside MLA) |
 | `LlamaForCausalLM` | `mixtral` | Llama 2 and 3, Mistral 7B, SmolLM2, TinyLlama |
