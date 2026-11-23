@@ -1466,8 +1466,11 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
-	// The history grew by what this generate committed.
-	e.applyPageBudget(s.lm, nil)
+	// The history grew by what this generate committed. An ephemeral
+	// session's release re-divides as it ends (releaseEphemeral).
+	if !ephemeral {
+		e.applyPageBudget(s.lm, nil)
+	}
 	if emitErr != nil {
 		return emitErr
 	}

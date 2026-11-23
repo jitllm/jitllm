@@ -221,13 +221,15 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 // follows the host: as other processes (or other servers) fill it, each cache
 // stops growing: each settles where it holds an eighth of what it holds plus
 // what is free, so n caches on one host hold at most n/(n+7) of the memory
-// that was free (four: 36%).
-func (e *Engine) storeLimit(share, held uint64) uint64 {
+// that was free (four: 36%). now is the host's available memory, read once
+// per re-division (applyPageBudget): a read is several files and a system
+// call.
+func (e *Engine) storeLimit(share, held, now uint64) uint64 {
 	if e.cfg.MemCacheBytes > 0 {
 		return e.cfg.MemCacheBytes
 	}
 	lim := share / storeShare
-	if now := e.availNow(); now > 0 {
+	if now > 0 {
 		lim = min(lim, (held+now)/storeShare)
 	}
 	return max(lim, 1)
