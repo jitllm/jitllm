@@ -62,13 +62,13 @@ func unrolled(pages func(n int) []uint32) func(*jlm.Source) {
 // answer is the copy's bit for bit on the CPU device, and within the device
 // band with every block on a card, across a seam that puts the owners (the
 // first pass) on the card and the sharing pass on the CPU, with the sharing
-// pass placed on the card and its owners on the CPU, and with the sharing
-// pass moved there mid-prompt. The sharers going to the card leave the pages
-// (and the expert pages) their owners read from host memory where they are:
+// pass placed on the card and its owners on the CPU, and with either pass
+// moved there mid-prompt. A pass going to the card leaves the pages (and the
+// expert pages) the other reads from host memory where they are:
 // the CPU's lanes hold a page once for every block they run from it
-// (Instance.holdFrame, by PageOf), so after the move the owners read no
-// page again. The shared container holds half the pages, and a run reads each page
-// once. A second pass reading its pages in another order is the violation,
+// (Instance.holdFrame, by PageOf), so after the move the pass left on the
+// CPU reads no page again. The shared container holds half the pages, and a
+// run reads each page once. A second pass reading its pages in another order is the violation,
 // and differs.
 func TestBlocksShareTheirWeights(t *testing.T) {
 	for _, name := range []string{"synth-olmo2.gguf", "synth-qwen2moe.gguf"} {
@@ -190,12 +190,14 @@ func blocksShareTheirWeights(t *testing.T, name string) {
 	defer g.Close()
 	// card runs m with seam blocks on the card (-1 every block), with the
 	// second pass on it and the first on the CPU (sharers), or with every
-	// block on the CPU and the second pass moved to the card mid-prompt
-	// (moved), its faults then those after the move.
-	const sharers, moved = -2, -3
+	// block on the CPU and one pass moved to the card mid-prompt, the second
+	// (moved) or the first (ownersMoved), its faults then those after the
+	// move.
+	const sharers, moved, ownersMoved = -2, -3, -4
 	card := func(m *model.Model, seam int) ([]float32, int64) {
 		var opts []Option
-		if seam == moved {
+		moves := seam == moved || seam == ownersMoved
+		if moves {
 			opts = append(opts, WithPlacement(Placement{Rest: &Place{On: nn.CPU}, Strict: true}))
 		}
 		if seam == sharers {
@@ -212,14 +214,14 @@ func blocksShareTheirWeights(t *testing.T, name string) {
 		if seam >= 0 {
 			st.SetGPULayers(seam)
 		}
-		second := make([]int, n)
+		first, second := make([]int, n), make([]int, n)
 		for i := range second {
-			second[i] = int(n) + i
+			first[i], second[i] = i, int(n)+i
 		}
 		switch placed := st.placedOn(dev); {
-		case seam == moved && len(placed) != 0:
+		case moves && len(placed) != 0:
 			t.Fatalf("blocks %v on the card before the move", placed)
-		case seam == moved:
+		case moves:
 		case seam == sharers:
 			if !slices.Equal(placed, second) {
 				t.Fatalf("blocks %v on the card, want the second pass's %v", placed, second)
@@ -230,23 +232,34 @@ func blocksShareTheirWeights(t *testing.T, name string) {
 		var out []float32
 		var before int64
 		for i, id := range in {
-			if seam == moved && i == len(in)/2 {
-				mv, err := st.MoveBlocks(int(n), 2*int(n), dev)
+			if moves && i == len(in)/2 {
+				pass := second
+				if seam == ownersMoved {
+					pass = first
+				}
+				mv, err := st.MoveBlocks(pass[0], pass[0]+int(n), dev)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !slices.Equal(mv.Moved, second) || !slices.Equal(st.placedOn(dev), second) {
-					t.Fatalf("moved %v (declined %v), on the card %v; want the second pass's %v", mv.Moved, mv.Declined, st.placedOn(dev), second)
+				if !slices.Equal(mv.Moved, pass) || !slices.Equal(st.placedOn(dev), pass) {
+					t.Fatalf("moved %v (declined %v), on the card %v; want %v", mv.Moved, mv.Declined, st.placedOn(dev), pass)
 				}
-				// The copy's second pass gives its own pages back; the
-				// shared one's pages are the first pass's, which stay.
+				// A block left on the CPU keeps its page; a moved block's
+				// page no CPU block reads went back, so the move released
+				// something.
+				host := map[int]bool{}
 				for li := 0; li < 2*int(n); li++ {
-					held := m.BlockResident(st.fr, li)
+					if !slices.Contains(pass, li) {
+						host[m.Container.PageOf(li)] = true
+					}
+				}
+				for li := 0; li < 2*int(n); li++ {
+					held, pg := m.BlockResident(st.fr, li), m.Container.PageOf(li)
 					switch {
-					case li < int(n) && !held:
-						t.Fatalf("after the move block %d, on the CPU, has lost its page %d", li, m.Container.PageOf(li))
-					case li >= int(n) && held && m.Container.PageOf(li) == li:
-						t.Fatalf("after the move block %d's own page %d is still in host memory: the move released nothing, and the arm proves nothing", li, li)
+					case !slices.Contains(pass, li) && !held:
+						t.Fatalf("after the move block %d, on the CPU, has lost its page %d", li, pg)
+					case slices.Contains(pass, li) && !host[pg] && held:
+						t.Fatalf("after the move block %d's page %d, which no CPU block reads, is still in host memory: the move released nothing, and the arm proves nothing", li, pg)
 					}
 				}
 				before, _ = st.fr.Faults()
@@ -259,7 +272,7 @@ func blocksShareTheirWeights(t *testing.T, name string) {
 		return append([]float32(nil), out...), faults - before
 	}
 	band := 0.0
-	for _, seam := range []int{-1, int(n), sharers, moved} {
+	for _, seam := range []int{-1, int(n), sharers, moved, ownersMoved} {
 		cw, cf := card(copied, seam)
 		cs, sf := card(shared, seam)
 		cb, _ := card(wrong, seam)
@@ -272,15 +285,15 @@ func blocksShareTheirWeights(t *testing.T, name string) {
 			t.Fatalf("seam %d: shared %.3g from the copy, the violation %.3g", seam, d, v)
 		}
 		// The second pass on the card leaves its pages to the first pass,
-		// which reads them from host memory: read once. Moved
-		// there mid-prompt, the first pass reads nothing more than the copy
-		// does: none of a dense model's pages, only the experts a token
-		// selects for the first time.
+		// which reads them from host memory: read once. Either pass moved
+		// there mid-prompt, the other reads nothing more than the copy does:
+		// none of a dense model's pages, only the experts a token selects
+		// for the first time.
 		switch {
 		case seam == sharers && !mixture && sf != int64(n):
 			t.Fatalf("the second pass on the card: the shared model faulted %d pages in, over %d pages", sf, n)
-		case seam == moved && (sf > cf || !mixture && sf != 0):
-			t.Fatalf("the second pass moved to the card: the shared model faulted %d pages in after it, the copy %d", sf, cf)
+		case (seam == moved || seam == ownersMoved) && (sf > cf || !mixture && sf != 0):
+			t.Fatalf("seam %d, a pass moved to the card: the shared model faulted %d pages in after it, the copy %d", seam, sf, cf)
 		}
 		t.Logf("seam %d: shared %.3g from the copy, the violation %.3g; %d faults (copied %d)", seam, d, v, sf, cf)
 	}
