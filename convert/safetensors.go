@@ -517,8 +517,10 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		parts := []jlm.Tensor{e}
 		sp := ha.split[ha.blockRest(name)]
 		// A split reads elements, which a block of MXFP4 is not; only a plain
-		// matrix, a bank member or a row concatenation may arrive packed.
-		if loc.mx() && sp != nil {
+		// matrix, a bank member or a row concatenation may arrive packed. An
+		// NVFP4 or MXFP8 row holds its own scales, so a split that moves
+		// whole rows cuts it (mjSpan refuses one that moves less).
+		if loc.mx() && loc.q == 0 && sp != nil {
 			return nil, fmt.Errorf("convert: %s is block-quantized and is cut at conversion: %w", name, ErrNotImplemented)
 		}
 		// A plain matrix is read when the writer reaches it; everything else is

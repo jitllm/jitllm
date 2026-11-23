@@ -178,3 +178,68 @@ func TestFP8GroupsConvertAsStored(t *testing.T) {
 		t.Errorf("no hf_quant_config.json: %v, %v", g, err)
 	}
 }
+
+// TestAVerbatimBankSplitsByRows holds a fused bank of NVFP4 or MXFP8 rows,
+// cut by the statement's interleave (even rows one role, odd the other), to
+// the rows of the planes cut the same way: a row carries its own scales and
+// global, so the cut moves whole rows and nothing else. A cut along a row is
+// refused.
+func TestAVerbatimBankSplitsByRows(t *testing.T) {
+	const sheets, half, k = 2, 3, 32
+	rows := 2 * half
+	env := mjEnv(map[string]any{"experts": float64(sheets), "inter": float64(half), "k": float64(k)})
+	pipe := func(part int) string {
+		return `[{"reshape": ["experts", "inter", 2, "k"]}, {"slice": [2, ` + string(rune('0'+part)) + `, 1]}, {"reshape": ["experts", "inter", "k"]}]`
+	}
+	pick := func(plane []byte, per, part int) []byte {
+		var out []byte
+		for r := 0; r < sheets*rows; r++ {
+			if r%2 == part {
+				out = append(out, plane[r*per:(r+1)*per]...)
+			}
+		}
+		return out
+	}
+	codes, scales := seqBytes(sheets*rows*k/2, 5), seqBytes(sheets*rows*k/16, 6)
+	vals, mscales := seqBytes(sheets*rows*k, 7), seqBytes(sheets*rows*k/32, 8)
+	global := []float32{0.25, 0.75}
+	nv, err := jlm.NV4Rows(codes, scales, global, sheets, rows, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mx, err := jlm.MX8Rows(vals, mscales, sheets*rows, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for part := range 2 {
+		want, err := jlm.NV4Rows(pick(codes, k/2, part), pick(scales, k/16, part), global, sheets, half, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := mjRun(t, env, pipe(part), mjVal{shape: []uint64{sheets, uint64(rows), k}, typ: jlm.TypeNV4, data: nv})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(v.data, want) || v.shape[1] != half {
+			t.Fatalf("NVFP4 part %d: %v, not the planes' rows %d of 2", part, v.shape, part)
+		}
+		other, _ := jlm.NV4Rows(pick(codes, k/2, 1-part), pick(scales, k/16, 1-part), global, sheets, half, k)
+		if bytes.Equal(other, want) {
+			t.Fatal("the two halves' rows agree: the gate cannot see which rows a part took")
+		}
+		wantMX, err := jlm.MX8Rows(pick(vals, k, part), pick(mscales, k/32, part), sheets*half, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err = mjRun(t, env, pipe(part), mjVal{shape: []uint64{sheets, uint64(rows), k}, typ: jlm.TypeMX8, data: mx})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(v.data, wantMX) {
+			t.Fatalf("MXFP8 part %d is not the planes' rows %d of 2", part, part)
+		}
+	}
+	if _, err := mjRun(t, env, `[{"slice": [2, 0, 16]}]`, mjVal{shape: []uint64{sheets, uint64(rows), k}, typ: jlm.TypeNV4, data: nv}); err == nil {
+		t.Fatal("a cut along an NVFP4 row was taken")
+	}
+}
