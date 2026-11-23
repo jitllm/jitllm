@@ -13,9 +13,10 @@ import (
 // statement, and counts the kernels a call of two live rows launches and a
 // call of the whole capacity: each norm hosts its rows' int8 form as one
 // workgroup a row (Coarsen), as decode's form of one row does, so the few
-// rows launch 14 kernels where they launched 18 (each norm's window maxima
-// and its codes two launches of their own), and the capacity's call launches
-// no more than its 24.
+// rows launch 11 kernels where they launched 18 (each norm's window maxima
+// and its codes two launches of their own; q, k and v three and gate and up
+// two, which Siblings runs as one each), and the capacity's call launches no
+// more than its 24.
 func TestCapacityFormLaunchesFewRowsAsOneRow(t *testing.T) {
 	d := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32,
 		Matrix: [3]int{16, 16, 16}, Fragment: ir.MMAVolta(), HalfPairs: true, VectorLoads: true, Shared: 96 << 10, Buffers: 32}
@@ -44,8 +45,8 @@ func TestCapacityFormLaunchesFewRowsAsOneRow(t *testing.T) {
 	all, allNames := launches(512)
 	t.Logf("two rows: %d %v", few, fewNames)
 	t.Logf("512 rows: %d %v", all, allNames)
-	if few != 14 {
-		t.Errorf("a call of two rows launches %d kernels, want 14", few)
+	if few != 11 {
+		t.Errorf("a call of two rows launches %d kernels, want 11", few)
 	}
 	if all > 24 {
 		t.Errorf("a call of the capacity launches %d kernels, more than 24", all)
