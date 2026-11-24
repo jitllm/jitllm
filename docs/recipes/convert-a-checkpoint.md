@@ -85,15 +85,16 @@ jitllm run -devices cpu -n 16 -temp 0 models/stories260K.jlm "Once upon a time"
 
 ## 3. What an unsupported model looks like
 
-An architecture outside the list is refused at conversion, naming it and every
-architecture that is supported:
+An architecture is not code: it is a statement in `convert/models/*.json` of
+its graph over the engine's ops. A file whose architecture no statement names is
+refused at conversion, naming it and every architecture that is stated:
 
 ```text
-convert: architecture "ollmo" is not implemented (apertus, arcee, ..., starcoder2): not implemented by this engine
+convert: GGUF architecture "ollmo": its graph is not stated over ops in convert/models (stated: apertus, arcee, ..., starcoder2): no library file states it
 ```
 
-Nothing partial is written, and no other command will run it: adding an
-architecture is a decision the project makes (AGENTS.md, RULE 7). An unknown
+Nothing partial is written, and no other command will run it: adding a
+statement is a decision the project makes (AGENTS.md, RULE 7). An unknown
 pre-tokenizer is refused the same way, at load
 (`pre-tokenizer "X" is not implemented`).
 
@@ -109,7 +110,7 @@ jitllm run stories260K.gguf "Once upon a time"
 
 | You see | Cause | Do this |
 |---|---|---|
-| `architecture "X" is not implemented` | the architecture is not in the list | choose a checkpoint of a listed architecture |
+| `GGUF architecture "X": its graph is not stated` | no library file states the architecture | choose a checkpoint of a stated architecture |
 | `missing block_count/embedding_length/head_count` | the GGUF's metadata is incomplete or for another architecture | re-download; a hand-edited GGUF is not a model |
 | `ErrNotImplemented` naming a projector | a vision projector outside the list | convert the text model alone |
 | a key spelled two ways that disagree is refused | the config contradicts itself | fix the config, or use the publisher's GGUF |

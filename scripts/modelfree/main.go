@@ -28,6 +28,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -147,14 +148,22 @@ func modelFree() bool {
 // event is one line of `go test -json`.
 type event struct {
 	Action, Package, Test, Output string
+	Elapsed                       float64
 }
 
 type row struct{ pkg, test, why string }
+
+// timed is a top-level test that finished and the seconds it took.
+type timed struct {
+	pkg, test string
+	secs      float64
+}
 
 type result struct {
 	name                  string
 	pass, fail, skip      int
 	failed, skipped       []row
+	took                  []timed
 	buildFailed, exitFail bool
 }
 
@@ -212,6 +221,9 @@ func goTest(name, dir, out string, args []string) (result, bool) {
 				if r.pkg == "" {
 					r.pkg = "/"
 				}
+				if e.Action != "skip" {
+					res.took = append(res.took, timed{r.pkg, r.test, e.Elapsed})
+				}
 				switch e.Action {
 				case "pass":
 					res.pass++
@@ -230,6 +242,9 @@ func goTest(name, dir, out string, args []string) (result, bool) {
 		fmt.Printf("::error::reading go test (%s): %v\n", name, err)
 	}
 	res.exitFail = cmd.Wait() != nil
+	for _, t := range slowest(res.took, 5) {
+		fmt.Printf("slow: %s %s %.0fs\n", t.pkg, t.test, t.secs)
+	}
 	return res, !res.exitFail && !res.buildFailed && sc.Err() == nil
 }
 
@@ -267,12 +282,14 @@ func summarize(results []result, skip map[string]string) error {
 	}
 	var pass, fail, skipped int
 	var failed, skips []row
+	var took []timed
 	for _, r := range results {
 		pass += r.pass
 		fail += r.fail
 		skipped += r.skip
 		failed = append(failed, r.failed...)
 		skips = append(skips, r.skipped...)
+		took = append(took, r.took...)
 	}
 	fmt.Fprintf(w, "## Model-free tests, %s/%s\n\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(w, "%d passed, %d failed, **%d skipped** (top-level tests)\n\n", pass, fail, skipped)
@@ -304,7 +321,23 @@ func summarize(results []result, skip map[string]string) error {
 		}
 		fmt.Fprint(w, "\n</details>\n\n")
 	}
+	// A package's test binary runs under goTest's -timeout, so the slowest
+	// tests are what a slower runner pushes past it.
+	if slow := slowest(took, 15); len(slow) > 0 {
+		fmt.Fprint(w, "<details><summary>Slowest top-level tests</summary>\n\n| package | test | seconds |\n|---|---|---|\n")
+		for _, t := range slow {
+			fmt.Fprintf(w, "| `%s` | `%s` | %.0f |\n", t.pkg, t.test, t.secs)
+		}
+		fmt.Fprint(w, "\n</details>\n\n")
+	}
 	return nil
+}
+
+// slowest is the n longest of took, longest first.
+func slowest(took []timed, n int) []timed {
+	s := slices.Clone(took)
+	slices.SortFunc(s, func(a, b timed) int { return cmp.Compare(b.secs, a.secs) })
+	return s[:min(n, len(s))]
 }
 
 // moduleRoot is the engine module's directory, wherever this was started from

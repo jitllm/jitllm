@@ -75,5 +75,8 @@ func TestScopeRefusalIsDistinguishableFromABreak(t *testing.T) {
 			t.Fatalf("an unimplemented projector does not carry the sentinel, so "+
 				"every sweeping gate goes RED for a RULE 7 scope decision: %v", err)
 		}
+		if !errors.Is(err, convert.ErrUnstated) {
+			t.Fatalf("an unstated projector is not refused as a missing statement: %v", err)
+		}
 	})
 }

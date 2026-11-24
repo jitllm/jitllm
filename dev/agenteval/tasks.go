@@ -142,7 +142,7 @@ where a reason for an unsupported file names what is unsupported. Do not modify 
 			},
 			Required: []requirement{ran("ran jitllm on beta.gguf", "jitllm", "beta.gguf")},
 			Reference: `jitllm convert alpha.gguf .agenteval/alpha.jlm
-b=$(jitllm convert beta.gguf .agenteval/beta.jlm 2>&1 | grep -o 'architecture "[^"]*" is not implemented' | sed 's/"/\\"/g')
+b=$(jitllm convert beta.gguf .agenteval/beta.jlm 2>&1 | grep -o 'architecture "[^"]*": its graph is not stated' | sed 's/"/\\"/g')
 cat > verdict.json <<EOF
 {"alpha.gguf": {"supported": true, "reason": "llama converts"},
  "beta.gguf": {"supported": false, "reason": "$b"}}
