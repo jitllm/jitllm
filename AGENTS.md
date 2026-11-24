@@ -336,8 +336,9 @@ refused at conversion naming the statement it lacks (`convert.ErrUnstated`,
 which a sweep reads as `ErrNotImplemented`). Adding one is the user's decision.
 
 `docs/models.md` is generated from those lists, never written by hand: an entry
-adds its models' line to `internal/modelsdoc/describe.go` (the generator refuses
-a name without one) and reruns `go run ./scripts/genmodels docs/models.md`;
+states its models' line in its library file's `describe` (a projector's or an
+audio front's in `convert/projectors.json`; `convert.Descriptions` reads them,
+and the generator refuses a name without one) and reruns `go run ./scripts/genmodels docs/models.md`;
 `srcgate.TestModelsDocIsGenerated` fails until it does. The same lists feed
 `docs/capabilities.json` (`cd server && go run ./cmd/gencapabilities`;
 `srcgate.TestCapabilitiesDocIsGenerated`).

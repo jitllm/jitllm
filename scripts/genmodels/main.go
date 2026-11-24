@@ -4,7 +4,7 @@
 //	go run ./scripts/genmodels docs/models.md
 //
 // With no argument it prints the page. It writes nothing when a name in the
-// code has no line in internal/modelsdoc/describe.go.
+// code has no describe line in its library file.
 package main
 
 import (
