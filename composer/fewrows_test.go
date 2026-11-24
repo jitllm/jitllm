@@ -12,11 +12,12 @@ import (
 // at a joint step's capacity of 512 rows on a device of a V100's CUDA
 // statement, and counts the kernels a call of two live rows launches and a
 // call of the whole capacity: each norm hosts its rows' int8 form as one
-// workgroup a row (Coarsen), as decode's form of one row does, so the few
-// rows launch 11 kernels where they launched 18 (each norm's window maxima
-// and its codes two launches of their own; q, k and v three and gate and up
-// two, which Siblings runs as one each), and the capacity's call launches no
-// more than its 24.
+// workgroup a row (Coarsen) across the rows its band is formed at, as
+// decode's form of one row does, so the few rows launch 9 kernels where they
+// launched 18 (each norm's window maxima and its codes two launches of their
+// own; q, k and v three and gate and up two, which Siblings runs as one each;
+// the gate's activation recomputed in the down projection's reader), and the
+// capacity's call launches no more than its 24.
 func TestCapacityFormLaunchesFewRowsAsOneRow(t *testing.T) {
 	d := composer.Device{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true, Regs: 32,
 		Matrix: [3]int{16, 16, 16}, Fragment: ir.MMAVolta(), HalfPairs: true, VectorLoads: true, Shared: 96 << 10, Buffers: 32}
@@ -45,15 +46,15 @@ func TestCapacityFormLaunchesFewRowsAsOneRow(t *testing.T) {
 	all, allNames := launches(512)
 	t.Logf("two rows: %d %v", few, fewNames)
 	t.Logf("512 rows: %d %v", all, allNames)
-	if few != 11 {
-		t.Errorf("a call of two rows launches %d kernels, want 11", few)
+	if few != 9 {
+		t.Errorf("a call of two rows launches %d kernels, want 9", few)
 	}
 	if all > 24 {
 		t.Errorf("a call of the capacity launches %d kernels, more than 24", all)
 	}
 	hosted := 0
 	for _, c := range codes {
-		if c.Name == "reduce+map+quantized" && c.Runs(2) && c.Live == 512 {
+		if c.Name == "reduce+map+quantized" && c.Runs(2) && c.Live > 0 && c.Live == c.Rows {
 			hosted++
 		}
 	}
