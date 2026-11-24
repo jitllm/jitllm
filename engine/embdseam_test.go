@@ -37,6 +37,11 @@ func eachModel(t *testing.T, fn func(t *testing.T, m *model.Model, io []Option),
 				t.Skipf("cannot load: %v", err)
 			}
 			defer m.Close()
+			// An embedding model has no head to decode with: its vectors are
+			// held to the GGUF oracle's by TestEmbeddingsMatchReference.
+			if m.IsEmbedding() {
+				t.Skip("an embedding model: it pools, and decodes nothing to compare")
+			}
 			fn(t, m, instOpts)
 		})
 	}
