@@ -287,11 +287,14 @@ lcpp_run() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-bench" -m "$MODEL" "${LCPP_ARGS[
 # length, because the fixed per-call costs amortize, so the longer side is
 # flattered. Here jitllm is run once first, its actual token count is read off its
 # own output, and llama-bench is then told -p <that count>.
+# The prompt goes in on stdin (jitllm run reads it there) and to llama.cpp as
+# a file: a 32k-token prompt is past the kernel's 128 KiB limit on one
+# argument, and the exec fails with E2BIG before either engine runs.
 PP=""
 PPTOK=""
-jitllm_pp()  { ${PIN[@]+"${PIN[@]}"} "$JITLLM" run -devices "$JITLLM_DEV" ${JITLLM_EXTRA[@]+"${JITLLM_EXTRA[@]}"} -n 1 "$JITLLM_PATH" "$PP" 2>&1 >/dev/null \
+jitllm_pp()  { printf '%s' "$PP" | ${PIN[@]+"${PIN[@]}"} "$JITLLM" run -devices "$JITLLM_DEV" ${JITLLM_EXTRA[@]+"${JITLLM_EXTRA[@]}"} -n 1 "$JITLLM_PATH" 2>&1 >/dev/null \
               | sed -n 's|.*prompt [0-9]* tok in [^(]*(\([0-9.]*\) tok/s).*|\1|p'; }
-jitllm_pp_ntok() { ${PIN[@]+"${PIN[@]}"} "$JITLLM" run -devices "$JITLLM_DEV" ${JITLLM_EXTRA[@]+"${JITLLM_EXTRA[@]}"} -n 1 "$JITLLM_PATH" "$PP" 2>&1 >/dev/null \
+jitllm_pp_ntok() { printf '%s' "$PP" | ${PIN[@]+"${PIN[@]}"} "$JITLLM" run -devices "$JITLLM_DEV" ${JITLLM_EXTRA[@]+"${JITLLM_EXTRA[@]}"} -n 1 "$JITLLM_PATH" 2>&1 >/dev/null \
               | sed -n 's|.*prompt \([0-9]*\) tok in .*|\1|p'; }
 lcpp_pp() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-bench" -m "$MODEL" "${LCPP_ARGS[@]}" -p "$PPTOK" -n 0 -r 1 2>/dev/null \
               | awk -F'|' '/pp'"$PPTOK"'/{gsub(/ /,"",$(NF-1)); split($(NF-1),a,"±"); print a[1]}'; }
@@ -336,7 +339,7 @@ jitllm_pp_warm() { ${PIN[@]+"${PIN[@]}"} "$JITLLM" speed -devices "$JITLLM_DEV" 
 # jitllm reads the container with O_DIRECT and gets no help from it. jitllm's
 # tuning cache is whatever this host holds (gpu.WithTuneCache); the header
 # says how many tuner trials the probe run timed.
-lcpp_comp() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-completion" -m "$MODEL" "${LCPP_ARGS[@]}" -n 1 -no-cnv --no-warmup --log-timestamps --log-prefix -p "$PP" </dev/null 2>&1; }
+lcpp_comp() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-completion" -m "$MODEL" "${LCPP_ARGS[@]}" -n 1 -no-cnv --no-warmup --log-timestamps --log-prefix -f <(printf '%s' "$PP") </dev/null 2>&1; }
 # lcpp_stamp PATTERN: seconds of the first log line matching PATTERN; llama.cpp
 # stamps lines M.SS.mmm.uuu from its logger's start.
 lcpp_stamp() { python3 -c '
