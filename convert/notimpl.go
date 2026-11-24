@@ -18,6 +18,16 @@ const ErrPart constError = "a part of a model, converted with the rest of it"
 // passes over it by this mark.
 const ErrBadInput constError = "a file that does not state its own tensors' shape"
 
+// ErrUnstated marks a source no library file states: an architecture, class
+// or projector whose graph has no statement over the graph's ops yet. That
+// statement is data to write (convert/models, convert/projectors.json), not
+// code. A sweep reads it as ErrNotImplemented.
+const ErrUnstated constError = "no library file states it"
+
 type constError string
 
 func (e constError) Error() string { return string(e) }
+
+func (e constError) Is(target error) bool {
+	return e == ErrUnstated && target == ErrNotImplemented
+}

@@ -812,7 +812,7 @@ type ExecutionDevice interface {
 // The policy over them (residency, sharing, the store) is the engine's.
 type HistoryStorage interface {
 	PagePool() *history.PagePool
-	ArenaFor(li, pp int, latent bool, slots int) (*history.Arena, error)
+	ArenaFor(li, pp int, latent bool, slots func() int) (*history.Arena, error)
 	NextSequence() int64
 }
 

@@ -330,10 +330,10 @@ balance (fewer instructions, 13.5% slower).
 The library's files (`convert/models/*.json`) are the list: their `gguf`
 lists are the GGUF architectures (`convert.Architectures`, with the towers'
 `clip`), their `classes` the safetensors classes (`convert.HFClasses`), and
-`convert.projectorOf` (`convert/config.go`, a case each in `visionOf`) the list
-of projectors. An architecture not in them does not convert (`configOf`:
-"architecture %q is not implemented"); an unknown projector is refused at
-conversion with `ErrNotImplemented`. Adding one is the user's decision.
+`convert/projectors.json`'s entries the list of projectors. Each is a
+statement over the graph's ops, not code. A source none of them states is
+refused at conversion naming the statement it lacks (`convert.ErrUnstated`,
+which a sweep reads as `ErrNotImplemented`). Adding one is the user's decision.
 
 `docs/models.md` is generated from those lists, never written by hand: an entry
 adds its models' line to `internal/modelsdoc/describe.go` (the generator refuses

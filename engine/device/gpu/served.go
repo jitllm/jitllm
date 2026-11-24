@@ -3040,6 +3040,9 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[g.viewKey(l.kvSrc)], bb.pkv.pRow, g.windowDesc(bb.pkv, l), bb.roff, bb.calls, bb.dRows,
 			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, bb)
 		if errors.Is(err, errFormedAhead) {
+			// Whether the form writes apart from x is known once it is
+			// formed: the copy that would take its output is asked beside it.
+			g.servedCopy(bb, bb.rows)
 			continue
 		}
 		if err != nil {
@@ -3088,6 +3091,7 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[g.viewKey(l.kvSrc)], bb.pkv.pRow, g.windowDesc(bb.pkv, l), qOff, bb.calls, bb.dRows,
 			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run, bb)
 		if errors.Is(err, errFormedAhead) {
+			g.servedCopy(bb, bb.rows)
 			continue
 		}
 		if err != nil {

@@ -305,8 +305,8 @@ func (e *Exec) PrepErr() error { return e.comp.Err() }
 func (e *Exec) PagePool() *PagePool { return e.cpu.KVPool(e.setup.Model) }
 
 // ArenaFor is the model's arena for block li's pages of pp floats, made with
-// slots slots on the first ask (nn.HistoryStorage).
-func (e *Exec) ArenaFor(li, pp int, latent bool, slots int) (*Arena, error) {
+// slots() slots on the first ask (nn.HistoryStorage).
+func (e *Exec) ArenaFor(li, pp int, latent bool, slots func() int) (*Arena, error) {
 	return e.cpu.Arenas(e.setup.Model).For(li, pp, latent, slots)
 }
 
