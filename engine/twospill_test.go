@@ -117,10 +117,12 @@ func TestTwoInstancesSpillOntoTheNextCard(t *testing.T) {
 			break
 		}
 	}
+	s := g.Stats()
+	t.Logf("composed parts: %d bytes, %d of them the prompt arenas'", s.ComposedBytes, s.ComposedArena)
 	if spills == 0 {
 		t.Fatal("no block spilled: the first card held both histories, and the gate proved nothing")
 	}
-	if s := g.Stats(); s.Blocks == 0 || s.PoolOver != 0 {
+	if s.Blocks == 0 || s.PoolOver != 0 {
 		t.Fatalf("the tier ran %d block(s), %d charge(s) past the pool", s.Blocks, s.PoolOver)
 	}
 }
