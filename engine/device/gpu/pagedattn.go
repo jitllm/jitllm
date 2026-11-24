@@ -96,13 +96,11 @@ func (g *devTier) pagedPlan(p *nn.LayerPlan) bool {
 	return g.paged && !p.NonCausal
 }
 
-// kvGeomOf is a plan's page geometry. MLA's is one row-major latent row a
-// position, float32 (the paged kernels read no packed latent), and no V
-// buffer: the value is the row's prefix.
+// kvGeomOf is a plan's page geometry, its rows of the type the plan's
+// history is (kvPoolOf). MLA's is one row-major latent row a position and no
+// V buffer: the value is the row's prefix.
 func (g *devTier) kvGeomOf(p *nn.LayerPlan) kvGeom {
-	latent := p.MLA()
-	pool := kvPoolOf(p)
-	return kvGeom{kvRow: p.KVRow(), f16: g.KVF16 && !latent && pool == (composer.Pool{}), mla: latent, pool: pool}
+	return kvGeom{kvRow: p.KVRow(), mla: p.MLA(), pool: kvPoolOf(p)}
 }
 
 // kvPoolOf is the pool a plan's typed history holds its rows in, as the
@@ -526,7 +524,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// (readRows): their forms at the pool's page are formed here, with the
 	// block, and a move or a read only runs them.
 	pl := kp.layers[key0]
-	if c, _, ok := pl.geom.convOf(kp.p); ok {
+	if c, ok := pl.geom.convOf(kp.p); ok {
 		if err := g.formConv(c); err != nil {
 			return err
 		}
@@ -816,13 +814,12 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return fmt.Errorf("the sequence holds %d page(s) and %d positions need %d", len(ids), pos, npages)
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
-	// A binary16 V pool's pages, and a typed history's keys and values, are
-	// narrowed and widened on the card, through the conversions formed with
+	// A typed history's keys and values are narrowed and widened on the card, through the conversions formed with
 	// the block (pagedLayer). A typed page's keys are by position, as a
 	// latent page's are: kf is a page's keys as floats.
 	var hv *pageConv
-	conv, keys, convs := pl.geom.convOf(P)
-	if convs {
+	conv, keys := pl.geom.convOf(P)
+	if keys {
 		var err error
 		if hv, err = g.keptConv(conv); err != nil {
 			return err
@@ -960,16 +957,6 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 			hk, hvs = append(hk, page[:kw]...), append(hvs, page[kw:]...)
 		}
 		kAll, vAll = append(hk, kAll...), append(hvs, vAll...)
-	} else if e > 0 && !keys {
-		hk := make([]float32, 0, npages*kw)
-		for _, page := range pl.home[s][:e] {
-			if page == nil {
-				hk = append(hk, make([]float32, kw)...)
-				continue
-			}
-			hk = append(hk, page[:kw]...)
-		}
-		kAll = append(hk, kAll...)
 	}
 	for t := 0; t < pos; t++ {
 		j, o := t/P, t%P

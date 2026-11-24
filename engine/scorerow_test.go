@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -20,29 +19,28 @@ import (
 // the widest tile (sm_70's AttnScoresMMA70 tiles 64 keys), or near MaxSeq the
 // overshoot lands in the next row. The lengths are not multiples of 64.
 func TestBatchedPrefillInAStateSizedToThePrompt(t *testing.T) {
-	prefillAgainstHost(t, []int{8, 200, 336})
+	prefillAgainstHost(t, []int{8, 200, 336}, false)
 }
 
-// TestBatchedPrefillWithABinary16VCache is the same comparison with the
-// device's V cache in binary16 (gpu.Config.KVF16, JITLLM_KV_F16=1). Such a
-// chunk goes down the per-row device path, which reads the layout it wrote;
-// the batched scratch reads V as float32.
-func TestBatchedPrefillWithABinary16VCache(t *testing.T) {
-	prefillAgainstHost(t, []int{336}, gpu.WithConfig(func(c *gpu.Config) { c.KVF16 = true }))
+// TestBatchedPrefillWithABinary16History is the same comparison with the
+// instances' history binary16 (WithKVF16), keys and values: the card's pool
+// holds it as the CPU's does, and the prompt's attention reads it there.
+func TestBatchedPrefillWithABinary16History(t *testing.T) {
+	prefillAgainstHost(t, []int{200, 336}, true)
 }
 
-func prefillAgainstHost(t *testing.T, lengths []int, opts ...gpu.Option) {
+func prefillAgainstHost(t *testing.T, lengths []int, f16 bool) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
-	instOpts := []Option{WithKVF16(false)}
+	instOpts := []Option{WithKVF16(f16)}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := openGPU(t, opts...)
+	g, err := openGPU(t)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

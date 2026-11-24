@@ -207,15 +207,6 @@ type Config struct {
 	// than this goes in passes over its pages, folded (pagedstream.go).
 	StagedPassKeys int
 
-	// KVF16 stores the V cache as packed binary16 instead of float32, halving
-	// both the bytes AttnAcc reads per position and the VRAM the cache holds.
-	// It is a field so `jitllm verify -ab` can alternate it in one process
-	// against one copy of the device weights.
-	//
-	// It is V only for now. RoPE writes the K cache and, under the NEOX layout,
-	// produces its two outputs half a head apart rather than adjacent, so K
-	// cannot be packed without restructuring the rotation.
-	KVF16 bool
 	// Attention history is paged (tier/pagedattn.go,
 	// .notes/design/device-kv-paging.md): a sequence grows by appending pages,
 	// and a page that does not fit is paged out or refused. KVPage is the

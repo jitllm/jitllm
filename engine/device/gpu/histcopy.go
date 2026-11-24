@@ -486,7 +486,7 @@ func (g *GPU) copiesFor(sid uint64, d *devTier, li int, p *nn.LayerPlan) (made [
 			if p.Spec != nil {
 				kept, bound = p.Spec.Hists, p.Spec.Bound
 			}
-			hs = hostHists(nil, src, kvSrc, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), kept, p.Graph.ReadsMore(), bound, d.KVF16)
+			hs = hostHists(nil, src, kvSrc, d.kvGeomOf(p), win, chunked, historyTail(p.Graph), kept, p.Graph.ReadsMore(), bound)
 		}
 		d.mu.Lock()
 		have, host := d.histCopies[src][sid], d.hostOf[src][sid]

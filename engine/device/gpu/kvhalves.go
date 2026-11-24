@@ -10,8 +10,7 @@ import (
 )
 
 // A history's pages arrive and leave as floats (nn.LayerDevice.MigrateKV)
-// wherever the pool holds other words: a binary16 V pool's (Config.KVF16),
-// and a typed history's keys and values (kvGeom.pool: q8 rows, GGUF blocks,
+// wherever the pool holds other words: a typed history's keys and values (kvGeom.pool: q8 rows, GGUF blocks,
 // bfloat16 halves). The card narrows and widens them itself, formed through
 // the composer like any other part (composer.Pool.ConvOps): a page's floats
 // staged and narrowed into the pool, a page's words widened before they are
@@ -32,21 +31,19 @@ type convPage struct {
 	w, rows int
 }
 
-// convOf is the conversion geometry k's pages of p positions take, keys
-// whether its keys take it as well as its values (a typed history's, its
-// keys by position), and ok false where its pages hold floats.
-func (k kvGeom) convOf(p int) (c convPage, keys, ok bool) {
+// convOf is the conversion geometry k's pages of p positions take, keys and
+// values alike (a typed history's, its keys by position), ok false where its
+// pages hold floats.
+func (k kvGeom) convOf(p int) (c convPage, ok bool) {
 	switch {
 	case k.typed():
 		w := k.kvRow
 		if k.pool.Row > 0 {
 			w = k.pool.Row
 		}
-		return convPage{k.pool, w, p * k.kvRow / w}, true, true
-	case k.f16 && k.vWords(p) > 0:
-		return convPage{composer.Pool{Half: true}, k.kvRow, p}, false, true
+		return convPage{k.pool, w, p * k.kvRow / w}, true
 	}
-	return convPage{}, false, false
+	return convPage{}, false
 }
 
 // servedConv is c's rows narrowed into its pool's words, or the words
@@ -150,7 +147,7 @@ func (g *devTier) formConv(c convPage) error {
 // formGeomConv is formConv for the pages of geometry k, nothing for a
 // geometry of floats. Callers hold g.mu.
 func (g *devTier) formGeomConv(k kvGeom, p int) error {
-	if c, _, ok := k.convOf(p); ok {
+	if c, ok := k.convOf(p); ok {
 		return g.formConv(c)
 	}
 	return nil

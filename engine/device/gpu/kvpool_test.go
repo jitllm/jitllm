@@ -75,7 +75,7 @@ func TestKVPoolPages(t *testing.T) {
 	const p = 64
 	kp := newKVPool(p, 0)
 	used0 := d.used
-	for li, geom := range []kvGeom{{kvRow: 16}, {kvRow: 16, f16: true}, {kvRow: 24, mla: true}} {
+	for li, geom := range []kvGeom{{kvRow: 16}, {kvRow: 16, pool: composer.Pool{Half: true}}, {kvRow: 24, mla: true}} {
 		if err := d.addKVLayer(kp, li, geom, 1); err != nil {
 			t.Fatal(err)
 		}
@@ -303,7 +303,7 @@ func TestKVPoolKeepsPagesAcrossAResize(t *testing.T) {
 			defer d.mu.Unlock()
 			kp := newKVPool(p, 0)
 			defer d.freeKVPool(kp)
-			geoms := []kvGeom{{kvRow: 96}, {kvRow: 96, f16: true}, {kvRow: 72, mla: true}}
+			geoms := []kvGeom{{kvRow: 96}, {kvRow: 96, pool: composer.Pool{Half: true}}, {kvRow: 72, mla: true}}
 			for li, gm := range geoms {
 				if err := d.addKVLayer(kp, li, gm, 1); err != nil {
 					t.Fatal(err)

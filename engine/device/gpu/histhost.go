@@ -40,9 +40,9 @@ type hostHist struct {
 // src's histories in place of its own (kvSrc), its rows' at rgeom, window
 // win (chunked) and tail, and each past them as src keeps it (kept); and
 // each other history of src it reads past those (more, as bound states
-// each, a rows' history held as binary16 where f16, or in rgeom's typed
-// pool, as the CPU device's form reads it).
-func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bool, tail int, kept []graph.KeptHistory, more []graph.HistoryRead, bound []graph.KeptHistory, f16 bool) []hostHist {
+// each, a rows' history in rgeom's typed pool, as the CPU device's form
+// reads it).
+func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bool, tail int, kept []graph.KeptHistory, more []graph.HistoryRead, bound []graph.KeptHistory) []hostHist {
 	add := func(x hostHist) {
 		for _, y := range dst {
 			if y.h == x.h {
@@ -61,7 +61,7 @@ func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bo
 		switch {
 		case r.Block != src || j >= len(bound):
 		case r.Hist == 0:
-			add(hostHist{geom: kvGeom{kvRow: bound[j].Width, f16: f16 && !rgeom.typed(), pool: rgeom.pool}})
+			add(hostHist{geom: kvGeom{kvRow: bound[j].Width, pool: rgeom.pool}})
 		default:
 			add(hostHist{h: r.Hist, geom: keptGeom(bound[j])})
 		}
@@ -83,10 +83,9 @@ func (g *devTier) hostHistsOf(dst []hostHist, sid uint64, l *layer, src int) []h
 	if ds := g.sess[sid]; ds != nil {
 		if t, ok := ds.hist[src]; ok {
 			rg.pool = codePool(t)
-			rg.f16 = g.KVF16 && !rg.mla && t == 0
 		}
 	}
-	return hostHists(dst, src, l.kvSrc, rg, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound, g.KVF16)
+	return hostHists(dst, src, l.kvSrc, rg, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound)
 }
 
 // lacksHists reports that this device holds no pool layer of one of
@@ -346,8 +345,8 @@ func (g *devTier) writeRows(s seqID, src, from, start, to int, k, v []float32) (
 	}
 	kw, vw := tl.geom.kWords(P), tl.geom.vWords(P)
 	var hv *pageConv
-	conv, keys, convs := tl.geom.convOf(P)
-	if convs {
+	conv, keys := tl.geom.convOf(P)
+	if keys {
 		var err error
 		if hv, err = g.keptConv(conv); err != nil {
 			return 0, err
@@ -695,8 +694,8 @@ func (g *devTier) readRows(s seqID, src, from, to int, k, v []float32) error {
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
 	var hv *pageConv
-	conv, keys, convs := pl.geom.convOf(P)
-	if convs {
+	conv, keys := pl.geom.convOf(P)
+	if keys {
 		var err error
 		if hv, err = g.keptConv(conv); err != nil {
 			return err

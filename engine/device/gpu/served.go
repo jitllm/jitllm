@@ -1351,7 +1351,6 @@ type servedKey struct {
 	graph      *graph.Graph
 	rows       int
 	keys, page int
-	half       bool
 	latent     bool
 	pool       composer.Pool
 	t          jlm.Type
@@ -3315,7 +3314,7 @@ func poolHistory(k kvGeom) composer.History {
 	case k.mla:
 		return composer.History{ValuesInKeys: true}
 	}
-	return composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: k.f16}}
+	return composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{}}
 }
 
 // entryHistory is how a pool of a history past a block's rows lays out its
@@ -3562,7 +3561,7 @@ func (g *devTier) blockKey(l *layer, pl *kvLayerPool, maxSeq, page, R, seqs int,
 	if k := g.kept; g.keeping && l.linear && k != nil && k.graphs[l] != nil {
 		bg = k.graphs[l]
 	}
-	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, half: geom.f16, latent: geom.mla, pool: geom.pool, seqs: seqs,
+	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, latent: geom.mla, pool: geom.pool, seqs: seqs,
 		stream: stream, held: l.pagedHeld(), context: context}
 }
 

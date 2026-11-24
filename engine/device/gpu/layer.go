@@ -1944,9 +1944,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	} else if attends {
 		g.initKVCap(p)
 		cp := g.capped(p)
-		// The V cache is half the size when packed (KVF16), which can decide
-		// whether a model fits on the card at all. Under MLA it is zero: the value
-		// is the key row's own prefix (kvPair.value).
+		// Under MLA the V cache is zero: the value is the key row's own
+		// prefix (kvPair.value).
 		cache, vcache = g.kvCacheBytes(p, cp.MaxSeq)
 		// One cache per session. PrepLayer runs for a session (sid), so
 		// this allocates for whichever sequence is placing blocks; a second
@@ -2004,7 +2003,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			kvp.vc.Write(nan[:vcache])
 		}
 	}
-	// cache + vcache, not 2*cache: with KVF16 the V half is half the size.
 	l.kvBytes = uint64(cache + vcache)
 	if kvp != nil && !kvp.shared {
 		kvp.bytes = l.kvBytes
@@ -3148,8 +3146,6 @@ type graphKey struct {
 	// (Config.Persist); persistDeps that they are ordered by dependency
 	// counters (Config.PersistDeps) rather than grid barriers.
 	persist, persistDeps bool
-	// kvF16 is the binary16 history (Config.KVF16), which the forms read.
-	kvF16 bool
 	// sid is the session the recording was made for: it bakes that session's
 	// page descriptors and recurrent seats, so another session never replays
 	// it. Keying on it, rather than dropping every recording when the current
@@ -3697,7 +3693,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	}
 	key := graphKey{lo: lo, hi: hi, scoreN: nCap, rows: R, head: head != nil, argmax: argmax, sampleK: sampleK, pick: pick,
 		rag: ragN, ragRuns: ragRuns, recParity: par, keys: keys, ragHead: ragHead, hnorm: hVecsID,
-		persist: persistOn, persistDeps: persistOn && g.PersistDeps, kvF16: g.KVF16, sid: sid,
+		persist: persistOn, persistDeps: persistOn && g.PersistDeps, sid: sid,
 		headSrv: headSrv, tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, pickHeadSrv: pickHeadSrv, pickSrv: pickSrv}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
@@ -5657,11 +5653,7 @@ func (g *devTier) kvCacheBytes(p *nn.LayerPlan, c int) (cache, vcache int) {
 	if p.MLA() {
 		return cache, 0
 	}
-	vcache = cache
-	if g.KVF16 {
-		vcache = cache / 2
-	}
-	return cache, vcache
+	return cache, cache
 }
 
 // restride copies rows rows of cols floats from src, srcStride apart, to dst,

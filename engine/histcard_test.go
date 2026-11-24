@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -208,14 +209,24 @@ func TestHistoryCrossesTiers(t *testing.T) {
 }
 
 func historyCrossesTiers(t *testing.T, path, arm string, kv ...Option) {
-	a, err := openGPU(t, gpu.WithDevices("cuda:0"), gpu.WithDeviceTune(gpu.TuneOff))
+	spec := testdevices.One("cuda:0")
+	a, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || a == nil {
-		noDevice(t, "cuda:0", err)
+		noDevice(t, spec, err)
 	}
 	defer a.Close()
-	spec := "cuda:0"
 	if arm == "other" {
-		spec = "cuda:1"
+		// A second card the selection lists: one past a's.
+		var cards []string
+		for _, c := range testdevices.Within([]string{"cuda:0", "cuda:1", "cuda:2", "cuda:3", "cuda:4", "cuda:5", "cuda:6", "cuda:7"}) {
+			if c != spec {
+				cards = append(cards, c)
+			}
+		}
+		if len(cards) == 0 {
+			noDevice(t, "a second CUDA card", nil)
+		}
+		spec = cards[0]
 	}
 	b, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || b == nil {

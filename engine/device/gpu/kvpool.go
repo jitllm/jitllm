@@ -34,7 +34,6 @@ func (e tierError) Error() string { return string(e) }
 // pages do.
 type kvGeom struct {
 	kvRow int
-	f16   bool
 	mla   bool
 	// period, past 1, is an entries plane's: one entry each period
 	// positions, a page holding its positions' and one spare slot
@@ -204,8 +203,6 @@ func (k kvGeom) vWords(p int) int {
 		return 0
 	case k.typed():
 		return p * k.pool.Words(k.kvRow)
-	case k.f16:
-		return p * k.kvRow / 2
 	case k.period > 1:
 		return composer.History{Period: k.period}.Slots(p) * k.kvRow
 	}
