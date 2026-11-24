@@ -190,6 +190,7 @@ func runPooled(d backend.Device, codes []composer.Code, in graph.ValueID, x []fl
 		return w
 	}
 	own := map[composer.Operand]backend.Buf{}
+	reach := reachOf(codes)
 	var outBuf backend.Buf
 	for ci, c := range codes {
 		args := make([]backend.Buf, len(c.Binds))
@@ -222,7 +223,7 @@ func runPooled(d backend.Device, codes []composer.Code, in graph.ValueID, x []fl
 			case bd.Words != nil:
 				w = bd.Words
 			default:
-				w = poisoned(int(max(bd.Bytes, 4)/4) + 64)
+				w = poisoned(int(max(reach[o], 4)/4) + 64)
 			}
 			b, err := alloc(w)
 			if err != nil {

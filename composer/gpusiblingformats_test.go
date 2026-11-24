@@ -186,6 +186,19 @@ func TestComposedGPUHeadNormsInOneLaunch(t *testing.T) {
 	}
 }
 
+// reachOf is what the codes reach of each operand they bind, the widest
+// binding's: a band's codes are formed at its rows, and the first code to
+// bind an operand may reach less of it than a later one.
+func reachOf(codes []composer.Code) map[composer.Operand]int64 {
+	reach := map[composer.Operand]int64{}
+	for _, c := range codes {
+		for _, bd := range c.Binds {
+			reach[bd.Operand] = max(reach[bd.Operand], bd.Bytes)
+		}
+	}
+	return reach
+}
+
 func without(pass string) *composer.Registry {
 	r := composer.Default()
 	p := r.Profiles[composer.DeviceGPU]
@@ -255,6 +268,7 @@ func runRoles(d backend.Device, codes []composer.Code, ins map[graph.ValueID][]f
 		return w
 	}
 	own := map[composer.Operand]backend.Buf{}
+	reach := reachOf(codes)
 	var outBuf backend.Buf
 	for ci, c := range codes {
 		args := make([]backend.Buf, len(c.Binds))
@@ -283,7 +297,7 @@ func runRoles(d backend.Device, codes []composer.Code, ins map[graph.ValueID][]f
 			case bd.Words != nil:
 				w = bd.Words
 			default:
-				w = poisoned(int(max(bd.Bytes, 4)/4) + 64)
+				w = poisoned(int(max(reach[o], 4)/4) + 64)
 			}
 			b, err := alloc(w)
 			if err != nil {
@@ -293,6 +307,10 @@ func runRoles(d backend.Device, codes []composer.Code, ins map[graph.ValueID][]f
 			if o.Kind == composer.OperandValue && o.Value == out {
 				outBuf = b
 			}
+		}
+		// A call of the capacity's rows runs no code of a band below it.
+		if !c.Band.Runs(0) {
+			continue
 		}
 		if err := op.kerns[ci].Launch(c.Groups, c.GPU.Group[0], args...); err != nil {
 			return nil, err

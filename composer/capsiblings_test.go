@@ -345,6 +345,7 @@ func runRolesAt(d backend.Device, op *loneOp, ins map[graph.ValueID][]float32, w
 		return w
 	}
 	own := map[composer.Operand]backend.Buf{}
+	reach := reachOf(op.codes)
 	outBufs := map[graph.ValueID]backend.Buf{}
 	for ci, c := range op.codes {
 		args := make([]backend.Buf, len(c.Binds))
@@ -377,7 +378,7 @@ func runRolesAt(d backend.Device, op *loneOp, ins map[graph.ValueID][]float32, w
 			case bd.Words != nil:
 				w = bd.Words
 			default:
-				w = poisoned(int(max(bd.Bytes, 4)/4) + guard)
+				w = poisoned(int(max(reach[o], 4)/4) + guard)
 			}
 			b, err := alloc(w)
 			if err != nil {

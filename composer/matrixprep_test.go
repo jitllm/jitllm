@@ -1,6 +1,7 @@
 package composer_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,7 +41,22 @@ func TestMatrixPrepLaunches(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			prep, halves := 0, 0
+			// A call runs one form's codes (Band), so each call's rows count.
+			prep, halves, most := 0, 0, 0
+			for L := 1; L <= rows; L++ {
+				n := 0
+				for _, c := range codes {
+					if c.Runs(L) && slices.ContainsFunc(c.Binds, func(bd composer.Binding) bool {
+						return bd.Writes && (strings.HasSuffix(bd.Operand.Name, ".halves") || strings.HasSuffix(bd.Operand.Name, ".rowscale"))
+					}) {
+						n++
+					}
+				}
+				most = max(most, n)
+				if L == rows {
+					prep = n
+				}
+			}
 			for _, c := range codes {
 				writes := map[string]bool{}
 				for _, bd := range c.Binds {
@@ -50,9 +66,6 @@ func TestMatrixPrepLaunches(t *testing.T) {
 						}
 					}
 				}
-				if len(writes) > 0 {
-					prep++
-				}
 				if writes[".halves"] {
 					halves++
 					if !writes[".rowscale"] {
@@ -61,11 +74,11 @@ func TestMatrixPrepLaunches(t *testing.T) {
 				}
 			}
 			t.Logf("rows %d convert %d: %d prep launches for two row factors, %d writing binary16 words", rows, convert, prep, halves)
-			if prep != 2 {
+			if prep != 2 || most != 2 {
 				for _, c := range codes {
 					t.Logf("%s, %d workgroups of %d, passes %v", c.Name, c.Groups, c.GPU.Group[0], c.Passes)
 				}
-				t.Fatalf("rows %d convert %d: %d prep launches for two row factors, not one each", rows, convert, prep)
+				t.Fatalf("rows %d convert %d: %d prep launches for two row factors at the capacity's call, %d at most at a call, not one each", rows, convert, prep, most)
 			}
 			if convert != 0 && (halves == 0) != (convert > 0) {
 				t.Fatalf("rows %d convert %d: %d kernels write binary16 words", rows, convert, halves)
