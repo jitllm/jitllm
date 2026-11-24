@@ -20,7 +20,7 @@ func TestInkling2FeaturesAreLoadBearing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	bound := hfGoldBound()[name]
+	bound := hfNMSE
 	if w := hfWorst(t, m, name); !(w <= bound) {
 		t.Fatalf("the stated graph: worst NMSE %.3e against transformers (bound %.0e)", w, bound)
 	}
@@ -84,12 +84,25 @@ func inkling2Violations() []inkling2Violation {
 	}
 }
 
+// inkling2Tiles bounds a prompt on the card's own tiles, whose matrix unit
+// multiplies binary16 operands: the last row reads 1.8e-06 on CUDA (V100),
+// 8.2e-12 on float tiles, and transformers' own run with every projection's
+// input rounded to binary16 2.2e-06 (scripts/inkling2gold.py); each feature
+// removed reads about 2.
+const inkling2Tiles = 1e-5
+
+// inkling2F16History bounds a binary16 history against transformers' f32
+// one: every block on the CPU reads 3.5e-05, half the blocks on a card (its
+// half widened) 2.7e-05 on CUDA and Vulkan, an f32 history 8.4e-11.
+const inkling2F16History = 1e-4
+
 // TestInkling2OnEveryDevice holds Inkling 2 on each listed card against
 // transformers' golden, within the golden's bound (RULE 11c): every block and
 // the head on the card, decoded a token at a time and prefilled as one chunk
 // on float tiles,
-// and half the blocks on the card, at an f32 history and at an f16 one, the
-// shipping default on amd64.
+// and on its own tiles, and half the blocks on the card, at an f32 history
+// and at an f16 one (the shipping default on amd64) written before the card
+// takes its half.
 // The card's tuner is off. Each feature removed on the every-block arm must
 // leave the bound.
 func TestInkling2OnEveryDevice(t *testing.T) {
@@ -99,7 +112,7 @@ func TestInkling2OnEveryDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	bound := hfGoldBound()[name]
+	bound := hfNMSE
 	ids, heads := hfGold(t, name)
 	nl := m.Cfg.NLayer
 	ran := 0
@@ -110,11 +123,8 @@ func TestInkling2OnEveryDevice(t *testing.T) {
 				noDevice(t, spec, err)
 			}
 			defer g.Close()
-			placed := func(n int, f16 bool) func(*Instance) {
+			placed := func(n int) func(*Instance) {
 				return func(st *Instance) {
-					if st.KVIsF16() != f16 {
-						t.Fatalf("the history is f16 %v, wanted %v", st.KVIsF16(), f16)
-					}
 					st.SetDeviceFallback(false)
 					if err := st.SetDevice(g); err != nil {
 						t.Fatal(err)
@@ -130,17 +140,49 @@ func TestInkling2OnEveryDevice(t *testing.T) {
 			for _, a := range []struct {
 				name string
 				n    int
-				f16  bool
 			}{
-				{"every block", nl, false},
-				{"half the blocks", nl / 2, false},
-				{"half the blocks, an f16 history", nl / 2, true},
+				{"every block", nl},
+				{"half the blocks", nl / 2},
 			} {
-				w := hfWorstOn(t, m, name, placed(a.n, a.f16), WithKVF16(a.f16))
+				w := hfWorstOn(t, m, name, placed(a.n), WithKVF16(false))
 				t.Logf("%s: worst NMSE %.3e against transformers", a.name, w)
 				if !(w <= bound) {
 					t.Errorf("%s on %s: worst NMSE %.3e against transformers, bound %.0e", a.name, spec, w, bound)
 				}
+			}
+			// An empty binary16 history steps down to the f32 a device holds
+			// (SetDevice), so placed before its first position the instance
+			// runs f32 on both sides. Written first, the history keeps its
+			// format: the CPU's half reads binary16 and the card's half takes
+			// it widened.
+			st0 := testInstance(t, m, len(ids)+1, WithKVF16(true))
+			placed(nl / 2)(st0)
+			t.Logf("placed at position 0, the f16 instance's history is f16 %v", st0.KVIsF16())
+			st0.Close()
+			cpu16 := hfWorstOn(t, m, name, func(st *Instance) {
+				if !st.KVIsF16() {
+					t.Fatal("the CPU's history is not binary16")
+				}
+			}, WithKVF16(true))
+			st := testInstance(t, m, len(ids)+1, WithKVF16(true))
+			w16 := 0.0
+			for p, id := range ids {
+				if p == 1 {
+					placed(nl / 2)(st)
+					if !st.KVIsF16() {
+						t.Fatal("the history written on the CPU stepped down when the card took half the blocks")
+					}
+				}
+				lg, err := st.Forward(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w16 = max(w16, hfNMSE64(lg, heads[p]))
+			}
+			st.Close()
+			t.Logf("half the blocks, an f16 history: worst NMSE %.3e against transformers; every block on the CPU at an f16 history %.3e", w16, cpu16)
+			if !(w16 <= inkling2F16History) || !(cpu16 <= inkling2F16History) {
+				t.Errorf("an f16 history on %s: worst NMSE %.3e (every block on the CPU %.3e), bound %.0e", spec, w16, cpu16, inkling2F16History)
 			}
 			prompt := func(d *gpu.GPU) float64 {
 				st := testInstance(t, m, len(ids)+1, WithKVF16(false))
@@ -168,14 +210,14 @@ func TestInkling2OnEveryDevice(t *testing.T) {
 			if !(w <= bound) {
 				t.Errorf("the prompt as one chunk on %s: NMSE %.3e against transformers, bound %.0e", spec, w, bound)
 			}
-			// The matrix unit's tiles multiply binary16 operands, and this
-			// fixture amplifies rounding about 1e8-fold in NMSE (its own f32
-			// forward reads 1.6e-06 against its f64 one): no bound on it
-			// separates a wrong tile from binary16. Reported, not held.
-			t.Logf("every block, the prompt as one chunk on the device's own tiles: last row's NMSE %.3e", prompt(g))
+			if w := prompt(g); !(w <= inkling2Tiles) {
+				t.Errorf("the prompt as one chunk on %s's own tiles: NMSE %.3e against transformers, bound %.0e", spec, w, inkling2Tiles)
+			} else {
+				t.Logf("every block, the prompt as one chunk on the device's own tiles: last row's NMSE %.3e", w)
+			}
 			for _, v := range inkling2Violations() {
 				undo := v.apply(m)
-				w := hfWorstOn(t, m, name, placed(nl, false), WithKVF16(false))
+				w := hfWorstOn(t, m, name, placed(nl), WithKVF16(false))
 				undo()
 				t.Logf("%s, every block: worst NMSE %.3e", v.name, w)
 				if !(w > bound) {
