@@ -16,6 +16,33 @@ import (
 // transformers recorded (scripts/hfgold.py), +Inf where a logit is not finite.
 func hfWorst(t *testing.T, m *model.Model, golden string) float64 {
 	t.Helper()
+	return hfWorstOn(t, m, golden, nil, WithKVF16(false))
+}
+
+// hfWorstOn is hfWorst with the instance placed by place before the first
+// token, under opts.
+func hfWorstOn(t *testing.T, m *model.Model, golden string, place func(*Instance), opts ...Option) float64 {
+	t.Helper()
+	ids, heads := hfGold(t, golden)
+	st := testInstance(t, m, len(ids)+1, opts...)
+	defer st.Close()
+	if place != nil {
+		place(st)
+	}
+	worst := 0.0
+	for p, id := range ids {
+		lg, err := st.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		worst = max(worst, hfNMSE64(lg, heads[p]))
+	}
+	return worst
+}
+
+// hfGold is the golden's ids and the logits transformers recorded at each.
+func hfGold(t *testing.T, golden string) ([]int32, [][]float64) {
+	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "testdata", "golden", "hf", golden+".json"))
 	if err != nil {
 		t.Fatal(err)
@@ -29,26 +56,24 @@ func hfWorst(t *testing.T, m *model.Model, golden string) float64 {
 	if err := json.Unmarshal(b, &gold); err != nil {
 		t.Fatal(err)
 	}
-	st := testInstance(t, m, len(gold.IDs)+1, WithKVF16(false))
-	defer st.Close()
-	worst := 0.0
-	for p, id := range gold.IDs {
-		lg, err := st.Forward(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var num, den float64
-		for i, w := range gold.Pos[p].Head {
-			d := float64(lg[i]) - w
-			num, den = num+d*d, den+w*w
-		}
-		nmse := num / den
-		if math.IsNaN(nmse) || math.IsInf(nmse, 0) {
-			return math.Inf(1)
-		}
-		worst = max(worst, nmse)
+	heads := make([][]float64, len(gold.Pos))
+	for p, x := range gold.Pos {
+		heads[p] = x.Head
 	}
-	return worst
+	return gold.IDs, heads
+}
+
+// hfNMSE64 is lg's NMSE against want, +Inf where it is not finite.
+func hfNMSE64(lg []float32, want []float64) float64 {
+	var num, den float64
+	for i, w := range want {
+		d := float64(lg[i]) - w
+		num, den = num+d*d, den+w*w
+	}
+	if e := num / den; !math.IsNaN(e) && !math.IsInf(e, 0) {
+		return e
+	}
+	return math.Inf(1)
 }
 
 // TestGPTJFeaturesAreLoadBearing holds what GPT-J's library file states
