@@ -115,6 +115,11 @@ func TestMatrixBandsFollowTheModel(t *testing.T) {
 			if c.Matrix != [2]int{} && c.Band.Upto > 0 {
 				narrow++
 			}
+			// A band's codes are formed at its rows, so what they alone
+			// bind holds those rows and not the capacity's.
+			if c.Band.Upto > 0 && (c.Rows < c.Band.Upto || c.Rows >= 512) || c.Band.Upto == 0 && c.Rows != 512 {
+				t.Fatalf("%v: %s, run at %+v, is formed at %d rows", sh, c.Name, c.Band, c.Rows)
+			}
 		}
 		if narrow == 0 {
 			t.Fatalf("%v: no matrix code runs in a band below the capacity's form: the model's narrower tiles were never formed", sh)

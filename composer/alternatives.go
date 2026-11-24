@@ -1,8 +1,11 @@
 package composer
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"reflect"
+	"slices"
 
-import "reflect"
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Band is the live rows of a call a code runs at: Upto, where set, at most
 // Upto rows; Past, where set, more than Past rows, or a call stating none
@@ -68,6 +71,12 @@ type band struct {
 	vec  int
 	tile MatrixTile
 	upto int
+}
+
+// rows is the rows a band's form holds, within the capacity's: its most,
+// and at least a tile of them, so its form takes the tile the model priced.
+func (b band) rows(capacity int) int {
+	return min(capacity, max(b.upto, b.vec, b.tile.Rows))
 }
 
 // bands is how req's projections run by the live rows of a call, where ks
@@ -201,11 +210,13 @@ func weightBits(k *Kernel) int {
 	return 512
 }
 
-// alternatives is one form of a request formed two ways at one capacity:
-// vec (the vector form, or a narrower band's tile) and mat. The codes the
-// two share, in order, run at every call; between them, vec's run at calls
-// of at most r rows and mat's at the rest, within the band each already
-// had.
+// alternatives is one form of a request formed two ways: vec (the vector
+// form, or a narrower band's tile, formed at its band's rows) and mat. The
+// codes the two share, in order, run at every call; between them, vec's run
+// at calls of at most r rows and mat's at the rest, within the band each
+// already had. A kernel the two form alike but at different rows (kin) is
+// one of each side by side, so each form's codes keep their places among
+// the other's.
 func alternatives(vec, mat []PartCode, r int) []PartCode {
 	n, m := len(vec), len(mat)
 	lcs := make([][]int, n+1)
@@ -215,7 +226,7 @@ func alternatives(vec, mat []PartCode, r int) []PartCode {
 	for i := n - 1; i >= 0; i-- {
 		for j := m - 1; j >= 0; j-- {
 			switch {
-			case reflect.DeepEqual(vec[i], mat[j]):
+			case kin(vec[i], mat[j]):
 				lcs[i][j] = lcs[i+1][j+1] + 1
 			case lcs[i+1][j] >= lcs[i][j+1]:
 				lcs[i][j] = lcs[i+1][j]
@@ -240,9 +251,16 @@ func alternatives(vec, mat []PartCode, r int) []PartCode {
 	i, j := 0, 0
 	for i < n || j < m {
 		switch {
-		case i < n && j < m && reflect.DeepEqual(vec[i], mat[j]):
+		case i < n && j < m && kin(vec[i], mat[j]):
 			flush()
-			out = append(out, vec[i])
+			v := vec[i]
+			v.Rows = mat[j].Rows
+			if reflect.DeepEqual(v, mat[j]) {
+				out = append(out, mat[j])
+			} else {
+				gv, gm = append(gv, vec[i]), append(gm, mat[j])
+				flush()
+			}
 			i, j = i+1, j+1
 		case j == m || i < n && lcs[i+1][j] >= lcs[i][j+1]:
 			gv = append(gv, vec[i])
@@ -254,4 +272,20 @@ func alternatives(vec, mat []PartCode, r int) []PartCode {
 	}
 	flush()
 	return out
+}
+
+// kin reports whether a and b are one kernel, formed alike but perhaps at
+// different rows: its name, passes, part and matrix, and its bindings'
+// operands and uses, alike.
+func kin(a, b PartCode) bool {
+	if a.Name != b.Name || a.Part != b.Part || a.Matrix != b.Matrix || a.Sweep != b.Sweep || !slices.Equal(a.Passes, b.Passes) || len(a.Binds) != len(b.Binds) {
+		return false
+	}
+	for k, x := range a.Binds {
+		y := b.Binds[k]
+		if x.Operand != y.Operand || x.Writes != y.Writes || x.Read != y.Read || x.Own != y.Own {
+			return false
+		}
+	}
+	return true
 }

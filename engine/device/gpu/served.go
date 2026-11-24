@@ -441,19 +441,21 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 					args = append(args, a)
 					continue
 				}
-				// Sized by its rows and by the widest binding of it: a code
-				// may reach past the rows' width (the CPU sizes it so too).
+				// Sized by the rows of the codes binding it (a band's are
+				// formed at its band's, composer.Code.Rows) and by the widest
+				// binding of it: a code may reach past the rows' width (the
+				// CPU sizes it so too).
 				i, ok := vals[o.Value]
 				if !ok {
-					n := 4 * rows * gr.Values[o.Value].Width
-					if !liveVal[o.Value] {
-						n = 4
-					}
-					i = buf(n, nil)
+					i = buf(4, nil)
 					vals[o.Value] = i
 				}
 				if liveVal[o.Value] {
-					f.own[i].n = max(f.own[i].n, int(bd.Bytes))
+					at := rows
+					if c.Rows > 0 && c.Rows < rows {
+						at = c.Rows
+					}
+					f.own[i].n = max(f.own[i].n, 4*at*gr.Values[o.Value].Width, int(bd.Bytes))
 				}
 				args = append(args, partArg{kind: partOwn, i: i})
 			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3:
@@ -822,6 +824,7 @@ func (f *partForm) pagedHalves(gr *graph.Graph, vals map[graph.ValueID]int, own 
 				return fmt.Errorf("the banks in pages read two selections")
 			}
 			f.sel, f.selN = i, rows*gr.Values[o.In[1]].Width
+			f.own[i].n = max(f.own[i].n, 4*f.selN)
 		}
 	}
 	for o, i := range own {

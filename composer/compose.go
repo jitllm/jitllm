@@ -76,6 +76,10 @@ type Code struct {
 	Work                                  bool
 	// Band is the call rows the code is launched at (Alternatives).
 	Band Band
+	// Rows is the step's rows the code is formed at, where its form states
+	// them: each value it binds holds that many rows. A band's code is
+	// formed at its band's rows (alternatives).
+	Rows int
 	// Cut is the segments a matrix code cuts k in at a call's rows, and
 	// whether the code is their combine (Kernel.Cut).
 	Cut Cut

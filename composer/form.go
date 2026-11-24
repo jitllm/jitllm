@@ -111,6 +111,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 				continue // the caller's tile is the matrix unit's at every call
 			}
 			br := req
+			br.Step.Rows = b.rows(req.Step.Rows)
 			if b.vec > 0 {
 				br.Device.Matrix, br.Device.Tile, br.Device.RowTile = [3]int{}, MatrixTile{}, b.vec
 			} else {
@@ -146,6 +147,9 @@ func (r *Registry) formCodes(req Request) ([]*Kernel, []PartCode, error) {
 	r.cache.clock("lower", time.Since(t0))
 	if err == nil {
 		codes, err = r.untailed(req, prof, ks, codes)
+	}
+	for i := range codes {
+		codes[i].Rows = req.Step.Rows
 	}
 	return ks, codes, err
 }

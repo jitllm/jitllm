@@ -258,6 +258,7 @@ func (f *partForm) rowHalves(gr *graph.Graph, tables []jlm.Role, vals map[graph.
 			return fmt.Errorf("the rows the row table %v is gathered by are written by no code before the gathers", tg.role)
 		}
 		w := gr.Values[tg.rows].Width
+		f.own[i].n = max(f.own[i].n, 4*rows*w)
 		f.rowSels = append(f.rowSels, partRowSel{role: tg.role, sel: i, n: w, ids: rows * w})
 	}
 	return nil
