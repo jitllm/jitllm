@@ -400,23 +400,13 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 		f.own = append(f.own, partBuf{n: max(n, 4), words: words})
 		return len(f.own) - 1
 	}
-	// A scratch binding no kernel reads or writes -- a sum a pass carried in
+	// A buffer is sized by the bindings that read or write it alone. A
+	// scratch binding no kernel reads or writes -- a sum a pass carried in
 	// registers, still a parameter -- is bound to a word: at a prompt's rows
 	// the sub-block dots alone are gigabytes. So is a value no kernel reads or
 	// writes: one a pass recomputes where it is read (a softcapped head's
-	// doubled sigmoid, a row of logits wide at every row).
-	live := map[composer.Operand]bool{}
-	liveVal := map[graph.ValueID]bool{}
-	for _, c := range codes {
-		for _, bd := range c.Binds {
-			if bd.Read || bd.Writes {
-				live[bd.Operand] = true
-				if bd.Operand.Kind == composer.OperandValue {
-					liveVal[bd.Operand.Value] = true
-				}
-			}
-		}
-	}
+	// doubled sigmoid, a row of logits wide at every row), and one only
+	// another band's codes reach.
 	for _, c := range codes {
 		if c.GPU == nil {
 			return nil, fmt.Errorf("%s has no GPU code", c.Name)
@@ -441,16 +431,16 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 					args = append(args, a)
 					continue
 				}
-				// Sized by the rows of the codes binding it (a band's are
-				// formed at its band's, composer.Code.Rows) and by the widest
-				// binding of it: a code may reach past the rows' width (the
-				// CPU sizes it so too).
+				// Sized by the rows of the codes that read or write it (a
+				// band's are formed at its band's, composer.Code.Rows) and by
+				// the widest binding of it: a code may reach past the rows'
+				// width (the CPU sizes it so too).
 				i, ok := vals[o.Value]
 				if !ok {
 					i = buf(4, nil)
 					vals[o.Value] = i
 				}
-				if liveVal[o.Value] {
+				if bd.Read || bd.Writes {
 					at := rows
 					if c.Rows > 0 && c.Rows < rows {
 						at = c.Rows
@@ -475,10 +465,11 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 				f.own[i].n = max(f.own[i].n, int(bd.Bytes))
 				args = append(args, partArg{kind: partOwn, i: i})
 			case bd.Words != nil || o.Kind == composer.OperandScratch:
-				// Sized by the widest binding of the operand: a later code
-				// may reach further into it than the first.
+				// Sized by the widest binding of the operand that reads or
+				// writes it: a later code may reach further into it than the
+				// first.
 				n := int(max(bd.Bytes, 4*int64(len(bd.Words))))
-				if bd.Words == nil && !live[o] {
+				if bd.Words == nil && !bd.Read && !bd.Writes {
 					n = 4
 				}
 				i, ok := own[o]
@@ -577,90 +568,151 @@ func (f *partForm) passSweeps() error {
 // share lays the form's own buffers out on fewer device buffers
 // (partForm.slot, phys), as the tier's own scratch reuses its buffers
 // block after block: a buffer whose first code writes it without reading
-// it, live from that code to the last that binds it, takes a buffer one
-// whose last code ran before its first gave up. The codes run in order on
-// one stream, so the earlier holder is done with it. A constant, a buffer
-// first read (it carries what an earlier call left), and a paged form's
-// selection and page table, which the host reads and writes between its
-// halves, keep buffers of their own. A binding that neither reads nor
+// it, live from that code to the last that binds it, takes a buffer whose
+// other holders are never live beside it. The codes run in order on one
+// stream, so a holder is done with it before the next writes it. Codes of
+// bands no one call runs (composer.Band) never run together, so a buffer is
+// live from code to code at each call's rows apart (bandRows): two whose
+// codes run at different calls take one buffer whatever their order. A constant, a
+// buffer first read (it carries what an earlier call left), and a paged
+// form's selection and page table, which the host reads and writes between
+// its halves, keep buffers of their own. A binding that neither reads nor
 // writes a buffer, a parameter its code never touches, is no use of it.
 // Callers form f outside any step.
 func (f *partForm) share(paged bool) {
 	n := len(f.own)
-	first, last := make([]int, n), make([]int, n)
+	at := f.bandRows()
+	first, last := make([][]int, n), make([][]int, n)
 	fresh := make([]bool, n)
 	for i := range first {
-		first[i] = -1
+		first[i], last[i] = make([]int, len(at)), make([]int, len(at))
+		for c := range at {
+			first[i][c] = -1
+		}
+		fresh[i] = true
 	}
+	used := make([]bool, n)
 	for ci, args := range f.args {
-		for _, a := range args {
-			if a.kind != partOwn || !a.read && !a.writes {
+		for c, r := range at {
+			if !f.codes[ci].geom.Band.Runs(r) {
 				continue
 			}
-			if first[a.i] < 0 {
-				first[a.i], fresh[a.i] = ci, true
+			for _, a := range args {
+				if a.kind != partOwn || !a.read && !a.writes {
+					continue
+				}
+				used[a.i] = true
+				if first[a.i][c] < 0 {
+					first[a.i][c] = ci
+				}
+				if first[a.i][c] == ci && (a.read || !a.writes) {
+					fresh[a.i] = false
+				}
+				last[a.i][c] = ci
 			}
-			if first[a.i] == ci && (a.read || !a.writes) {
-				fresh[a.i] = false
-			}
-			last[a.i] = ci
 		}
 	}
 	// A pass runs again over what was written before it.
 	for i := range last {
-		for _, sw := range f.sweeps {
-			if first[i] >= 0 && first[i] < sw.lo && last[i] >= sw.lo {
-				last[i] = max(last[i], sw.hi-1)
+		for c := range at {
+			for _, sw := range f.sweeps {
+				if first[i][c] >= 0 && first[i][c] < sw.lo && last[i][c] >= sw.lo {
+					last[i][c] = max(last[i][c], sw.hi-1)
+				}
 			}
 		}
 	}
-	f.slot = make([]int, n)
-	f.phys = f.phys[:0]
-	var free []int // the end code of each shared buffer, by its index in phys
-	order := make([]int, 0, n)
+	start := func(i int) int {
+		s := len(f.codes)
+		for _, x := range first[i] {
+			if x >= 0 {
+				s = min(s, x)
+			}
+		}
+		return s
+	}
+	// apart reports whether buffers i and j are never live at once: at
+	// each call's rows, one's codes end before the other's start.
+	apart := func(i, j int) bool {
+		for c := range at {
+			if first[i][c] >= 0 && first[j][c] >= 0 && first[i][c] <= last[j][c] && first[j][c] <= last[i][c] {
+				return false
+			}
+		}
+		return true
+	}
+	pinned := make([]bool, n)
+	var order []int
 	for i, b := range f.own {
-		pinned := b.words != nil || !fresh[i] || paged && (i == f.sel || i == f.table)
-		if pinned {
-			f.slot[i] = len(f.phys)
-			f.phys = append(f.phys, b)
-			free = append(free, len(f.codes))
-			continue
+		pinned[i] = b.words != nil || !used[i] || !fresh[i] || paged && (i == f.sel || i == f.table)
+		if !pinned[i] {
+			order = append(order, i)
 		}
-		order = append(order, i)
 	}
-	slices.SortStableFunc(order, func(a, b int) int { return first[a] - first[b] })
-	for _, i := range order {
-		need, at := f.own[i].n, -1
-		for p, end := range free {
-			if f.phys[p].words != nil || end >= first[i] || end == len(f.codes) {
-				continue
-			}
-			// The narrowest that holds it, else the widest, grown.
-			switch {
-			case at < 0:
-				at = p
-			case f.phys[p].n >= need && (f.phys[at].n < need || f.phys[p].n < f.phys[at].n):
-				at = p
-			case f.phys[at].n < need && f.phys[p].n > f.phys[at].n:
-				at = p
+	// place lays the buffers out in order, each on a buffer whose holders
+	// are never live beside it -- the first such, or where narrowest is set
+	// the narrowest that holds it, else the widest, grown: the slot of each,
+	// the buffers, the own buffers each shared one holds (nil for one held
+	// alone), and the shared ones' bytes.
+	place := func(order []int, narrowest bool) (slot []int, phys []partBuf, held [][]int, bytes int) {
+		slot = make([]int, n)
+		for i, b := range f.own {
+			if pinned[i] {
+				slot[i] = len(phys)
+				phys = append(phys, b)
+				held = append(held, nil)
 			}
 		}
-		if at < 0 {
-			at = len(f.phys)
-			f.phys = append(f.phys, partBuf{})
-			free = append(free, 0)
+		for _, i := range order {
+			need, to := f.own[i].n, -1
+			for p, hs := range held {
+				if hs == nil || slices.ContainsFunc(hs, func(j int) bool { return !apart(i, j) }) {
+					continue
+				}
+				switch {
+				case to < 0:
+					to = p
+				case !narrowest:
+				case phys[p].n >= need && (phys[to].n < need || phys[p].n < phys[to].n):
+					to = p
+				case phys[to].n < need && phys[p].n > phys[to].n:
+					to = p
+				}
+			}
+			if to < 0 {
+				to = len(phys)
+				phys = append(phys, partBuf{})
+				held = append(held, []int{})
+			}
+			phys[to].n = max(phys[to].n, need)
+			held[to] = append(held[to], i)
+			slot[i] = to
 		}
-		f.phys[at].n = max(f.phys[at].n, need)
-		free[at] = last[i]
-		f.slot[i] = at
+		for p, hs := range held {
+			if hs != nil {
+				bytes += phys[p].n
+			}
+		}
+		return slot, phys, held, bytes
 	}
+	// Laid out two ways, the fewer bytes kept: by first use, each on the
+	// narrowest that holds it (the room a buffer before it gave up), and
+	// widest first, each on the first it fits beside (the room a wide one
+	// leaves around its codes filled by narrower ones).
+	slices.SortStableFunc(order, func(a, b int) int { return start(a) - start(b) })
+	slot, phys, held, bytes := place(order, true)
+	slices.SortStableFunc(order, func(a, b int) int { return f.own[b].n - f.own[a].n })
+	if s, p, h, n := place(order, false); n < bytes {
+		slot, phys, held = s, p, h
+	}
+	f.slot, f.phys = slot, phys
 	// The passing buffers numbered widest first, so a scratch's arena of
 	// every form's (partArena) holds each form's widest in one buffer.
 	f.arenaAt = make([]int, len(f.phys))
 	var pass []int
-	for p, end := range free {
+	for p, hs := range held {
 		f.arenaAt[p] = -1
-		if end != len(f.codes) {
+		if hs != nil {
 			pass = append(pass, p)
 		}
 	}
@@ -668,6 +720,23 @@ func (f *partForm) share(paged bool) {
 	for j, p := range pass {
 		f.arenaAt[p] = j
 	}
+}
+
+// bandRows is a call's rows at each of which the form's codes run as a set
+// of their own (composer.Band.Runs): the capacity's call, each band's most
+// and the row past it.
+func (f *partForm) bandRows() []int {
+	at := []int{0}
+	for _, c := range f.codes {
+		for _, b := range [2]int{c.geom.Band.Upto, c.geom.Band.Past} {
+			for r := b; b > 0 && r <= b+1; r++ {
+				if !slices.Contains(at, r) {
+					at = append(at, r)
+				}
+			}
+		}
+	}
+	return at
 }
 
 // partArena is a scratch's buffers the prompt instances of every form at
