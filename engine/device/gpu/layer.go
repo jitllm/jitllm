@@ -5002,12 +5002,15 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 		// exactly as MigrateKV treats a block with no cache.
 		return true
 	}
-	if l.pool == nil || l.recC == 0 {
+	if l.pool == nil || l.recC == 0 && l.recS == 0 {
 		return false
 	}
 	// A batch hands every row's state back to back, row r at r*ConvState and
 	// r*StateLen: the seat's own layout, one slot a row.
-	rows := len(conv) / l.recC
+	rows := len(conv) / max(l.recC, 1)
+	if l.recC == 0 {
+		rows = len(state) / l.recS
+	}
 	if rows < 1 || len(conv) != rows*l.recC || len(state) != rows*l.recS {
 		g.fail(fmt.Sprintf("MigrateRec: block %d wants a multiple of %d conv and %d state floats, "+
 			"the caller offered %d and %d", li, l.recC, l.recS, len(conv), len(state)))
@@ -5080,9 +5083,11 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 	// writes 1-cur before anything reads it); writing both is defence, so no
 	// future caller depends on that parity argument.
 	for i := 0; i < 2; i++ {
-		if err := l.pool.c[i].WriteAt(st.base*l.recC*4, f32b(conv)); err != nil {
-			g.fail(fmt.Sprintf("MigrateRec: block %d conv half %d: %v", li, i, err))
-			return false
+		if len(conv) > 0 {
+			if err := l.pool.c[i].WriteAt(st.base*l.recC*4, f32b(conv)); err != nil {
+				g.fail(fmt.Sprintf("MigrateRec: block %d conv half %d: %v", li, i, err))
+				return false
+			}
 		}
 		if l.pool.s[i] == nil || len(state) == 0 {
 			continue // a shared pool's second half is the device's scratch
