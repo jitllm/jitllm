@@ -107,9 +107,10 @@ const mixedSpan = 64
 // kinds; every block there and half, at the
 // reserved width as placed and narrowed to 64 rows. The card's rows past
 // position 0 are held to the CPU's within three times the band a prompt's
-// run one submission holds reads on the same card. The mix is load-bearing:
-// the CPU's rows stand past the bound both from those of the model whose
-// every block reads the windows and from its own with no windows.
+// run one submission holds reads on the same card at the same reserved
+// width. The mix is load-bearing: at every width the CPU's rows stand past
+// the bound both from those of the model whose every block reads the
+// windows and from its own with no windows.
 func TestMixedWindowsMatchTheCPU(t *testing.T) {
 	m := mixedWindowsModel(t)
 	defer m.Close()
@@ -129,20 +130,21 @@ func TestMixedWindowsMatchTheCPU(t *testing.T) {
 		standEvery, standNone)
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g := openCentredCard(t, spec, 0)
-			band, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuPrompt[w:])
-			g.Close()
-			bound := centredBound * max(band, 1e-6)
-			t.Logf("%s: a prompt's run of %d rows, one submission, against the CPU's: NMSE %.3e", spec, ns, band)
-			if math.IsNaN(band) {
-				t.Fatalf("a run one submission holds reads NMSE %v on %s", band, spec)
-			}
-			if !(stand > bound) {
-				t.Fatalf("the mixed model's rows stand %.3e from those of a model whose every block reads the windows or none, inside the bound %.3e: the mix holds nothing to see",
-					stand, bound)
-			}
 			for _, rows := range []int{0, 64} {
 				g := openCentredCard(t, spec, rows)
+				// The band is the placement's own: a reserved width the
+				// projections' vector form serves runs int8 rows where the
+				// matrix form runs float ones.
+				band, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuPrompt[w:])
+				bound := centredBound * max(band, 1e-6)
+				t.Logf("%s, reserved %d: a prompt's run of %d rows, one submission, against the CPU's: NMSE %.3e", spec, rows, ns, band)
+				if math.IsNaN(band) {
+					t.Fatalf("a run one submission holds reads NMSE %v on %s, reserved %d", band, spec, rows)
+				}
+				if !(stand > bound) {
+					t.Fatalf("the mixed model's rows stand %.3e from those of a model whose every block reads the windows or none, inside the bound %.3e at reserved %d: the mix holds nothing to see",
+						stand, bound, rows)
+				}
 				for _, layers := range []int{m.Cfg.NLayer, m.Cfg.NLayer / 2} {
 					for _, arm := range []struct {
 						spans []model.Span
