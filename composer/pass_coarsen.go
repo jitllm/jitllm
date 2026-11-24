@@ -1085,7 +1085,13 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	// would land on the last output beside the real one.
 	whole := k.T%m.Group == 0
 	if k.host != nil {
-		whole = k.T == m.Group || k.perRow && k.P == m.Group || k.guard >= 0
+		// A workgroup holds one row's P units where the host is one a row:
+		// all T units filling the group says nothing about its threads.
+		units := k.T
+		if k.perRow {
+			units = k.P
+		}
+		whole = units == m.Group || k.guard >= 0
 	}
 	if whole && k.warp > 0 && m.Group%k.warp == 0 && slots&(slots-1) == 0 && k.lanes%slots == 0 {
 		v := acc
