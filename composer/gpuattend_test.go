@@ -34,7 +34,9 @@ type attendRowsCase struct {
 // rows [run[0], run[1]) that attend to the run's end, as a picture's rows
 // do, each window still starting from the row's own position; past 0,
 // extent biases each row's scores by backward distance (graph.Attrs.Extent),
-// and rowSinks takes a case's sinks from a row's input (graph.Attrs.RowSinks).
+// and rowSinks takes a case's sinks from a row's input (graph.Attrs.RowSinks);
+// typed holds keys and values as binary16 rows by position, a card's
+// binary16 history, and latent one such pool whose values are its keys.
 type attendInputs struct {
 	ctx      int
 	spread   float64
@@ -42,6 +44,8 @@ type attendInputs struct {
 	run      [2]int
 	extent   int
 	rowSinks bool
+	typed    bool
+	latent   bool
 }
 
 // TestComposedGPUAttendRows forms an appended history and the attention
@@ -84,6 +88,9 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{}},
 		{attendRowsCase{8, 2, 64, 0, true, false}, attendInputs{}},
 		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{}},
+		{attendRowsCase{16, 8, 256, 0, false, false}, attendInputs{}},
+		{attendRowsCase{16, 8, 256, 16, true, true}, attendInputs{}},
+		{attendRowsCase{8, 2, 256, 0, false, false}, attendInputs{ctx: 8192}},
 		{attendRowsCase{64, 8, 64, 16, true, false}, attendInputs{}},
 		{attendRowsCase{64, 8, 64, 0, true, false}, attendInputs{}},
 		{attendRowsCase{12, 4, 64, 16, false, false}, attendInputs{}},
@@ -105,6 +112,12 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		{attendRowsCase{10, 2, 80, 0, true, true}, attendInputs{extent: 37, rowSinks: true}},
 		{attendRowsCase{64, 8, 64, 0, true, false}, attendInputs{rowSinks: true}},
 		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{extent: 300, run: [2]int{5, 20}}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{typed: true}},
+		{attendRowsCase{12, 4, 64, 16, true, false}, attendInputs{typed: true}},
+		{attendRowsCase{12, 4, 64, 16, true, false}, attendInputs{typed: true, extent: 9, rowSinks: true}},
+		{attendRowsCase{16, 8, 256, 0, false, false}, attendInputs{typed: true, ctx: 8192}},
+		{attendRowsCase{8, 1, 64, 0, true, false}, attendInputs{latent: true}},
+		{attendRowsCase{16, 1, 576, 0, false, false}, attendInputs{latent: true}},
 	}
 	matrices, cuda := 0, false
 	for _, d := range devs {
@@ -119,8 +132,8 @@ func TestComposedGPUAttendRows(t *testing.T) {
 					matrices++
 				}
 				c, in := tc.c, tc.in
-				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d/extent%d/rowsinks%v", d.API(), matrix,
-					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1], in.extent, in.rowSinks)
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d/extent%d/rowsinks%v/typed%v/latent%v", d.API(), matrix,
+					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1], in.extent, in.rowSinks, in.typed, in.latent)
 				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, in, matrix) })
 			}
 		}
@@ -141,7 +154,17 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	}
 	keys := (p0 + R + 64*page - 1) / (64 * page) * 64 * page
 	b := graph.New()
-	n := b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
+	kIn := b.In("k", c.kvh*c.dim)
+	vIn := kIn
+	if !in.latent {
+		vIn = b.In("v", c.kvh*c.dim)
+	}
+	n := b.KVAppend(kIn, vIn, 0)
+	half := in.typed || in.latent
+	hist := composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: !c.f32v}}
+	if half {
+		hist = composer.History{Keys: composer.Pool{Half: true}, Values: composer.Pool{Half: true}, ValuesInKeys: in.latent}
+	}
 	var sinks []jlm.Role
 	rowSinks := c.sinks && in.rowSinks
 	if c.sinks && !rowSinks {
@@ -171,7 +194,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 		dev.Matrix = [3]int{16, 16, 16}
 	}
 	_, codes, err := composer.Default().Form(composer.Request{Graph: g, Step: composer.Step{Rows: capRows, Page: page, Keys: keys, Seqs: 1},
-		Device: dev, History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: !c.f32v}}})
+		Device: dev, History: hist})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +259,14 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	ks, vs := make([][]float32, p0+R), make([][]float32, p0+R)
 	for p := range p0 + R {
 		ks[p], vs[p] = factor(w, false), rnd(w, 1)
+		if half {
+			for e, x := range ks[p] {
+				ks[p][e] = float32(quant.DecodeHalf(quant.EncodeHalf(x)))
+			}
+		}
+		if in.latent {
+			vs[p] = ks[p]
+		}
 	}
 	q := factor(capRows*qw, true)
 	k, v := make([]float32, capRows*w), make([]float32, capRows*w)
@@ -248,11 +279,19 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	if c.f32v {
 		vpool = poisoned(keys / page * page * w)
 	}
+	if half {
+		kpool = poisoned(keys / page * page * w / 2)
+	}
 	for p := range p0 {
 		pg, off := p/page, p%page
 		for e := range w {
-			kpool[(pg*w+e)*page+off] = math.Float32bits(ks[p][e])
 			hv, i := uint32(quant.EncodeHalf(vs[p][e])), (pg*page+off)*w+e
+			if half {
+				hk := uint32(quant.EncodeHalf(ks[p][e]))
+				kpool[i/2] = kpool[i/2]&^(0xFFFF<<(16*(i%2))) | hk<<(16*(i%2))
+			} else {
+				kpool[(pg*w+e)*page+off] = math.Float32bits(ks[p][e])
+			}
 			switch {
 			case c.f32v:
 				vpool[i] = math.Float32bits(vs[p][e])
@@ -380,7 +419,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 			copy(rows[r*4:], []uint32{0, shift, e, p})
 			copy(win[r*4:], []uint32{0, uint32(first(r)) + shift, e, p})
 		}
-		vals := map[graph.ValueID][]uint32{g.In[0]: f32w(k), g.In[1]: f32w(v), g.In[2]: f32w(q), g.Out[0]: poisoned(capRows * qw)}
+		vals := map[graph.ValueID][]uint32{kIn: f32w(k), vIn: f32w(v), qIn: f32w(q), g.Out[0]: poisoned(capRows * qw)}
 		for i, x := range extra {
 			if i == 0 && in.extent > 0 {
 				vals[x] = f32w(bias)

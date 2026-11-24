@@ -41,7 +41,7 @@ func BenchmarkComposedFlash(t *testing.B) {
 		if d.API() != "ptx" {
 			continue
 		}
-		for _, c := range []attendRowsCase{{32, 8, 64, 0, false, false}, {32, 8, 128, 0, false, false}, {32, 8, 64, 0, false, true}, {32, 8, 128, 0, false, true}} {
+		for _, c := range []attendRowsCase{{32, 8, 64, 0, false, false}, {32, 8, 128, 0, false, false}, {32, 8, 64, 0, false, true}, {32, 8, 128, 0, false, true}, {16, 8, 256, 0, false, false}} {
 			for _, fl := range flashConfigs(t) {
 				dev := gpuDevice(d)
 				dev.Matrix = [3]int{16, 16, 16}
@@ -58,13 +58,35 @@ func BenchmarkComposedFlash(t *testing.B) {
 	}
 }
 
+// BenchmarkComposedFlashLatent is BenchmarkComposedFlash at a latent
+// attention's geometry, DeepSeek-V2-Lite's: 16 query heads over one kv head
+// whose binary16 row of 576 is its key and its value.
+//
+//	go test ./composer -run '^$' -bench ComposedFlashLatent -benchtime 1x
+func BenchmarkComposedFlashLatent(t *testing.B) {
+	testlock.GPU(t)
+	p0 := 1536
+	if v, err := strconv.Atoi(os.Getenv("JITLLM_FLASH_AT")); err == nil && v >= 0 {
+		p0 = v
+	}
+	for _, d := range openDevices() {
+		defer d.Close()
+		if d.API() != "ptx" {
+			continue
+		}
+		dev := gpuDevice(d)
+		dev.Matrix = [3]int{16, 16, 16}
+		flashRunWith(t, d, composer.Default(), dev, attendRowsCase{heads: 16, kvh: 1, dim: 576}, p0, 8, true, nil)
+	}
+}
+
 // TestFlashScaleAddIsTheSharedSum holds the flash form whose weighted sums
 // stay in tiles, each block's products added to them in one fused
 // multiply-add (Device.ScaleAdd), to the form that carries them through
 // workgroup memory: the same arithmetic, so every output word is equal, on
 // every CUDA device that lowers the row scale and does not carry sums in its
-// accumulator, at Llama's head width with float32 and binary16 values and a
-// chunk 13k positions in. The violation is the binary16 arm's values moved
+// accumulator, at Llama's head width and Gemma 3's (sliced, flashSlices),
+// with float32 and binary16 values and a chunk 13k positions in. The violation is the binary16 arm's values moved
 // by one ulp at one position the chunk attends.
 func TestFlashScaleAddIsTheSharedSum(t *testing.T) {
 	testlock.GPU(t)
@@ -76,7 +98,7 @@ func TestFlashScaleAddIsTheSharedSum(t *testing.T) {
 			continue
 		}
 		dev.Matrix = [3]int{16, 16, 16}
-		for _, c := range []attendRowsCase{{32, 8, 128, 0, false, true}, {32, 8, 128, 0, false, false}, {32, 8, 64, 0, false, false}} {
+		for _, c := range []attendRowsCase{{32, 8, 128, 0, false, true}, {32, 8, 128, 0, false, false}, {32, 8, 64, 0, false, false}, {16, 8, 256, 0, false, false}} {
 			for _, p0 := range []int{0, 12800} {
 				t.Run(fmt.Sprintf("%s/%dq%dkv%dd/f32values%v/at%d", d.Name(), c.heads, c.kvh, c.dim, c.f32v, p0), func(t *testing.T) {
 					shared := dev
@@ -87,7 +109,7 @@ func TestFlashScaleAddIsTheSharedSum(t *testing.T) {
 						t.Fatalf("%d of %d output words differ from the form that sums through workgroup memory", n, len(want))
 					}
 					if !c.f32v && p0 > 0 {
-						moved := flashRunWith(t, d, composer.Default(), dev, c, p0, 0, func(v []uint32) { v[len(v)/3] ^= 1 })
+						moved := flashRunWith(t, d, composer.Default(), dev, c, p0, 0, false, func(v []uint32) { v[len(v)/3] ^= 1 })
 						if differ(moved, want) == 0 {
 							t.Fatal("a value moved by one ulp changed no output word: the comparison sees nothing")
 						}
@@ -141,21 +163,30 @@ func flashRegistry(fl composer.Flash) *composer.Registry {
 // its output's words; with rounds past zero it logs each code's median
 // microseconds over that many rounds, and the kernels' resources.
 func flashRun(t testing.TB, d backend.Device, reg *composer.Registry, dev composer.Device, c attendRowsCase, p0, rounds int) []uint32 {
-	return flashRunWith(t, d, reg, dev, c, p0, rounds, nil)
+	return flashRunWith(t, d, reg, dev, c, p0, rounds, false, nil)
 }
 
 // flashRunWith is flashRun with the value history's words passed through
-// edit before they are written, where it is set.
-func flashRunWith(t testing.TB, d backend.Device, reg *composer.Registry, dev composer.Device, c attendRowsCase, p0, rounds int, edit func([]uint32)) []uint32 {
+// edit before they are written, where it is set; latent states a history
+// whose values are its keys' rows, one kv head of binary16 rows (MLA's).
+func flashRunWith(t testing.TB, d backend.Device, reg *composer.Registry, dev composer.Device, c attendRowsCase, p0, rounds int, latent bool, edit func([]uint32)) []uint32 {
 	const page, R, reps = 64, 512, 5
 	keys := (p0+R+page-1)/page*page + 2*page
 	b := graph.New()
-	n := b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
+	hist := composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: !c.f32v}}
+	var n int
+	if latent {
+		k := b.In("k", c.kvh*c.dim)
+		n = b.KVAppend(k, k, 0)
+		hist = composer.History{Keys: composer.Pool{Half: true}, Values: composer.Pool{Half: true}, ValuesInKeys: true}
+	} else {
+		n = b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
+	}
 	scale := 1 / math.Sqrt(float64(c.dim))
 	b.Out(b.Attend(b.In("q", c.heads*c.dim), n, graph.Attrs{NHead: c.heads, NKVHead: c.kvh, HeadDim: c.dim, Scale: scale}))
 	g := b.G
 	_, codes, err := reg.Form(composer.Request{Graph: g, Step: composer.Step{Rows: R, Page: page, Keys: keys, Seqs: 1},
-		Device: dev, History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: !c.f32v}}})
+		Device: dev, History: hist})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +208,13 @@ func flashRunWith(t testing.TB, d backend.Device, reg *composer.Registry, dev co
 	for i := range pages {
 		pages[i] = uint32(i)
 	}
-	vals := map[graph.ValueID][]uint32{g.In[0]: rnd(R * w), g.In[1]: rnd(R * w), g.In[2]: rnd(R * c.heads * c.dim), g.Out[0]: make([]uint32, R*c.heads*c.dim)}
+	vals := map[graph.ValueID][]uint32{}
+	for _, in := range g.In {
+		vals[in] = rnd(R * g.Values[in].Width)
+	}
+	vals[g.Out[0]] = make([]uint32, R*c.heads*c.dim)
 	vpool := rnd(keys * w)
-	if !c.f32v {
+	if !c.f32v || latent {
 		vpool = vpool[:keys*w/2]
 		for i, x := range vpool {
 			// Two binary16 values a word, each of a magnitude below one.
@@ -190,6 +225,9 @@ func flashRunWith(t testing.TB, d backend.Device, reg *composer.Registry, dev co
 		edit(vpool)
 	}
 	tables := map[string][]uint32{"rows": rows, "rows.n": {R}, "pages": pages, "kv.k": rnd(keys * w), "kv.v": vpool}
+	if latent {
+		tables["kv.k"] = vpool
+	}
 	var bufs []backend.Buf
 	defer func() {
 		for _, bf := range bufs {
