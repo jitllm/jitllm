@@ -2145,7 +2145,7 @@ input	model/front.go	"model: the marker head's block %d states no attention over
 input	model/front.go	"model: the marker head's block %d states no graph: convert the model again"
 input	model/front.go	"model: the stated %s: %w"
 input	model/front.go	"no block %d"
-input	model/front.go	"the container stores %v for block %d, which its stated graph does not bind"
+input	model/front.go	"the container stores %v for block %d, which no stated graph of its page binds"
 context	model/front.go	"the head"
 context	model/front.go	"the head's pick graph does not verify: %w"
 context	model/front.go	"the input rows"

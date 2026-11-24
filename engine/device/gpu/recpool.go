@@ -128,9 +128,10 @@ func (g *devTier) newRecPool(l *layer, slots int, shared bool, filled []recSeat)
 	var err error
 	for i := 0; i < 2 && err == nil; i++ {
 		if i == 0 || !shared {
-			// A short convolution keeps no state beside its window, and an
-			// empty buffer is no buffer on every backend: four bytes it never
-			// reads stand in.
+			// A short convolution keeps no state beside its window, a
+			// graph's state no window beside its state, and an empty buffer
+			// is no buffer on every backend: four bytes it never reads stand
+			// in.
 			if p.s[i], err = g.alloc(max(sB, 4)); err != nil {
 				break
 			}
@@ -138,7 +139,7 @@ func (g *devTier) newRecPool(l *layer, slots int, shared bool, filled []recSeat)
 				break
 			}
 		}
-		if p.c[i], err = g.alloc(cB); err != nil {
+		if p.c[i], err = g.alloc(max(cB, 4)); err != nil {
 			break
 		}
 		err = zero(p.c[i], l.recC)

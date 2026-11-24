@@ -33,7 +33,7 @@ type lines struct {
 }
 
 // Render is docs/models.md as the code makes it now. It fails when a name in
-// the converter's lists has no line in describe.go, or a line names nothing.
+// the converter's lists has no describe in the library, or a line names nothing.
 func Render() ([]byte, error) {
 	d, err := convert.Descriptions()
 	if err != nil {

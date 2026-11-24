@@ -40,7 +40,7 @@ func (g *devTier) recSeatOf(sid uint64, li int) (*layer, *recPair, recSeat, bool
 	l := g.layers[li]
 	rp := l.recOf(sid)
 	st, ok := g.recSeats[sid]
-	if l == nil || rp == nil || !ok || st.rows != 1 || l.pool == nil || l.recC == 0 {
+	if l == nil || rp == nil || !ok || st.rows != 1 || l.pool == nil || l.recC == 0 && l.recS == 0 {
 		return nil, nil, recSeat{}, false
 	}
 	return l, rp, st, true
@@ -69,7 +69,9 @@ func (g *devTier) snapRec(sid uint64, li int, key string) bool {
 	}
 	// Queued, and run with the rest of the point's blocks in one call
 	// (flushSnaps).
-	g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.c, Src: l.pool.c[rp.cur], SrcOff: st.base * l.recC * 4, N: l.recC * 4})
+	if l.recC > 0 {
+		g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.c, Src: l.pool.c[rp.cur], SrcOff: st.base * l.recC * 4, N: l.recC * 4})
+	}
 	if l.recS > 0 {
 		g.snapList = append(g.snapList, backend.CopyRange{Dst: sn.s, Src: l.pool.s[sh], SrcOff: st.base * l.recS * 4, N: l.recS * 4})
 	}
@@ -156,9 +158,11 @@ func (g *devTier) loadRec(sid uint64, li int, key string) bool {
 		return false
 	}
 	for i := 0; i < 2; i++ {
-		if err := g.dev.Copy(l.pool.c[i], st.base*l.recC*4, sn.c, 0, l.recC*4); err != nil {
-			g.fail("LoadRec: " + err.Error())
-			return false
+		if l.recC > 0 {
+			if err := g.dev.Copy(l.pool.c[i], st.base*l.recC*4, sn.c, 0, l.recC*4); err != nil {
+				g.fail("LoadRec: " + err.Error())
+				return false
+			}
 		}
 		if l.pool.s[i] == nil || l.recS == 0 {
 			continue

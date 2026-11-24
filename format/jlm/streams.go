@@ -140,7 +140,7 @@ func (u *SubStreams) valid(n uint8, where string) error {
 			return fmt.Errorf("jlm: %s writes a stream through a program of %d inputs, want %d", where, p.NIn,
 				2+len(u.Exports)+post)
 		}
-		if err := p.valid(where); err != nil {
+		if err := p.validOrInput(where); err != nil {
 			return err
 		}
 	}
@@ -156,18 +156,23 @@ func (u *SubStreams) valid(n uint8, where string) error {
 		if p == nil {
 			continue
 		}
-		// A program may return one of its inputs as it is, with no op.
-		if len(p.Ops) == 0 {
-			if p.Out >= p.NIn {
-				return fmt.Errorf("jlm: %s returns value %d of %d", where, p.Out, p.NIn)
-			}
-			continue
-		}
-		if err := p.valid(where); err != nil {
+		if err := p.validOrInput(where); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validOrInput is valid, but for a program of no op, which returns one of
+// its inputs as it is.
+func (p *Program) validOrInput(where string) error {
+	if len(p.Ops) == 0 {
+		if p.Out >= p.NIn {
+			return fmt.Errorf("jlm: %s returns value %d of %d", where, p.Out, p.NIn)
+		}
+		return nil
+	}
+	return p.valid(where)
 }
 
 func encodeStreams(w *wbuf, s *Streams) {

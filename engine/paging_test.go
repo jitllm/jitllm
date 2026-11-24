@@ -45,7 +45,7 @@ func principleModels() []string {
 // TestMoEFamiliesPageWithTheSameAnswer.
 func principleMixtures() []string {
 	names := []string{"synth-dbrx.gguf", "synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix,
-		"synth-qwen2moe.gguf" + loopSuffix}
+		"synth-qwen2moe.gguf" + loopSuffix, "synth-hf-inkling2"}
 	for _, fx := range moe2Fixtures() {
 		names = append(names, fx.name+".gguf")
 	}

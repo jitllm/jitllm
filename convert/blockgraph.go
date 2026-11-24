@@ -28,6 +28,9 @@ type mjGraph struct {
 	Block []mjBlockOp `json:"block"`
 	// Streams is the residual's streams the blocks mix (streamstates.go).
 	Streams *mjStreams `json:"streams"`
+	// Facts are the graph's own facts of a block, each a name and an
+	// expression over the block's facts and the facts before it, in order.
+	Facts [][2]string `json:"facts"`
 	// exprs are its expressions compiled, by their text (check).
 	exprs map[string]*jinja.Expr
 }
@@ -268,6 +271,23 @@ func states() map[string]graph.State {
 func (g *mjGraph) check(names tensorNames) error {
 	if len(g.Block) == 0 {
 		return fmt.Errorf("a graph states no block")
+	}
+	known := (&blockFacts{c: &jlm.Config{}}).vars()
+	for i, f := range g.Facts {
+		_, fact := known[f[0]]
+		if f[0] == "" || fact || slices.ContainsFunc(g.Facts[:i], func(e [2]string) bool { return e[0] == f[0] }) {
+			return fmt.Errorf("fact %d names %q, which is a block's fact already or no name", i, f[0])
+		}
+		if err := g.compile(f[1]); err != nil {
+			return fmt.Errorf("fact %s: %w", f[0], err)
+		}
+		if x := g.exprs[f[1]]; x != nil {
+			for _, n := range x.Names() {
+				if j := slices.IndexFunc(g.Facts, func(e [2]string) bool { return e[0] == n }); j >= i {
+					return fmt.Errorf("fact %s reads %s, which is not stated before it", f[0], n)
+				}
+			}
+		}
 	}
 	for i, u := range g.Use {
 		if u.If == "" || u.Graph == "" {
@@ -613,7 +633,7 @@ func (g *mjGraph) compile(src string, runs ...string) error {
 	known := (&blockFacts{c: &jlm.Config{}}).vars()
 	for _, n := range x.Names() {
 		// range is the expression language's own.
-		if _, ok := known[n]; !ok && !slices.Contains(runs, n) && n != "range" {
+		if _, ok := known[n]; !ok && !slices.Contains(runs, n) && n != "range" && !g.statesFact(n) {
 			return fmt.Errorf("expression %q reads %q, which is not a fact of a block", src, n)
 		}
 	}
@@ -622,6 +642,24 @@ func (g *mjGraph) compile(src string, runs ...string) error {
 	}
 	g.exprs[src] = x
 	return nil
+}
+
+// statesFact reports whether the graph states a fact named n.
+func (g *mjGraph) statesFact(n string) bool {
+	return slices.ContainsFunc(g.Facts, func(f [2]string) bool { return f[0] == n })
+}
+
+// withFacts is vars with the graph's own facts added, each over the ones
+// before it.
+func (g *mjGraph) withFacts(vars map[string]jinja.Value) (map[string]jinja.Value, error) {
+	for _, f := range g.Facts {
+		v, err := g.value(f[1], vars)
+		if err != nil {
+			return nil, fmt.Errorf("fact %s: %w", f[0], err)
+		}
+		vars[f[0]] = v
+	}
+	return vars, nil
 }
 
 // value is expression src's value over a block's facts.
@@ -717,11 +755,19 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, tak
 	n := int(c.NLayer + c.HeadBlocks() + np)
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
+	// A page's tensors are bound by one of the blocks reading it: a looped
+	// layer's later passes may read what its first does not.
+	unbound := map[int][]jlm.Role{}
 	for li := range n {
-		bg, err := blockGraphOf(c.Config, s, li, g, used, src, names, taken)
+		bg, u, err := blockGraphOf(c.Config, s, li, g, used, src, names, taken)
 		if err != nil {
 			return fmt.Errorf("convert: block %d's stated graph: %w", li, err)
 		}
+		pg := c.PageOf(li)
+		if prev, ok := unbound[pg]; ok {
+			u = slices.DeleteFunc(u, func(r jlm.Role) bool { return !slices.Contains(prev, r) })
+		}
+		unbound[pg] = u
 		b, err := graph.Encode(bg)
 		if err != nil {
 			return err
@@ -736,6 +782,11 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value, tak
 			out.Graphs = append(out.Graphs, string(b))
 		}
 		out.Of = append(out.Of, i)
+	}
+	for li := range n {
+		if u := unbound[c.PageOf(li)]; len(u) != 0 {
+			return fmt.Errorf("convert: block %d's stated graph: the block stores %v, which no graph of its page binds", li, u)
+		}
 	}
 	c.Blocks = out
 	return nil
@@ -785,13 +836,17 @@ func usedGraphs(g *mjGraph) ([]*mjGraph, error) {
 // (g.Use's graphs) whose condition holds for it, each feature it takes added
 // to taken where that is not nil.
 func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGraph, src jinja.Value, names tensorNames,
-	taken map[string]bool) (*graph.Graph, error) {
+	taken map[string]bool) (*graph.Graph, []jlm.Role, error) {
 	bf := blockFactsOf(c, s, li, names)
 	bf.src = src
+	uses, err := g.withFacts(bf.vars())
+	if err != nil {
+		return nil, nil, err
+	}
 	for i, u := range g.Use {
-		on, err := g.flag(u.If, bf.vars())
+		on, err := g.flag(u.If, uses)
 		if err != nil {
-			return nil, fmt.Errorf("use %d: %w", i, err)
+			return nil, nil, fmt.Errorf("use %d: %w", i, err)
 		}
 		if on {
 			g = used[i]
@@ -803,15 +858,12 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 	}
 	b := graph.NewBlock(li)
 	if err := g.run(b, g.Block, bf, li, taken); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := graph.Verify(b.G, bf.facts); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if u := graph.Unbound(b.G, bf.facts); len(u) != 0 {
-		return nil, fmt.Errorf("the block stores %v, which its graph does not bind", u)
-	}
-	return b.G, nil
+	return b.G, graph.Unbound(b.G, bf.facts), nil
 }
 
 // run emits steps into b over bf's facts as block li's, each feature a step
@@ -822,7 +874,10 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 	marks := map[string]int{}
 	lists := map[string][]graph.ValueID{}
 	codes := map[graph.ValueID][2]graph.ValueID{}
-	facts := bf.vars()
+	facts, err := g.withFacts(bf.vars())
+	if err != nil {
+		return err
+	}
 	vars := facts
 	num := func(x string) (float64, error) { return g.num(x, vars) }
 	ops, err := g.unrolled(steps, facts, nil)
@@ -1177,6 +1232,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 			if err != nil {
 				return fmt.Errorf("op %d (stream_writes): %w", i, err)
 			}
+			unalias(b, out)
 			lists[o.Out] = out
 			continue
 		case "stream_join":
@@ -1237,6 +1293,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 				}
 				out[k] = bank
 			}
+			unalias(b, out)
 			b.Out(out...)
 			continue
 		}
@@ -1777,6 +1834,22 @@ func fnNamed(name string) jlm.Fn {
 		}
 	}
 	return 0
+}
+
+// unalias writes a copy into each stream of xs, a block's streams, that
+// holds another stream's input or a value an earlier stream holds: a
+// stream's input and output are one buffer, so a value two streams hold
+// would be written to one of them alone. A copy taken where the streams are
+// written reads the input before any output is written over it.
+func unalias(b *graph.Builder, xs []graph.ValueID) {
+	for k, v := range xs {
+		j := slices.Index(b.G.In, v)
+		if (j < 0 || j == k || j >= len(xs)) && slices.Index(xs, v) == k {
+			continue
+		}
+		w := b.G.Values[v].Width
+		xs[k] = b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: "stream", Width: w}}, nil, graph.Attrs{Width: w}, nil, nil)[0]
+	}
 }
 
 // blockFacts are what a block's graph is stated over: the block's tensors

@@ -75,8 +75,9 @@ func TestSafetensorsQ8MatchTransformers(t *testing.T) {
 				t.Fatalf("WithQ8 left %d quantizable matrices float and quantized %d", float, q8)
 			}
 			// A position over the bound is excused only where some mixture
-			// block chose other experts than the float container did there: a
-			// top-k is the one discontinuity a rounding may legitimately cross.
+			// block chose other experts than the float container did, there or
+			// at a position before it, whose rows it attends to: a top-k is the
+			// one discontinuity a rounding may legitimately cross.
 			q8Logits, q8Sel := runTraced(t, dst, gold.IDs)
 			var fSel [][]string
 			worst, over := 0.0, 0
@@ -103,15 +104,17 @@ func TestSafetensorsQ8MatchTransformers(t *testing.T) {
 					_, fSel = runTraced(t, fdst, gold.IDs)
 				}
 				flipped := ""
-				for l := range q8Sel[p] {
-					if q8Sel[p][l] != fSel[p][l] {
-						flipped += fmt.Sprintf(" block %d float %s, Q8 %s;", l, fSel[p][l], q8Sel[p][l])
+				for at := p; at >= 0 && flipped == ""; at-- {
+					for l := range q8Sel[at] {
+						if q8Sel[at][l] != fSel[at][l] {
+							flipped += fmt.Sprintf(" pos %d block %d float %s, Q8 %s;", at, l, fSel[at][l], q8Sel[at][l])
+						}
 					}
 				}
 				if flipped == "" {
 					t.Errorf("pos %d: NMSE %.3e against transformers (bound %.0e), and every mixture "+
-						"block chose the float container's experts there, so it is not a top-k flip",
-						p, nmse, hfQ8NMSE)
+						"block chose the float container's experts there and at every position before it, "+
+						"so it is not a top-k flip", p, nmse, hfQ8NMSE)
 					continue
 				}
 				t.Logf("pos %d: NMSE %.3e against transformers (bound %.0e), a top-k flip:%s",

@@ -544,7 +544,7 @@ func TestMoEFamiliesPageWithTheSameAnswer(t *testing.T) {
 // stays put while the blocks' and the experts' pages are evicted and read
 // back, and every logit is the resident run's.
 func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
-	for _, name := range []string{"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix} {
+	for _, name := range []string{"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix, "synth-hf-inkling2"} {
 		t.Run(name, func(t *testing.T) {
 			src := jlmOf(t, testmodels.Path(name))
 			m, err := model.Open(src)

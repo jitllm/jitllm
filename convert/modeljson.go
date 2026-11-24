@@ -328,7 +328,18 @@ type mjTensor struct {
 	// If, a GGUF table's, is an expression over the GGUF's keys: the tensor
 	// is cut where it holds and kept as it is where it does not.
 	If string `json:"if"`
+	// Block, Each and Where place a model-level source's target in a block,
+	// a class's model table's: Block is the block it belongs to, Each a
+	// count of targets cut from the source (i 0 first), Where a condition the
+	// target is cut under, each an expression over the config and i, i being
+	// also the index a name's {i} matches.
+	Block string `json:"block"`
+	Each  string `json:"each"`
+	Where string `json:"where"`
 }
+
+// placed reports whether a target is placed in a block.
+func (t mjTensor) placed() bool { return t.Block != "" || t.Each != "" || t.Where != "" }
 
 func (t *mjTensor) UnmarshalJSON(b []byte) error {
 	var s string
@@ -815,11 +826,20 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		return nil
 	}
 	for n, ts := range mj.Tensors.Model {
+		if strings.Contains(n, "{i}") || slices.ContainsFunc(ts, mjTensor.placed) {
+			if err := mj.addPlaced(a, st, n, ts, retarget); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if err := addAll(a.model, n, ts); err != nil {
 			return nil, err
 		}
 	}
 	for n, ts := range mj.Tensors.Block {
+		if slices.ContainsFunc(ts, mjTensor.placed) {
+			return nil, fmt.Errorf("convert: %s: block tensor %s is placed in a block, which a model tensor is", mj.name, n)
+		}
 		if err := addAll(a.block, n, ts); err != nil {
 			return nil, err
 		}
@@ -1449,10 +1469,12 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 		kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 	}
-	cfg, err := classConfigOf(meta.New(c.path, kvs, ts))
+	mapped := meta.New(c.path, kvs, ts)
+	cfg, err := classConfigOf(mapped)
 	if err != nil {
 		return nil, err
 	}
+	cfg.keys = ggufKeys(mapped)
 	// A stated shared-expert width holds the checkpoint to it: a graph that
 	// takes the width off the tensor would run whatever ships, where the class
 	// builds the width its config states.
@@ -1709,6 +1731,14 @@ func (mj *modelJSON) modelStandIns(env exprEnv, shapes map[string][]uint64, name
 	for _, n := range names {
 		shape := shapes[n]
 		if shape == nil {
+			continue
+		}
+		if pts, at, ok := mj.placedTargets(n); ok {
+			more, err := placedStandIns(env, n, shape, pts, at, have)
+			if err != nil {
+				return nil, err
+			}
+			ts = append(ts, more...)
 			continue
 		}
 		for _, t := range mj.Tensors.Model[n] {

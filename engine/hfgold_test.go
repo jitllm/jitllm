@@ -184,6 +184,7 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 			st := testInstance(t, m, len(gold.IDs)+1, instOpts...)
 			defer st.Close()
 			worst := 0.0
+			bound := hfNMSE
 			for p, id := range gold.IDs {
 				lg, err := st.Forward(id)
 				if err != nil {
@@ -204,8 +205,8 @@ func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 					}
 				}
 				// Non-finite first: NaN > bound is false.
-				if math.IsNaN(nmse) || math.IsInf(nmse, 0) || nmse > hfNMSE {
-					t.Fatalf("pos %d: NMSE %.3e against transformers (bound %.0e)", p, nmse, hfNMSE)
+				if math.IsNaN(nmse) || math.IsInf(nmse, 0) || nmse > bound {
+					t.Fatalf("pos %d: NMSE %.3e against transformers (bound %.0e)", p, nmse, bound)
 				}
 				if best != want.Argmax {
 					t.Errorf("pos %d: argmax %d, transformers %d (max %.4f, ours %.4f)",

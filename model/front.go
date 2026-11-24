@@ -683,6 +683,34 @@ func (m *Model) storesHeadMix(li int) bool {
 	return false
 }
 
+// unboundOnPage is what the container stores for block li that neither its
+// graph g nor the graph of another block reading the same page binds: a
+// looped block's tensors may be read on one of its passes only.
+func (m *Model) unboundOnPage(li int, g *graph.Graph, f graph.Facts) []jlm.Role {
+	u := graph.Unbound(g, f)
+	c := m.Container.Config()
+	for lj := range c.WeightsOf {
+		if len(u) == 0 {
+			break
+		}
+		if lj == li || c.PageOf(lj) != c.PageOf(li) {
+			continue
+		}
+		s := c.Blocks.Graph(lj)
+		fj, why := m.blockFacts(lj)
+		if s == "" || why != Covered {
+			continue
+		}
+		gj, err := graph.Decode([]byte(s), lj, fj)
+		if err != nil {
+			continue
+		}
+		left := graph.Unbound(gj, f)
+		u = slices.DeleteFunc(u, func(r jlm.Role) bool { return !slices.Contains(left, r) })
+	}
+	return u
+}
+
 // statedBlockGraph is block li's graph as the converter states it (s,
 // graph.Encode's), held to what the container stores for the block as a
 // graph built here is.
@@ -695,8 +723,8 @@ func (m *Model) statedBlockGraph(li int, s string) (*graph.Graph, Uncovered, err
 	if err != nil {
 		return nil, UncoveredUnverified, err
 	}
-	if u := graph.Unbound(g, f); len(u) != 0 {
-		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for block %d, which its stated graph does not bind", u, li)
+	if u := m.unboundOnPage(li, g, f); len(u) != 0 {
+		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for block %d, which no stated graph of its page binds", u, li)
 	}
 	// A graph stated before its attention carried the key-run rule decodes
 	// it as false, which on a layer the container keeps causal over a
