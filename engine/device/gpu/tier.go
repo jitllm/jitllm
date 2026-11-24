@@ -2489,7 +2489,6 @@ func (g *devTier) Close() {
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
 	g.quiesce()
-	g.freeConvs()
 	g.partsClose()
 	g.freeMarks()
 	for _, ds := range g.sess {

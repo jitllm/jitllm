@@ -1164,6 +1164,9 @@ func (g *devTier) dropPromptInst(bs *blockScratch, f *partForm) {
 // partsClose frees every lane's served parts and every form. Callers hold
 // g.mu.
 func (g *devTier) partsClose() {
+	// A page conversion's forms are among them: it goes too, and the next
+	// placement forms it again (formConv).
+	g.freeConvs()
 	g.eachLane(func(l *lane) { g.dropLaneParts(l) })
 	for k, f := range g.servedForms {
 		f.close()
@@ -3195,7 +3198,12 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	// A ragged step's tokens at each width the lane holds a scratch for.
 	if !g.NoPromptPrewarm && bs != nil && bs.sampleGraph != nil {
 		g.prewarming = true
-		for w := range g.bbs {
+		for w, bb := range g.bbs {
+			// Over the rows the per-row logits hold (headRows), as the step
+			// samples them (bs.ragRows).
+			if bb != nil && bs.head != nil {
+				w = g.headRows(bb, bs.head.nrows)
+			}
 			if _, err := g.servedSampleAt(bs.sampleGraph, w); err != nil {
 				g.fail("the composed rows sample: " + err.Error())
 			}
@@ -3264,12 +3272,31 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		}
 	}
 	// A head over rows at each width the lane holds a scratch for, its rows
-	// a call's (composer.CallRows): a step of any count of wanted rows forms
-	// nothing.
-	for w := range g.bbs {
+	// a call's (composer.CallRows) and no more than the per-row logits hold
+	// (headRows): a step of any count of wanted rows forms nothing.
+	// A width past them takes its wanted rows a chunk at a time into a
+	// staging set of the head's rows (headChunk), the take formed here too.
+	for w, bb := range g.bbs {
+		H := w
+		if bb != nil {
+			H = g.headRows(bb, bs.head.nrows)
+		}
 		for _, f := range bs.heads {
-			if _, err := g.servedHead(bs, f, bs.hVecs, w); err != nil {
+			if _, err := g.servedHead(bs, f, bs.hVecs, H); err != nil {
 				g.fail("the composed rows head: " + err.Error())
+				return
+			}
+		}
+		if bb != nil && H < bb.rows {
+			if bb.headReq == nil {
+				var err error
+				if bb.headReq, err = g.alloc(4 * (composer.RequestRows + H)); err != nil {
+					g.fail(fmt.Sprintf("the composed take of %d of %d rows: its request: %v", H, bb.rows, err))
+					return
+				}
+			}
+			if _, err := g.servedRowTakeOf(bb.headReq, bs.p.NEmbd, bb.rows, H); err != nil {
+				g.fail(fmt.Sprintf("the composed take of %d of %d rows: %v", H, bb.rows, err))
 				return
 			}
 		}
