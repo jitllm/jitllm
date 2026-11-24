@@ -119,7 +119,9 @@ const recomputeReads = 2
 // recomputed is the kernels of ks after ks[i] that read its output, where
 // ks[i] is a map of no loops storing one value of the part's own at its
 // element and not itself a map run in another, every reader is a map of no
-// loops reading it at coordinates, at most recomputeReads of them, and no
+// loops reading it at coordinates, at most recomputeReads of them, or a
+// row's work (WorkRow) reading it at most that many times a loop over the
+// row -- a row factor's scale and its halves, each a pair a trip -- and no
 // kernel from ks[i] to its last reader writes what ks[i] reads.
 func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 	pk := ks[i]
@@ -138,7 +140,8 @@ func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 			continue
 		}
 		c := ks[j]
-		if j < i || c.Cut.Sums || c.Kind != PrimMap && (mapsOnly || c.Kind != PrimReduce) || c.Work || c.Kind == PrimMap && len(c.Loops) != 0 || c.Part != pk.Part || c.Of != pk.Of || c.writes(o) {
+		row := c.Work && slices.Contains(c.Passes, WorkRow{}.Name())
+		if j < i || c.Cut.Sums || c.Kind != PrimMap && (mapsOnly || c.Kind != PrimReduce) || c.Work && !row || c.Kind == PrimMap && len(c.Loops) != 0 || c.Part != pk.Part || c.Of != pk.Of || c.writes(o) {
 			return nil, false
 		}
 		reads := 0
@@ -150,6 +153,10 @@ func recomputed(ks []*Kernel, i int, mapsOnly bool) ([]int, bool) {
 			if !viewOf(c.Bufs[nd.Buf], nd, pk.Space) {
 				return nil, false
 			}
+		}
+		if row && reads <= recomputeReads*len(c.Loops) && !again {
+			readers = append(readers, j)
+			continue
 		}
 		if reads > recomputeReads || again && reads > 1 || c.Kind == PrimReduce && reads > 1 {
 			return nil, false
