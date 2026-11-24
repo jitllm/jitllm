@@ -79,6 +79,10 @@ type cudaDev struct {
 	queued    map[int64]qRef
 	nQueued   atomic.Int32
 	queues    map[*cudaQueue]bool
+	// idle is streams closed queues left drained, each with its staging
+	// arena, for the next NewQueue: a session that opens and closes a queue
+	// makes neither a stream nor page-locked memory. Close destroys them.
+	idle []*cudaQueue
 	// posted routes every call through the owner goroutine instead of running
 	// it inline; Opts.CUDAPosted, fixed at open.
 	posted bool
@@ -959,7 +963,13 @@ func (c *cudaDev) Close() {
 				q.stage = nil
 			}
 		}
-		c.queues = nil
+		for _, q := range c.idle {
+			q.st.Destroy()
+			if q.stage != nil {
+				c.drv.FreeHost(q.stage)
+			}
+		}
+		c.queues, c.idle = nil, nil
 		c.qmu.Unlock()
 		c.d.Close()
 		close(done)
@@ -1510,13 +1520,21 @@ func (c *cudaDev) NewQueue() (Queue, error) {
 	if !c.drv.QueuesAvailable() {
 		return nil, fmt.Errorf("backend: cuda: this driver has no non-blocking streams")
 	}
-	var st *cuda.Stream
-	var err error = errCUDAClosed
-	c.do(func() { st, err = c.d.NewQueue() })
-	if err != nil {
-		return nil, err
+	var q *cudaQueue
+	c.qmu.Lock()
+	if n := len(c.idle); n > 0 && c.queues != nil {
+		q, c.idle = c.idle[n-1], c.idle[:n-1]
 	}
-	q := &cudaQueue{c: c, st: st}
+	c.qmu.Unlock()
+	if q == nil {
+		var st *cuda.Stream
+		var err error = errCUDAClosed
+		c.do(func() { st, err = c.d.NewQueue() })
+		if err != nil {
+			return nil, err
+		}
+		q = &cudaQueue{c: c, st: st}
+	}
 	c.ctr.ownedQueues.Add(1)
 	c.qmu.Lock()
 	if c.queues == nil {
@@ -1527,7 +1545,9 @@ func (c *cudaDev) NewQueue() (Queue, error) {
 	return q, nil
 }
 
-// Close destroys the stream, after everything queued on it.
+// Close ends the queue after everything queued on it. Its stream, drained,
+// and its staging arena go to the device's idle streams for a later
+// NewQueue (cudaDev.idle); one that did not drain is destroyed.
 func (q *cudaQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -1541,7 +1561,15 @@ func (q *cudaQueue) Close() {
 		return // the device closed it
 	}
 	c.do(func() {
-		q.st.Sync()
+		drained := q.st.Sync() == nil
+		c.qmu.Lock()
+		if drained && c.queues != nil {
+			c.idle = append(c.idle, &cudaQueue{c: c, st: q.st, stage: q.stage})
+			q.stage = nil
+			c.qmu.Unlock()
+			return
+		}
+		c.qmu.Unlock()
 		q.st.Destroy()
 		if q.stage != nil {
 			q.c.drv.FreeHost(q.stage)
