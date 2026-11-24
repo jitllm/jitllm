@@ -64,7 +64,7 @@ func TestHistoryTakesTheLeasingInstancesFormat(t *testing.T) {
 				// Served after the prefill instance, the generation one took its
 				// binary16; a device attached after serving steps an empty cache
 				// down to float32 (SetDeviceLayers), as this does.
-				g.With(func(in *Instance) { in.stepDownKVToF32() })
+				g.With(func(in *Instance) { in.setKVFmt(nn.KVF32) })
 				if p.kvFmt != nn.KVF16 || g.kvFmt != nn.KVF32 {
 					t.Fatalf("the instances' histories are %v and %v, want f16 and f32: the formats never differ", p.kvFmt, g.kvFmt)
 				}

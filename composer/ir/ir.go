@@ -206,7 +206,8 @@ const (
 	OpDepExit
 	OpOr
 	// OpTileScale is accumulator tile Args[0] with each row r times
-	// element Args[2]+r of the shared array Args[1].
+	// element Args[2]+r of the shared array Args[1], plus accumulator
+	// Vargs[0] in the same fused multiply-add where it has one.
 	OpTileScale
 	// OpPackHalves is the low binary16 halves of Args[0] and Args[1] in one
 	// u32, Args[0]'s low; with Imm 1 their high halves.

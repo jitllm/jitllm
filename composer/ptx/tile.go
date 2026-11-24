@@ -601,8 +601,9 @@ func (tl *tileLower) voltaAccess(o ir.Op, base Reg, offset, stride Reg, store []
 }
 
 // scale is accumulator rs of t with each element times the f32 word of
-// shared array base at offset plus the element's row.
-func (tl *tileLower) scale(t ir.TileType, rs []Reg, base, offset Reg) []Reg {
+// shared array base at offset plus the element's row, and where add holds
+// an accumulator of t, its element added in the same fused multiply-add.
+func (tl *tileLower) scale(t ir.TileType, rs []Reg, base, offset Reg, add []Reg) []Reg {
 	b := tl.b
 	out := tl.fresh(t)
 	type rowAt struct {
@@ -620,6 +621,10 @@ func (tl *tileLower) scale(t ir.TileType, rs []Reg, base, offset Reg) []Reg {
 			f = b.Reg(F32)
 			b.Op("ld.shared.f32 %v,[%v+%d];", f, a, 4*c)
 			factor[rowAt{l, c}] = f
+		}
+		if add != nil {
+			b.Op("fma.rn.f32 %v,%v,%v,%v;", out[n], rs[n], f, add[n])
+			return
 		}
 		b.Op("mul.rn.f32 %v,%v,%v;", out[n], rs[n], f)
 	}

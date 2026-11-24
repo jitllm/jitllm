@@ -342,7 +342,7 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 		return nil, false
 	}
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
-		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, windowed: windowed}
+		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, scaleAdd: d.ScaleAdd && !d.ScaleRows, windowed: windowed}
 	return b.kernel(), true
 }
 
@@ -378,8 +378,11 @@ type flashBuild struct {
 	first, warpRow  int
 	minus, zero     int
 	tq, tr          map[int]int
-	// scale keeps the weighted sums in accumulators (Device.ScaleRows).
+	// scale keeps the weighted sums in accumulators (Device.ScaleRows), and
+	// scaleAdd keeps them in tiles each block's products are added to
+	// (Device.ScaleAdd).
 	scale    bool
+	scaleAdd bool
 	sums     []int
 	windowed bool
 	own0     int
@@ -519,7 +522,7 @@ func (b *flashBuild) kernel() *Kernel {
 // descriptor addressing the history.
 func (b *flashBuild) stageBlock() {
 	U, m, g := ir.U32, b.m, b.g
-	if b.scale {
+	if b.scale || b.scaleAdd {
 		// The trip before multiplied its block after its last barrier.
 		m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
 	}
@@ -667,14 +670,23 @@ func (b *flashBuild) weighted() {
 		acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
 		return m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
 	}
-	if b.scale {
+	if b.scale || b.scaleAdd {
 		alpha := m.bin(OpAdd, U, b.warpRow, m.u32(g.sOff+2*(g.TR+1)))
 		var sums []int
 		for j := 0; j < b.Dv/b.tn; j++ {
 			f := m.add(Node{Op: OpFold, Type: ir.Void, At: b.P, B: b.zero, Tile: &cT})
-			acc := m.add(Node{Op: OpTileScale, Type: ir.Void, A: f, B: alpha, Buf: b.st, Tile: &cT})
-			for s := range steps {
-				acc = products(acc, s, j)
+			var acc int
+			if b.scale {
+				acc = m.add(Node{Op: OpTileScale, Type: ir.Void, A: f, B: alpha, Buf: b.st, Tile: &cT})
+				for s := range steps {
+					acc = products(acc, s, j)
+				}
+			} else {
+				blk := b.zero
+				for s := range steps {
+					blk = products(blk, s, j)
+				}
+				acc = m.add(Node{Op: OpTileScaleAdd, Type: ir.Void, A: f, B: alpha, C: blk, Buf: b.st, Tile: &cT})
 			}
 			m.Nodes[f].A = acc
 			sums = append(sums, f)

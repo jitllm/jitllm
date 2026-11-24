@@ -43,8 +43,9 @@ type kvGeom struct {
 	pool   composer.Pool
 }
 
-// typed is a geometry holding a quantized or bfloat16 history's words.
-func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.BF16 }
+// typed is a geometry holding a quantized, binary16 or bfloat16 history's
+// words.
+func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.Half }
 
 // kWords and vWords are one page's K and V in 32-bit words.
 func (k kvGeom) kWords(p int) int {

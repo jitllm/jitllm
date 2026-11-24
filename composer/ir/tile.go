@@ -205,6 +205,21 @@ func (b *Builder) TileScaleRows(t, buf, offset Value) Value {
 	return b.emit(Op{Kind: OpTileScale, Type: Void, Tile: &r, Args: [3]Value{t, buf, offset}})
 }
 
+// TileScaleRowsAdd is TileScaleRows(t, buf, offset) plus accumulator u, each
+// element one fused multiply-add: a running sum rescaled and a block's
+// products added without the matrix unit's own accumulate.
+func (b *Builder) TileScaleRowsAdd(t, buf, offset, u Value) Value {
+	tt := b.tileTypeOf(t)
+	if tt == nil || tt.Use != TileAcc || tt.Elem != TileF32 {
+		b.fail("ir: TileScaleRowsAdd: the scaled value is not a float32 accumulator")
+	}
+	if ut := b.tileTypeOf(u); ut == nil || *ut != *tt {
+		b.fail("ir: TileScaleRowsAdd: the added value is not an accumulator of the scaled one's type")
+	}
+	r := *tt
+	return b.emit(Op{Kind: OpTileScale, Type: Void, Tile: &r, Args: [3]Value{t, buf, offset}, Vargs: []Value{u}})
+}
+
 // TileStore writes a tile back to memory. It is the only way out of a tile
 // value: there is no element accessor, since the lane mapping is undefined.
 func (b *Builder) TileStore(buf, offset, stride, tile Value, colMajor bool) {
@@ -360,6 +375,9 @@ func (k *Kernel) validateTiles() error {
 			}
 			if TileTypeOf(k, o.Args[2]) != nil {
 				return fmt.Errorf("ir: op %d (tile.scale): its offset is a tile", i)
+			}
+			if len(o.Vargs) > 1 || len(o.Vargs) == 1 && (TileTypeOf(k, o.Vargs[0]) == nil || *TileTypeOf(k, o.Vargs[0]) != *o.Tile) {
+				return fmt.Errorf("ir: op %d (tile.scale) adds what is not an accumulator of its own type", i)
 			}
 			if lane, why := k.laneDependent(o.Args[2], map[Value]bool{}); lane {
 				return fmt.Errorf("ir: op %d (tile.scale): its offset is lane-dependent (%s)", i, why)

@@ -932,8 +932,8 @@ func runXProcAnon(t *testing.T, dir string) xprocResult {
 	return r
 }
 
-// TestNamespaceSurvivesTheF16StepDown: naming a namespace and THEN attaching a
-// device must not silently disable the cache.
+// TestNamespaceSurvivesTheF16StepDown: naming a namespace and THEN rebuilding
+// the cache in another format must not silently disable the cache.
 //
 // The f16 step-down rebuilds the cache with newKVCache, and the rebuild once
 // dropped ns, so pages went to a name no later run could find.
@@ -951,10 +951,10 @@ func TestNamespaceSurvivesTheF16StepDown(t *testing.T) {
 	s.SetKVStore(NewMemStore())
 	mustKey(t, s, "tinyllama/q3_K_M/stepdown")
 
-	// The real path: stepDownKVToF32 is the body SetDeviceLayers runs, extracted
-	// so a gate can reach it without a card.
+	// The real path: the rebuild setKVFmt makes when a served instance takes
+	// the pool's first instance's format (Pool.Serve).
 	mustBudget(t, s, 1<<20)
-	s.stepDownKVToF32()
+	s.setKVFmt(nn.KVF32)
 	if got := s.CacheNamespace(); got != "tinyllama/q3_K_M/stepdown" {
 		t.Fatalf("the namespace is %q after the step-down: pages would go to the "+
 			"process-local session id and no later run could find them", got)

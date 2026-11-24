@@ -310,7 +310,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 		Buffers: backend.Bindings(g.dev), Group: int(g.groupMost.Load())}
 	if dev.Matrix[0] > 0 {
 		dev.Fragment = backend.Fragment(g.dev)
-		dev.ScaleRows = g.composedScale()
+		dev.ScaleRows, dev.ScaleAdd = g.composedScale()
 	}
 	dev.Tile = g.matrixTile(r, dev, rows)
 	return composer.Request{
@@ -354,22 +354,22 @@ func (g *devTier) composedMatrix() [3]int {
 	return [3]int{s.M, s.N, s.K}
 }
 
-// composedScale reports whether the device lowers a row scale of the
-// matrix tile's accumulator (composer.Device.ScaleRows), asked once.
-func (g *devTier) composedScale() bool {
+// composedScale reports whether the device carries a running sum in a
+// matrix tile's accumulator, its rows scaled (composer.Device.ScaleRows),
+// and whether it lowers the row scale fused with an add
+// (composer.Device.ScaleAdd); the lowering is asked once.
+//
+// sm_70's quad-pair accumulators do not carry one: with the sum through the
+// unit's accumulate, the float32 prompt gate's worst step on Qwen3-1.7B read
+// 0.00522 against its 0.00212 bound, and 0.000621 without the row scale.
+func (g *devTier) composedScale() (rows, add bool) {
 	if g.scaleCap == 0 {
 		g.scaleCap = -1
-		// Not on sm_70's quad-pair accumulators until their row scale is gated
-		// alone: with it the float32 prompt gate's worst step on Qwen3-1.7B
-		// read 0.00522 against its 0.00212 bound, without it 0.000621.
-		if backend.TileQuadPairs(g.dev) {
-			return false
-		}
 		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32, Scale: true}); ok {
 			g.scaleCap = 1
 		}
 	}
-	return g.scaleCap > 0
+	return g.scaleCap > 0 && !backend.TileQuadPairs(g.dev), g.scaleCap > 0
 }
 
 // composedLanes is the subgroup the composer forms for: the device's lanes,

@@ -106,14 +106,14 @@ func (g *devTier) kvGeomOf(p *nn.LayerPlan) kvGeom {
 }
 
 // kvPoolOf is the pool a plan's typed history holds its rows in, as the
-// CPU device's pages hold them (nn.BlockSpec's KVRow, KVBlock and KVBF16),
-// none for a history of floats.
+// CPU device's pages hold them (nn.BlockSpec's KVRow, KVBlock, KVBF16, and
+// binary16 where no store keeps floats), none for a history of floats.
 func kvPoolOf(p *nn.LayerPlan) composer.Pool {
 	if p.Spec == nil {
 		return composer.Pool{}
 	}
 	s := p.Spec
-	return composer.Pool{Row: s.KVRow, Block: s.KVBlock, Half: s.KVBF16, BF16: s.KVBF16}
+	return composer.Pool{Row: s.KVRow, Block: s.KVBlock, Half: s.KVBF16 || !s.F32 && s.KVRow == 0, BF16: s.KVBF16}
 }
 
 // kvPages is the device's KV pool, made on first use. Callers hold g.mu.

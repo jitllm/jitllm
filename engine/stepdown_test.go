@@ -32,7 +32,7 @@ func TestASteppedDownCacheIsAnF32Cache(t *testing.T) {
 			if got.kvFmt != nn.KVF16 {
 				t.Fatalf("the default cache is %v here: the step down is not exercised", got.kvFmt)
 			}
-			got.stepDownKVToF32()
+			got.setKVFmt(nn.KVF32)
 			if got.kvFmt != want.kvFmt {
 				t.Fatalf("stepped down to %v, opened at %v", got.kvFmt, want.kvFmt)
 			}

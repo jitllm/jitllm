@@ -81,7 +81,7 @@ func moveNode(nd *Node, bufOf, loopOf []int) {
 		nd.At = loopOf[nd.At-1] + 1
 	}
 	switch nd.Op {
-	case OpLoad, OpTileLoad, OpTileScale:
+	case OpLoad, OpTileLoad, OpTileScale, OpTileScaleAdd:
 		nd.Buf = bufOf[nd.Buf]
 	}
 }
@@ -163,7 +163,7 @@ func arity(op Op) int {
 		return 0
 	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32, OpDupEven, OpDupOdd, OpSwapPairs, OpCopy, OpUpper, OpWidenHalf, OpTileSplat, OpMMAGet, OpSpanSum:
 		return 1
-	case OpFma, OpSelect, OpDot4, OpDot4U, OpTileMMA, OpFmaF16x2:
+	case OpFma, OpSelect, OpDot4, OpDot4U, OpTileMMA, OpFmaF16x2, OpTileScaleAdd:
 		return 3
 	}
 	return 2

@@ -936,12 +936,9 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	}
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
 	// (Instance.moveKV).
-	// An empty binary16 cache steps down to the f32 the device holds; one
-	// with history keeps its format and travels converted, widened on its way
-	// to the device and narrowed home (moveKV), as a q8_0 one does. A
-	// Instance whose CPU blocks run composed keeps the binary16 its CPU device
-	// holds (composer.Halves), in the arenas its blocks were bound to, as a cache
-	// with history does.
+	// A binary16 cache keeps its format on every device, a card's pages
+	// holding its halves as the CPU's do (a typed pool), and travels
+	// widened and narrowed on the way (moveKV), as a q8_0 one does.
 	// The history comes home before the device changes (or detaches), or the
 	// next tier would attend over empty buffers. SetGPULayers(0) is that walk
 	// in the right order, reused rather than restated.
@@ -952,20 +949,6 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 			// would silently discard it.
 			return fmt.Errorf("model: %d block(s) stay on the device attached now "+
 				"(pinned, or its history would not come home)", s.devCount())
-		}
-	}
-	// An empty binary16 cache steps down to the f32 the device holds, so a
-	// history that later moves between devices through the host comes back
-	// as it went (TestLayerRelocatesToAnotherDevice,
-	// TestMLAStepsTheKVDownAtTheRightWidths).
-	// The blocks the CPU still runs once the device has made its offers are
-	// prepared for the new cache then, not every block now.
-	if d != nil && s.pos == 0 && s.kvFmt == nn.KVF16 && !s.histWritten() {
-		s.prepLater = true
-		s.stepDownKVToF32()
-		s.prepLater = false
-		if !later {
-			defer s.prepFrames()
 		}
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
@@ -2962,11 +2945,6 @@ func (s *Session) Pos() int { return s.pos }
 // since it was made: a prompt restored from a prefix cache adds none, and a
 // one-row prompt (decode's path) adds one.
 func (s *Session) PrefillRows() int { return s.promptRows }
-
-// stepDownKVToF32 narrows the cache from packed halves to f32 and rebuilds it.
-// It is a named method so a gate can reach it without a real card. The caller
-// owns the pos == 0 precondition: the pages are rebuilt, not reinterpreted.
-func (s *Instance) stepDownKVToF32() { s.setKVFmt(nn.KVF32) }
 
 // setKVFmt rebuilds an empty cache in format f, and the CPU's forms for it:
 // what a served instance takes from the pool's first (Pool.Serve), so a

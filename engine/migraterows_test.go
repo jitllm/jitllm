@@ -224,7 +224,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			// binary16 reference parts from them by its rounding alone, 4.1e-3
 			// at one of synth-phimoe's positions under its long factors.
 			if host.kvFmt == nn.KVF16 {
-				host.stepDownKVToF32()
+				host.setKVFmt(nn.KVF32)
 			}
 			want := drive(host, func(int) {})
 			host.Close()
