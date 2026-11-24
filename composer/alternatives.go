@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // Band is the live rows of a call a code runs at: Upto, where set, at most
@@ -77,6 +78,19 @@ type band struct {
 // and at least a tile of them, so its form takes the tile the model priced.
 func (b band) rows(capacity int) int {
 	return min(capacity, max(b.upto, b.vec, b.tile.Rows))
+}
+
+// stepRows reports whether every value of g holds the step's rows, none
+// stating rows of its own (graph.Value.Rows, a fold of rows): a band's form
+// at fewer rows then holds fewer of each. One that states them is formed at
+// the capacity's rows, which the rows it states are of.
+func stepRows(g *graph.Graph) bool {
+	for _, v := range g.Values {
+		if v.Rows > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // bands is how req's projections run by the live rows of a call, where ks

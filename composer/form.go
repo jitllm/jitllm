@@ -111,7 +111,9 @@ func (r *Registry) form(req Request) ([]Code, error) {
 				continue // the caller's tile is the matrix unit's at every call
 			}
 			br := req
-			br.Step.Rows = b.rows(req.Step.Rows)
+			if stepRows(req.Graph) {
+				br.Step.Rows = b.rows(req.Step.Rows)
+			}
 			if b.vec > 0 {
 				br.Device.Matrix, br.Device.Tile, br.Device.RowTile = [3]int{}, MatrixTile{}, b.vec
 			} else {
