@@ -32,12 +32,16 @@ type attendRowsCase struct {
 // exponentials fall below binary16's normal range), whether the row and
 // position factors share a large part whose dots cancel, and the chunk's
 // rows [run[0], run[1]) that attend to the run's end, as a picture's rows
-// do, each window still starting from the row's own position.
+// do, each window still starting from the row's own position; past 0,
+// extent biases each row's scores by backward distance (graph.Attrs.Extent),
+// and rowSinks takes a case's sinks from a row's input (graph.Attrs.RowSinks).
 type attendInputs struct {
-	ctx    int
-	spread float64
-	cancel bool
-	run    [2]int
+	ctx      int
+	spread   float64
+	cancel   bool
+	run      [2]int
+	extent   int
+	rowSinks bool
 }
 
 // TestComposedGPUAttendRows forms an appended history and the attention
@@ -48,7 +52,8 @@ type attendInputs struct {
 // positions so a causal row's span takes two partitions, starting inside a
 // page and crossing into the next: each row attends causally from the history's
 // start, or from its window's where the attention slides, with a sink a head
-// where it carries them, held row by row to the definition over the history
+// where it carries them, a head's or a row's own, a score bias by backward
+// distance where it carries one, held row by row to the definition over the history
 // as the pools hold it. The form must run its partitions in order (the
 // running pass), or where the device's matrix unit is stated, run on the
 // unit (the flash pass), a window a bound of its loop, every
@@ -57,7 +62,10 @@ type attendInputs struct {
 // positions: no binding a kernel reads or writes may hold more than four
 // words a row, head and dimension, where a [rows, heads, keys] buffer at the
 // bound is sixty-four of them. Two violations must fail: every row's first
-// attended position moved by one, and the sinks zeroed.
+// attended position moved by one, and the sinks zeroed; with a bias, the bias
+// zeroed and the definitions by the wrong distance's sign and clamped past
+// the extent must not be what the form computes, and with a row's sinks,
+// every row's taken as the first's must fail.
 func TestComposedGPUAttendRows(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
@@ -92,6 +100,11 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		{attendRowsCase{8, 2, 128, 0, true, true}, attendInputs{ctx: 8192}},
 		{attendRowsCase{12, 4, 64, 16, false, false}, attendInputs{run: [2]int{0, 20}}},
 		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{run: [2]int{5, 20}}},
+		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{extent: 700}},
+		{attendRowsCase{12, 4, 64, 16, true, false}, attendInputs{extent: 9, rowSinks: true}},
+		{attendRowsCase{10, 2, 80, 0, true, true}, attendInputs{extent: 37, rowSinks: true}},
+		{attendRowsCase{64, 8, 64, 0, true, false}, attendInputs{rowSinks: true}},
+		{attendRowsCase{8, 2, 64, 0, false, false}, attendInputs{extent: 300, run: [2]int{5, 20}}},
 	}
 	matrices, cuda := 0, false
 	for _, d := range devs {
@@ -106,8 +119,8 @@ func TestComposedGPUAttendRows(t *testing.T) {
 					matrices++
 				}
 				c, in := tc.c, tc.in
-				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d", d.API(), matrix,
-					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1])
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d/extent%d/rowsinks%v", d.API(), matrix,
+					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1], in.extent, in.rowSinks)
 				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, in, matrix) })
 			}
 		}
@@ -130,13 +143,29 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	b := graph.New()
 	n := b.KVAppend(b.In("k", c.kvh*c.dim), b.In("v", c.kvh*c.dim), 0)
 	var sinks []jlm.Role
-	if c.sinks {
+	rowSinks := c.sinks && in.rowSinks
+	if c.sinks && !rowSinks {
 		sinks = []jlm.Role{jlm.RoleAttnSinks}
 	}
 	scale := float32(1 / math.Sqrt(float64(c.dim)))
-	b.Out(b.Attend(b.In("q", c.heads*c.dim), n, graph.Attrs{NHead: c.heads, NKVHead: c.kvh, HeadDim: c.dim, Scale: float64(scale),
-		Window: c.window}, sinks...))
+	qIn := b.In("q", c.heads*c.dim)
+	var extra []graph.ValueID
+	if in.extent > 0 {
+		extra = append(extra, b.In("bias", c.heads*in.extent))
+	}
+	if rowSinks {
+		extra = append(extra, b.In("sinks", c.heads))
+	}
+	b.Out(b.AttendWith(qIn, graph.StateRef{State: graph.StateKV, Version: n}, graph.Attrs{NHead: c.heads, NKVHead: c.kvh, HeadDim: c.dim,
+		Scale: float64(scale), Window: c.window, Extent: in.extent, RowSinks: rowSinks}, extra, sinks...))
 	g := b.G
+	inv := map[jlm.Role]graph.Shape{}
+	if len(sinks) == 1 {
+		inv[jlm.RoleAttnSinks] = graph.Shape{K: c.heads}
+	}
+	if err := graph.Verify(g, graph.Facts{Inventory: inv}); err != nil {
+		t.Fatal(err)
+	}
 	dev := gpuDevice(d)
 	if matrix {
 		dev.Matrix = [3]int{16, 16, 16}
@@ -258,7 +287,7 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	// A sink near the log-sum-exp of the first row's scores holds about as
 	// much as the positions do, at any length and spread.
 	sinkv := make([]float32, c.heads)
-	for h := range sinkv {
+	for h := range c.heads {
 		var sc []float64
 		for p := first(0); p <= p0; p++ {
 			var s float64
@@ -273,9 +302,40 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 		}
 		sinkv[h] = float32(top + math.Log(sum) + rng.NormFloat64())
 	}
+	// A row's own sinks: the heads' moved by a deviation of one a row.
+	sinkOf := func(sv []float32, r, h int) float64 { return float64(sv[h]) }
+	if rowSinks {
+		heads := sinkv
+		sinkv = make([]float32, capRows*c.heads)
+		for i := range sinkv {
+			sinkv[i] = heads[i%c.heads] + float32(rng.NormFloat64())
+		}
+		sinkOf = func(sv []float32, r, h int) float64 { return float64(sv[r*c.heads+h]) }
+	}
+	// The score bias, a row's heads' by backward distance, of a deviation of
+	// one; biasAt is the bias row r's key at p gains, by the definition's
+	// distance (mode 0), or by a violation's: the distance's sign turned (1),
+	// a distance past the extent clamped to its last (2), none (3).
+	bias := rnd(capRows*c.heads*max(1, in.extent), 1)
+	biasAt := func(mode, r, h, p int) float64 {
+		d := p0 + r - p
+		switch mode {
+		case 1:
+			d = -d
+		case 2:
+			d = min(d, in.extent-1)
+		case 3:
+			return 0
+		}
+		if in.extent == 0 || d < 0 || d >= in.extent {
+			return 0
+		}
+		return float64(bias[(r*c.heads+h)*in.extent+d])
+	}
 	// row is the definition at row r over the pools with the row factor qr
 	// and, where msq, the expected squared error the flash form's binary16
 	// operands add to it (flashErr).
+	mode := 0
 	row := func(r int, qr []float32, sinkOn, msq bool) ([]float64, float64) {
 		want, n := make([]float64, qw), end(r)-first(r)
 		var mse float64
@@ -288,10 +348,10 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 				for e, x := range qh {
 					s += float64(x) * float64(ks[p][kv*c.dim+e])
 				}
-				raw = append(raw, s*float64(scale))
+				raw = append(raw, s*float64(scale)+biasAt(mode, r, h, p))
 			}
 			if sinkOn {
-				raw = append(raw, float64(sinkv[h]))
+				raw = append(raw, sinkOf(sinkv, r, h))
 			}
 			wt = append(wt[:0], raw...)
 			oracle.Softmax(wt)
@@ -321,6 +381,13 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 			copy(win[r*4:], []uint32{0, uint32(first(r)) + shift, e, p})
 		}
 		vals := map[graph.ValueID][]uint32{g.In[0]: f32w(k), g.In[1]: f32w(v), g.In[2]: f32w(q), g.Out[0]: poisoned(capRows * qw)}
+		for i, x := range extra {
+			if i == 0 && in.extent > 0 {
+				vals[x] = f32w(bias)
+			} else {
+				vals[x] = f32w(sv)
+			}
+		}
 		tables := map[string][]uint32{"rows": rows, "rows.win": win, "rows.n": {uint32(R)}, "pages": pages,
 			"kv.k": append([]uint32(nil), kpool...), "kv.v": append([]uint32(nil), vpool...)}
 		vecs := map[jlm.Role][]uint32{jlm.RoleAttnSinks: f32w(sv)}
@@ -383,8 +450,34 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 		t.Errorf("with every row's first attended position moved the NMSE is %.3e: the gate cannot see a wrong row", e)
 	}
 	if c.sinks {
-		if e := nmse(run(0, make([]float32, c.heads), q), want, 0); !(e > max(1e-6, budget[0])) {
+		if e := nmse(run(0, make([]float32, len(sinkv)), q), want, 0); !(e > max(1e-6, budget[0])) {
 			t.Errorf("with the sinks zeroed the NMSE is %.3e: the gate cannot see the sinks", e)
+		}
+	}
+	if rowSinks {
+		first := slices.Clone(sinkv)
+		for i := range first {
+			first[i] = sinkv[i%c.heads]
+		}
+		if e := nmse(run(0, first, q), want, last); !(e > max(1e-6, budget[last])) {
+			t.Errorf("with every row's sinks the first's the NMSE is %.3e: the gate cannot see a row's sinks", e)
+		}
+	}
+	if in.extent > 0 {
+		kept := slices.Clone(bias)
+		clear(bias)
+		e := nmse(run(0, sinkv, q), want, last)
+		copy(bias, kept)
+		if !(e > max(1e-6, budget[last])) {
+			t.Errorf("with the bias zeroed the NMSE is %.3e: the gate cannot see the bias", e)
+		}
+		for _, m := range []int{1, 2} {
+			mode = m
+			wrong, _ := row(last, q[last*qw:(last+1)*qw], c.sinks, false)
+			mode = 0
+			if e := nmse(got, append(make([]float64, last*qw), wrong...), last); !(e > max(1e-6, budget[last])) {
+				t.Errorf("the form is NMSE %.3e from the bias by violation %d's distance: the gate cannot tell them apart", e, m)
+			}
 		}
 	}
 	if in.run[1] > 0 {

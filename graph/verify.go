@@ -475,8 +475,18 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: pooled blocks scored by their first positions", at)
 			}
 		case OpAttend:
-			if len(o.In) == 2 {
-				if p := producer(g, o.In[1]); p == nil || p.Kind != OpSelect || o.Attr.NHead%p.Attr.NKVHead != 0 || len(p.Reads) != 1 || len(o.Reads) < 1 || p.Reads[0] != o.Reads[len(o.Reads)-1] {
+			sel, bias, sinks, ok := AttendInputs(o)
+			a := o.Attr
+			switch {
+			case !ok || a.Extent < 0:
+				bad("%s: %d inputs past the query beside a bias of %d and sinks a row %v", at, len(o.In)-1, a.Extent, a.RowSinks)
+			case bias >= 0 && width(bias) != a.NHead*a.Extent:
+				bad("%s: a score bias of %d over %d heads of %d distances", at, width(bias), a.NHead, a.Extent)
+			case sinks >= 0 && (width(sinks) != a.NHead || len(o.Weight) != 0):
+				bad("%s: sinks of %d a row over %d heads beside %d weights", at, width(sinks), a.NHead, len(o.Weight))
+			}
+			if sel >= 0 {
+				if p := producer(g, sel); p == nil || p.Kind != OpSelect || o.Attr.NHead%p.Attr.NKVHead != 0 || len(p.Reads) != 1 || len(o.Reads) < 1 || p.Reads[0] != o.Reads[len(o.Reads)-1] {
 					bad("%s: a selection that is not one of its own history's groups", at)
 				}
 			}

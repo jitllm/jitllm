@@ -54,5 +54,9 @@ func (r *Residency) Touch(li int, nExpert int, sel []int32) {
 // stay open across the read of one that is not.
 func (m *Model) BlockHeld(fr *jlm.Frames, li int) bool {
 	c, cf := m.Container, fr
-	return c == nil || li >= c.NPages() || cf.Resident(li)
+	if c == nil {
+		return true
+	}
+	pg := c.PageOf(li)
+	return pg >= c.NPages() || cf.Resident(pg)
 }

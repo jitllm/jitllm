@@ -111,8 +111,10 @@ func Packed(t Type) bool { _, ok := packerOf(t); return ok }
 // writer did and compare the bytes.
 func Packer(t Type) (layout.Quant, bool) { return packerOf(t) }
 
-// verbatimBytes is how many bytes a non-packed type occupies for n elements.
-func verbatimBytes(t Type, n uint64) (uint64, error) {
+// verbatimBytes is how many bytes rows rows of k elements of a non-packed
+// type occupy.
+func verbatimBytes(t Type, rows, k uint64) (uint64, error) {
+	n := rows * k
 	switch t {
 	case TypeF32:
 		return n * 4, nil
@@ -123,6 +125,16 @@ func verbatimBytes(t Type, n uint64) (uint64, error) {
 			return 0, fmt.Errorf("jlm: %d iq4nl elements is not a whole number of 32-wide blocks", n)
 		}
 		return n / 32 * 18, nil
+	case TypeNV4:
+		if k%16 != 0 {
+			return 0, fmt.Errorf("jlm: a row of %d nv4 elements is not a whole number of 16-wide blocks", k)
+		}
+		return rows * NV4RowBytes(int(k)), nil
+	case TypeMX8:
+		if k%32 != 0 {
+			return 0, fmt.Errorf("jlm: a row of %d mx8 elements is not a whole number of 32-wide blocks", k)
+		}
+		return rows * MX8RowBytes(int(k)), nil
 	}
 	return 0, fmt.Errorf("jlm: type %v is neither packed nor verbatim", t)
 }
@@ -165,7 +177,7 @@ func sheetPlanes(e *Entry) (qs, d, sc, sheets uint64, err error) {
 		return sheetSpan(e)
 	}
 	sh, rows := sheetsOf(e.Dims, e.NDim)
-	n, err := verbatimBytes(e.Type, rows*e.Dims[0])
+	n, err := verbatimBytes(e.Type, rows, e.Dims[0])
 	return n, 0, 0, sh, err
 }
 
@@ -317,7 +329,7 @@ func spans(t Type, dims [4]uint64, ndim uint8) (qs, d, sc uint64, err error) {
 			alignUp(uint64(psc) * 4 * sheets), nil
 	}
 	rows *= sheets
-	n, err := verbatimBytes(t, rows*k)
+	n, err := verbatimBytes(t, rows, k)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -345,7 +357,7 @@ func alwaysResident(e *Entry, rows bool) bool {
 }
 
 // RowBytes is one row of a row table: Dims[0] elements of its type.
-func RowBytes(e *Entry) (uint64, error) { return verbatimBytes(e.Type, e.Dims[0]) }
+func RowBytes(e *Entry) (uint64, error) { return verbatimBytes(e.Type, 1, e.Dims[0]) }
 
 // Write lays src out as dst, a jlm container.
 //
@@ -452,8 +464,12 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*fileLayout, error) {
 			present[roleAt{es[i].Role, es[i].Block}] = true
 		}
 	}
-	if err := src.Config.CheckQKNorm(int(maxBlock+1), func(r Role, b int32) bool {
-		return present[roleAt{r, b}]
+	blocks := int(maxBlock + 1)
+	if n := len(src.Config.WeightsOf); n != 0 {
+		blocks = n
+	}
+	if err := src.Config.CheckQKNorm(blocks, func(r Role, b int32) bool {
+		return present[roleAt{r, int32(src.Config.PageOf(int(b)))}]
 	}); err != nil {
 		return nil, err
 	}

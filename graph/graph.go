@@ -62,6 +62,8 @@ const (
 	// positions as above, then the second's entries, one each Span positions
 	// (an OpKVAppend's), the row seeing those its range's end over Span
 	// closes, each of Words[0] wide; a selection masks the second alone.
+	// Past the query and the selection, an Extent's input is a score bias
+	// by backward distance and a RowSinks' input the sinks (AttendInputs).
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
@@ -169,8 +171,12 @@ const (
 	// dilated: tap t reads the row (Taps-1-t)*Dil back, the window the last
 	// (Taps-1)*Dil rows. The window is the recurrent convolution's state
 	// (StateRecConv), or where the op reads StateRecState, Offset floats into
-	// each of the state's slots of Span floats: a tail past a rule's state. A
-	// primitive with a state of its own: a recurrent mixer's convolution.
+	// each of the state's slots of Span floats: a tail past a rule's state.
+	// Where In[1] is given, it is each row's own taps added to the static
+	// ones: per group of channels (In[0]'s width over In[1]'s in Taps), the
+	// group's Taps taps side by side in the static taps' order, the oldest
+	// first. A primitive with a state of its own: a recurrent mixer's
+	// convolution, or a dynamic short convolution.
 	OpStateConv
 	// OpPool is the step's live rows of In[0] pooled into one row, Out[0]
 	// it in every row: their mean, the first's or the last's (Pooling, a
@@ -1050,6 +1056,15 @@ type Attrs struct {
 	// Chain and Filter are OpPosResample's: the coordinate's convention
 	// and the taps that read it.
 	Chain, Filter uint8
+	// Extent, past 0, adds a row's score bias to OpAttend's scores: an
+	// input of NHead*Extent a row, the key at backward distance d (the
+	// row's position less the key's) gaining head h's element h*Extent+d
+	// after the scale, before the softcap, where 0 <= d < Extent, nothing
+	// elsewhere. Over two histories it biases the first's positions.
+	Extent int
+	// RowSinks takes OpAttend's sinks from an input of NHead a row, one
+	// logit a head in the denominator alone, in place of Weight[0].
+	RowSinks bool
 	// RowWindows makes OpAttend read each row's attended range from the
 	// step's window table, not its history descriptor: a vision tower's
 	// window attention, a row's keys its window's rows.
@@ -1222,6 +1237,31 @@ func (g *Graph) StateVersion(s State) int {
 		}
 	}
 	return v
+}
+
+// AttendInputs is OpAttend o's inputs past the query, in their order: its
+// selection, its score bias (Attrs.Extent) and its sinks (Attrs.RowSinks),
+// each -1 where o has none; false where its inputs are not that list.
+func AttendInputs(o Op) (sel, bias, sinks ValueID, ok bool) {
+	sel, bias, sinks = -1, -1, -1
+	at := len(o.In)
+	take := func(on bool) ValueID {
+		if !on || at < 2 {
+			return -1
+		}
+		at--
+		return o.In[at]
+	}
+	if sinks = take(o.Attr.RowSinks); o.Attr.RowSinks && sinks < 0 {
+		return -1, -1, -1, false
+	}
+	if bias = take(o.Attr.Extent > 0); o.Attr.Extent > 0 && bias < 0 {
+		return -1, -1, -1, false
+	}
+	if at == 2 {
+		sel = o.In[1]
+	}
+	return sel, bias, sinks, at == 1 || at == 2
 }
 
 // AttendNoRuns reports that g's attention stays causal inside a call's

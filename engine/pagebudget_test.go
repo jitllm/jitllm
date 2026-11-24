@@ -16,12 +16,22 @@ import (
 func TestOpenHonoursAPageBudget(t *testing.T) {
 	// Every embedding model's vectors (embedprinciples_test.go).
 	eachEmbedModel(t, embedOpenHonoursAPageBudget)
+	// And a loop's blocks reading pages other blocks read
+	// (jlm.Config.WeightsOf), a mixture's expert bank among them: a budget
+	// below the pages evicts a page every pass's block reads.
+	for _, name := range []string{"synth-olmo2.gguf" + loopSuffix, "synth-qwen2moe.gguf" + loopSuffix} {
+		t.Run(name, func(t *testing.T) { openHonoursAPageBudget(t, jlmOf(t, testmodels.Path(name))) })
+	}
 	path, ok := models()["stories260K"]
 	if !ok {
 		t.Skip("no small model in the table")
 	}
-	src := jlmOf(t, path)
+	openHonoursAPageBudget(t, jlmOf(t, path))
+}
 
+// openHonoursAPageBudget is TestOpenHonoursAPageBudget on the container at
+// src.
+func openHonoursAPageBudget(t *testing.T, src string) {
 	full, err := model.Open(src)
 	if err != nil {
 		t.Fatal(err)

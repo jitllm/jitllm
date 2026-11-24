@@ -53,6 +53,11 @@ func TestComposedGPUAttendInPasses(t *testing.T) {
 		{name: "narrow/around/chunk", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1, around: true, heads: 2, kvh: 1, dim: 16},
 		{name: "rows/around/one", pos: []int{100}, one: true, around: true},
 		{name: "narrow/around/one", pos: []int{100}, one: true, around: true, heads: 2, kvh: 1, dim: 16},
+		{name: "rows/extent", pos: []int{40, 70, 100}, extent: 45},
+		{name: "rows/extent/rowsinks", pos: []int{40, 70, 100}, extent: 19, rowSinks: true},
+		{name: "chunk/extent/rowsinks", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1, extent: 37, rowSinks: true},
+		{name: "chunk/wide/extent", pos: wide, seqs: 1, extent: 200},
+		{name: "rows/rowsinks/one", pos: []int{100}, one: true, rowSinks: true},
 	}
 	for _, d := range devs {
 		tiles, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32})
@@ -81,6 +86,11 @@ type passCase struct {
 	heads, kvh, dim int
 	// pooled selects by pooled block keys (selectInPasses).
 	pooled bool
+	// extent biases the scores by backward distance (graph.Attrs.Extent),
+	// a span of history that crosses passes; rowSinks takes the sinks from
+	// a row's input (graph.Attrs.RowSinks).
+	extent   int
+	rowSinks bool
 }
 
 func attendInPasses(t *testing.T, d backend.Device, c passCase) {
@@ -109,7 +119,18 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 		kRow, qRow = b.Add(kIn, kb), b.Add(qIn, qb)
 	}
 	n := b.KVAppend(kRow, vIn, 0)
-	out := b.Attend(qRow, n, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim, Scale: 1 / math.Sqrt(float64(dim))})
+	var extra []graph.ValueID
+	var biasIn, sinkIn graph.ValueID
+	if c.extent > 0 {
+		biasIn = b.In("bias", heads*c.extent)
+		extra = append(extra, biasIn)
+	}
+	if c.rowSinks {
+		sinkIn = b.In("sinks", heads)
+		extra = append(extra, sinkIn)
+	}
+	out := b.AttendWith(qRow, graph.StateRef{State: graph.StateKV, Version: n}, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim,
+		Scale: 1 / math.Sqrt(float64(dim)), Extent: c.extent, RowSinks: c.rowSinks}, extra)
 	if c.around {
 		out = b.Add(out, resid)
 	}
@@ -180,6 +201,22 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 	if c.around {
 		vals[kb], vals[qb], vals[resid] = f32w(rnd(capRows*w)), f32w(rnd(capRows*qw)), f32w(rnd(capRows*qw))
 	}
+	if c.extent > 0 {
+		bias := rnd(capRows * heads * c.extent)
+		for i := range bias {
+			bias[i] *= 3
+		}
+		vals[biasIn] = f32w(bias)
+	}
+	if c.rowSinks {
+		// Sinks near e^4 take a share of a hundred keys' mass a zeroed sink
+		// cannot hide.
+		sk := rnd(capRows * heads)
+		for i := range sk {
+			sk[i] = 4 + sk[i]
+		}
+		vals[sinkIn] = f32w(sk)
+	}
 	base := map[string][]uint32{"rows.n": {uint32(R)}, "pages": pages, "kv.k": kpool, "kv.v": vpool, "q.off": make([]uint32, capRows*4)}
 
 	runner := newPassRunner(d)
@@ -190,6 +227,29 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 		t.Fatal(err)
 	}
 	wantF := wf32(want)
+	// The inputs past the query reach the answer: the whole form without
+	// them parts from it.
+	var past []graph.ValueID
+	if c.extent > 0 {
+		past = append(past, biasIn)
+	}
+	if c.rowSinks {
+		past = append(past, sinkIn)
+	}
+	for _, x := range past {
+		kept := vals[x]
+		vals[x] = make([]uint32, len(kept))
+		fresh := newPassRunner(d)
+		none, err := fresh.run(whole, 0, len(whole), vals, base, full, nil)
+		fresh.close()
+		vals[x] = kept
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nmse := passNMSE(wf32(none), wantF, R*qw); nmse < 1e-4 {
+			t.Fatalf("input %d zeroed reads NMSE %.3e from it set: the gate cannot see it", x, nmse)
+		}
+	}
 
 	lo, hi := passSpan(inPasses)
 	if lo < 0 || hi <= lo {
@@ -672,4 +732,14 @@ func (r *passRunner) run(codes []composer.Code, lo, hi int, vals map[graph.Value
 		res[i] = binary.LittleEndian.Uint32(p[4*i:])
 	}
 	return res, nil
+}
+
+// passNMSE is the error of got against want over their first n values.
+func passNMSE(got, want []float32, n int) float64 {
+	var num, den float64
+	for i := range n {
+		e := float64(got[i]) - float64(want[i])
+		num, den = num+e*e, den+float64(want[i])*float64(want[i])
+	}
+	return num / den
 }

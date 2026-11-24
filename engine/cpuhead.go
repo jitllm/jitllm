@@ -41,7 +41,7 @@ func (s *Instance) partPlan(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type
 		for _, w := range o.Weight {
 			if t, ok := over[w.Role]; ok {
 				p.Formats[w.Role] = t
-			} else if e, ok := f.Find(w.Role, int32(g.Block), -1); ok {
+			} else if e, ok := f.Find(w.Role, int32(s.m.Container.PageOf(g.Block)), -1); ok {
 				p.Formats[w.Role] = e.Type
 			} else if t := s.ws.matrix(g.Block, l, w.Role); t != nil && t.E != nil {
 				p.Formats[w.Role] = t.E.Type

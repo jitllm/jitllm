@@ -95,7 +95,7 @@ func (g *devTier) offerFrames(li int, p *nn.LayerPlan, w *nn.LayerWeights) (*jlm
 	if err := w.Bind(w, fr); err != nil {
 		return fr, jlm.Lease{}, err
 	}
-	l, err := fr.Hold(li, nil)
+	l, err := fr.Hold(p.File.PageOf(li), nil)
 	return fr, l, err
 }
 

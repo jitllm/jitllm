@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -24,7 +25,27 @@ const sideInputsSuffix = "@sideinputs"
 // conversion states them, so the restated model runs what a converted one
 // does.
 func statedSuffixes() map[string]func(*jlm.Source) {
-	return map[string]func(*jlm.Source){sideInputsSuffix: withSideInputs}
+	return map[string]func(*jlm.Source){sideInputsSuffix: withSideInputs, loopSuffix: loopedTwice}
+}
+
+// loopSuffix names a fixture whose layers run twice over (loopedTwice):
+// blocks n..2n-1 a second pass of blocks 0..n-1 reading the first pass's
+// pages (jlm.Config.WeightsOf), each block with its own history. A
+// mixture's second pass reads its first pass's expert bank.
+const loopSuffix = "@loop"
+
+// loopedTwice states s's layers run twice, as a library file's unroll
+// states a loop (convert.UnrollSource). A loop the converter refuses
+// leaves a statement of the pages that the writer refuses in turn.
+func loopedTwice(s *jlm.Source) {
+	n := int(s.Config.NLayer)
+	order := make([]int, 2*n)
+	for i := range order {
+		order[i] = i % n
+	}
+	if err := convert.UnrollSource(s, order); err != nil {
+		s.Config.WeightsOf = []uint32{math.MaxUint32}
+	}
 }
 
 // statedSource is the fixture a name with a statedSuffixes suffix restates

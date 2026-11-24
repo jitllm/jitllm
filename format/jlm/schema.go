@@ -85,7 +85,18 @@ const (
 	// rounded.
 	TypeTQ2F Type = 15
 
-	typeMax = TypeTQ2F
+	// TypeNV4 is NVFP4 (quant.NVFP4), carried verbatim: each row its sheet's
+	// f32 global scale, then a block per 16 elements of an E4M3 scale and
+	// eight bytes of e2m1 codes (element 2j the low nibble), padded to a word
+	// (NV4RowBytes). The weight is code * scale * global.
+	TypeNV4 Type = 16
+
+	// TypeMX8 is MXFP8 (quant.MXFP8), carried verbatim: each row a block per
+	// 32 elements of an E8M0 exponent and 32 E4M3 values, padded to a word
+	// (MX8RowBytes). The weight is value * 2^(e-127).
+	TypeMX8 Type = 17
+
+	typeMax = TypeMX8
 )
 
 // Valid reports whether t is a code this format defines. A file carrying
@@ -124,6 +135,10 @@ func (t Type) String() string {
 		return "tq2"
 	case TypeTQ2F:
 		return "tq2f"
+	case TypeNV4:
+		return "nv4"
+	case TypeMX8:
+		return "mx8"
 	}
 	return "type(" + itoa(uint64(t)) + ")"
 }
@@ -819,7 +834,7 @@ func roleName(r Role) (string, bool) {
 func roleGroups() []func(Role) (string, bool) {
 	return []func(Role) (string, bool){
 		bitnetRoleName, visionRoleName, moe2RoleName, flagshipRoleName,
-		decisionRoleName, audioRoleName, visionFamRoleName,
+		decisionRoleName, audioRoleName, visionFamRoleName, loopRoleName,
 	}
 }
 
@@ -874,6 +889,10 @@ func SourceType(t Type) (quant.Type, bool) {
 		return quant.TQ2_0, true
 	case TypeTQ2F:
 		return quant.TQ2_F32, true
+	case TypeNV4:
+		return quant.NVFP4, true
+	case TypeMX8:
+		return quant.MXFP8, true
 	}
 	return 0, false
 }
@@ -911,6 +930,10 @@ func TypeOf(t quant.Type) (Type, bool) {
 		return TypeTQ2, true
 	case quant.TQ2_F32:
 		return TypeTQ2F, true
+	case quant.NVFP4:
+		return TypeNV4, true
+	case quant.MXFP8:
+		return TypeMX8, true
 	}
 	return 0, false
 }
@@ -982,5 +1005,5 @@ func (r Role) Expanded() bool {
 		return true
 	}
 	return r == RoleXIELU || r == RoleAttnSubNorm || r == RoleFFNSubNorm || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r) ||
-		audioExpanded(r)
+		audioExpanded(r) || loopExpanded(r)
 }

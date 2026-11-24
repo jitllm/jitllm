@@ -216,7 +216,7 @@ func graphSteps() map[string][4]int {
 		"history_pool":   {0, 0, 0, 0},
 		"kv_append":      {2, 2, 0, 0},
 		"kv_from":        {0, 0, 0, 0},
-		"attend":         {1, 2, 0, -1},
+		"attend":         {1, 4, 0, -1},
 		"indexer":        {2, 2, 0, 0},
 		"select":         {1, 2, 0, 0},
 		"act":            {1, -1, 0, 0},
@@ -1005,11 +1005,7 @@ func (g *mjGraph) run(b *graph.Builder, steps []mjBlockOp, bf *blockFacts, li in
 			if err != nil {
 				return fmt.Errorf("op %d (attend): %w", i, err)
 			}
-			if len(in) == 2 {
-				y = b.AttendSelected(in[0], reads[0], in[1], a, w...)
-			} else {
-				y = b.AttendOf(in[0], reads[0], a, w...)
-			}
+			y = b.AttendWith(in[0], reads[0], a, in[1:], w...)
 			at := &b.G.Ops[len(b.G.Ops)-1]
 			if at.Kind != graph.OpAttend || len(at.Out) != 1 || at.Out[0] != y {
 				return fmt.Errorf("op %d (attend): the attention is not the builder's last op", i)
@@ -1821,7 +1817,7 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int, names tensorNames) *bloc
 			}
 			continue
 		}
-		if int(t.Block) != li || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
+		if int(t.Block) != c.PageOf(li) || t.Role.Vision() || predictRole(t.Role) || t.Index >= 0 {
 			continue
 		}
 		sh := graph.Shape{K: int(t.Dims[0])}
@@ -1884,6 +1880,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 	}
 	return map[string]jinja.Value{
 		"layer":                  jinja.NewInt(int64(li)),
+		"page":                   jinja.NewInt(int64(c.PageOf(li))),
 		"trunk":                  i(c.NLayer),
 		"head_blocks":            i(c.HeadBlocks()),
 		"decision_heads":         i(c.DecisionHeads),
@@ -2095,8 +2092,8 @@ func (bf *blockFacts) attend() graph.Attrs {
 	a := graph.Attrs{NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(bf.li)), HeadDim: bf.headDim, Scale: scale,
 		Softcap: float64(c.AttnSoftcap), Bidir: bidir, RowWindows: bidir && c.Flags2.Has(jlm.Flag2MediaPrefix),
 		NoRuns: bf.li < len(c.BidirLayers) && !c.BidirLayers[bf.li]}
-	if bf.c.Sliding(bf.li) {
-		a.Window, a.Chunked = int(c.SWAWindow), c.Flags.Has(jlm.FlagSWAChunked)
+	if w := bf.c.WindowAt(bf.li); w != 0 {
+		a.Window, a.Chunked = int(w), c.Flags.Has(jlm.FlagSWAChunked)
 	}
 	return a
 }

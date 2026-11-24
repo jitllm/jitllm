@@ -525,9 +525,10 @@ func (m *Model) FrontGraphs() *frontSet {
 func (m *Model) Inventory(block int32) (graph.Facts, bool) {
 	inv := map[jlm.Role]graph.Shape{}
 	perExpert := false
+	pg := int32(m.Container.PageOf(int(block)))
 	for i := range m.Container.Entries() {
 		e := &m.Container.Entries()[i]
-		if e.Block != block || e.Role.Vision() || predictRole(e.Role) {
+		if e.Block != pg || e.Role.Vision() || predictRole(e.Role) {
 			continue
 		}
 		if e.Index >= 0 {
@@ -558,7 +559,7 @@ func (m *Model) Inventory(block int32) (graph.Facts, bool) {
 
 // stores reports whether the container stores role for block li.
 func (m *Model) Stores(li int, role jlm.Role) bool {
-	_, ok := m.Container.Find(role, int32(li), -1)
+	_, ok := m.Container.Find(role, int32(m.Container.PageOf(li)), -1)
 	return ok
 }
 

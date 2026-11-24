@@ -421,6 +421,20 @@ type Config struct {
 	// Front are the graphs of the parts outside the blocks where the
 	// converter states them (FrontGraphs). The thirty-first optional tail.
 	Front FrontGraphs
+	// WeightsOf is, per block of the text's block space (the trunk, the
+	// head blocks and the prediction blocks), the page of the text page
+	// array holding the weights it reads, where some block reads another's:
+	// the passes of an unrolled loop past the first run the first pass's
+	// weights, each with its own history and state. Nil is every block its
+	// own page. A block's entries are its page's (Entry.Block is the page),
+	// read once and resident once on a device. The thirty-second optional
+	// tail.
+	WeightsOf []uint32
+	// Windows is, per text block, the window of positions it attends over,
+	// zero for every position, where the sliding blocks follow no period
+	// (SWAPeriod is zero then, and SWAWindow the widest window). Nil is
+	// SWAPeriod's statement. The thirty-third optional tail.
+	Windows []uint32
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:
@@ -1048,10 +1062,26 @@ const (
 	ActQuantRowInt8
 )
 
-// Sliding reports that layer li attends over a sliding window: all but the
-// last of each SWAPeriod layers, or with Flag2SWAGlobalFirst all but the
-// first.
-func (c *Config) Sliding(li int) bool {
+// Sliding reports that layer li attends over a sliding window: its own
+// (Windows), or all but the last of each SWAPeriod layers, or with
+// Flag2SWAGlobalFirst all but the first.
+func (c *Config) Sliding(li int) bool { return c.WindowAt(li) != 0 }
+
+// WindowAt is the window layer li attends over, zero for every position.
+func (c *Config) WindowAt(li int) uint32 {
+	if len(c.Windows) != 0 {
+		if li >= 0 && li < len(c.Windows) {
+			return c.Windows[li]
+		}
+		return 0
+	}
+	if c.slidesByPeriod(li) {
+		return c.SWAWindow
+	}
+	return 0
+}
+
+func (c *Config) slidesByPeriod(li int) bool {
 	w, p := c.SWAWindow, int(c.SWAPeriod)
 	if c.Flags2.Has(Flag2SWAGlobalFirst) {
 		return w > 0 && p > 1 && li%p != 0

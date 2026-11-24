@@ -106,6 +106,9 @@ type mjOp struct {
 	// Pick is [axis, start, length, start, length, ...]: those ranges of the
 	// axis joined in order.
 	Pick []mjSize `json:"pick"`
+	// Flip is an axis, its indices taken last first: a reference's taps
+	// stored newest first read oldest first.
+	Flip *mjSize `json:"flip"`
 	// TrimZero, true, cuts the slowest axis's trailing indices whose bytes
 	// are all zero, one at least kept: a converter's padding, of any storage
 	// type, sized by the bytes it reads.
@@ -162,6 +165,9 @@ func (o mjOp) name() string {
 	}
 	if o.Pick != nil {
 		set = append(set, "pick")
+	}
+	if o.Flip != nil {
+		set = append(set, "flip")
 	}
 	if o.Shape != nil {
 		set = append(set, "shape")
@@ -222,7 +228,7 @@ func (p mjPipe) check() error {
 			if _, err := parseExpr(o.RMS); err != nil {
 				return fmt.Errorf("rms %q: %w", o.RMS, err)
 			}
-		case "reshape", "transpose", "concat", "stack", "trim_zero", "shape", "linear":
+		case "reshape", "transpose", "concat", "stack", "trim_zero", "shape", "linear", "flip":
 		default:
 			return fmt.Errorf("step %d names %q; one primitive a step is the rule", i, n)
 		}
@@ -257,6 +263,8 @@ func argsOf(o mjOp) []mjSize {
 		return []mjSize{*o.Concat}
 	case o.Stack != nil:
 		return []mjSize{*o.Stack}
+	case o.Flip != nil:
+		return []mjSize{*o.Flip}
 	}
 	return nil
 }
@@ -319,6 +327,8 @@ func (p mjPipe) run(env exprEnv, in []mjVal) (mjVal, error) {
 				out, err = mjTrimZero(vs[0])
 			case "pick":
 				out, err = mjPick(vs[0], args)
+			case "flip":
+				out, err = mjFlip(vs[0], args[0])
 			case "shape":
 				out, err = mjShape(vs[0], args)
 			case "pad":
@@ -744,6 +754,20 @@ func mjPick(v mjVal, args []int64) (mjVal, error) {
 		parts = append(parts, p)
 	}
 	return mjConcat(parts, args[0])
+}
+
+// mjFlip is v with the indices of axis taken last first.
+func mjFlip(v mjVal, axis int64) (mjVal, error) {
+	ax, err := mjAxis(axis, len(v.shape))
+	if err != nil {
+		return mjVal{}, err
+	}
+	n := int64(v.shape[ax])
+	args := []int64{axis}
+	for i := n - 1; i >= 0; i-- {
+		args = append(args, i, 1)
+	}
+	return mjPick(v, args)
 }
 
 // mjTrimZero is v without the trailing indices of its slowest axis whose

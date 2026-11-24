@@ -39,6 +39,9 @@ type Config struct {
 	// RouterScore, RouterWeight and StateRevision refuse rather than read as
 	// stating nothing (Unstated).
 	Stated *Statement
+	// Unroll is, per block, the source layer whose weights it reads, where
+	// the library states a loop (mjConfig.Unroll); nil is every layer once.
+	Unroll []int
 	// took is the statement tables' choices reading the source made (a
 	// rotary method's reading, a readout and its bands), which FeaturesOf
 	// counts.

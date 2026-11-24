@@ -839,7 +839,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		// Pinned across the upload below: the frame is the source, and a read
 		// for another block into the same frames would otherwise evict it.
 		if fr := l.pg.fr; fr != nil {
-			pin, err := fr.Hold(li, nil)
+			pin, err := fr.Hold(fr.File().PageOf(li), nil)
 			if err != nil {
 				g.fail(fmt.Sprintf("block %d page-in: %v", li, err))
 				return false

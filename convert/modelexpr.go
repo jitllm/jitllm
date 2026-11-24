@@ -15,6 +15,7 @@ import (
 // and a key of a parenthesised value, (a ?? b).key. There are no loops, and
 // calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x),
 // at(x, i), and the lists' each_layer(n, members, first, inside, outside),
+// every(n, period, at, inside, outside), loop(n, start, end, passes),
 // partitions(n, first, a, b), each_match(list, value, inside, outside),
 // leading(list, value) and count(list, value), whose counts are bounded, so
 // an expression sizes nothing unchecked (RULE 9), and its depth is bounded.
@@ -440,6 +441,10 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 			return evalAt(n.args, env)
 		case n.str == "each_layer" && len(n.args) == 5:
 			return evalEachLayer(n.args, env)
+		case n.str == "loop" && len(n.args) == 4:
+			return evalLoop(n.args, env)
+		case n.str == "every" && len(n.args) == 5:
+			return evalEvery(n.args, env)
 		case n.str == "partitions" && len(n.args) == 4:
 			return evalPartitions(n.args, env)
 		case n.str == "each_match" && len(n.args) == 4:
@@ -567,6 +572,70 @@ func evalLayerCount(n *exprNode, env exprEnv) (int, error) {
 		return 0, fmt.Errorf("%s is %v, not a count of layers", exprText(n), f)
 	}
 	return int(f), nil
+}
+
+// evalEvery is every(n, period, at, inside, outside): n values, the i-th
+// inside where i % period is at and outside elsewhere -- a class's default
+// layer list of one kind every period layers.
+func evalEvery(args []*exprNode, env exprEnv) (any, error) {
+	var v [3]int
+	for i, a := range args[:3] {
+		var err error
+		if v[i], err = evalLayerCount(a, env); err != nil {
+			return nil, err
+		}
+	}
+	n, period, at := v[0], v[1], v[2]
+	if period < 1 || at >= period {
+		return nil, fmt.Errorf("every(%d, %d, %d): no position %d of a period of %d", n, period, at, at, period)
+	}
+	in, err := evalMJ(args[3], env)
+	if err != nil {
+		return nil, err
+	}
+	out, err := evalMJ(args[4], env)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]any, n)
+	for i := range res {
+		res[i] = out
+		if i%period == at {
+			res[i] = in
+		}
+	}
+	return res, nil
+}
+
+// evalLoop is loop(n, start, end, passes): the layer each block of n layers
+// runs where layers start..end-1 run passes times over, the order a
+// library's unroll states: 0..start-1, then start..end-1 passes times, then
+// end..n-1.
+func evalLoop(args []*exprNode, env exprEnv) (any, error) {
+	var v [4]int
+	for i, a := range args {
+		var err error
+		if v[i], err = evalLayerCount(a, env); err != nil {
+			return nil, err
+		}
+	}
+	n, start, end, passes := v[0], v[1], v[2], v[3]
+	if start > end || end > n || passes < 1 {
+		return nil, fmt.Errorf("loop(%d, %d, %d, %d): not a loop of %d layers", n, start, end, passes, n)
+	}
+	out := make([]any, 0, n+(passes-1)*(end-start))
+	for l := range start {
+		out = append(out, float64(l))
+	}
+	for range passes {
+		for l := start; l < end; l++ {
+			out = append(out, float64(l))
+		}
+	}
+	for l := end; l < n; l++ {
+		out = append(out, float64(l))
+	}
+	return out, nil
 }
 
 // evalEachLayer is each_layer(n, members, first, inside, outside): n values,

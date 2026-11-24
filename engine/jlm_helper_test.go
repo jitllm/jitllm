@@ -512,6 +512,11 @@ func existingModel(path string) (string, bool) {
 			return path, true
 		}
 	}
+	if src, _, ok := statedSource(path); ok {
+		if _, ok := existingModel(src); ok {
+			return path, true
+		}
+	}
 	c := strings.TrimSuffix(path, filepath.Ext(path)) + jlm.Ext
 	if _, err := os.Stat(c); err == nil {
 		return c, true

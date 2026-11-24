@@ -80,7 +80,7 @@ func (b *Bindings) Err() error { return b.err }
 func (b *Bindings) Bind(f *Form, li int, t Tensors) ([]unsafe.Pointer, nn.Decline) {
 	var frame unsafe.Pointer
 	if li >= 0 && b.fr != nil {
-		frame = unsafe.Pointer(unsafe.SliceData(b.fr.Page(li)))
+		frame = unsafe.Pointer(unsafe.SliceData(b.fr.Page(b.fr.File().PageOf(li))))
 	}
 	k := bindKey{f, li, t}
 	w := b.bound[k]

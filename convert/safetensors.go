@@ -285,9 +285,15 @@ type hfLoc struct {
 	t  *safetensors.Tensor
 	sf *safetensors.File
 	st *safetensors.Tensor
+	// q is the container type of a weight hf_quant_config.json names
+	// (convert/hffp8.go), with NVFP4's amax (af, at) and denominator (df, dt).
+	q      jlm.Type
+	af, df *safetensors.File
+	at, dt *safetensors.Tensor
 }
 
-// mx reports whether this is an MXFP4 weight (convert/hfmxfp4.go).
+// mx reports whether this is a weight of block scales: compressed-tensors
+// MXFP4 (convert/hfmxfp4.go), or a format hf_quant_config.json names.
 func (l hfLoc) mx() bool { return l.st != nil }
 
 // hfDir is where a HuggingFace model's JSON and tokenizer are read from: a
@@ -346,6 +352,13 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 	if err := mergeMXFP4(all, mx); err != nil {
 		return nil, err
 	}
+	fp8, err := hfQuantGroupsOf(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := mergeFP8(all, fp8); err != nil {
+		return nil, err
+	}
 
 	names := all2names(all)
 	sort.Strings(names)
@@ -391,7 +404,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 				return nil, fmt.Errorf("convert: %s: no tensor %q", dir, name)
 			}
 			if loc.mx() {
-				return nil, fmt.Errorf("convert: %s is MXFP4, and its values are folded at conversion: %w",
+				return nil, fmt.Errorf("convert: %s is block-quantized, and its values are folded at conversion: %w",
 					name, ErrNotImplemented)
 			}
 			ty, widen, err := hfTypeOf(loc.t.DType)
@@ -461,6 +474,8 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		}
 		if rt != nil {
 			ty, shape, read = rt.ty, rt.shape, rt.read
+		} else if loc.q != 0 {
+			ty, shape, read = loc.q, loc.fp8Shape(), loc.readFP8
 		} else if loc.mx() {
 			// [rows, cols] of MXFP4 values, read as GGUF's blocks.
 			ty, shape, read = jlm.TypeMX4, []uint64{t.Shape[0], 2 * t.Shape[1]}, loc.readMXFP4
@@ -502,9 +517,11 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		parts := []jlm.Tensor{e}
 		sp := ha.split[ha.blockRest(name)]
 		// A split reads elements, which a block of MXFP4 is not; only a plain
-		// matrix, a bank member or a row concatenation may arrive packed.
-		if loc.mx() && sp != nil {
-			return nil, fmt.Errorf("convert: %s is MXFP4 and is cut at conversion: %w", name, ErrNotImplemented)
+		// matrix, a bank member or a row concatenation may arrive packed. An
+		// NVFP4 or MXFP8 row holds its own scales, so a split that moves
+		// whole rows cuts it (mjSpan refuses one that moves less).
+		if loc.mx() && loc.q == 0 && sp != nil {
+			return nil, fmt.Errorf("convert: %s is block-quantized and is cut at conversion: %w", name, ErrNotImplemented)
 		}
 		// A plain matrix is read when the writer reaches it; everything else is
 		// read immediately, because a split sizes its parts from the data and a
@@ -587,6 +604,9 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string, taken
 		return nil, fmt.Errorf("convert: %s: no tensor in this model has a role", dir)
 	}
 	if err := StateActivations(cfg, s); err != nil {
+		return nil, err
+	}
+	if err := unrollBlocks(cfg, s); err != nil {
 		return nil, err
 	}
 	g := ha.graph

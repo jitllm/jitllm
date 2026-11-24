@@ -1285,7 +1285,7 @@ func (m *Model) CPUResidentBlocks(fr *jlm.Frames) int {
 	}
 	n := 0
 	for i := 0; i < len(m.Layers); i++ {
-		if fr.Resident(i) {
+		if fr.Resident(m.Container.PageOf(i)) {
 			n++
 		}
 	}
@@ -1301,7 +1301,7 @@ func (m *Model) Blocks() int { return len(m.Layers) }
 // that runs on the host and is not resident is read from the file on its next
 // pass.
 func (m *Model) BlockResident(fr *jlm.Frames, li int) bool {
-	return m.Container != nil && fr != nil && fr.Resident(li)
+	return m.Container != nil && fr != nil && fr.Resident(m.Container.PageOf(li))
 }
 
 // PageSize is one block page's size in bytes, or zero for a model with no
@@ -1323,7 +1323,7 @@ func (m *Model) BlockBytes(li int) (total, bank uint64) {
 	es := m.Container.Entries()
 	for i := range es {
 		e := &es[i]
-		if e.Block == jlm.DenseBlock || m.Container.BlockOf(e) != li {
+		if e.Block == jlm.DenseBlock || m.Container.BlockOf(e) != m.Container.PageOf(li) {
 			continue
 		}
 		q, d, sc := jlm.SpanLenOf(e)
@@ -1411,7 +1411,7 @@ func (m *Model) PageBytes(li int) uint64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Container.PageBytes(li)
+	return m.Container.PageBytes(m.Container.PageOf(li))
 }
 
 // PageStats is the budget in pages and what it has cost so far.
@@ -1440,7 +1440,7 @@ func (m *Model) PageIn(fr *jlm.Frames, li int, l *Layer) error {
 	//
 	// A model can have no block pages at all: an all-F32 model keeps
 	// everything in the dense region (jlm.alwaysResident).
-	if m.Container == nil || li >= len(m.Layers) || li >= m.Container.NPages() {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return nil
 	}
 	// The block's own weights, not its experts: moe() ensures those after the
@@ -1458,10 +1458,10 @@ func (m *Model) PageIn(fr *jlm.Frames, li int, l *Layer) error {
 // ensure) reads it. A device deciding whether to take the block reads shapes
 // and lengths only, so it decides before anything is read.
 func (m *Model) BindBlock(fr *jlm.Frames, li int, l *Layer) error {
-	if m.Container == nil || li >= len(m.Layers) || li >= m.Container.NPages() {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return nil
 	}
-	if err := fr.Claim(li); err != nil {
+	if err := fr.Claim(m.Container.PageOf(li)); err != nil {
 		return err
 	}
 	return bindPacked(fr, m.Cfg, l)
@@ -1478,7 +1478,7 @@ func (m *Model) BindBlock(fr *jlm.Frames, li int, l *Layer) error {
 // The consumer is tier.streamBank.fill. A block that demotes goes back through
 // ensureLayer, the whole-block read.
 func (m *Model) PageInSelected(fr *jlm.Frames, li int, sel []uint32, l *Layer) error {
-	if m.Container == nil || li >= int(m.Container.H.NBlocks) {
+	if m.Container == nil || li >= m.Container.TextSpace() {
 		return nil
 	}
 	// A bank in expert pages reaches the device through Sheet, which holds
@@ -1496,7 +1496,7 @@ func (m *Model) PageInSelected(fr *jlm.Frames, li int, sel []uint32, l *Layer) e
 	if len(rs) == 0 {
 		return m.PageIn(fr, li, l)
 	}
-	if err := fr.EnsureRanges(li, rs); err != nil {
+	if err := fr.EnsureRanges(m.Container.PageOf(li), rs); err != nil {
 		return err
 	}
 	return bindPacked(fr, m.Cfg, l)
@@ -1521,8 +1521,10 @@ func entryTensor(e *jlm.Entry) (Tensor, error) {
 	if e.NDim < 2 {
 		return Tensor{}, fmt.Errorf("model: %v has %d dimensions, want 2", e.Role, e.NDim)
 	}
+	// A matrix is read by generated code: a type the decoders know, or
+	// rows DecodeVerbatim reads as stored (NVFP4, MXFP8).
 	typ, ok := jlm.SourceType(e.Type)
-	if !ok || !quant.Dequantable(typ) {
+	if !ok || !quant.Dequantable(typ) && !jlm.VerbatimRows(e.Type) {
 		return Tensor{}, fmt.Errorf("model: %v is %v, which has no dequantizer yet", e.Role, e.Type)
 	}
 	// rows is the product of every trailing dimension: for a 3-D expert
@@ -1610,7 +1612,7 @@ func SameSpan(a, b []byte) bool {
 func (m *Model) ensureBlock(fr *jlm.Frames, li int) error {
 	m.basePlanOnce.Do(m.buildBasePlans)
 	if li >= 0 && li < len(m.basePlans) {
-		return fr.EnsureRanges(li, m.basePlans[li])
+		return fr.EnsureRanges(m.Container.PageOf(li), m.basePlans[li])
 	}
 	return m.ensureBlockRanges(fr, li, false)
 }
@@ -1634,13 +1636,14 @@ func (m *Model) buildBasePlans() {
 // what a part binding only those reads of the page.
 func (m *Model) RolesPlan(li int, roles []jlm.Role) []jlm.Range {
 	c := m.Container
-	if c == nil || li >= int(c.H.NBlocks) {
+	if c == nil || li >= c.TextSpace() {
 		return nil
 	}
 	var rs []jlm.Range
+	pg := int32(c.PageOf(li))
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		if e.Role.Vision() || e.Block != int32(li) || e.Role.Expanded() || c.ExpertPaged(e) || !slices.Contains(roles, e.Role) {
+		if e.Role.Vision() || e.Block != pg || e.Role.Expanded() || c.ExpertPaged(e) || !slices.Contains(roles, e.Role) {
 			continue
 		}
 		switch e.Role {
@@ -1655,10 +1658,10 @@ func (m *Model) RolesPlan(li int, roles []jlm.Role) []jlm.Range {
 // PageInRanges is PageIn reading only ranges rs of block li's page, binding
 // l at the whole page: a span outside rs is the right length and unread.
 func (m *Model) PageInRanges(fr *jlm.Frames, li int, rs []jlm.Range, l *Layer) error {
-	if m.Container == nil || li >= len(m.Layers) || li >= m.Container.NPages() {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return nil
 	}
-	if err := fr.EnsureRanges(li, rs); err != nil {
+	if err := fr.EnsureRanges(m.Container.PageOf(li), rs); err != nil {
 		return err
 	}
 	return bindPacked(fr, m.Cfg, l)
@@ -1674,7 +1677,7 @@ func (m *Model) EnsureBlockExperts(fr *jlm.Frames, li int) error {
 }
 
 func (m *Model) ensureBlockRanges(fr *jlm.Frames, li int, experts bool) error {
-	return fr.EnsureRanges(li, m.blockPlan(li, experts))
+	return fr.EnsureRanges(m.Container.PageOf(li), m.blockPlan(li, experts))
 }
 
 // blockPlan is the ranges of block li's page that ensureBlockRanges reads.
@@ -1682,10 +1685,11 @@ func (m *Model) blockPlan(li int, experts bool) []jlm.Range {
 	c := m.Container
 	var rs []jlm.Range
 	// A vision block's entries say Block i of the vision section; it is block
-	// NBlocks+i of the one block space, the page they live in.
-	vision, bi := li >= int(c.H.NBlocks), int32(li)
+	// TextSpace+i of the one block space. A text block's say the page it
+	// reads (PageOf).
+	vision, bi := li >= c.TextSpace(), int32(c.PageOf(li))
 	if vision {
-		bi = int32(li - int(c.H.NBlocks))
+		bi = int32(li - c.TextSpace())
 	}
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
@@ -1738,13 +1742,13 @@ func (m *Model) EnsureBlockSelected(fr *jlm.Frames, li int, sel []uint32, base b
 	if rs == nil {
 		return nil
 	}
-	return fr.EnsureRanges(li, rs)
+	return fr.EnsureRanges(m.Container.PageOf(li), rs)
 }
 
 // speculateExperts queues the experts sel of block li's bank for the
 // container's background readers, replacing the guesses not yet started.
 func (m *Model) SpeculateExperts(fr *jlm.Frames, li int, sel []uint32) {
-	if m.Container == nil || li >= len(m.Layers) {
+	if m.Container == nil || li >= len(m.Layers) || m.Container.PageOf(li) >= m.Container.NPages() {
 		return
 	}
 	if bank := m.Layers[li].ExpBank().E; bank != nil && m.Container.ExpertPaged(bank) {
@@ -1757,13 +1761,14 @@ func (m *Model) SpeculateExperts(fr *jlm.Frames, li int, sel []uint32) {
 // pages.
 func (m *Model) selectedRanges(li int, sel []uint32, base bool) ([]jlm.Range, error) {
 	c := m.Container
-	if c == nil || li >= int(c.H.NBlocks) {
+	if c == nil || li >= c.TextSpace() {
 		return nil, nil
 	}
 	var rs []jlm.Range
+	pg := int32(c.PageOf(li))
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		if e.Role.Vision() || e.Block != int32(li) || e.Role.Expanded() {
+		if e.Role.Vision() || e.Block != pg || e.Role.Expanded() {
 			continue
 		}
 		// A bank in expert pages is not in this block's page: its sheets are
@@ -1820,11 +1825,11 @@ func (m *Model) EnsureExperts(fr *jlm.Frames, li int, sel []int32, h *ExpertHold
 	// own page included: with every expert page pinned the victim rule falls
 	// back to the most recently used block page, which is this layer's own. And
 	// one selected expert's fault must not take another's page.
-	if li < int(c.H.NBlocks) {
+	if li < c.TextSpace() {
 		// Only when it is in: a block whose base runs on a device gave its
 		// page back, and claiming a frame for it here would hold a block's
 		// worth of host budget empty for the experts' sake.
-		if lb, ok := cf.HoldFilled(li); ok {
+		if lb, ok := cf.HoldFilled(c.PageOf(li)); ok {
 			h.leases = append(h.leases, lb)
 		}
 	}
@@ -1993,10 +1998,10 @@ func ReleaseLayer(c *jlm.Frames, li int, l *Layer, keepExperts bool) {
 	l.banksFrom = [3]bankSpans{}
 	// Another instance runs the block from host memory: its page and its
 	// experts' stay for it.
-	if c.Kept(li) {
+	if c.Kept(c.File().PageOf(li)) {
 		return
 	}
-	c.DropPage(li)
+	c.DropPage(c.File().PageOf(li))
 	// A bank in expert pages is not in the block's page: since v26 each expert
 	// is a page of its own, and on a mixture those are nearly all of the
 	// weights (Qwen3-30B-A3B: 18.0 of 18.5 GiB). The device holds the whole
@@ -2098,7 +2103,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	// A marker head's feed-forward is as wide as its blocks store it.
 	if h := cfg.Head; h != nil {
-		e, ok := c.Find(jlm.RoleFFNUp, int32(cfg.Trunk), -1)
+		e, ok := c.Find(jlm.RoleFFNUp, int32(c.PageOf(cfg.Trunk)), -1)
 		if !ok {
 			return nil, fmt.Errorf("model: the marker head's block %d stores no feed-forward", cfg.Trunk)
 		}
@@ -2120,7 +2125,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if cfg.MoE() {
 		cfg.routed = make([]bool, cfg.NLayer+cfg.NPredict)
 		for i := range cfg.routed {
-			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(i), -1)
+			cfg.routed[i] = c.Has(jlm.RoleRouter, int32(c.PageOf(i)), -1)
 		}
 	}
 	m := &Model{Cfg: cfg}
@@ -2160,9 +2165,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		return nil
 	}
+	// first is the first block reading each text page: the layer whose
+	// vectors a page's are (the blocks sharing it share them).
+	var first []int
 	vec := func(role jlm.Role, block int32) ([]float32, error) {
-		if block >= 0 && int(block) < len(m.Layers) {
-			if v := nn.VectorOf(m.Layers[block].Vecs, role); v != nil {
+		if block >= 0 && int(block) < len(first) && first[block] >= 0 {
+			if v := nn.VectorOf(m.Layers[first[block]].Vecs, role); v != nil {
 				return v, nil
 			}
 		}
@@ -2333,18 +2341,37 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if v := c.Vision(); v != nil && v.Tower != nil {
 		nvis = int(v.NLayer) + audioBlocks(v)
 	}
-	m.Layers = make([]Layer, cfg.NLayer+cfg.NPredict, max(cfg.NLayer+cfg.NPredict, int(c.H.NBlocks))+nvis)
+	m.Layers = make([]Layer, cfg.NLayer+cfg.NPredict, max(cfg.NLayer+cfg.NPredict, c.TextSpace())+nvis)
+	first = make([]int, c.TextPages())
+	readers := make([][]int, c.TextPages())
+	for i := range first {
+		first[i] = -1
+	}
+	for li := range m.Layers {
+		if p := c.PageOf(li); p < len(first) {
+			if first[p] < 0 {
+				first[p] = li
+			}
+			readers[p] = append(readers[p], li)
+		}
+	}
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block < 0 || int(e.Block) >= len(m.Layers) {
+		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block < 0 || int(e.Block) >= len(readers) {
 			continue
 		}
-		v, err := vec(e.Role, e.Block)
-		if err != nil {
-			return nil, err
+		// Read once: every block reading the page holds the same floats.
+		var v []float32
+		for _, li := range readers[e.Block] {
+			if v == nil {
+				var err error
+				if v, err = entryVector(c, e); err != nil {
+					return nil, err
+				}
+			}
+			l := &m.Layers[li]
+			l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: v})
 		}
-		l := &m.Layers[e.Block]
-		l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: v})
 	}
 	// bind names one tensor a layer reads by name.
 	type bind = struct {
@@ -2357,7 +2384,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// happen before any block is read.
 		l := &m.Layers[i]
 		cur = l
-		bi := int32(i)
+		bi := int32(c.PageOf(i))
 		// A block binds what it stores, each matrix under its role: its
 		// stated graph names what it reads, and Open holds the graph to the
 		// store (graph.Verify, graph.Unbound). Named here is what code reads
@@ -2473,7 +2500,7 @@ func buildMTP(c *jlm.File, m *Model,
 	vec, optVec func(jlm.Role, int32) ([]float32, error)) error {
 	cfg := m.Cfg
 	for i := cfg.NLayer; i < cfg.NLayer+cfg.NPredict; i++ {
-		bi := int32(i)
+		bi := int32(c.PageOf(i))
 		w := &mtpWeights{Head: m.Output, Embd: m.Embd, HeadNorm: m.OutNorm}
 		var err error
 		if w.Proj, err = get(jlm.RolePredictProj, bi, -1); err != nil {
@@ -2547,10 +2574,9 @@ func bankExpert(b Tensor, role jlm.Role, nExpert, e int) (Tensor, error) {
 		return Tensor{}, fmt.Errorf("model: %v is %d x %d, want %d experts of %d rows",
 			role, b.K, b.Rows, nExpert, nrow)
 	}
-	be, bb := int(b.Typ.BlockElems()), int(b.Typ.BlockBytes())
-	if be == 0 || b.K%be != 0 {
-		return Tensor{}, fmt.Errorf("model: %v rows are %d elements, not a multiple of %s's %d",
-			role, b.K, b.Typ, be)
+	rb, err := rowBytes(b.Typ, b.K)
+	if err != nil {
+		return Tensor{}, fmt.Errorf("model: %v: %w", role, err)
 	}
 	// A packed bank is priced by the packer, not by the source block size:
 	// b.data is the payload span only.
@@ -2607,10 +2633,34 @@ func bankExpert(b Tensor, role jlm.Role, nExpert, e int) (Tensor, error) {
 	if len(b.Data) == 0 {
 		return Tensor{E: b.E, Typ: b.Typ, Rows: nrow, K: b.K}, nil
 	}
-	if want := nExpert * nrow * (b.K / be * bb); want != len(b.Data) {
+	if want := nExpert * nrow * rb; want != len(b.Data) {
 		return Tensor{}, fmt.Errorf("model: %v holds %d bytes, want %d", role, len(b.Data), want)
 	}
 	return rows(b, e*nrow, nrow)
+}
+
+// rowBytes is one stored row of k elements of type typ: whole blocks of a
+// block type, or a verbatim type's own row, NVFP4's and MXFP8's holding
+// their scales (layout.RawRowBytes).
+func rowBytes(typ quant.Type, k int) (int, error) {
+	w := 0
+	switch typ {
+	case quant.NVFP4:
+		w = 16
+	case quant.MXFP8:
+		w = 32
+	}
+	if q, ok := layout.VerbatimOf(typ); ok && w != 0 {
+		if k%w != 0 {
+			return 0, fmt.Errorf("rows of %d elements are not whole %s blocks of %d", k, typ, w)
+		}
+		return layout.RawRowBytes(q, k), nil
+	}
+	be, bb := int(typ.BlockElems()), int(typ.BlockBytes())
+	if be == 0 || k%be != 0 {
+		return 0, fmt.Errorf("rows are %d elements, not a multiple of %s's %d", k, typ, be)
+	}
+	return k / be * bb, nil
 }
 
 // rows returns the sub-tensor made of n rows of t starting at from.
@@ -2623,13 +2673,11 @@ func rows(t Tensor, from, n int) (Tensor, error) {
 	if t.Packed != nil {
 		return Tensor{}, fmt.Errorf("model: %s is packed: its rows are not a byte range", t.name())
 	}
-	be, bb := int(t.Typ.BlockElems()), int(t.Typ.BlockBytes())
-	if be == 0 || t.K%be != 0 {
-		return Tensor{}, fmt.Errorf("model: %s rows are %d elements, not a multiple of %s's %d",
-			t.name(), t.K, t.Typ, be)
+	rb, err := rowBytes(t.Typ, t.K)
+	if err != nil {
+		return Tensor{}, fmt.Errorf("model: %s: %w", t.name(), err)
 	}
-	rowBytes := t.K / be * bb
-	lo, hi := from*rowBytes, (from+n)*rowBytes
+	lo, hi := from*rb, (from+n)*rb
 	if from < 0 || n <= 0 || hi > len(t.Data) {
 		return Tensor{}, fmt.Errorf("model: %s: rows [%d,%d) of %d do not fit %d bytes",
 			t.name(), from, from+n, t.Rows, len(t.Data))

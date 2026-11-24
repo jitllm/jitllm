@@ -9,9 +9,26 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// sinkVec is an attention's per-head sinks.
-func sinkVec(o graph.Op) Operand {
-	return Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}
+// sinksOf is an attention's sinks, the operand a map reads them from: the
+// per-head weight, or the row's input (graph.Attrs.RowSinks); false where
+// it has none.
+func sinksOf(o graph.Op, c *Context) (Operand, bool) {
+	if _, _, s, _ := graph.AttendInputs(o); s >= 0 {
+		return c.value(s), true
+	}
+	if len(o.Weight) == 1 {
+		return Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}, true
+	}
+	return Operand{}, false
+}
+
+// sinkAt is head h's sink at row r, operand j of the map x states, of R
+// rows by H heads.
+func sinkAt(o graph.Op, x *exprs, j, R, H, r, h int) int {
+	if o.Attr.RowSinks {
+		return x.at(j, []int{R, H}, r, h)
+	}
+	return x.at(j, []int{H}, h)
 }
 
 // scoreMap is the score primitive.
@@ -35,7 +52,8 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	defer undo()
 	a := o.Attr
-	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 ||
+	sel, bias, _, ok := graph.AttendInputs(o)
+	if !ok || len(o.Out) != 1 || len(o.Weight) > 1 || a.RowSinks && len(o.Weight) != 0 || a.Window < 0 || a.Softcap < 0 ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
@@ -47,25 +65,25 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		kw = a.Width
 	}
 	if len(o.Reads) == 2 {
-		return attendBoth(o, c, kw)
+		return attendBoth(o, c, kw, sel, bias)
 	}
 	g, err := c.attendGeomOf(o.Reads[0], 1, kw, a)
 	if err != nil {
 		return nil, err
 	}
-	if len(o.In) == 2 {
+	g.biasBy(c, bias, a.Extent)
+	if sel >= 0 {
 		// A block selection: the positions each kv group's mask keeps, over
 		// the whole history where it is read in passes.
-		sel := c.producer(o.In[1])
-		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 || a.Window != 0 || a.Bidir {
+		m, p := maskOf(c, sel), c.producer(sel)
+		if p == nil || p.Kind != graph.OpSelect || a.NHead%p.Attr.NKVHead != 0 || a.Window != 0 || a.Bidir {
 			return nil, fmt.Errorf("an attention of %d heads, window %d, over a selection that is not its own history's", a.NHead, a.Window)
 		}
 		w, err := c.selWhole()
 		if err != nil {
 			return nil, err
 		}
-		m := maskOf(c, o.In[1])
-		g.Mask, g.MaskGroups, g.MaskKeys = &m, sel.Attr.NKVHead, w
+		g.Mask, g.MaskGroups, g.MaskKeys = &m, p.Attr.NKVHead, w
 	}
 	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), g), nil
 }
@@ -110,19 +128,20 @@ func (c *Context) attendGeomOf(r graph.StateRef, period, kw int, a graph.Attrs) 
 // running partial (foldPasses): each side's weighted values and sum scaled
 // by exp of its maximum less the larger, a side that attended nothing
 // dropped, a sink's exp(sink - max) in the sum once.
-func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
+func attendBoth(o graph.Op, c *Context, kw int, selIn, bias graph.ValueID) ([]Prim, error) {
 	a := o.Attr
 	rows, err := c.attendGeomOf(o.Reads[0], 1, kw, a)
 	if err != nil {
 		return nil, err
 	}
+	rows.biasBy(c, bias, a.Extent)
 	ents, err := c.attendGeomOf(o.Reads[1], a.Span, int(a.Words[0]), a)
 	if err != nil {
 		return nil, err
 	}
 	ents.Tag = "e."
-	if len(o.In) == 2 {
-		sel := c.producer(o.In[1])
+	if selIn >= 0 {
+		sel := c.producer(selIn)
 		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 {
 			return nil, fmt.Errorf("an attention of %d heads over a selection that is not its entries' groups", a.NHead)
 		}
@@ -130,7 +149,7 @@ func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
 		if err != nil {
 			return nil, err
 		}
-		m := maskOf(c, o.In[1])
+		m := maskOf(c, selIn)
 		ents.Mask, ents.MaskGroups, ents.MaskKeys = &m, sel.Attr.NKVHead, w
 	}
 	q, out := c.value(o.In[0]), c.value(o.Out[0])
@@ -141,7 +160,7 @@ func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
 	R, H, D := c.Step.Rows, a.NHead, a.HeadDim
 	if c.History.Passes {
 		// A pass folds both its partials into the running one.
-		return append(append(pr, pe...), foldPasses(o, R, H, D, [][3]Operand{{vr, lr, mr}, {ve, le, me}}, out)...), nil
+		return append(append(pr, pe...), foldPasses(o, c, R, H, D, [][3]Operand{{vr, lr, mr}, {ve, le, me}}, out)...), nil
 	}
 	F := ir.F32
 	heads, dims := []int{R, H}, []int{R, H, D}
@@ -158,9 +177,9 @@ func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
 	acc := x.op(OpAdd, F, x.op(OpMul, F, x.at(0, dims, r, h, d), ex), x.op(OpMul, F, x.at(3, dims, r, h, d), ey))
 	l := x.op(OpAdd, F, x.op(OpMul, F, lo, ex), x.op(OpMul, F, lj, ey))
 	in := []Operand{vr, lr, mr, ve, le, me}
-	if len(o.Weight) == 1 {
-		l = x.op(OpAdd, F, l, x.un(OpExp, F, x.op(OpSub, F, x.at(6, []int{H}, h), mn)))
-		in = append(in, sinkVec(o))
+	if sk, ok := sinksOf(o, c); ok {
+		l = x.op(OpAdd, F, l, x.un(OpExp, F, x.op(OpSub, F, sinkAt(o, &x, 6, R, H, r, h), mn)))
+		in = append(in, sk)
 	}
 	x.op(OpMul, F, acc, x.op(OpDiv, F, x.f(1), x.op(OpMax, F, l, x.f(1e-30))))
 	prims := append(pr, pe...)
@@ -192,6 +211,19 @@ type attendGeom struct {
 	Period int
 	// Tag sets this history's scratch apart from another's the op reads.
 	Tag string
+	// Bias, where set, is a row's score bias by backward distance, Extent
+	// distances a head (graph.Attrs.Extent).
+	Bias   *Operand
+	Extent int
+}
+
+// biasBy biases g's scores by the value bias, extent distances a head;
+// nothing where bias is -1.
+func (g *attendGeom) biasBy(c *Context, bias graph.ValueID, extent int) {
+	if bias >= 0 {
+		b := c.value(bias)
+		g.Bias, g.Extent = &b, extent
+	}
 }
 
 // attend is decodeAttend's primitives for the query q (rows by heads by
@@ -202,21 +234,21 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	R, H, D := c.Step.Rows, a.NHead, g.D
 	prims, values, sums, maxes := attendPartial(o, a, c, q, out, g)
 	if c.History.Passes {
-		return append(prims, foldPasses(o, R, H, D, [][3]Operand{{values, sums, maxes}}, out)...)
+		return append(prims, foldPasses(o, c, R, H, D, [][3]Operand{{values, sums, maxes}}, out)...)
 	}
 	var ox exprs
 	nv := ox.at(0, []int{R, H, D}, ox.coord(0), ox.coord(1), ox.coord(2))
 	l := ox.at(1, []int{R, H}, ox.coord(0), ox.coord(1))
 	outIn := []Operand{values, sums}
-	if len(o.Weight) == 1 {
+	if sk, ok := sinksOf(o, c); ok {
 		// A sink is one more logit a head in the denominator alone: the
 		// sum gains exp(sink - max), the max the keys' alone, so the
 		// attention keeps the form of one without (the split's partitions
 		// and their combine). A sink past the max by more than a float's
 		// exponent makes the sum infinite and the row zero, its limit.
 		m := ox.at(2, []int{R, H}, ox.coord(0), ox.coord(1))
-		l = ox.op(OpAdd, ir.F32, l, ox.un(OpExp, ir.F32, ox.op(OpSub, ir.F32, ox.at(3, []int{H}, ox.coord(1)), m)))
-		outIn = append(outIn, maxes, sinkVec(o))
+		l = ox.op(OpAdd, ir.F32, l, ox.un(OpExp, ir.F32, ox.op(OpSub, ir.F32, sinkAt(o, &ox, 3, R, H, ox.coord(0), ox.coord(1)), m)))
+		outIn = append(outIn, maxes, sk)
 	}
 	ox.op(OpMul, ir.F32, nv, ox.op(OpDiv, ir.F32, ox.f(1), ox.op(OpMax, ir.F32, l, ox.f(1e-30))))
 	return append(prims, Prim{Kind: PrimMap, Shape: []int{R, H, D}, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}})
@@ -262,6 +294,18 @@ func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g atte
 	valid := sx.op(OpLess, ir.Pred, sx.op(OpSub, U, spos, sfirst), sx.op(OpSub, U, sx.live(), sfirst))
 	dot := sx.at(0, keys, sx.coord(0), sx.coord(1), sx.coord(2))
 	score := sx.op(OpMul, F, dot, sx.f(float32(a.Scale)))
+	biasAt := 3
+	if g.Mask != nil {
+		biasAt = 4
+	}
+	if g.Bias != nil {
+		// The key's backward distance, unsigned: a key past the row's own
+		// position wraps past the extent and gains nothing.
+		E := uint32(g.Extent)
+		dist := sx.op(OpSub, U, hs.row(&sx, rowWrite), spos)
+		b := sx.at(biasAt, []int{R, H, g.Extent}, sx.coord(0), sx.coord(1), sx.op(OpMin, U, dist, sx.u(E-1)))
+		score = sx.op(OpAdd, F, score, sx.sel(F, sx.op(OpLess, ir.Pred, dist, sx.u(E)), b, sx.f(0)))
+	}
 	if c := float32(a.Softcap); c > 0 {
 		e := sx.un(OpExp, F, sx.op(OpMul, F, sx.f(2/c), score))
 		score = sx.op(OpMul, F, sx.f(c), sx.op(OpSub, F, sx.f(1), sx.op(OpDiv, F, sx.f(2), sx.op(OpAdd, F, e, sx.f(1)))))
@@ -318,12 +362,16 @@ func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g atte
 		desc = TableWindows.op()
 	}
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, g.Pages}, ops[1:]...) }
-	// The score map reads the mask as its fourth operand.
+	// The score map reads the mask as its fourth operand, the bias past it.
 	withMask := func(d Operand) []Operand {
+		ops := tables(d)
 		if g.Mask != nil {
-			return tables(d, *g.Mask)
+			ops = append(ops, *g.Mask)
 		}
-		return tables(d)
+		if g.Bias != nil {
+			ops = append(ops, *g.Bias)
+		}
+		return ops
 	}
 	prims = []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
@@ -357,7 +405,7 @@ func foldsAPass(p Prim) bool {
 // the fold: the values over the sum, a sink's exp(sink - max) in the sum
 // alone. A partial of sum zero has attended nothing, whatever its maximum:
 // the first pass folds into zeros.
-func foldPasses(o graph.Op, R, H, D int, parts [][3]Operand, out Operand) []Prim {
+func foldPasses(o graph.Op, c *Context, R, H, D int, parts [][3]Operand, out Operand) []Prim {
 	U, F := ir.U32, ir.F32
 	runs, heads, dims := []int{R, H, D + 2}, []int{R, H}, []int{R, H, D}
 	ri := 3 * len(parts)
@@ -398,10 +446,10 @@ func foldPasses(o graph.Op, R, H, D int, parts [][3]Operand, out Operand) []Prim
 	er, eh := ex.coord(0), ex.coord(1)
 	l := ex.at(0, runs, er, eh, ex.u(uint32(D+1)))
 	in := []Operand{TableRunOut.op()}
-	if len(o.Weight) == 1 {
+	if sk, ok := sinksOf(o, c); ok {
 		m := ex.at(0, runs, er, eh, ex.u(uint32(D)))
-		l = ex.op(OpAdd, F, l, ex.un(OpExp, F, ex.op(OpSub, F, ex.at(1, []int{H}, eh), m)))
-		in = append(in, sinkVec(o))
+		l = ex.op(OpAdd, F, l, ex.un(OpExp, F, ex.op(OpSub, F, sinkAt(o, &ex, 1, R, H, er, eh), m)))
+		in = append(in, sk)
 	}
 	ex.op(OpMul, F, ex.at(0, runs, er, eh, ex.coord(2)), ex.op(OpDiv, F, ex.f(1), ex.op(OpMax, F, l, ex.f(1e-30))))
 	return []Prim{
