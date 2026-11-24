@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,57 @@ func notRun() map[string]string {
 		m["github.com/jitllm/jitllm/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
 	}
 	return m
+}
+
+// sharded names the packages whose one test binary comes near goTest's
+// -timeout on the slowest runner (macOS: the engine at 2581 s and the composer
+// at 2423 s of 2700 on main), and how many binaries each is run as. Each shard
+// holds a share of the package's top-level tests under the same timeout, so a
+// hung test still fails its shard.
+func sharded() map[string]int {
+	return map[string]int{
+		"github.com/jitllm/jitllm/engine":   4,
+		"github.com/jitllm/jitllm/composer": 3,
+	}
+}
+
+type testRun struct {
+	name, dir string
+	args      []string
+}
+
+// shards lists pkg's top-level tests and deals them round-robin into n runs,
+// each a -run of the names it holds.
+func shards(dir, pkg string, n int) ([]testRun, error) {
+	cmd := exec.Command("go", "test", "-list", ".", pkg)
+	cmd.Dir = dir
+	cmd.Stderr = os.Stderr
+	b, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("go test -list %s: %w", pkg, err)
+	}
+	var names []string
+	for _, f := range strings.Fields(string(b)) {
+		if strings.HasPrefix(f, "Test") || strings.HasPrefix(f, "Example") || strings.HasPrefix(f, "Fuzz") {
+			names = append(names, f)
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("go test -list %s: no tests listed", pkg)
+	}
+	parts := make([][]string, n)
+	for i, t := range names {
+		parts[i%n] = append(parts[i%n], regexp.QuoteMeta(t))
+	}
+	base := pkg[strings.LastIndex(pkg, "/")+1:]
+	var runs []testRun
+	for i, p := range parts {
+		if len(p) == 0 {
+			continue
+		}
+		runs = append(runs, testRun{fmt.Sprintf("%s-%d", base, i+1), dir, []string{"-run", "^(" + strings.Join(p, "|") + ")$", pkg}})
+	}
+	return runs, nil
 }
 
 func main() {
@@ -102,17 +154,23 @@ func modelFree() bool {
 	if err != nil {
 		fatal(err)
 	}
+	split := sharded()
 	var rootPkgs []string
 	for _, p := range pkgs {
-		if _, ok := skip[p]; !ok {
+		_, skipped := skip[p]
+		_, alone := split[p]
+		if !skipped && !alone {
 			rootPkgs = append(rootPkgs, p)
 		}
 	}
-	type testRun struct {
-		name, dir string
-		args      []string
-	}
 	runs := []testRun{{"root", root, rootPkgs}}
+	for _, p := range slices.Sorted(maps.Keys(split)) {
+		sr, err := shards(root, p, split[p])
+		if err != nil {
+			fatal(err)
+		}
+		runs = append(runs, sr...)
+	}
 	// The jitllmtest tag builds the comparison implementations and the tier
 	// forcing hooks, so the SSE tier's kernels run on an AVX2 runner. amd64
 	// only: the tier does not exist elsewhere.
