@@ -394,11 +394,11 @@ func (p Flash) form(c expChain, d Device) ([]*Kernel, bool) {
 	b.NC = nc
 	no := c.last.Bufs[c.last.Stores[0].Buf].Operand
 	b.part = Operand{Kind: OperandScratch, Name: no.Name + ".flashpart", Of: no.Of}
-	b.stride = flashParts.stride(Dv)
+	b.stride = flashParts().stride(Dv)
 	k = b.kernel()
 	hm := *h
 	hm.Rows, hm.Query, hm.Dim = R, H, Dv
-	mg := SplitRange{Work: flashParts}.merge(c.last, hm, b.NC, b.stride, b.part, c.vl.out, c.sm.out, c.mx.out)
+	mg := SplitRange{Work: flashParts()}.merge(c.last, hm, b.NC, b.stride, b.part, c.vl.out, c.sm.out, c.mx.out)
 	mg.Of, mg.Capacity = c.last.Of, c.last.Capacity
 	if past == 0 {
 		return []*Kernel{k, mg}, true
@@ -484,7 +484,7 @@ const flashThreadRegs = 255
 
 // flashParts is a split flash's partial: a row and head's weighted sums,
 // then its maximum and its sum, a slot each workgroup of the tile.
-var flashParts = Workgroups{Pad: 1, Copies: 1}
+func flashParts() Workgroups { return Workgroups{Pad: 1, Copies: 1} }
 
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more
