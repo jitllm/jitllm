@@ -433,6 +433,8 @@ func (e *lowerer) get(i int) ir.Value {
 		v = b.TileMMA(x, y, z)
 	case OpTileScale:
 		v = b.TileScaleRows(e.get(nd.A), e.params[nd.Buf], e.get(nd.B))
+	case OpTileScaleAdd:
+		v = b.TileScaleRowsAdd(e.get(nd.A), e.params[nd.Buf], e.get(nd.B), e.get(nd.C))
 	case OpMMA:
 		vs := make([]ir.Value, len(nd.Ax))
 		for j, a := range nd.Ax {
@@ -608,7 +610,7 @@ func (n *Kernel) BufsReached() []bool {
 	r := make([]bool, len(n.Bufs))
 	for _, nd := range n.Nodes {
 		switch nd.Op {
-		case OpLoad, OpTileLoad, OpTileScale:
+		case OpLoad, OpTileLoad, OpTileScale, OpTileScaleAdd:
 			r[nd.Buf] = true
 		}
 	}

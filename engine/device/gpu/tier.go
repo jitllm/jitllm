@@ -207,15 +207,6 @@ type Config struct {
 	// than this goes in passes over its pages, folded (pagedstream.go).
 	StagedPassKeys int
 
-	// KVF16 stores the V cache as packed binary16 instead of float32, halving
-	// both the bytes AttnAcc reads per position and the VRAM the cache holds.
-	// It is a field so `jitllm verify -ab` can alternate it in one process
-	// against one copy of the device weights.
-	//
-	// It is V only for now. RoPE writes the K cache and, under the NEOX layout,
-	// produces its two outputs half a head apart rather than adjacent, so K
-	// cannot be packed without restructuring the rotation.
-	KVF16 bool
 	// Attention history is paged (tier/pagedattn.go,
 	// .notes/design/device-kv-paging.md): a sequence grows by appending pages,
 	// and a page that does not fit is paged out or refused. KVPage is the
@@ -486,6 +477,11 @@ type Stats struct {
 	// AttendLaunches counts, as MatrixLaunches, the launches of a part's
 	// attention formed on the matrix unit (composer.Flash).
 	AttendLaunches [nn.NumParts]int
+	// SplitAttends counts the launches of attentions split past some
+	// history, and of their merges (composer.Flash's split); WholeAttends
+	// those same attentions' whole forms, launched below it. A call
+	// launches one or the other.
+	SplitAttends, WholeAttends int
 	// ComposedLanes is the subgroup the composer formed the served parts for
 	// (Config.ComposedLanes, else the device's lanes): the selection check of
 	// a gate that narrows it.
@@ -897,6 +893,8 @@ func (s *Stats) add(o Stats) {
 		s.PartsReplayed[i] += o.PartsReplayed[i]
 	}
 	s.UnformedAtStep += o.UnformedAtStep
+	s.SplitAttends += o.SplitAttends
+	s.WholeAttends += o.WholeAttends
 	for i := range s.UnformedAtStepParts {
 		s.UnformedAtStepParts[i] += o.UnformedAtStepParts[i]
 	}
@@ -2489,7 +2487,6 @@ func (g *devTier) Close() {
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
 	g.quiesce()
-	g.freeConvs()
 	g.partsClose()
 	g.freeMarks()
 	for _, ds := range g.sess {

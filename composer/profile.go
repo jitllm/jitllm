@@ -12,7 +12,14 @@ func gpuProfile() Profile {
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16}, Passes: []Pass{
 		Offsets{Table: TableQOff.op()},
 		RunLengths{Grain: 128, Align: 32},
-		Flash{Rows: 128, Keys: 32, Shared: 48 << 10, Half: true},
+		// Launch and Plane are fitted to a V100's merge of a 512-row chunk
+		// (21.5 us and 5.5 us a word of each unit's 26214 a partial, at the
+		// 6.1 ps a product its 128-wide heads' blocks run at, two
+		// workgroups a unit): the split prices less past 928 positions
+		// there and past 896 for 256-wide heads, both measured losing at 512
+		// (437 us against 460; 506 against 523) and winning at 1536 (815
+		// against 730; 907 against 873).
+		Flash{Rows: 128, Keys: 32, Shared: 48 << 10, Half: true, Launch: 7 << 19, Plane: 34},
 		SplitRange{Work: mainWorkgroups()},
 		WorkFuse{Work: mainWorkgroups()},
 		HeadGroups{Work: mainWorkgroups()},

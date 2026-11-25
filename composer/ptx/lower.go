@@ -570,7 +570,11 @@ func Lower(k *ir.Kernel, target string, opts ...Option) (string, error) {
 			tl.regs[v] = tl.splat(*o.Tile, reg[a0])
 
 		case ir.OpTileScale:
-			tl.regs[v] = tl.scale(*o.Tile, tl.regs[a0], reg[a1], reg[a2])
+			var add []Reg
+			if len(o.Vargs) == 1 {
+				add = tl.regs[o.Vargs[0]]
+			}
+			tl.regs[v] = tl.scale(*o.Tile, tl.regs[a0], reg[a1], reg[a2], add)
 
 		case ir.OpTileMMA:
 			tl.regs[v] = tl.mma(*k.Ops[a0-1].Tile, *k.Ops[a1-1].Tile, *k.Ops[a2-1].Tile,

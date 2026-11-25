@@ -228,7 +228,7 @@ func WithMMATile(mt, nt int) Option {
 func WithArena(n uint64) Option { return func(o *openOpts) { o.kb.arena = n } }
 
 // WithConfig applies f to the Config the tier is built with, which is where the
-// A/B arms live: NoGraph, NoBatch, NoTail, NoMMA, KVF16, PerLayerSubmit and
+// A/B arms live: NoGraph, NoBatch, NoTail, NoMMA, PerLayerSubmit and
 // StageLimit. One option
 // rather than a wrapper per field keeps each field's documentation in one
 // place.

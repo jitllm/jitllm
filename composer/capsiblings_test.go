@@ -39,14 +39,14 @@ func bindsRole(c composer.Code, r jlm.Role) bool {
 func projectionLaunches(codes []composer.Code, rows int, together ...[]jlm.Role) (int, bool) {
 	n, joined := 0, true
 	for _, c := range codes {
-		if c.Runs(rows) && slices.ContainsFunc(projectionRoles(), func(r jlm.Role) bool { return bindsRole(c, r) }) {
+		if c.Runs(rows, 0) && slices.ContainsFunc(projectionRoles(), func(r jlm.Role) bool { return bindsRole(c, r) }) {
 			n++
 		}
 	}
 	for _, roles := range together {
 		one := false
 		for _, c := range codes {
-			all := c.Runs(rows)
+			all := c.Runs(rows, 0)
 			for _, r := range roles {
 				all = all && bindsRole(c, r)
 			}
@@ -93,7 +93,7 @@ func TestCapacitySiblingsLaunchAsOneRow(t *testing.T) {
 		a, _ := projectionLaunches(apart, rows)
 		all, matrix := 0, false
 		for _, c := range codes {
-			if c.Runs(rows) {
+			if c.Runs(rows, 0) {
 				all++
 				matrix = matrix || c.Matrix != [2]int{}
 			}
@@ -274,7 +274,7 @@ func TestComposedGPUCapacitySiblings(t *testing.T) {
 							}
 						}
 						n, together := projectionLaunches(codes, L, []jlm.Role{jlm.RoleAttnK, jlm.RoleAttnV}, []jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp})
-						matrix := slices.ContainsFunc(codes, func(c composer.Code) bool { return c.Runs(L) && c.Matrix != [2]int{} })
+						matrix := slices.ContainsFunc(codes, func(c composer.Code) bool { return c.Runs(L, 0) && c.Matrix != [2]int{} })
 						switch {
 						case together == matrix:
 							t.Errorf("%s: a call of %d rows, the matrix unit's %v, runs k and v and gate and up together %v", name, L, matrix, together)
@@ -388,7 +388,7 @@ func runRolesAt(d backend.Device, op *loneOp, ins map[graph.ValueID][]float32, w
 				outBufs[o.Value] = b
 			}
 		}
-		if !c.Runs(rows) {
+		if !c.Runs(rows, 0) {
 			continue
 		}
 		groups := c.Groups

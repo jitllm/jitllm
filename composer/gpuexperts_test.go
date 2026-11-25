@@ -233,7 +233,7 @@ func TestComposedGPUExperts(t *testing.T) {
 						}
 						vectorAt := func(L int) bool {
 							for _, c := range formed {
-								if c.Band.Upto > 0 && c.Runs(L) {
+								if c.Band.Upto > 0 && c.Runs(L, 0) {
 									return true
 								}
 							}
@@ -376,7 +376,7 @@ func runExperts(d backend.Device, codes []composer.Code, kerns []backend.Kernel,
 				args[i] = b
 			}
 		}
-		if !c.Runs(rows) {
+		if !c.Runs(rows, 0) {
 			continue
 		}
 		if err := kerns[ci].Launch(c.LiveGroups(rows), c.GPU.Group[0], args...); err != nil {

@@ -25,8 +25,8 @@ package model
 
 // attnWidths is the key and value widths the attention kernels are emitted
 // for. They differ only under MLA, where a score covers the whole cached row
-// and the accumulation only its latent prefix. NewInstance and stepDownKVToF32
-// must both derive them here.
+// and the accumulation only its latent prefix. Every rebuild of the cache
+// (NewInstance, setKVFmt) derives them here.
 func (c *Config) AttnWidths() (hdK, hdV int) {
 	if c.KVLoraRank != 0 {
 		return c.KVLoraRank + c.NRot, c.KVLoraRank

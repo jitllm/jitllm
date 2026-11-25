@@ -1213,9 +1213,9 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	probe.Close()
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true, budget: 3 * page})
 	defer m.Close()
-	// The device steps an empty binary16 history down to f32 as it attaches,
-	// so the host arms hold f32 too: among 4096 experts with one used, the
-	// rounding alone flips a near tie (position 2 on arm64, NMSE 0.36).
+	// Every arm holds an f32 history, the card's pools the instance's type:
+	// among 4096 experts with one used, binary16's rounding alone flips a
+	// near tie against an f32 arm (position 2 on arm64, NMSE 0.36).
 	openOpts2 = append(openOpts2, WithKVF16(false))
 	t.Logf("page %d bytes (%.2f MiB), chunk %d", page, float64(page)/(1<<20), jlm.Chunk)
 	if b := 3 * page; !budgetEvicts(m, b) {

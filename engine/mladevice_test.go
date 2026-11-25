@@ -366,22 +366,21 @@ func TestMLAOnADeviceWithPoisonedBuffers(t *testing.T) {
 	}
 }
 
-// TestMLAStepsTheKVDownAtTheRightWidths covers the SHIPPING KV width on an MLA
-// model (f16, the amd64 default), which every gate beside it pins to f32.
-//
-// SetDeviceLayers steps an f16 cache down to f32 and re-emits the host
-// attention kernels; they must use MLA's widths (KVLoraRank+NRot scores,
-// KVLoraRank values), not HeadDim. Those kernels only run on host blocks, so
-// this places one block and leaves the rest home. It fails against
-// stepDownKVToF32 going through AddAttn.
-func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
+// TestMLAKeepsItsBinary16OnACard covers the SHIPPING KV width on an MLA model
+// (binary16, the amd64 default), which every gate beside it pins to f32: one
+// block placed on a card and the rest left on the CPU, the history stays
+// binary16 on both, the card's pages holding the latent rows' halves as the
+// CPU's do, and the CPU's attention runs at MLA's widths (KVLoraRank+NRot
+// scores, KVLoraRank values), not HeadDim. The logits are held to the CPU's
+// own binary16 run.
+func TestMLAKeepsItsBinary16OnACard(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89}
 	ran := 0
 	for _, name := range []string{"synth-deepseek-dense", "synth-deepseek"} {
 		t.Run(name, func(t *testing.T) {
 			src := hfContainer(t, name)
-			// The REFERENCE is f16 too: this gate is about the step-down
-			// emitting the right kernels, not about what an f16 cache costs.
+			// The REFERENCE is binary16 too: this gate is about the card
+			// holding the history as it is, not about what binary16 costs.
 			instOpts := []Option{WithKVF16(true)}
 			m, err := model.Open(src)
 			if err != nil {
@@ -407,18 +406,15 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 					st := testInstance(t, m, len(ids)+1, instOpts...)
 					defer st.Close()
 					if !st.KVIsF16() {
-						t.Fatal("the cache is not f16, so no step-down happens and " +
-							"this gate proved nothing")
+						t.Fatal("the cache is not binary16, so this gate proves nothing")
 					}
-					// ONE block: the rest stay on the host and run the attention
-					// kernels the step-down emitted.
+					// ONE block: the rest stay on the host and run its attention.
 					st.SetDeviceLayers(gpux, 1)
 					if n := st.GPULayers(); n != 1 {
-						t.Skipf("%s placed %d block(s), not 1", spec, n)
+						t.Fatalf("%s placed %d block(s), not 1", spec, n)
 					}
-					if st.KVIsF16() {
-						t.Fatal("the cache is still f16 after SetDeviceLayers -- the " +
-							"step-down did not run and this gate proved nothing")
+					if !st.KVIsF16() {
+						t.Fatal("the cache stepped down from binary16 when the card took a block")
 					}
 					got := runIDs(t, st, ids)
 					worst, worstD := compare(t, want, got)

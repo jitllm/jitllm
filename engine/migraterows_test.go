@@ -219,13 +219,10 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			if host.opt.kvTypeSet && host.KVType() != host.opt.kvType {
 				t.Fatalf("asked for a %v KV cache and the batch holds %v", host.opt.kvType, host.KVType())
 			}
-			// Attaching steps an empty binary16 history down to f32, so the
-			// reference holds its history as every device arm does: a
-			// binary16 reference parts from them by its rounding alone, 4.1e-3
-			// at one of synth-phimoe's positions under its long factors.
-			if host.kvFmt == nn.KVF16 {
-				host.stepDownKVToF32()
-			}
+			// The reference holds its history in the format every device arm
+			// keeps (a card's pool is the instance's type): an f32 reference
+			// parts from a binary16 card by the rounding alone, 4.1e-3 at one
+			// of synth-phimoe's positions under its long factors.
 			want := drive(host, func(int) {})
 			host.Close()
 

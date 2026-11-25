@@ -111,12 +111,6 @@ func TestGraphKeySeparatesTheRecurrentParity(t *testing.T) {
 	if len(m) != 2 {
 		t.Fatalf("a graph map holds %d recording(s) for two parities", len(m))
 	}
-	// And nothing else moved: the parity must not alias an existing axis.
-	c := a
-	c.kvF16 = !a.kvF16
-	if c == b {
-		t.Fatal("the parity and the f16 arm are the same bit")
-	}
 }
 
 // TestRangeParityIsTheRangesOwn: a recording is keyed by the halves its own

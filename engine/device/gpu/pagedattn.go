@@ -96,24 +96,22 @@ func (g *devTier) pagedPlan(p *nn.LayerPlan) bool {
 	return g.paged && !p.NonCausal
 }
 
-// kvGeomOf is a plan's page geometry. MLA's is one row-major latent row a
-// position, float32 (the paged kernels read no packed latent), and no V
-// buffer: the value is the row's prefix.
+// kvGeomOf is a plan's page geometry, its rows of the type the plan's
+// history is (kvPoolOf). MLA's is one row-major latent row a position and no
+// V buffer: the value is the row's prefix.
 func (g *devTier) kvGeomOf(p *nn.LayerPlan) kvGeom {
-	latent := p.MLA()
-	pool := kvPoolOf(p)
-	return kvGeom{kvRow: p.KVRow(), f16: g.KVF16 && !latent && pool == (composer.Pool{}), mla: latent, pool: pool}
+	return kvGeom{kvRow: p.KVRow(), mla: p.MLA(), pool: kvPoolOf(p)}
 }
 
 // kvPoolOf is the pool a plan's typed history holds its rows in, as the
-// CPU device's pages hold them (nn.BlockSpec's KVRow, KVBlock and KVBF16),
-// none for a history of floats.
+// CPU device's pages hold them (nn.BlockSpec's KVRow, KVBlock, KVBF16, and
+// binary16 where no store keeps floats), none for a history of floats.
 func kvPoolOf(p *nn.LayerPlan) composer.Pool {
 	if p.Spec == nil {
 		return composer.Pool{}
 	}
 	s := p.Spec
-	return composer.Pool{Row: s.KVRow, Block: s.KVBlock, Half: s.KVBF16, BF16: s.KVBF16}
+	return composer.Pool{Row: s.KVRow, Block: s.KVBlock, Half: s.KVBF16 || !s.F32 && s.KVRow == 0, BF16: s.KVBF16}
 }
 
 // kvPages is the device's KV pool, made on first use. Callers hold g.mu.
@@ -526,7 +524,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// (readRows): their forms at the pool's page are formed here, with the
 	// block, and a move or a read only runs them.
 	pl := kp.layers[key0]
-	if c, _, ok := pl.geom.convOf(kp.p); ok {
+	if c, ok := pl.geom.convOf(kp.p); ok {
 		if err := g.formConv(c); err != nil {
 			return err
 		}
@@ -545,8 +543,12 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// A block keeping histories past its rows' holds them beside its rows
 	// at its rows' seats, and sends them home with its rows.
 	for _, k := range p.Graph.KeptHistories() {
-		eg := kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
-		if err := g.addKVLayer(kp, histKey(key0, k.Hist), eg, 1+seats); err != nil {
+		eg := keptGeom(k, want.pool)
+		err := g.addKVLayer(kp, histKey(key0, k.Hist), eg, 1+seats)
+		if err == nil {
+			err = g.formGeomConv(eg, kp.p)
+		}
+		if err != nil {
 			if fresh {
 				delete(l.kv, sid)
 			}
@@ -816,13 +818,12 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return fmt.Errorf("the sequence holds %d page(s) and %d positions need %d", len(ids), pos, npages)
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
-	// A binary16 V pool's pages, and a typed history's keys and values, are
-	// narrowed and widened on the card, through the conversions formed with
+	// A typed history's keys and values are narrowed and widened on the card, through the conversions formed with
 	// the block (pagedLayer). A typed page's keys are by position, as a
 	// latent page's are: kf is a page's keys as floats.
 	var hv *pageConv
-	conv, keys, convs := pl.geom.convOf(P)
-	if convs {
+	conv, keys := pl.geom.convOf(P)
+	if keys {
 		var err error
 		if hv, err = g.keptConv(conv); err != nil {
 			return err
@@ -960,16 +961,6 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 			hk, hvs = append(hk, page[:kw]...), append(hvs, page[kw:]...)
 		}
 		kAll, vAll = append(hk, kAll...), append(hvs, vAll...)
-	} else if e > 0 && !keys {
-		hk := make([]float32, 0, npages*kw)
-		for _, page := range pl.home[s][:e] {
-			if page == nil {
-				hk = append(hk, make([]float32, kw)...)
-				continue
-			}
-			hk = append(hk, page[:kw]...)
-		}
-		kAll = append(hk, kAll...)
 	}
 	for t := 0; t < pos; t++ {
 		j, o := t/P, t%P

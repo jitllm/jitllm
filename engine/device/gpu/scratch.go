@@ -421,7 +421,9 @@ func (g *devTier) allocRagOut(bs *blockScratch, vocab, nembd int) error {
 		if bs.headIn, err = g.alloc(n * nembd * bs.p.Streams() * 4); err != nil {
 			return err
 		}
-		bs.headReq, err = g.alloc(4 * (composer.RequestRows + n))
+		if bs.headReq == nil {
+			bs.headReq, err = g.alloc(4 * (composer.RequestRows + n))
+		}
 	}
 	return err
 }

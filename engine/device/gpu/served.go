@@ -136,6 +136,10 @@ type partCode struct {
 	// matrix pass formed whose tiles it multiplies, not the kernel that
 	// writes its rows' factor for it. attend is an attention formed there.
 	matrix, attend bool
+	// split marks an attention dealt over workgroups past some history
+	// (composer.Code.Keys), its merge among them; whole the same attention
+	// formed whole, launched at the histories below.
+	split, whole bool
 	// sweep is a code a form over passes runs once a pass (composer.Code.Sweep).
 	sweep bool
 }
@@ -310,7 +314,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 		Buffers: backend.Bindings(g.dev), Group: int(g.groupMost.Load())}
 	if dev.Matrix[0] > 0 {
 		dev.Fragment = backend.Fragment(g.dev)
-		dev.ScaleRows = g.composedScale()
+		dev.ScaleRows, dev.ScaleAdd = g.composedScale()
 	}
 	dev.Tile = g.matrixTile(r, dev, rows)
 	return composer.Request{
@@ -354,22 +358,22 @@ func (g *devTier) composedMatrix() [3]int {
 	return [3]int{s.M, s.N, s.K}
 }
 
-// composedScale reports whether the device lowers a row scale of the
-// matrix tile's accumulator (composer.Device.ScaleRows), asked once.
-func (g *devTier) composedScale() bool {
+// composedScale reports whether the device carries a running sum in a
+// matrix tile's accumulator, its rows scaled (composer.Device.ScaleRows),
+// and whether it lowers the row scale fused with an add
+// (composer.Device.ScaleAdd); the lowering is asked once.
+//
+// sm_70's quad-pair accumulators do not carry one: with the sum through the
+// unit's accumulate, the float32 prompt gate's worst step on Qwen3-1.7B read
+// 0.00522 against its 0.00212 bound, and 0.000621 without the row scale.
+func (g *devTier) composedScale() (rows, add bool) {
 	if g.scaleCap == 0 {
 		g.scaleCap = -1
-		// Not on sm_70's quad-pair accumulators until their row scale is gated
-		// alone: with it the float32 prompt gate's worst step on Qwen3-1.7B
-		// read 0.00522 against its 0.00212 bound, without it 0.000621.
-		if backend.TileQuadPairs(g.dev) {
-			return false
-		}
 		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32, Scale: true}); ok {
 			g.scaleCap = 1
 		}
 	}
-	return g.scaleCap > 0
+	return g.scaleCap > 0 && !backend.TileQuadPairs(g.dev), g.scaleCap > 0
 }
 
 // composedLanes is the subgroup the composer forms for: the device's lanes,
@@ -432,10 +436,10 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 	}
 	for ci, c := range codes {
 		geom := composer.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
-			LiveGroup: c.LiveGroup, Work: c.Work, Band: c.Band, Cut: c.Cut}
+			LiveGroup: c.LiveGroup, Work: c.Work, Band: c.Band, Cut: c.Cut, Keys: c.Keys}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
 			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA }),
-			attend: slices.Contains(c.Passes, "flash"), sweep: c.Sweep})
+			attend: slices.Contains(c.Passes, "flash"), split: c.Keys.Past > 0, whole: c.Keys.Upto > 0, sweep: c.Sweep})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -974,8 +978,9 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 }
 
 // unitLaunches is the launches of a form's kernels on the matrix unit: of
-// its matrices, and of its attentions.
-type unitLaunches struct{ matrix, attend int }
+// its matrices, of its attentions, and of those its split's and its whole
+// form's where it has both.
+type unitLaunches struct{ matrix, attend, split, whole int }
 
 // launchCodes is launch of the form's codes [lo, hi).
 func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backend.Buf, lo, hi int) (unitLaunches, error) {
@@ -983,7 +988,7 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 	var matrix unitLaunches
 	for i := lo; i < hi; i++ {
 		fc, bufs := &f.codes[i], sv.args[i]
-		if !fc.geom.Runs(sv.rows) {
+		if !fc.geom.Runs(sv.rows, sv.keys) {
 			continue
 		}
 		for j, a := range f.args[i] {
@@ -1025,6 +1030,12 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 		}
 		if fc.attend {
 			matrix.attend++
+		}
+		if fc.split {
+			matrix.split++
+		}
+		if fc.whole {
+			matrix.whole++
 		}
 	}
 	return matrix, nil
@@ -1164,6 +1175,9 @@ func (g *devTier) dropPromptInst(bs *blockScratch, f *partForm) {
 // partsClose frees every lane's served parts and every form. Callers hold
 // g.mu.
 func (g *devTier) partsClose() {
+	// A page conversion's forms are among them: it goes too, and the next
+	// placement forms it again (formConv).
+	g.freeConvs()
 	g.eachLane(func(l *lane) { g.dropLaneParts(l) })
 	for k, f := range g.servedForms {
 		f.close()
@@ -1348,7 +1362,6 @@ type servedKey struct {
 	graph      *graph.Graph
 	rows       int
 	keys, page int
-	half       bool
 	latent     bool
 	pool       composer.Pool
 	t          jlm.Type
@@ -1378,6 +1391,10 @@ type servedPart struct {
 	// rows, where set, is the call's rows, the word its table states: a
 	// launch runs their groups, not its form's every row's.
 	rows int
+	// keys, where set, is the most history positions a row of the call
+	// reads, as its recording's key holds them: a form running another way
+	// past some (composer.Code.Keys) launches the way they take.
+	keys int
 }
 
 // errServedCold is a served part asked for inside a capture before it
@@ -1632,6 +1649,8 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind nn.Pa
 	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += matrix.matrix
 	g.AttendLaunches[kind] += matrix.attend
+	g.SplitAttends += matrix.split
+	g.WholeAttends += matrix.whole
 	return nil
 }
 
@@ -1731,6 +1750,8 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += m0.matrix + m1.matrix
 	g.AttendLaunches[kind] += m0.attend + m1.attend
+	g.SplitAttends += m0.split + m1.split
+	g.WholeAttends += m0.whole + m1.whole
 	return nil
 }
 
@@ -2426,15 +2447,15 @@ func (f *partForm) apartAt(n, rows int) bool {
 }
 
 // inPlace says the form may write output out over input in at a call of
-// rows rows (zero: every code): every kernel the call launches that reads
-// in launches before the first that writes out. One kernel that reads in
+// rows rows (zero: every code) at any history: every kernel the call may
+// launch that reads in launches before the first that writes out. One kernel that reads in
 // at the elements it writes out at is not enough: a launch clamps its
 // surplus threads to the last element, and every lane storing an element
 // may store before another lane reads it, adding twice (RULE 13).
 func (f *partForm) inPlace(in, out, rows int) bool {
 	lastRead, firstWrite := -1, len(f.codes)
 	for i, args := range f.args {
-		if rows > 0 && !f.codes[i].geom.Runs(rows) {
+		if rows > 0 && !f.codes[i].geom.RunsAtSome(rows) {
 			continue
 		}
 		for _, a := range args {
@@ -3195,7 +3216,12 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	// A ragged step's tokens at each width the lane holds a scratch for.
 	if !g.NoPromptPrewarm && bs != nil && bs.sampleGraph != nil {
 		g.prewarming = true
-		for w := range g.bbs {
+		for w, bb := range g.bbs {
+			// Over the rows the per-row logits hold (headRows), as the step
+			// samples them (bs.ragRows).
+			if bb != nil && bs.head != nil {
+				w = g.headRows(bb, bs.head.nrows)
+			}
 			if _, err := g.servedSampleAt(bs.sampleGraph, w); err != nil {
 				g.fail("the composed rows sample: " + err.Error())
 			}
@@ -3264,12 +3290,31 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		}
 	}
 	// A head over rows at each width the lane holds a scratch for, its rows
-	// a call's (composer.CallRows): a step of any count of wanted rows forms
-	// nothing.
-	for w := range g.bbs {
+	// a call's (composer.CallRows) and no more than the per-row logits hold
+	// (headRows): a step of any count of wanted rows forms nothing.
+	// A width past them takes its wanted rows a chunk at a time into a
+	// staging set of the head's rows (headChunk), the take formed here too.
+	for w, bb := range g.bbs {
+		H := w
+		if bb != nil {
+			H = g.headRows(bb, bs.head.nrows)
+		}
 		for _, f := range bs.heads {
-			if _, err := g.servedHead(bs, f, bs.hVecs, w); err != nil {
+			if _, err := g.servedHead(bs, f, bs.hVecs, H); err != nil {
 				g.fail("the composed rows head: " + err.Error())
+				return
+			}
+		}
+		if bb != nil && H < bb.rows {
+			if bb.headReq == nil {
+				var err error
+				if bb.headReq, err = g.alloc(4 * (composer.RequestRows + H)); err != nil {
+					g.fail(fmt.Sprintf("the composed take of %d of %d rows: its request: %v", H, bb.rows, err))
+					return
+				}
+			}
+			if _, err := g.servedRowTakeOf(bb.headReq, bs.p.NEmbd, bb.rows, H); err != nil {
+				g.fail(fmt.Sprintf("the composed take of %d of %d rows: %v", H, bb.rows, err))
 				return
 			}
 		}
@@ -3288,14 +3333,14 @@ func poolHistory(k kvGeom) composer.History {
 	case k.mla:
 		return composer.History{ValuesInKeys: true}
 	}
-	return composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: k.f16}}
+	return composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{}}
 }
 
 // entryHistory is how a pool of a history past a block's rows lays out its
 // pages for the composer: an entry's row a position, its values beside its
 // keys where they are not its keys, as historyMigrate reads them.
 func entryHistory(k kvGeom) composer.History {
-	return composer.History{ValuesInKeys: k.mla, Period: k.period}
+	return composer.History{Keys: k.pool, Values: k.pool, ValuesInKeys: k.mla, Period: k.period}
 }
 
 // bindHists binds into t every history block src keeps past its rows,
@@ -3535,7 +3580,7 @@ func (g *devTier) blockKey(l *layer, pl *kvLayerPool, maxSeq, page, R, seqs int,
 	if k := g.kept; g.keeping && l.linear && k != nil && k.graphs[l] != nil {
 		bg = k.graphs[l]
 	}
-	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, half: geom.f16, latent: geom.mla, pool: geom.pool, seqs: seqs,
+	return servedKey{kind: kind, graph: bg, rows: R, keys: keyBound(maxSeq), page: page, latent: geom.mla, pool: geom.pool, seqs: seqs,
 		stream: stream, held: l.pagedHeld(), context: context}
 }
 

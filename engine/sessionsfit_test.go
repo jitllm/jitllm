@@ -23,13 +23,16 @@ import (
 // holds only part of its history there and still runs. The violation is a
 // budget with no room for a second session: the second holds part of its.
 func TestACardHoldsTheSessionsItsRoomStates(t *testing.T) {
-	const ctxLen, fitMore = 512, 2
+	// A session's history is some 32 MiB at binary16: the driver's rounding
+	// of the pool's buffers moves the budget by up to 16 MiB a growth, and a
+	// room counted in histories smaller than that cannot be read.
+	const ctxLen, fitMore = 1024, 2
 	m, err := model.Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog by the river bank. ", 64), true)
+	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog by the river bank. ", 128), true)
 	if len(ids) < ctxLen {
 		t.Fatalf("the prompt is %d tokens, under the %d-token context", len(ids), ctxLen)
 	}
@@ -98,8 +101,14 @@ func TestACardHoldsTheSessionsItsRoomStates(t *testing.T) {
 		pageOuts := st.PageOuts
 		kv := st.KVBytes
 		for i := 1; ; i++ {
+			was := g.Stats()
 			prefill(i)
 			after := g.Stats()
+			d := func(a, b uint64) int64 { return int64(a) - int64(b) }
+			t.Logf("session %d: budget used %+d bytes, history %+d, pool %+d (free %+d), scratch %+d, composed %+d, row logits %+d, arena %+d, allocated %+d, rounding %+d", i,
+				d(after.BudgetUsed, was.BudgetUsed), d(after.KVBytes, was.KVBytes), d(after.KVPoolBytes, was.KVPoolBytes),
+				d(after.KVFreeBytes, was.KVFreeBytes), d(after.ScratchBytes, was.ScratchBytes), d(after.ComposedBytes, was.ComposedBytes),
+				d(after.RowLogitsBytes, was.RowLogitsBytes), d(after.ComposedArena, was.ComposedArena), d(after.Allocated, was.Allocated), d(after.RoundingBytes, was.RoundingBytes))
 			if after.PageOuts != pageOuts {
 				t.Fatalf("session %d paged %d block(s) out: the model fits, and history is what the room is for",
 					i, after.PageOuts-pageOuts)

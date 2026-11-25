@@ -3,6 +3,7 @@ package gpu
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -40,9 +41,9 @@ type hostHist struct {
 // src's histories in place of its own (kvSrc), its rows' at rgeom, window
 // win (chunked) and tail, and each past them as src keeps it (kept); and
 // each other history of src it reads past those (more, as bound states
-// each, a rows' history held as binary16 where f16, or in rgeom's typed
-// pool, as the CPU device's form reads it).
-func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bool, tail int, kept []graph.KeptHistory, more []graph.HistoryRead, bound []graph.KeptHistory, f16 bool) []hostHist {
+// each, a rows' history in rgeom's typed pool, as the CPU device's form
+// reads it).
+func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bool, tail int, kept []graph.KeptHistory, more []graph.HistoryRead, bound []graph.KeptHistory) []hostHist {
 	add := func(x hostHist) {
 		for _, y := range dst {
 			if y.h == x.h {
@@ -54,25 +55,30 @@ func hostHists(dst []hostHist, src, kvSrc int, rgeom kvGeom, win int, chunked bo
 	if src == kvSrc {
 		add(hostHist{geom: rgeom, win: win, chunked: chunked, tail: tail})
 		for _, k := range kept {
-			add(hostHist{h: k.Hist, geom: keptGeom(k)})
+			add(hostHist{h: k.Hist, geom: keptGeom(k, rgeom.pool)})
 		}
 	}
 	for j, r := range more {
 		switch {
 		case r.Block != src || j >= len(bound):
 		case r.Hist == 0:
-			add(hostHist{geom: kvGeom{kvRow: bound[j].Width, f16: f16 && !rgeom.typed(), pool: rgeom.pool}})
+			add(hostHist{geom: kvGeom{kvRow: bound[j].Width, pool: rgeom.pool}})
 		default:
-			add(hostHist{h: r.Hist, geom: keptGeom(bound[j])})
+			add(hostHist{h: r.Hist, geom: keptGeom(bound[j], rgeom.pool)})
 		}
 	}
 	return dst
 }
 
 // keptGeom is the page geometry of history k, one past its block's rows
-// (pagedLayer).
-func keptGeom(k graph.KeptHistory) kvGeom {
-	return kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
+// (pagedLayer), beside rows held in pool rows: binary16 where those are and
+// its values are its keys, as the CPU device holds it, floats otherwise.
+func keptGeom(k graph.KeptHistory, rows composer.Pool) kvGeom {
+	g := kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
+	if k.ValuesInKeys && rows == (composer.Pool{Half: true}) {
+		g.pool = rows
+	}
+	return g
 }
 
 // hostHistsOf is hostHists for placed block l reading block src for
@@ -83,10 +89,9 @@ func (g *devTier) hostHistsOf(dst []hostHist, sid uint64, l *layer, src int) []h
 	if ds := g.sess[sid]; ds != nil {
 		if t, ok := ds.hist[src]; ok {
 			rg.pool = codePool(t)
-			rg.f16 = g.KVF16 && !rg.mla && t == 0
 		}
 	}
-	return hostHists(dst, src, l.kvSrc, rg, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound, g.KVF16)
+	return hostHists(dst, src, l.kvSrc, rg, l.win, l.chunked, l.rtail, l.rkept, l.kvMore, l.rbound)
 }
 
 // lacksHists reports that this device holds no pool layer of one of
@@ -148,10 +153,8 @@ func (g *GPU) makeHostCopy(sid uint64, src int, d *devTier, hs []hostHist, p *nn
 				kp.chunked = x.chunked
 			}
 		}
-		if x.h == 0 {
-			if err := dv.formGeomConv(geom, kp.p); err != nil {
-				return err
-			}
+		if err := dv.formGeomConv(geom, kp.p); err != nil {
+			return err
 		}
 	}
 	if !widen {
@@ -346,8 +349,8 @@ func (g *devTier) writeRows(s seqID, src, from, start, to int, k, v []float32) (
 	}
 	kw, vw := tl.geom.kWords(P), tl.geom.vWords(P)
 	var hv *pageConv
-	conv, keys, convs := tl.geom.convOf(P)
-	if convs {
+	conv, keys := tl.geom.convOf(P)
+	if keys {
 		var err error
 		if hv, err = g.keptConv(conv); err != nil {
 			return 0, err
@@ -512,7 +515,7 @@ func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
 	}
 	pl := kp.layers[key]
 	P, per, w := kp.p, max(1, pl.geom.period), pl.geom.kvRow
-	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
+	kw, vw, kf := pl.geom.kWords(P), pl.geom.vWords(P), pl.geom.slots(P)*w
 	ew := w
 	if vw > 0 {
 		ew = 2 * w
@@ -520,6 +523,10 @@ func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
 	j0, j1 := from/per, to/per
 	if j1 <= j0 {
 		return nil
+	}
+	hv, err := g.entryConv(pl, P)
+	if err != nil {
+		return err
 	}
 	if len(e) < (j1-j0)*ew {
 		return fmt.Errorf("%d entries of %d floats do not fit %d", j1-j0, ew, len(e))
@@ -529,8 +536,8 @@ func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
 	if len(ids) <= last/P {
 		return fmt.Errorf("the sequence holds %d entry page(s) and %d positions need %d", len(ids), to, last/P+1)
 	}
-	page := g.hostScratch(kw + vw)
-	kPage, vPage := page[:kw], page[kw:]
+	page := g.hostScratch(kf + vw)
+	kPage, vPage := page[:kf], page[kf:]
 	cur := -1
 	for j := j0; j < j1; j++ {
 		q := (j+1)*per - 1
@@ -538,9 +545,18 @@ func (g *devTier) readEntries(s seqID, key, from, to int, e []float32) error {
 			cur = pg
 			clear(page)
 			switch id := ids[pg]; {
+			case id == 0 && pg < len(pl.home[s]) && len(pl.home[s][pg]) >= kw+vw && hv != nil:
+				if err := hv.widenPage(nil, 0, pl.home[s][pg][:kw], kPage); err != nil {
+					return err
+				}
 			case id == 0 && pg < len(pl.home[s]) && len(pl.home[s][pg]) >= kw+vw:
 				copy(page, pl.home[s][pg][:kw+vw])
 			case id == 0:
+			case hv != nil:
+				if err := hv.widenPage(pl.k, int(id)*kw*4, nil, kPage); err != nil {
+					return err
+				}
+				g.HostReadPages++
 			default:
 				if err := g.dev.Copy(pl.stage, 0, pl.k, int(id)*kw*4, kw*4); err != nil {
 					return err
@@ -582,7 +598,11 @@ func (g *devTier) writeEntries(s seqID, key, from, start, to int, e []float32) (
 	}
 	tl := kp.layers[key]
 	P, per, w := kp.p, max(1, tl.geom.period), tl.geom.kvRow
-	kw, vw := tl.geom.kWords(P), tl.geom.vWords(P)
+	kw, vw, kf := tl.geom.kWords(P), tl.geom.vWords(P), tl.geom.slots(P)*w
+	hv, err := g.entryConv(tl, P)
+	if err != nil {
+		return 0, err
+	}
 	ew := w
 	if vw > 0 {
 		ew = 2 * w
@@ -608,8 +628,8 @@ func (g *devTier) writeEntries(s seqID, key, from, start, to int, e []float32) (
 	if err := g.flushTabs(); err != nil {
 		return 0, err
 	}
-	page := g.hostScratch(kw + vw)
-	kPage, vPage := page[:kw], page[kw:]
+	page := g.hostScratch(kf + vw)
+	kPage, vPage := page[:kf], page[kf:]
 	pages := 0
 	for pg := p0; pg < p1; pg++ {
 		id := tl.owned[s][pg]
@@ -629,13 +649,27 @@ func (g *devTier) writeEntries(s seqID, key, from, start, to int, e []float32) (
 				copy(vPage[at:at+w], e[o+w:o+ew])
 			}
 		}
-		if home {
+		switch {
+		case home && hv != nil:
+			words, err := hv.narrowPage(kPage, nil, 0)
+			if err != nil {
+				return 0, err
+			}
+			copy(tl.home[s][pg], words)
+			pages++
+			continue
+		case home:
 			copy(tl.home[s][pg], page)
 			pages++
 			continue
-		}
-		if err := tl.k.WriteAt(int(id)*kw*4, f32b(kPage)); err != nil {
-			return 0, err
+		case hv != nil:
+			if _, err := hv.narrowPage(kPage, tl.k, int(id)*kw*4); err != nil {
+				return 0, err
+			}
+		default:
+			if err := tl.k.WriteAt(int(id)*kw*4, f32b(kPage)); err != nil {
+				return 0, err
+			}
 		}
 		if vw > 0 {
 			if err := tl.v.WriteAt(int(id)*vw*4, f32b(vPage)); err != nil {
@@ -695,8 +729,8 @@ func (g *devTier) readRows(s seqID, src, from, to int, k, v []float32) error {
 	}
 	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
 	var hv *pageConv
-	conv, keys, convs := pl.geom.convOf(P)
-	if convs {
+	conv, keys := pl.geom.convOf(P)
+	if keys {
 		var err error
 		if hv, err = g.keptConv(conv); err != nil {
 			return err

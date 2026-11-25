@@ -39,8 +39,12 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 // with the composer serving parts.
 func aBatchLeavesAnotherSessionAlone(t *testing.T, m *model.Model, parts nn.Parts, io ...Option) {
 	const seq, rows, before, after = 256, 3, 3, 5
+	// The per-row head is bounded to a few rows' logits (headChunk): at the
+	// reserved prompt width it is larger than half of B's history, so a card
+	// short of room declining it would leave that history room to spare.
 	open := func(t *testing.T, spec string) *gpu.GPU {
-		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			gpu.WithConfig(func(c *gpu.Config) { c.HeadRowBytes = 8 * 4 * m.Cfg.NVocab }))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}
@@ -191,7 +195,10 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *model.Model, parts nn.Part
 	}
 
 	// Room for both: B's rows grow B's caches and nobody else's.
-	var bFull uint64
+	// usedB is what the card charges once B has run beside A and retired:
+	// A, the scratch B's steps built and the pool B's history grew, which
+	// the card keeps, a spare seat's pages among them.
+	var bFull, usedB uint64
 	t.Run("room", func(t *testing.T) {
 		g := open(t, "gpu:0")
 		b := run(t, g)
@@ -199,17 +206,18 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *model.Model, parts nn.Part
 			t.Fatalf("with room for both, B placed %d of %d blocks", b.devCount(), m.Cfg.NLayer)
 		}
 		composedRan(t, parts, nil, g)
-		bFull = bPeak
-		t.Logf("A alone charged %d bytes; B holds %d for %d rows of %d", usedA, bFull, rows, seq)
+		bFull, usedB = bPeak, g.Budgets()[0].Used
+		t.Logf("A alone charged %d bytes, %d once B ran; B holds %d for %d rows of %d", usedA, usedB, bFull, rows, seq)
 	})
 	if bFull == 0 {
 		t.Fatal("the roomy arm did not run, so the tight one has no budget to derive")
 	}
 
-	// Room for A and half of B's rows: B takes blocks home for itself or the
-	// card pages them, and A keeps every one.
+	// Room for A, the scratch B's steps run in and the pool's spare seat, but
+	// not B's rows: B takes blocks home for itself or the card pages them,
+	// and A keeps every one.
 	t.Run("tight", func(t *testing.T) {
-		g := open(t, testdevices.Like(t, "cuda:0")+"="+strconv.FormatUint(usedA+bFull/2, 10))
+		g := open(t, testdevices.Like(t, "cuda:0")+"="+strconv.FormatUint(usedB-bFull, 10))
 		b := run(t, g)
 		n, pages := b.devCount(), g.Stats().PageOuts
 		if n == 0 || n == m.Cfg.NLayer && pages == 0 {

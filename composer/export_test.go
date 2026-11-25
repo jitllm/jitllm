@@ -54,3 +54,16 @@ func Q8RowsCase(R, W int) []float32 { return q8RowsCase(R, W) }
 func BlockFmts() []graph.BlockFmt { return blockFmts() }
 
 func HalvesWithinAnUlp(a, b uint32) bool { return halvesWithinAnUlp(a, b) }
+
+// FlashFits reports whether the default profile's flash form holds an
+// attention of rows rows, heads heads over kvh key heads, dk and dv wide
+// (latent: the values its keys' rows), within d's workgroup memory.
+func FlashFits(rows, heads, kvh, dk, dv int, latent bool, d Device) bool {
+	for _, p := range gpuProfile().Passes {
+		if f, ok := p.(Flash); ok {
+			g, _ := f.geom(rows, heads, kvh, dk, dv, latent, d)
+			return g.TR > 0
+		}
+	}
+	return false
+}

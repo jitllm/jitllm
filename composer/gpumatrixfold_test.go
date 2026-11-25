@@ -115,7 +115,7 @@ func TestComposedGPUMatrixFoldedRows(t *testing.T) {
 						whole := L / fold * n
 						e := gpuNMSE(res[:whole], want[:whole])
 						for _, c := range formed {
-							if c.Band.Upto > 0 && c.Runs(L) && whole > 0 {
+							if c.Band.Upto > 0 && c.Runs(L, 0) && whole > 0 {
 								e = min(e, gpuNMSE(res[:whole], want8[:whole]))
 								break
 							}

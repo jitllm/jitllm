@@ -127,6 +127,9 @@ type Kernel struct {
 	// Cut is the segments a matrix kernel's k is cut in at launch, and its
 	// combine's.
 	Cut Cut
+	// Keys is the history positions of a call the kernel is launched at,
+	// where its form runs another way past them (Flash's split).
+	Keys Band
 	// price is a matrix kernel's model (crossing): its form, depth and
 	// segments.
 	price matrixPrice
@@ -472,6 +475,9 @@ const (
 	// OpTileScale is tile A with each row r times the float of workgroup
 	// buffer Buf at element B+r.
 	OpTileScale
+	// OpTileScaleAdd is OpTileScale's A, B and Buf plus accumulator C, each
+	// element one fused multiply-add.
+	OpTileScaleAdd
 	// OpPackHalves is A's and B's low binary16 halves in one word, A's
 	// low, or with Imm 1 their high halves (ir.OpPackHalves).
 	OpPackHalves
@@ -779,6 +785,8 @@ func (o Op) String() string {
 		return "mmaget"
 	case OpTileScale:
 		return "tilescale"
+	case OpTileScaleAdd:
+		return "tilescaleadd"
 	case OpPackHalves:
 		return "packhalves"
 	case OpSpanSum:

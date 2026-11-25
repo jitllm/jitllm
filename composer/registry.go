@@ -63,8 +63,15 @@ type Device struct {
 	// Matrix issues on fragments it lays out (OpMMA).
 	Fragment ir.MMAShape
 	// ScaleRows is a device whose lowering scales an accumulator tile's
-	// rows by words of workgroup memory (OpTileScale).
+	// rows by words of workgroup memory (OpTileScale) and whose matrix unit
+	// carries a running sum in its accumulator.
 	ScaleRows bool
+	// ScaleAdd is a device whose lowering scales an accumulator tile's rows
+	// and adds a second accumulator in one fused multiply-add
+	// (OpTileScaleAdd): where it does not state ScaleRows, a running sum is
+	// held in its tiles and each block's products are added to it there,
+	// never through the unit's own accumulate.
+	ScaleAdd bool
 	// HalfPairs is a device whose lowering runs packed binary16 arithmetic
 	// (OpSubF16x2, OpFmaF16x2).
 	HalfPairs bool

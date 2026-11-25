@@ -37,7 +37,7 @@ func gpuDevice(d backend.Device) composer.Device {
 	scale, _ := backend.LowersTile(d, backend.TileShape{M: 16, N: 16, K: 16, Elem: ir.TileF16, Acc: ir.TileF32, Scale: true})
 	return composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, Shared: shared, ExactDiv: composer.ExactDivOn(d.API()),
 		HalfPairs: composer.HalfPairsOn(d.API()), VectorLoads: composer.VectorLoadsOn(d.API()),
-		Fragment: backend.Fragment(d), ScaleRows: scale, Buffers: backend.Bindings(d)}
+		Fragment: backend.Fragment(d), ScaleRows: scale && !backend.TileQuadPairs(d), ScaleAdd: scale, Buffers: backend.Bindings(d)}
 }
 
 // writesInput reports whether the formed kernels write the graph's input

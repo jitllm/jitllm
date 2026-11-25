@@ -215,8 +215,8 @@ func TestCPUComposesOnce(t *testing.T) {
 				defer g.Close()
 				r := testInstance(t, m, 512, withKVPage(32), WithCPU(cd))
 				defer r.Close()
-				// An empty binary16 history steps down to the card's f32 at the
-				// attach, and the CPU's blocks are composed again for it.
+				// An attach that changed the history's format composes the
+				// CPU's blocks again for it.
 				was := r.kvFmt
 				if err := r.SetDeviceLayers(g, 0); err != nil {
 					t.Fatal(err)

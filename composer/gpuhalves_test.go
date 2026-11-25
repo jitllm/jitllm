@@ -13,7 +13,8 @@ import (
 )
 
 // TestComposedGPUHalves executes OpHalves and OpWidenHalves on each GPU
-// backend at ragged widths over a step of several rows, held as
+// backend at ragged widths over a step of several rows, and at a card
+// history page's (a page of 64 positions, rows of 32 floats and wider), held as
 // TestComposedCPUHalves holds the CPU's: each word two halves rounded to
 // nearest even, the lower element low (quant.EncodeHalf), and each half
 // widened as quant.DecodeHalf reads it. GLSL.std.450's PackHalf2x16 leaves
@@ -25,13 +26,13 @@ func TestComposedGPUHalves(t *testing.T) {
 	if len(devs) == 0 {
 		testmodels.Missing(t, "no GPU backend on this host: the gate proved nothing")
 	}
-	const R = 5
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
 			dev := gpuDevice(d)
 			ties := 0
-			for _, W := range []int{2, 6, 18, 40} {
+			for _, sh := range [][2]int{{5, 2}, {5, 6}, {5, 18}, {5, 40}, {64, 32}, {64, 64}, {64, 256}} {
+				R, W := sh[0], sh[1]
 				floats := composer.HalvesCase(R * W)
 				run := func(kind graph.OpKind, x []float32) []float32 {
 					b := graph.New()

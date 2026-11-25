@@ -34,7 +34,6 @@ func (e tierError) Error() string { return string(e) }
 // pages do.
 type kvGeom struct {
 	kvRow int
-	f16   bool
 	mla   bool
 	// period, past 1, is an entries plane's: one entry each period
 	// positions, a page holding its positions' and one spare slot
@@ -43,18 +42,24 @@ type kvGeom struct {
 	pool   composer.Pool
 }
 
-// typed is a geometry holding a quantized or bfloat16 history's words.
-func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.BF16 }
+// typed is a geometry holding a quantized, binary16 or bfloat16 history's
+// words.
+func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.Half }
+
+// slots is a page's rows of p positions: an entries plane's entries.
+func (k kvGeom) slots(p int) int {
+	if k.period > 1 {
+		return composer.History{Period: k.period}.Slots(p)
+	}
+	return p
+}
 
 // kWords and vWords are one page's K and V in 32-bit words.
 func (k kvGeom) kWords(p int) int {
-	switch {
-	case k.period > 1:
-		return composer.History{Period: k.period}.Slots(p) * k.kvRow
-	case k.typed():
-		return p * k.pool.Words(k.kvRow)
+	if k.typed() {
+		return k.slots(p) * k.pool.Words(k.kvRow)
 	}
-	return p * k.kvRow
+	return k.slots(p) * k.kvRow
 }
 
 // histKey(li, h) is block li's history h, histKey(li, 0) == li its rows',
@@ -202,13 +207,9 @@ func (k kvGeom) vWords(p int) int {
 	case k.mla:
 		return 0
 	case k.typed():
-		return p * k.pool.Words(k.kvRow)
-	case k.f16:
-		return p * k.kvRow / 2
-	case k.period > 1:
-		return composer.History{Period: k.period}.Slots(p) * k.kvRow
+		return k.slots(p) * k.pool.Words(k.kvRow)
 	}
-	return p * k.kvRow
+	return k.slots(p) * k.kvRow
 }
 
 // seqID names a sequence: a session, and the base of its rows' slots (0 for a

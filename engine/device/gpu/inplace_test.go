@@ -145,7 +145,7 @@ func TestABandedFormWritesOverXAtItsBand(t *testing.T) {
 	for _, rows := range []int{1, 2, 3, 4, 5, 8} {
 		launched := 0
 		for i := range f.codes {
-			if f.codes[i].geom.Runs(rows) {
+			if f.codes[i].geom.Runs(rows, 0) {
 				launched++
 			}
 		}
@@ -161,7 +161,7 @@ func TestABandedFormWritesOverXAtItsBand(t *testing.T) {
 		in := f.inPlace(0, 0, rows)
 		lastRead, firstWrite := -1, len(f.codes)
 		for i, args := range f.args {
-			if !f.codes[i].geom.Runs(rows) {
+			if !f.codes[i].geom.Runs(rows, 0) {
 				continue
 			}
 			for _, a := range args {

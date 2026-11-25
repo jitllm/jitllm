@@ -81,12 +81,6 @@ func verifyCmd(args []string) error {
 		return err
 	}
 	defer g.Close()
-	// KVF16 is an environment variable, not an -ab arm: it changes the V
-	// cache's layout and size at PrepLayer, so flipping it mid-run would
-	// reinterpret the cache. The value is read, not just its presence.
-	if v := os.Getenv("JITLLM_KV_F16"); v != "" {
-		g.KVF16 = v == "1"
-	}
 	fmt.Printf("device: %s\n", g.Name())
 	fmt.Printf("model:  %s  L=%d d=%d\n", fs.Arg(0), m.Cfg.NLayer, m.Cfg.NEmbd)
 

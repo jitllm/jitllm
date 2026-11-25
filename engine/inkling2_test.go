@@ -150,14 +150,14 @@ func TestInkling2OnEveryDevice(t *testing.T) {
 					t.Errorf("%s on %s: worst NMSE %.3e against transformers, bound %.0e", a.name, spec, w, bound)
 				}
 			}
-			// An empty binary16 history steps down to the f32 a device holds
-			// (SetDevice), so placed before its first position the instance
-			// runs f32 on both sides. Written first, the history keeps its
-			// format: the CPU's half reads binary16 and the card's half takes
-			// it widened.
+			// A binary16 history keeps its format on every device, placed
+			// before its first position or after it: the CPU's half and the
+			// card's half both hold binary16.
 			st0 := testInstance(t, m, len(ids)+1, WithKVF16(true))
 			placed(nl / 2)(st0)
-			t.Logf("placed at position 0, the f16 instance's history is f16 %v", st0.KVIsF16())
+			if !st0.KVIsF16() {
+				t.Fatal("placed at position 0, the binary16 history stepped down")
+			}
 			st0.Close()
 			cpu16 := hfWorstOn(t, m, name, func(st *Instance) {
 				if !st.KVIsF16() {
