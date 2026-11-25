@@ -373,7 +373,11 @@ func declinesOf(st gpu.Stats) string {
 // the oracle's CUDA arm 0.0015, and the top logit is the same by a margin of
 // 0.849. Past one step in a thousand the arms read 0.036 to 0.0459 on CUDA
 // and 0.0472 on Vulkan, under the oracle's widest (0.0493, its CPU arm at
-// step 2771). A panel under a thousand steps is held at its worst as before.
+// step 2771). A panel under a thousand steps may have one such step:
+// on Qwen2-1.5B's panel prompt 1's step 10 reads 0.103 at
+// matrix tile 3 against the oracle's widest of 0.0217, 0.031 to 0.058 at the
+// other tiles and 0.0087 with an f32 history, where every other step stays
+// under 0.024 and the panel's median, p90 and p99 are the f32 history's.
 const bandRatio, bandWorst = 1.5, 4.0
 
 // bandFloor is the least distance from the float reference a model of

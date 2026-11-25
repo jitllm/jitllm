@@ -62,12 +62,12 @@ func (b *panelBand) add(ratios, dists []float64) {
 }
 
 // worst is the panel's widest step, and next the widest past one step in a
-// thousand of the panel's.
+// thousand of the panel's, and past one step at least.
 func (b *panelBand) worst() float64 { return slices.Max(b.dists) }
 
 func (b *panelBand) next() float64 {
 	d := slices.Sorted(slices.Values(b.dists))
-	return d[len(d)-1-len(d)/1000]
+	return d[max(0, len(d)-1-max(1, len(d)/1000))]
 }
 
 func (b *panelBand) median() float64 {
@@ -75,9 +75,9 @@ func (b *panelBand) median() float64 {
 	return m[len(m)/2]
 }
 
-// inside holds the median to bandRatio, every step but one in a thousand to
-// bandWorst times the reference's widest, and those to bandWorst times that
-// bound (bandWorst).
+// inside holds the median to bandRatio, every step but one in a thousand (or
+// one) to bandWorst times the reference's widest, and those to bandWorst
+// times that bound (bandWorst).
 func (b *panelBand) inside(wide float64) bool {
 	return b.median() <= bandRatio && b.next() <= bandWorst*wide && b.worst() <= bandWorst*bandWorst*wide
 }
