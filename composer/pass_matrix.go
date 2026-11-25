@@ -892,9 +892,11 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	}
 	kn := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpMin, U, next, lastTrip), m.u32(KC)), k0)
 	into := m.bin(OpMul, U, m.bin(OpAnd, U, next, m.u32(1)), m.u32(half))
-	stage(P, kn, into, TR, 0, r0, last, f.row)
-	stage(P, kn, m.bin(OpAdd, U, into, m.u32(bAt)), TN, 1, n0, lastOut, f.out)
-	m.Stores = append(m.Stores, Store{Barrier: true, At: P})
+	if T > 1 || cut > 1 {
+		stage(P, kn, into, TR, 0, r0, last, f.row)
+		stage(P, kn, m.bin(OpAdd, U, into, m.u32(bAt)), TN, 1, n0, lastOut, f.out)
+		m.Stores = append(m.Stores, Store{Barrier: true, At: P})
+	}
 	// emit is k's stores of sum at row r and output n, in loop at; or
 	// where k is cut, the sum to its segment's plane.
 	var planes Operand

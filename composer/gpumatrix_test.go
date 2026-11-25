@@ -113,16 +113,19 @@ func TestComposedGPUMatrix(t *testing.T) {
 			rng := rand.New(rand.NewSource(53))
 			ran, cuts, banded, vecRan, matRan := 0, 0, 0, 0, 0
 			calls100 := []int{1, 15, 33, 64, 100}
+			smalls := []int{1, 15, 33, 64, 140}
 			for _, typ := range formats {
 				// The last shape's row tiles and outputs fill the units at
 				// its capacity and its k is long, so the model leaves k whole
 				// there and cuts it at launch by the call's rows (Cut): run
 				// at the profile's tile and its model's split alone, over
 				// binary16 and the served models' commonest format.
+				// The first shapes are a small model's: k of one trip or
+				// less, and calls of fewer rows than a tile.
 				for _, sh := range []struct {
 					n, k, capacity int
 					calls          []int
-				}{{100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
+				}{{24, 64, 140, smalls}, {96, 64, 140, smalls}, {64, 96, 140, smalls}, {128, 16, 140, smalls}, {128, 32, 140, smalls}, {128, 64, 140, smalls}, {128, 128, 140, smalls}, {128, 64, 64, []int{1, 15, 33, 64}}, {128, 32, 64, []int{1, 15, 33, 64}}, {100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
 					// One weight, one call and their oracles a format and shape:
 					// every tile runs the same projection.
 					var w []byte
@@ -132,7 +135,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 						n, k, capacity, calls := sh.n, sh.k, sh.capacity, sh.calls
 						own := gpuMatrixTiles()[0]
 						own.Split, own.Convert = 0, -1
-						if capacity != 100 && (tile != own || typ != quant.F16 && typ != quant.Q4_K) {
+						if capacity != 100 && capacity != 140 && !(capacity == 64 && n == 128) && (tile != own || typ != quant.F16 && typ != quant.Q4_K) {
 							continue
 						}
 						td := dev
@@ -141,6 +144,12 @@ func TestComposedGPUMatrix(t *testing.T) {
 						q, qok := layout.QuantOf(typ)
 						if typ == quant.F16 {
 							jt, q, ok, qok = jlm.TypeF16, layout.Float16, true, true
+						}
+						if (capacity == 140 || capacity == 64) && tile.Split > 1 && k%(tile.Depth*tile.Split) != 0 {
+							continue
+						}
+						if (capacity == 140 || capacity == 64) && (typ != quant.F16 && typ != quant.Q8_0 || k%32 != 0 && typ != quant.F16) {
+							continue
 						}
 						if !ok || !qok {
 							t.Fatalf("%v has no container type or kernel format", typ)
