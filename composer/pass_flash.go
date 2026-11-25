@@ -360,20 +360,9 @@ func (p Flash) form(c expChain, d Device) ([]*Kernel, bool) {
 	if tm != 16 || Dk%tk != 0 || Dk%4 != 0 || Dv%tn != 0 || Dv%4 != 0 || R < tm {
 		return nil, false
 	}
-	limit := p.Shared
-	if d.Shared > 0 {
-		limit = min(limit, d.Shared)
-	}
-	S := flashSlices(Dk/tk, Dv/tn)
 	vik := sameLoad(dt.k, kx, c.vl.k, vx)
-	G := flashGroup(H, h.Key)
-	g := p.layout(R*G, Dk, Dv, limit, tm, tn, tk, S, vik)
-	if g.TR < p.Rows/2 && d.Shared > limit {
-		if w := p.layout(R*G, Dk, Dv, d.Shared, tm, tn, tk, S, vik); w.TR > g.TR {
-			g = w
-		}
-	}
-	if g.TR == 0 || g.TR%G != 0 {
+	g, G := p.geom(R, H, h.Key, Dk, Dv, vik, d)
+	if g.TR == 0 {
 		return nil, false
 	}
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, G: G, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
@@ -485,6 +474,30 @@ const flashThreadRegs = 255
 // flashParts is a split flash's partial: a row and head's weighted sums,
 // then its maximum and its sum, a slot each workgroup of the tile.
 func flashParts() Workgroups { return Workgroups{Pad: 1, Copies: 1} }
+
+// geom is the layout of a form over R rows of H heads, in groups of the
+// heads sharing one of Hk key heads, Dk and Dv wide (vik: the values the
+// keys' rows) on d, and the heads a workgroup takes together: a TR of 0
+// where none fits the device's workgroup memory.
+func (p Flash) geom(R, H, Hk, Dk, Dv int, vik bool, d Device) (flashGeom, int) {
+	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
+	limit := p.Shared
+	if d.Shared > 0 {
+		limit = min(limit, d.Shared)
+	}
+	S := flashSlices(Dk/tk, Dv/tn)
+	G := flashGroup(H, Hk)
+	g := p.layout(R*G, Dk, Dv, limit, tm, tn, tk, S, vik)
+	if g.TR < p.Rows/2 && d.Shared > limit {
+		if w := p.layout(R*G, Dk, Dv, d.Shared, tm, tn, tk, S, vik); w.TR > g.TR {
+			g = w
+		}
+	}
+	if g.TR%G != 0 {
+		g = flashGeom{}
+	}
+	return g, G
+}
 
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more

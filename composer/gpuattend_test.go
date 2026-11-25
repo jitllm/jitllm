@@ -247,12 +247,16 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 			}
 		}
 	}
+	// A device whose workgroup memory holds no layout of the form (Metal's
+	// 32 KB against a 256-wide head's) runs the partitions on its matrix unit
+	// too.
+	fits := matrix && composer.FlashFits(capRows, c.heads, c.kvh, c.dim, c.dim, in.latent, dev)
 	switch {
-	case matrix && (flash != 1 || running != 0):
+	case fits && (flash != 1 || running != 0):
 		t.Errorf("%d kernels run on the matrix unit and %d the partitions in order: the gate did not select the matrix unit's form", flash, running)
 	case matrix && in.split > 1 && merged != 1:
 		t.Errorf("a split of %d left %d merges: the gate did not select the split form", in.split, merged)
-	case !matrix && (running != 1 || flash != 0):
+	case !fits && (running != 1 || flash != 0):
 		t.Errorf("%d kernels run the partitions in order and %d on the matrix unit: the gate did not select the running form", running, flash)
 	}
 	t.Logf("%d kernels, the largest scratch the attention reads or writes %d bytes (a [rows, heads, keys] buffer is %d)",
