@@ -34,7 +34,7 @@ func TestCapacityFormLaunchesFewRowsAsOneRow(t *testing.T) {
 	}
 	launches := func(rows int) (n int, names []string) {
 		for _, c := range codes {
-			if c.Runs(rows) {
+			if c.Runs(rows, 0) {
 				n++
 				names = append(names, c.Name)
 			}
@@ -53,7 +53,7 @@ func TestCapacityFormLaunchesFewRowsAsOneRow(t *testing.T) {
 	}
 	hosted := 0
 	for _, c := range codes {
-		if c.Name == "reduce+map+quantized" && c.Runs(2) && c.Live == 512 {
+		if c.Name == "reduce+map+quantized" && c.Runs(2, 0) && c.Live == 512 {
 			hosted++
 		}
 	}

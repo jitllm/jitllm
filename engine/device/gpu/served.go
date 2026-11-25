@@ -136,6 +136,10 @@ type partCode struct {
 	// matrix pass formed whose tiles it multiplies, not the kernel that
 	// writes its rows' factor for it. attend is an attention formed there.
 	matrix, attend bool
+	// split marks an attention dealt over workgroups past some history
+	// (composer.Code.Keys), its merge among them; whole the same attention
+	// formed whole, launched at the histories below.
+	split, whole bool
 	// sweep is a code a form over passes runs once a pass (composer.Code.Sweep).
 	sweep bool
 }
@@ -432,10 +436,10 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 	}
 	for ci, c := range codes {
 		geom := composer.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
-			LiveGroup: c.LiveGroup, Work: c.Work, Band: c.Band, Cut: c.Cut}
+			LiveGroup: c.LiveGroup, Work: c.Work, Band: c.Band, Cut: c.Cut, Keys: c.Keys}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
 			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA }),
-			attend: slices.Contains(c.Passes, "flash"), sweep: c.Sweep})
+			attend: slices.Contains(c.Passes, "flash"), split: c.Keys.Past > 0, whole: c.Keys.Upto > 0, sweep: c.Sweep})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -974,8 +978,9 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 }
 
 // unitLaunches is the launches of a form's kernels on the matrix unit: of
-// its matrices, and of its attentions.
-type unitLaunches struct{ matrix, attend int }
+// its matrices, of its attentions, and of those its split's and its whole
+// form's where it has both.
+type unitLaunches struct{ matrix, attend, split, whole int }
 
 // launchCodes is launch of the form's codes [lo, hi).
 func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backend.Buf, lo, hi int) (unitLaunches, error) {
@@ -983,7 +988,7 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 	var matrix unitLaunches
 	for i := lo; i < hi; i++ {
 		fc, bufs := &f.codes[i], sv.args[i]
-		if !fc.geom.Runs(sv.rows) {
+		if !fc.geom.Runs(sv.rows, sv.keys) {
 			continue
 		}
 		for j, a := range f.args[i] {
@@ -1025,6 +1030,12 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 		}
 		if fc.attend {
 			matrix.attend++
+		}
+		if fc.split {
+			matrix.split++
+		}
+		if fc.whole {
+			matrix.whole++
 		}
 	}
 	return matrix, nil
@@ -1380,6 +1391,10 @@ type servedPart struct {
 	// rows, where set, is the call's rows, the word its table states: a
 	// launch runs their groups, not its form's every row's.
 	rows int
+	// keys, where set, is the most history positions a row of the call
+	// reads, as its recording's key holds them: a form running another way
+	// past some (composer.Code.Keys) launches the way they take.
+	keys int
 }
 
 // errServedCold is a served part asked for inside a capture before it
@@ -1634,6 +1649,8 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind nn.Pa
 	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += matrix.matrix
 	g.AttendLaunches[kind] += matrix.attend
+	g.SplitAttends += matrix.split
+	g.WholeAttends += matrix.whole
 	return nil
 }
 
@@ -1733,6 +1750,8 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += m0.matrix + m1.matrix
 	g.AttendLaunches[kind] += m0.attend + m1.attend
+	g.SplitAttends += m0.split + m1.split
+	g.WholeAttends += m0.whole + m1.whole
 	return nil
 }
 
@@ -2428,15 +2447,15 @@ func (f *partForm) apartAt(n, rows int) bool {
 }
 
 // inPlace says the form may write output out over input in at a call of
-// rows rows (zero: every code): every kernel the call launches that reads
-// in launches before the first that writes out. One kernel that reads in
+// rows rows (zero: every code) at any history: every kernel the call may
+// launch that reads in launches before the first that writes out. One kernel that reads in
 // at the elements it writes out at is not enough: a launch clamps its
 // surplus threads to the last element, and every lane storing an element
 // may store before another lane reads it, adding twice (RULE 13).
 func (f *partForm) inPlace(in, out, rows int) bool {
 	lastRead, firstWrite := -1, len(f.codes)
 	for i, args := range f.args {
-		if rows > 0 && !f.codes[i].geom.Runs(rows) {
+		if rows > 0 && !f.codes[i].geom.RunsAtSome(rows) {
 			continue
 		}
 		for _, a := range args {

@@ -40,10 +40,17 @@ func (c Cut) Of(rows int) int {
 	return s
 }
 
-// Runs reports whether a call of rows rows launches c: its band takes the
-// rows, and a cut's combine runs only where the call is cut (0 rows is the
-// form's capacity).
-func (c *Code) Runs(rows int) bool {
+// Runs reports whether a call of rows rows reading keys positions of
+// history launches c: its bands take the rows and the keys, and a cut's
+// combine runs only where the call is cut (0 rows or keys is the form's
+// capacity).
+func (c *Code) Runs(rows, keys int) bool {
+	return c.RunsAtSome(rows) && c.Keys.Runs(keys)
+}
+
+// RunsAtSome reports whether a call of rows rows launches c at some
+// history: Runs at every key band.
+func (c *Code) RunsAtSome(rows int) bool {
 	return c.Band.Runs(rows) && !(c.Cut.Sums && c.Cut.Of(rows) == 1)
 }
 

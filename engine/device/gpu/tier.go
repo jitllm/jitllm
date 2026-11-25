@@ -477,6 +477,11 @@ type Stats struct {
 	// AttendLaunches counts, as MatrixLaunches, the launches of a part's
 	// attention formed on the matrix unit (composer.Flash).
 	AttendLaunches [nn.NumParts]int
+	// SplitAttends counts the launches of attentions split past some
+	// history, and of their merges (composer.Flash's split); WholeAttends
+	// those same attentions' whole forms, launched below it. A call
+	// launches one or the other.
+	SplitAttends, WholeAttends int
 	// ComposedLanes is the subgroup the composer formed the served parts for
 	// (Config.ComposedLanes, else the device's lanes): the selection check of
 	// a gate that narrows it.
@@ -888,6 +893,8 @@ func (s *Stats) add(o Stats) {
 		s.PartsReplayed[i] += o.PartsReplayed[i]
 	}
 	s.UnformedAtStep += o.UnformedAtStep
+	s.SplitAttends += o.SplitAttends
+	s.WholeAttends += o.WholeAttends
 	for i := range s.UnformedAtStepParts {
 		s.UnformedAtStepParts[i] += o.UnformedAtStepParts[i]
 	}

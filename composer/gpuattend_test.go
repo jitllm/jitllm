@@ -36,7 +36,9 @@ type attendRowsCase struct {
 // extent biases each row's scores by backward distance (graph.Attrs.Extent),
 // and rowSinks takes a case's sinks from a row's input (graph.Attrs.RowSinks);
 // typed holds keys and values as binary16 rows by position, a card's
-// binary16 history, and latent one such pool whose values are its keys.
+// binary16 history, and latent one such pool whose values are its keys;
+// split, past 1, deals the flash form's blocks over that many workgroups
+// (Flash.Split), their partials merged.
 type attendInputs struct {
 	ctx      int
 	spread   float64
@@ -46,6 +48,7 @@ type attendInputs struct {
 	rowSinks bool
 	typed    bool
 	latent   bool
+	split    int
 }
 
 // TestComposedGPUAttendRows forms an appended history and the attention
@@ -118,6 +121,12 @@ func TestComposedGPUAttendRows(t *testing.T) {
 		{attendRowsCase{16, 8, 256, 0, false, false}, attendInputs{typed: true, ctx: 8192}},
 		{attendRowsCase{8, 1, 64, 0, true, false}, attendInputs{latent: true}},
 		{attendRowsCase{16, 1, 576, 0, false, false}, attendInputs{latent: true}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{ctx: 8192, split: 2}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{ctx: 8192, split: 5}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{split: 4}},
+		{attendRowsCase{12, 4, 64, 0, true, false}, attendInputs{ctx: 300, split: 3}},
+		{attendRowsCase{16, 8, 128, 0, false, false}, attendInputs{typed: true, ctx: 8192, split: 3}},
+		{attendRowsCase{8, 1, 64, 0, true, false}, attendInputs{latent: true, ctx: 2000, split: 2}},
 	}
 	matrices, cuda := 0, false
 	for _, d := range devs {
@@ -132,8 +141,8 @@ func TestComposedGPUAttendRows(t *testing.T) {
 					matrices++
 				}
 				c, in := tc.c, tc.in
-				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d/extent%d/rowsinks%v/typed%v/latent%v", d.API(), matrix,
-					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1], in.extent, in.rowSinks, in.typed, in.latent)
+				name := fmt.Sprintf("%s/matrix%v/%dq%dkv%dd/window%d/sinks%v/f32values%v/ctx%d/spread%g/cancel%v/run%d-%d/extent%d/rowsinks%v/typed%v/latent%v/split%d", d.API(), matrix,
+					c.heads, c.kvh, c.dim, c.window, c.sinks, c.f32v, in.ctx, in.spread, in.cancel, in.run[0], in.run[1], in.extent, in.rowSinks, in.typed, in.latent, in.split)
 				t.Run(name, func(t *testing.T) { gpuAttendRows(t, d, c, in, matrix) })
 			}
 		}
@@ -193,18 +202,28 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 	if matrix {
 		dev.Matrix = [3]int{16, 16, 16}
 	}
-	_, codes, err := composer.Default().Form(composer.Request{Graph: g, Step: composer.Step{Rows: capRows, Page: page, Keys: keys, Seqs: 1},
+	reg := composer.Default()
+	if in.split > 1 {
+		reg = flashRegistry(composer.Flash{Rows: 128, Keys: 32, Shared: 48 << 10, Half: true, Split: in.split})
+	}
+	_, codes, err := reg.Form(composer.Request{Graph: g, Step: composer.Step{Rows: capRows, Page: page, Keys: keys, Seqs: 1},
 		Device: dev, History: hist})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The call launches the codes its history takes (Code.Keys), as a
+	// step's does: a form split past some positions runs whole below them.
+	codes = slices.DeleteFunc(codes, func(c composer.Code) bool { return !c.Keys.Runs(p0 + R) })
 	var scratch int64
-	running, flash := 0, 0
+	running, flash, merged := 0, 0, 0
 	for _, cd := range codes {
 		if slices.Contains(cd.Passes, "running") {
 			running++
 		}
-		if slices.Contains(cd.Passes, "flash") {
+		if slices.Contains(cd.Passes, "flash") && cd.Name != "flash" {
+			merged++
+		}
+		if slices.Contains(cd.Passes, "flash") && cd.Name == "flash" {
 			flash++
 			scaled := cd.GPU != nil && slices.ContainsFunc(cd.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileScale })
 			if want := dev.ScaleRows || dev.ScaleAdd; scaled != want {
@@ -216,15 +235,23 @@ func gpuAttendRows(t *testing.T, d backend.Device, c attendRowsCase, in attendIn
 				continue
 			}
 			scratch = max(scratch, bd.Bytes)
-			if bd.Bytes > int64(4*4*capRows*c.heads*c.dim) {
-				t.Errorf("%s binds %s of %d bytes: more than four words a row, head and dimension at a key bound of %d",
-					cd.Name, bd.Operand.Name, bd.Bytes, keys)
+			// A split's partial holds a slot a workgroup of the tile; the
+			// form's own split takes at most eight (flashSplit).
+			words := max(4, in.split+1)
+			if in.split == 0 {
+				words = 9
+			}
+			if bd.Bytes > int64(4*words*capRows*c.heads*c.dim) {
+				t.Errorf("%s binds %s of %d bytes: more than %d words a row, head and dimension at a key bound of %d",
+					cd.Name, bd.Operand.Name, bd.Bytes, words, keys)
 			}
 		}
 	}
 	switch {
 	case matrix && (flash != 1 || running != 0):
 		t.Errorf("%d kernels run on the matrix unit and %d the partitions in order: the gate did not select the matrix unit's form", flash, running)
+	case matrix && in.split > 1 && merged != 1:
+		t.Errorf("a split of %d left %d merges: the gate did not select the split form", in.split, merged)
 	case !matrix && (running != 1 || flash != 0):
 		t.Errorf("%d kernels run the partitions in order and %d on the matrix unit: the gate did not select the running form", running, flash)
 	}

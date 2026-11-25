@@ -425,7 +425,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 			if err != nil {
 				return err
 			}
-			m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
+			m0.matrix, m0.attend, m0.split, m0.whole = m0.matrix+m.matrix, m0.attend+m.attend, m0.split+m.split, m0.whole+m.whole
 		}
 		side, inKey, outKey := pg.run, tableKey(composer.TableRunIn), tableKey(composer.TableRunOut)
 		if sw.folds == composer.TableSelOut {
@@ -472,7 +472,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 			if err != nil {
 				return err
 			}
-			m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
+			m0.matrix, m0.attend, m0.split, m0.whole = m0.matrix+m.matrix, m0.attend+m.attend, m0.split+m.split, m0.whole+m.whole
 			g.ComposedStreamPasses++
 		}
 		// What reads the sweep's fold reads its last.
@@ -488,5 +488,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += m0.matrix + m.matrix
 	g.AttendLaunches[kind] += m0.attend + m.attend
+	g.SplitAttends += m0.split + m.split
+	g.WholeAttends += m0.whole + m.whole
 	return nil
 }

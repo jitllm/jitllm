@@ -331,14 +331,14 @@ func flashRunWith(t testing.TB, d backend.Device, reg *composer.Registry, dev co
 		if r, ok := backend.KernelResourcesOf(op.kerns[ci]); ok {
 			res = fmt.Sprintf("regs %d, spill %d, shared %d, resident %d", r.Regs, r.SpillBytes, r.SharedBytes, r.Resident)
 		}
-		t.Logf("%s %dq%dkv%dd f32 values %v scaleadd %v rows %d at %d: %-24s %v %4d workgroups of %4d: %8.1f us  %s", d.Name(), c.heads, c.kvh, c.dim,
-			c.f32v, dev.ScaleAdd && !dev.ScaleRows, R, p0, cd.Name, cd.Passes[len(cd.Passes)-1], cd.LiveGroups(R), cd.GPU.Group[0], med(us), res)
+		t.Logf("%s %dq%dkv%dd f32 values %v scaleadd %v rows %d at %d: %-24s %v %4d workgroups of %4d, keys %+v: %8.1f us  %s", d.Name(), c.heads, c.kvh, c.dim,
+			c.f32v, dev.ScaleAdd && !dev.ScaleRows, R, p0, cd.Name, cd.Passes[len(cd.Passes)-1], cd.LiveGroups(R), cd.GPU.Group[0], cd.Keys, med(us), res)
 	}
 	return words
 }
 
 // flashConfigs is the flash forms the probe times: JITLLM_FLASH_SHAPES, a
-// comma list of ROWS:KEYS:SHARED, or the profile's alone.
+// comma list of ROWS:KEYS:SHARED[:SPLIT], or the profile's alone.
 func flashConfigs(t testing.TB) []composer.Flash {
 	env := os.Getenv("JITLLM_FLASH_SHAPES")
 	if env == "" {
@@ -354,10 +354,14 @@ func flashConfigs(t testing.TB) []composer.Flash {
 			}
 			v = append(v, n)
 		}
-		if len(v) != 3 {
-			t.Fatalf("JITLLM_FLASH_SHAPES %q: want ROWS:KEYS:SHARED", f)
+		if len(v) != 3 && len(v) != 4 {
+			t.Fatalf("JITLLM_FLASH_SHAPES %q: want ROWS:KEYS:SHARED[:SPLIT]", f)
 		}
-		out = append(out, composer.Flash{Rows: v[0], Keys: v[1], Shared: v[2], Half: true})
+		fl := composer.Flash{Rows: v[0], Keys: v[1], Shared: v[2], Half: true}
+		if len(v) == 4 {
+			fl.Split = v[3]
+		}
+		out = append(out, fl)
 	}
 	return out
 }

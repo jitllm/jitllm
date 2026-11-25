@@ -172,9 +172,9 @@ func TestComposedGPUMatrix(t *testing.T) {
 							}
 							for _, L := range calls {
 								switch {
-								case c.Band.Upto > 0 && c.Runs(L):
+								case c.Band.Upto > 0 && c.Runs(L, 0):
 									vecRan++
-								case c.Band.Past > 0 && c.Runs(L):
+								case c.Band.Past > 0 && c.Runs(L, 0):
 									matRan++
 								}
 							}
@@ -256,7 +256,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 						// else the decoded weight's.
 						vectorAt := func(L int) bool {
 							for _, c := range formed {
-								if c.Band.Upto > 0 && c.Runs(L) {
+								if c.Band.Upto > 0 && c.Runs(L, 0) {
 									return true
 								}
 							}

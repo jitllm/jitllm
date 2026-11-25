@@ -79,6 +79,9 @@ type Code struct {
 	// Cut is the segments a matrix code cuts k in at a call's rows, and
 	// whether the code is their combine (Kernel.Cut).
 	Cut Cut
+	// Keys is the history positions of a call the code is launched at
+	// (Kernel.Keys).
+	Keys Band
 	// Args is a host call's argument words.
 	Args []CallArg
 	// Calls is a host kernel's calls' space, the outermost first: the
@@ -365,7 +368,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			continue
 		}
 		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Scan: k.Kind == PrimScan, Matrix: k.Matrix,
-			Sweep: k.Sweep, Cut: k.Cut}
+			Sweep: k.Sweep, Cut: k.Cut, Keys: k.Keys}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
 			c.Share, c.ShareUnit = k.Share, k.ShareUnit

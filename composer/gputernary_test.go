@@ -192,7 +192,7 @@ func runGraphRowsWith(d backend.Device, codes []composer.Code, kerns []backend.K
 				args[i] = b
 			}
 		}
-		if !c.Runs(rows) {
+		if !c.Runs(rows, 0) {
 			continue
 		}
 		groups := c.Groups

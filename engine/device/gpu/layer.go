@@ -4053,6 +4053,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				if inst == nil {
 					why = partNoRoom
 				}
+				if sv != nil {
+					sv.keys = a.nCap
+				}
 				if R > 1 && sv != nil {
 					sv.rows = nrow
 					if cp != nil && !sv.f.apartAt(len(l.graph.Out), nrow) {

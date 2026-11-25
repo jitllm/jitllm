@@ -43,9 +43,26 @@ import (
 // within Shared takes the unit's memory where the device states more
 // (Device.Shared): two warps a workgroup stage the history for few rows and
 // hide no latency.
+//
+// Split, past 1, deals a tile's blocks over that many workgroups, each its
+// share in order: each leaves its weighted sums, maximum and sum in a
+// partial, and the normalization becomes the partials' merge (SplitRange's),
+// each weighted by exp of its maximum less the greatest. A tile with fewer
+// blocks than workgroups leaves the rest's partials empty. 1 splits none.
+// 0 forms both ways where the device's waves leave slots idle (flashSplit):
+// the form unsplit at a call's history of up to the positions where the
+// model prices the split less (crossing), split past them. The model is a
+// block's products on a unit (a tile's rows by a block's positions by both
+// heads' widths, by the workgroups the unit holds at once) by each
+// workgroup's blocks by the waves its grid spans, and the merge's Launch
+// and Plane a word its partials move on one unit (written, read, and the
+// output written), in the same products. A windowed history
+// is not split.
 type Flash struct {
 	Rows, Keys, Shared int
 	Half               bool
+	Split              int
+	Launch, Plane      int
 }
 
 func (Flash) Name() string { return "flash" }
@@ -57,9 +74,11 @@ func (p Flash) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	var out []*Kernel
 	for i := 0; i < len(ks); i++ {
 		if ch, ok := rangeChain(ks[i:]); ok {
-			if k, ok := p.form(ch, d); ok {
-				k.Passes = append(append([]string(nil), ch.last.Passes...), p.Name())
-				out = append(out, k)
+			if fs, ok := p.form(ch, d); ok {
+				for _, k := range fs {
+					k.Passes = append(append([]string(nil), ch.last.Passes...), p.Name())
+				}
+				out = append(out, fs...)
 				i += ch.n - 1
 				continue
 			}
@@ -265,7 +284,7 @@ func flashLayout(TR, KB, Dk, Dv, S int, vik bool) flashGeom {
 	return g
 }
 
-func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
+func (p Flash) form(c expChain, d Device) ([]*Kernel, bool) {
 	tm, tn, tk := d.Matrix[0], d.Matrix[1], d.Matrix[2]
 	h := c.mx.k.Heads
 	if h == nil || h.Seqs != 1 || len(c.mem) != 6 {
@@ -358,9 +377,114 @@ func (p Flash) form(c expChain, d Device) (*Kernel, bool) {
 		return nil, false
 	}
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, G: G, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
-		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, scaleAdd: d.ScaleAdd && !d.ScaleRows, windowed: windowed}
-	return b.kernel(), true
+		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, scaleAdd: d.ScaleAdd && !d.ScaleRows, windowed: windowed, NC: 1}
+	k := b.kernel()
+	nc, past := p.Split, 0
+	if nc == 0 {
+		nc = flashSplit(k, d)
+		if nc > 1 {
+			past = p.crossing(k, g, nc, R*H*Dv, Dk+Dv, d)
+		}
+	}
+	if nc <= 1 || windowed || past < 0 {
+		return []*Kernel{k}, true
+	}
+	whole := k
+	b.m, b.tq, b.tr, b.sums = nil, map[int]int{}, map[int]int{}, nil
+	b.NC = nc
+	no := c.last.Bufs[c.last.Stores[0].Buf].Operand
+	b.part = Operand{Kind: OperandScratch, Name: no.Name + ".flashpart", Of: no.Of}
+	b.stride = flashParts.stride(Dv)
+	k = b.kernel()
+	hm := *h
+	hm.Rows, hm.Query, hm.Dim = R, H, Dv
+	mg := SplitRange{Work: flashParts}.merge(c.last, hm, b.NC, b.stride, b.part, c.vl.out, c.sm.out, c.mx.out)
+	mg.Of, mg.Capacity = c.last.Of, c.last.Capacity
+	if past == 0 {
+		return []*Kernel{k, mg}, true
+	}
+	whole.Keys = Band{Upto: past}
+	k.Keys, mg.Keys = Band{Past: past}, Band{Past: past}
+	return []*Kernel{whole, k, mg}, true
 }
+
+// crossing is the history positions past which the model prices whole's
+// blocks dealt over nc workgroups a tile, with the merge of out outputs,
+// less than whole's: -1 where it prices the split no less at any history.
+// width is a position's products a row, both heads'.
+func (p Flash) crossing(whole *Kernel, g flashGeom, nc, out, width int, d Device) int {
+	slots, W := flashSlots(whole, d), whole.groups()
+	if slots == 0 {
+		return -1
+	}
+	per := slots / d.Units
+	// A wave of n workgroups: its count, and the products a unit runs a
+	// block of it.
+	waves := func(n int) int { return (n + slots - 1) / slots }
+	trip := func(n int) int { return min(per, (n+d.Units-1)/d.Units) * g.TR * g.KB * width }
+	merge := p.Launch + p.Plane*(2*nc+1)*out/d.Units
+	// Each price grows by its waves' products a block, so past the blocks
+	// where the split's grows the slower it stays the less.
+	a, b := waves(W)*trip(W), waves(W*nc)*trip(W*nc)
+	if b >= a*nc {
+		return -1
+	}
+	for blocks := 1; blocks <= 1<<20; blocks++ {
+		if b*((blocks+nc-1)/nc)+merge < a*blocks {
+			return (blocks - 1) * g.KB
+		}
+	}
+	return -1
+}
+
+// flashSplit is the workgroups a tile's blocks are dealt over where the
+// form states none: the fewest whose grid fills 95% of the slots its waves
+// span, at the workgroups of k a unit holds (their threads, their workgroup
+// memory, flashThreadRegs registers a thread). None where the launch holds
+// every workgroup at once already (resident) or the unsplit grid fills its
+// waves. On a V100 at a 12800-position chunk of 512 rows: 3 for Llama's
+// 128-wide heads (5121 us to 4475 with the merge; 5 reads 5040) and 256-wide
+// (6178 to 5415), none for 64-wide, whose unsplit grid is one wave of two a
+// unit (2550 against 3138 split).
+func flashSplit(k *Kernel, d Device) int {
+	if d.Units <= 0 || d.Slots <= 0 || k.Group <= 0 || resident(k, d) > 0 {
+		return 1
+	}
+	slots, W := flashSlots(k, d), k.groups()
+	if slots == 0 {
+		return 1
+	}
+	for nc := 1; nc <= 8; nc++ {
+		w := W * nc
+		if 20*w >= 19*((w+slots-1)/slots*slots) {
+			return nc
+		}
+	}
+	return 1
+}
+
+// flashSlots is the workgroups of k the device holds at once: those a unit
+// holds by their threads, their workgroup memory and flashThreadRegs
+// registers a thread, on every unit; 0 where a unit holds none.
+func flashSlots(k *Kernel, d Device) int {
+	per := d.Slots / d.Units / k.Group
+	if sb := sharedBytes(k); d.Shared > 0 && sb > 0 {
+		per = min(per, d.Shared/sb)
+	}
+	if d.Regs > 0 {
+		per = min(per, d.Regs*(d.Slots/d.Units)/(flashThreadRegs*k.Group))
+	}
+	return max(per, 0) * d.Units
+}
+
+// flashThreadRegs is the registers a flash thread takes, the most a CUDA
+// thread holds: the forms measured on sm_70 take 253 to 255 where their
+// grid sets no bound.
+const flashThreadRegs = 255
+
+// flashParts is a split flash's partial: a row and head's weighted sums,
+// then its maximum and its sum, a slot each workgroup of the tile.
+var flashParts = Workgroups{Pad: 1, Copies: 1}
 
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more
@@ -428,14 +552,14 @@ func loadOperand(k *Kernel, i int) (Operand, bool) {
 
 // flashBuild is a Flash kernel as it is built.
 type flashBuild struct {
-	c               expChain
-	dt, sc          *member
-	g               flashGeom
-	Dk, Dv, R, H    int
+	c            expChain
+	dt, sc       *member
+	g            flashGeom
+	Dk, Dv, R, H int
 	// G is the query heads a tile's rows take of one position, sharing a
 	// kv head (flashGroup): tile row r is position r/G's head r%G of the
 	// workgroup's G.
-	G int
+	G               int
 	tm, tn, tk      int
 	qx, kx, vx      int
 	m               *Kernel
@@ -455,6 +579,12 @@ type flashBuild struct {
 	sums     []int
 	windowed bool
 	own0     int
+	// NC is the workgroups a tile's blocks are dealt over (Flash.Split),
+	// part their partial, stride a slot's words, and empty, where NC is past
+	// 1, whether the workgroup's share holds no block.
+	NC, stride int
+	part       Operand
+	empty      int
 }
 
 func (b *flashBuild) side(m *member, row, kpos, inner int, subs map[Operand]int) *flashSide {
@@ -590,7 +720,11 @@ func (b *flashBuild) kernel() *Kernel {
 	U := ir.U32
 	g, c := b.g, b.c
 	last := c.last
-	m := &Kernel{Name: "flash", Kind: PrimMatrix, Work: true, Group: 32 * g.TR * g.S / b.tm, Space: []int{(b.R + g.TR/b.G - 1) / (g.TR / b.G), b.H / b.G},
+	space := []int{(b.R + g.TR/b.G - 1) / (g.TR / b.G), b.H / b.G}
+	if b.NC > 1 {
+		space = append(space, b.NC)
+	}
+	m := &Kernel{Name: "flash", Kind: PrimMatrix, Work: true, Group: 32 * g.TR * g.S / b.tm, Space: space,
 		Part: last.Part, Of: last.Of, Apart: last.Apart, Capacity: last.Capacity, RowsHeld: last.Capacity > 0}
 	b.m = m
 	b.st = m.buf(Buf{Kind: BufShared, Elem: U, Size: g.total, Operand: Operand{Kind: OperandScratch, Name: c.vl.out.Name + ".flash"}})
@@ -641,11 +775,22 @@ func (b *flashBuild) kernel() *Kernel {
 	}
 	span := m.add(Node{Op: OpSelect, Type: U, A: m.add(Node{Op: OpLess, Type: ir.Pred, A: first, B: end}), B: m.bin(OpSub, U, end, first), C: m.u32(0)})
 	blocks := m.bin(OpMax, U, m.bin(OpDiv, U, m.bin(OpAdd, U, span, m.u32(g.KB-1)), m.u32(g.KB)), m.u32(1))
+	// A split's workgroup runs its share of the blocks; one whose share is
+	// empty runs the tile's last block, and leaves an empty partial.
+	trips, from := blocks, m.u32(0)
+	if b.NC > 1 {
+		c := m.add(Node{Op: OpCoord, A: 2, Type: U})
+		per := m.bin(OpDiv, U, m.bin(OpAdd, U, blocks, m.u32(b.NC-1)), m.u32(b.NC))
+		lo := m.bin(OpMul, U, c, per)
+		b.empty = m.add(Node{Op: OpLess, Type: ir.Pred, A: m.bin(OpSub, U, blocks, m.u32(1)), B: lo})
+		trips = m.add(Node{Op: OpSelect, Type: U, A: b.empty, B: m.u32(1), C: m.bin(OpMin, U, per, m.bin(OpSub, U, blocks, lo))})
+		from = m.add(Node{Op: OpSelect, Type: U, A: b.empty, B: m.bin(OpSub, U, blocks, m.u32(1)), C: lo})
+	}
 	P := m.loop(1, -1)
-	m.Loops[P].Count, m.Loops[P].Uniform, m.Loops[P].StepsLast = blocks+1, true, true
+	m.Loops[P].Count, m.Loops[P].Uniform, m.Loops[P].StepsLast = trips+1, true, true
 	b.P = P
 	kb := m.add(Node{Op: OpIter, At: P, Type: U})
-	b.k0 = m.bin(OpAdd, U, first, m.bin(OpMul, U, kb, m.u32(g.KB)))
+	b.k0 = m.bin(OpAdd, U, first, m.bin(OpMul, U, m.bin(OpAdd, U, from, kb), m.u32(g.KB)))
 	b.first = m.add(Node{Op: OpLess, Type: ir.Pred, A: kb, B: m.u32(1)})
 	b.stageBlock()
 	b.dots()
@@ -893,6 +1038,10 @@ func (b *flashBuild) rescaled(f, u int) int {
 func (b *flashBuild) output() {
 	U, F, m, g, last := ir.U32, ir.F32, b.m, b.g, b.c.last
 	st := last.Stores[0]
+	if b.NC > 1 {
+		b.partials()
+		return
+	}
 	for u, f := range b.sums {
 		rloc, dd := b.split(u, g.TR*b.Dv, b.Dv)
 		row, head := b.rowOf(rloc), b.headOf(rloc)
@@ -924,5 +1073,31 @@ func (b *flashBuild) output() {
 			ns.Ix = copyInto(m, last, st.Ix, leaf)
 		}
 		m.Stores = append(m.Stores, ns)
+	}
+}
+
+// partials is a split's output: each of the thread's weighted sums into its
+// row and head's slot of the workgroup's share, and beside them the row's
+// maximum and sum, each element's thread writing the row's same two. An
+// empty share's slot holds no weight: its maximum the least, its sums 0.
+func (b *flashBuild) partials() {
+	U, F, m, g := ir.U32, ir.F32, b.m, b.g
+	pb := m.buf(Buf{Kind: BufOut, Elem: F, Operand: b.part, Extent: b.R * b.H * b.NC * b.stride})
+	c := m.add(Node{Op: OpCoord, A: 2, Type: U})
+	pick := func(none, v int) int { return m.add(Node{Op: OpSelect, Type: F, A: b.empty, B: none, C: v}) }
+	zero := m.f32(0)
+	for u, f := range b.sums {
+		rloc, dd := b.split(u, g.TR*b.Dv, b.Dv)
+		row, head := b.rowOf(rloc), b.headOf(rloc)
+		slot := m.bin(OpAdd, U, m.bin(OpMul, U, m.bin(OpAdd, U, m.bin(OpMul, U, row, m.u32(b.H)), head), m.u32(b.NC)), c)
+		at := func(off int) int {
+			return m.bin(OpAdd, U, m.bin(OpMul, U, slot, m.u32(b.stride)), off)
+		}
+		mx := b.load(F, m.bin(OpAdd, U, rloc, m.u32(g.sOff)), -1)
+		sm := b.load(F, m.bin(OpAdd, U, rloc, m.u32(g.sOff+g.TR+1)), -1)
+		m.Stores = append(m.Stores,
+			Store{Buf: pb, Ix: at(dd), Val: pick(zero, f), At: -1},
+			Store{Buf: pb, Ix: at(m.u32(b.stride - 2)), Val: pick(b.minus, mx), At: -1},
+			Store{Buf: pb, Ix: at(m.u32(b.stride - 1)), Val: pick(zero, sm), At: -1})
 	}
 }

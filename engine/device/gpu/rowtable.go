@@ -303,6 +303,8 @@ func (sv *servedPart) rowsRun(g *devTier, lc *launcher, s backend.Session, inst 
 	g.TableRowsRead += read
 	g.MatrixLaunches[kind] += m0.matrix + m1.matrix
 	g.AttendLaunches[kind] += m0.attend + m1.attend
+	g.SplitAttends += m0.split + m1.split
+	g.WholeAttends += m0.whole + m1.whole
 	return nil
 }
 

@@ -96,7 +96,7 @@ func TestMatrixBandsFollowTheModel(t *testing.T) {
 	}
 	projections := func(codes []composer.Code, rows int) (vec, mat []composer.Code) {
 		for _, c := range codes {
-			if !c.Runs(rows) || !strings.Contains(c.Name, "reduce") || strings.Contains(c.Name, "combine") ||
+			if !c.Runs(rows, 0) || !strings.Contains(c.Name, "reduce") || strings.Contains(c.Name, "combine") ||
 				strings.Contains(c.Name, "halves") || strings.Contains(c.Name, "rowscale") {
 				continue
 			}
