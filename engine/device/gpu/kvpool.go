@@ -46,15 +46,20 @@ type kvGeom struct {
 // words.
 func (k kvGeom) typed() bool { return k.pool.Row > 0 || k.pool.Half }
 
+// slots is a page's rows of p positions: an entries plane's entries.
+func (k kvGeom) slots(p int) int {
+	if k.period > 1 {
+		return composer.History{Period: k.period}.Slots(p)
+	}
+	return p
+}
+
 // kWords and vWords are one page's K and V in 32-bit words.
 func (k kvGeom) kWords(p int) int {
-	switch {
-	case k.period > 1:
-		return composer.History{Period: k.period}.Slots(p) * k.kvRow
-	case k.typed():
-		return p * k.pool.Words(k.kvRow)
+	if k.typed() {
+		return k.slots(p) * k.pool.Words(k.kvRow)
 	}
-	return p * k.kvRow
+	return k.slots(p) * k.kvRow
 }
 
 // histKey(li, h) is block li's history h, histKey(li, 0) == li its rows',
@@ -202,11 +207,9 @@ func (k kvGeom) vWords(p int) int {
 	case k.mla:
 		return 0
 	case k.typed():
-		return p * k.pool.Words(k.kvRow)
-	case k.period > 1:
-		return composer.History{Period: k.period}.Slots(p) * k.kvRow
+		return k.slots(p) * k.pool.Words(k.kvRow)
 	}
-	return p * k.kvRow
+	return k.slots(p) * k.kvRow
 }
 
 // seqID names a sequence: a session, and the base of its rows' slots (0 for a

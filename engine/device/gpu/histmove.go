@@ -20,7 +20,11 @@ func (g *devTier) historyMigrate(sid uint64, li, h int, e []float32, pos int, to
 	}
 	s := seqID{sid, 0}
 	P, per, w := kp.p, max(1, pl.geom.period), pl.geom.kvRow
-	kw, vw := pl.geom.kWords(P), pl.geom.vWords(P)
+	kw, vw, kf := pl.geom.kWords(P), pl.geom.vWords(P), pl.geom.slots(P)*w
+	hv, err := g.entryConv(pl, P)
+	if err != nil {
+		return err
+	}
 	ew := w
 	if vw > 0 {
 		ew = 2 * w
@@ -60,14 +64,14 @@ func (g *devTier) historyMigrate(sid uint64, li, h int, e []float32, pos int, to
 	pages := make([][]float32, npages)
 	if toDevice {
 		for j := range pages {
-			pages[j] = make([]float32, kw+vw)
+			pages[j] = make([]float32, kf+vw)
 		}
 		for j := 0; j < n; j++ {
 			q := (j+1)*per - 1
 			at := q % P / per * w
 			copy(pages[q/P][at:at+w], e[j*ew:j*ew+w])
 			if vw > 0 {
-				copy(pages[q/P][kw+at:kw+at+w], e[j*ew+w:(j+1)*ew])
+				copy(pages[q/P][kf+at:kf+at+w], e[j*ew+w:(j+1)*ew])
 			}
 		}
 		for j, page := range pages {
@@ -78,7 +82,20 @@ func (g *devTier) historyMigrate(sid uint64, li, h int, e []float32, pos int, to
 				for len(pl.home[s]) <= j {
 					pl.home[s] = append(pl.home[s], nil)
 				}
+				if hv != nil {
+					words, err := hv.narrowPage(page, nil, 0)
+					if err != nil {
+						return err
+					}
+					page = append([]float32(nil), words...)
+				}
 				pl.home[s][j] = page
+				continue
+			}
+			if hv != nil {
+				if _, err := hv.narrowPage(page, pl.k, int(ids[j])*kw*4); err != nil {
+					return err
+				}
 				continue
 			}
 			if err := pl.k.WriteAt(int(ids[j])*kw*4, f32b(page[:kw])); err != nil {
@@ -89,6 +106,28 @@ func (g *devTier) historyMigrate(sid uint64, li, h int, e []float32, pos int, to
 					return err
 				}
 			}
+		}
+		return nil
+	}
+	if hv != nil {
+		for j := range pages {
+			pages[j] = make([]float32, kf)
+			if j < ev {
+				if j >= len(pl.home[s]) || len(pl.home[s][j]) < kw {
+					return fmt.Errorf("entry page %d is at home and holds nothing", j)
+				}
+				err = hv.widenPage(nil, 0, pl.home[s][j][:kw], pages[j])
+			} else {
+				err = hv.widenPage(pl.k, int(ids[j])*kw*4, nil, pages[j])
+			}
+			if err != nil {
+				return err
+			}
+		}
+		for j := 0; j < n; j++ {
+			q := (j+1)*per - 1
+			at := q % P / per * w
+			copy(e[j*ew:j*ew+w], pages[q/P][at:at+w])
 		}
 		return nil
 	}

@@ -543,8 +543,12 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// A block keeping histories past its rows' holds them beside its rows
 	// at its rows' seats, and sends them home with its rows.
 	for _, k := range p.Graph.KeptHistories() {
-		eg := kvGeom{kvRow: k.Width, mla: k.ValuesInKeys, period: k.Period}
-		if err := g.addKVLayer(kp, histKey(key0, k.Hist), eg, 1+seats); err != nil {
+		eg := keptGeom(k, want.pool)
+		err := g.addKVLayer(kp, histKey(key0, k.Hist), eg, 1+seats)
+		if err == nil {
+			err = g.formGeomConv(eg, kp.p)
+		}
+		if err != nil {
 			if fresh {
 				delete(l.kv, sid)
 			}

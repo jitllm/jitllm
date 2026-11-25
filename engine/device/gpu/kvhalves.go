@@ -41,7 +41,7 @@ func (k kvGeom) convOf(p int) (c convPage, ok bool) {
 		if k.pool.Row > 0 {
 			w = k.pool.Row
 		}
-		return convPage{k.pool, w, p * k.kvRow / w}, true
+		return convPage{k.pool, w, k.slots(p) * k.kvRow / w}, true
 	}
 	return convPage{}, false
 }
@@ -237,4 +237,14 @@ func (c *pageConv) widenPage(pool backend.Buf, off int, words, out []float32) er
 		return err
 	}
 	return c.f.Read(f32b(out))
+}
+
+// entryConv is the conversion an entries plane's pages of p positions take
+// (convOf), nil where they hold floats. Callers hold g.mu.
+func (g *devTier) entryConv(pl *kvLayerPool, p int) (*pageConv, error) {
+	c, ok := pl.geom.convOf(p)
+	if !ok {
+		return nil, nil
+	}
+	return g.keptConv(c)
 }

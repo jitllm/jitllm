@@ -3340,7 +3340,7 @@ func poolHistory(k kvGeom) composer.History {
 // pages for the composer: an entry's row a position, its values beside its
 // keys where they are not its keys, as historyMigrate reads them.
 func entryHistory(k kvGeom) composer.History {
-	return composer.History{ValuesInKeys: k.mla, Period: k.period}
+	return composer.History{Keys: k.pool, Values: k.pool, ValuesInKeys: k.mla, Period: k.period}
 }
 
 // bindHists binds into t every history block src keeps past its rows,
