@@ -264,16 +264,24 @@ type flashGeom struct {
 	TR, KB, S                                  int
 	sq, sv, sp                                 int
 	aOff, kOff, vOff, pOff, plOff, sOff, total int
+	// vt stages the second factor a column a row at stride sv, unless it
+	// is the first's rows.
+	vt bool
 }
 
 // flashLayout is the tile of TR rows, KB positions a block and S warps a
-// warp's rows; vik stages the second factor with the first (its rows).
-func flashLayout(TR, KB, Dk, Dv, S int, vik bool) flashGeom {
+// warp's rows; vik stages the second factor with the first (its rows), vt
+// a column a row.
+func flashLayout(TR, KB, Dk, Dv, S int, vik, vt bool) flashGeom {
 	g := flashGeom{TR: TR, KB: KB, S: S, sq: Dk + 4, sv: Dv + 4, sp: KB + 4}
 	up := func(n int) int { return (n + 3) / 4 * 4 }
 	g.kOff = up(max(TR*g.sq/2, S*TR*KB, TR*Dv))
 	g.vOff = g.kOff + up(KB*g.sq/2)
 	g.pOff = g.vOff + up(KB*g.sv/2)
+	if vt && !vik {
+		g.vt, g.sv = true, KB+4
+		g.pOff = g.vOff + up(Dv*g.sv/2)
+	}
 	if vik {
 		g.vOff, g.sv = g.kOff, g.sq
 		g.pOff = g.kOff + up(KB*g.sq/2)
@@ -502,7 +510,8 @@ func (p Flash) geom(R, H, Hk, Dk, Dv int, vik bool, d Device) (flashGeom, int) {
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more
 // rows than R take, at least a tile's, and no more threads than a
-// workgroup holds. Its TR is 0 where none fits.
+// workgroup holds, the second factor a column a row where that fits the
+// same rows and positions. Its TR is 0 where none fits.
 func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk, S int, vik bool) flashGeom {
 	top := p.Rows
 	for top/2 >= tm && top/2 >= R {
@@ -513,8 +522,13 @@ func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk, S int, vik bool) flashGeom {
 			continue
 		}
 		for KB := p.Keys; KB >= max(tn, tk) && KB%2 == 0; KB /= 2 {
-			if g := flashLayout(TR, KB, Dk, Dv, S, vik); TR%tm == 0 && KB%tn == 0 && KB%tk == 0 && KB%(4*S) == 0 && 4*g.total <= limit {
-				return g
+			if TR%tm != 0 || KB%tn != 0 || KB%tk != 0 || KB%(4*S) != 0 {
+				continue
+			}
+			for _, vt := range []bool{true, false} {
+				if g := flashLayout(TR, KB, Dk, Dv, S, vik, vt); 4*g.total <= limit {
+					return g
+				}
 			}
 		}
 	}
@@ -819,8 +833,10 @@ func (b *flashBuild) kernel() *Kernel {
 }
 
 // stageBlock stages a block's position factors: the dots' halves a
-// position a row, the weighted sum's a position a row, the last row's
-// descriptor addressing the history.
+// position a row, the weighted sum's a column a row (vt: a tile of them
+// loads its positions adjacent, as the dots' does, where a position a row
+// takes a load an element), the last row's descriptor addressing the
+// history.
 func (b *flashBuild) stageBlock() {
 	U, m, g := ir.U32, b.m, b.g
 	if b.scale || b.scaleAdd {
@@ -845,16 +861,31 @@ func (b *flashBuild) stageBlock() {
 	if g.vOff == g.kOff {
 		n = 0
 	}
+	if g.vt {
+		n /= 2
+	}
 	for u := 0; u < (n+m.Group-1)/m.Group; u++ {
 		key, dp := b.split(u, n, vhalf)
-		kp := m.bin(OpAdd, U, b.k0, key)
-		s := b.side(b.c.vl, b.stageRow(kp), kp, 0, nil)
-		v := func(e int) int {
+		if g.vt {
+			key = m.bin(OpMul, U, key, m.u32(2))
+		}
+		v := func(key, e int) int {
+			kp := m.bin(OpAdd, U, b.k0, key)
+			s := b.side(b.c.vl, b.stageRow(kp), kp, 0, nil)
 			s.inner = m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
 			return s.at(m, b.vx)
 		}
-		ix := m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sv/2)), dp)
-		b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), b.word(v(0), v(1)), b.P)
+		if !g.vt {
+			ix := m.bin(OpAdd, U, m.bin(OpMul, U, key, m.u32(g.sv/2)), dp)
+			b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), b.word(v(key, 0), v(key, 1)), b.P)
+			continue
+		}
+		key1 := m.bin(OpAdd, U, key, m.u32(1))
+		for e := range 2 {
+			col := m.bin(OpAdd, U, m.bin(OpMul, U, dp, m.u32(2)), m.u32(e))
+			ix := m.bin(OpAdd, U, m.bin(OpMul, U, col, m.u32(g.sv/2)), m.bin(OpShr, U, key, m.u32(1)))
+			b.store(m.bin(OpAdd, U, ix, m.u32(g.vOff)), b.word(v(key, e), v(key1, e)), b.P)
+		}
 	}
 	m.Stores = append(m.Stores, Store{Barrier: true, At: b.P})
 }
@@ -981,9 +1012,15 @@ func (b *flashBuild) weighted() {
 	// A block's products: the exponentials' halves by the second factor,
 	// then their remainders' halves by it.
 	js := b.sliced(b.Dv / g.S)
+	jt := b.sliced(b.Dv / g.S * g.sv)
 	jv := b.Dv / b.tn / g.S
 	products := func(acc, s, j int) int {
-		v := b.tile(bT, b.plus(m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), js), g.sv, false, b.P)
+		var v int
+		if g.vt {
+			v = b.tile(bT, b.plus(m.u32(2*g.vOff+j*b.tn*g.sv+s*b.tk), jt), g.sv, true, b.P)
+		} else {
+			v = b.tile(bT, b.plus(m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), js), g.sv, false, b.P)
+		}
 		acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
 		return m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
 	}
