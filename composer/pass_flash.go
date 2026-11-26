@@ -272,10 +272,14 @@ type flashGeom struct {
 // flashLayout is the tile of TR rows, KB positions a block and S warps a
 // warp's rows; vik stages the second factor with the first (its rows), vt
 // a column a row.
-func flashLayout(TR, KB, Dk, Dv, S int, vik, vt bool) flashGeom {
+func flashLayout(TR, KB, Dk, Dv, S int, vik, vt, held bool) flashGeom {
 	g := flashGeom{TR: TR, KB: KB, S: S, sq: Dk + 4, sv: Dv + 4, sp: KB + 4}
 	up := func(n int) int { return (n + 3) / 4 * 4 }
-	g.kOff = up(max(TR*g.sq/2, S*TR*KB, TR*Dv))
+	sums := TR * Dv
+	if held {
+		sums = 0
+	}
+	g.kOff = up(max(TR*g.sq/2, S*TR*KB, sums))
 	g.vOff = g.kOff + up(KB*g.sq/2)
 	g.pOff = g.vOff + up(KB*g.sv/2)
 	if vt && !vik {
@@ -288,6 +292,9 @@ func flashLayout(TR, KB, Dk, Dv, S int, vik, vt bool) flashGeom {
 	}
 	g.plOff = g.pOff + up((TR+1)*g.sp/2)
 	g.sOff = g.plOff + up((TR+1)*g.sp/2)
+	if held {
+		g.sOff = max(g.sOff, up(TR*Dv))
+	}
 	g.total = g.sOff + 3*(TR+1)
 	return g
 }
@@ -495,9 +502,10 @@ func (p Flash) geom(R, H, Hk, Dk, Dv int, vik bool, d Device) (flashGeom, int) {
 	}
 	S := flashSlices(Dk/tk, Dv/tn)
 	G := flashGroup(H, Hk)
-	g := p.layout(R*G, Dk, Dv, limit, tm, tn, tk, S, vik)
+	held := d.ScaleRows || d.ScaleAdd
+	g := p.layout(R*G, Dk, Dv, limit, tm, tn, tk, S, vik, held)
 	if g.TR < p.Rows/2 && d.Shared > limit {
-		if w := p.layout(R*G, Dk, Dv, d.Shared, tm, tn, tk, S, vik); w.TR > g.TR {
+		if w := p.layout(R*G, Dk, Dv, d.Shared, tm, tn, tk, S, vik, held); w.TR > g.TR {
 			g = w
 		}
 	}
@@ -510,9 +518,10 @@ func (p Flash) geom(R, H, Hk, Dk, Dv int, vik bool, d Device) (flashGeom, int) {
 // layout is the flash form of the most rows a workgroup, then the most
 // positions a block, whose workgroup memory is at most limit bytes: no more
 // rows than R take, at least a tile's, and no more threads than a
-// workgroup holds, the second factor a column a row where that fits the
-// same rows and positions. Its TR is 0 where none fits.
-func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk, S int, vik bool) flashGeom {
+// workgroup holds. At those rows and positions the second factor is staged
+// a column a row where that fits, its sums held past the loop (held) in the
+// regions the loop leaves. Its TR is 0 where none fits.
+func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk, S int, vik, held bool) flashGeom {
 	top := p.Rows
 	for top/2 >= tm && top/2 >= R {
 		top /= 2
@@ -525,11 +534,13 @@ func (p Flash) layout(R, Dk, Dv, limit, tm, tn, tk, S int, vik bool) flashGeom {
 			if TR%tm != 0 || KB%tn != 0 || KB%tk != 0 || KB%(4*S) != 0 {
 				continue
 			}
-			for _, vt := range []bool{true, false} {
-				if g := flashLayout(TR, KB, Dk, Dv, S, vik, vt); 4*g.total <= limit {
-					return g
-				}
+			if g := flashLayout(TR, KB, Dk, Dv, S, vik, false, false); 4*g.total > limit {
+				continue
 			}
+			if g := flashLayout(TR, KB, Dk, Dv, S, vik, true, held); 4*g.total <= limit {
+				return g
+			}
+			return flashLayout(TR, KB, Dk, Dv, S, vik, false, false)
 		}
 	}
 	return flashGeom{}
