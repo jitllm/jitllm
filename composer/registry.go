@@ -255,7 +255,8 @@ func (r *Registry) ForPasses(kind DeviceKind) *Registry {
 }
 
 // WithoutSplits is r with no sum, range or extreme cut into segments on
-// device kind: every sum in its loop's order. It shares r's cache.
+// device kind, a flash form's history among them (Flash.Split 1): every sum
+// in its loop's order. It shares r's cache.
 func (r *Registry) WithoutSplits(kind DeviceKind) *Registry {
 	fr := *r
 	fr.Profiles = maps.Clone(r.Profiles)
@@ -267,9 +268,19 @@ func (r *Registry) WithoutSplits(kind DeviceKind) *Registry {
 		}
 		return false
 	}
-	p.Passes = slices.DeleteFunc(slices.Clone(p.Passes), cut)
+	whole := func(ps []Pass) []Pass {
+		ps = slices.DeleteFunc(slices.Clone(ps), cut)
+		for i, x := range ps {
+			if f, ok := x.(Flash); ok {
+				f.Split = 1
+				ps[i] = f
+			}
+		}
+		return ps
+	}
+	p.Passes = whole(p.Passes)
 	if p.Narrow != nil {
-		p.Narrow = slices.DeleteFunc(slices.Clone(p.Narrow), cut)
+		p.Narrow = whole(p.Narrow)
 	}
 	fr.Profiles[kind] = p
 	return &fr
