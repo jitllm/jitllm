@@ -254,7 +254,11 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *model.Model, g *c6Golden, vs [
 			// composer runs where it serves blocks the front end states.
 			// noGraph issues every step itself, which counts the declines.
 			onDevice := func(run func(*Instance) [][]float32, steps int, noGraph bool) ([][]float32, string) {
-				opts := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
+				// The host's bound is f32's: flash's weights carry their
+				// remainders (Config.FlashRemainders), where binary16's alone put
+				// synth-apertus's near one-hot rows 1.3e-4 off with a flip.
+				opts := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+					gpu.WithConfig(func(c *gpu.Config) { c.FlashRemainders = true })}, testTierOpts(t)...)
 				if noGraph {
 					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 				}

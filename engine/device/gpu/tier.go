@@ -159,6 +159,10 @@ type Config struct {
 	// (composer.Registry.WithoutSplits): a reference apart from the composer's
 	// splits.
 	ComposedUnsplit bool
+	// FlashRemainders forms flash attention with the exponentials'
+	// remainders, a second product a block (composer.Registry.WithRemainders):
+	// weights of some 22 bits where the default's 11 are binary16's.
+	FlashRemainders bool
 	// ComposedLanes, where not zero, is the subgroup the composer forms the
 	// served parts for in place of the device's (pickLanes): a narrower one,
 	// which a gate forms at to hold each lane count's forms to the tier. A
@@ -1747,7 +1751,8 @@ type devShared struct {
 	everyRows backend.Buf
 	composer  *composer.Registry
 	// composerFloat is composer with no int8 form (Config.ComposedFloat),
-	// and no split where Config.ComposedUnsplit.
+	// no split where Config.ComposedUnsplit, and flash's remainders where
+	// Config.FlashRemainders.
 	composerFloat *composer.Registry
 	// composerPasses is composer for forms over a history read in passes
 	// (composer.Registry.ForPasses).

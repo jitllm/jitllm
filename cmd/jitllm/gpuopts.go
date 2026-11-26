@@ -143,6 +143,7 @@ func gpuOptions() []gpu.Option {
 		{"JITLLM_NO_GPU_BATCH", set("JITLLM_NO_GPU_BATCH"), func(c *gpu.Config) { c.NoBatch = true }},
 		{"JITLLM_GPU_NO_TAIL", set("JITLLM_GPU_NO_TAIL"), func(c *gpu.Config) { c.NoTail = true }},
 		{"JITLLM_NO_GPU_MMA", set("JITLLM_NO_GPU_MMA"), func(c *gpu.Config) { c.NoMMA = true }},
+		{"JITLLM_FLASH_REMAINDERS", os.Getenv("JITLLM_FLASH_REMAINDERS") == "1", func(c *gpu.Config) { c.FlashRemainders = true }},
 		{"JITLLM_GPU_NO_EXACT_PROMPT", set("JITLLM_GPU_NO_EXACT_PROMPT"), func(c *gpu.Config) { c.NoExactPrompt = true }},
 		{"JITLLM_GPU_STREAM", set("JITLLM_GPU_STREAM"), func(c *gpu.Config) { c.StreamExperts = true }},
 		{"JITLLM_GPU_STREAM_CACHE", num("JITLLM_GPU_STREAM_CACHE") > 0,

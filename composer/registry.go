@@ -286,6 +286,32 @@ func (r *Registry) WithoutSplits(kind DeviceKind) *Registry {
 	return &fr
 }
 
+// WithRemainders is r whose flash forms on device kind stage the
+// exponentials' remainders, a second product a block (Flash.Remainders):
+// weights of some 22 bits where the default's carry 11. It shares r's
+// cache.
+func (r *Registry) WithRemainders(kind DeviceKind) *Registry {
+	fr := *r
+	fr.Profiles = maps.Clone(r.Profiles)
+	p := fr.Profiles[kind]
+	rest := func(ps []Pass) []Pass {
+		ps = slices.Clone(ps)
+		for i, x := range ps {
+			if f, ok := x.(Flash); ok {
+				f.Remainders = true
+				ps[i] = f
+			}
+		}
+		return ps
+	}
+	p.Passes = rest(p.Passes)
+	if p.Narrow != nil {
+		p.Narrow = rest(p.Narrow)
+	}
+	fr.Profiles[kind] = p
+	return &fr
+}
+
 // DropSegments has every split on device kind sum its segments but the
 // last (Split.Drop): a gate's violation, never a shipping one.
 func (r *Registry) DropSegments(kind DeviceKind) {

@@ -1515,7 +1515,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		}
 	}
 	r := g.composer
-	if g.ComposedFloat || g.ComposedUnsplit {
+	if g.ComposedFloat || g.ComposedUnsplit || g.FlashRemainders {
 		if g.composerFloat == nil {
 			g.composerFloat = g.composer
 			if g.ComposedFloat {
@@ -1523,6 +1523,9 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			}
 			if g.ComposedUnsplit {
 				g.composerFloat = g.composerFloat.WithoutSplits(composer.DeviceGPU)
+			}
+			if g.FlashRemainders {
+				g.composerFloat = g.composerFloat.WithRemainders(composer.DeviceGPU)
 			}
 		}
 		r = g.composerFloat
