@@ -115,17 +115,19 @@ func TestComposedGPUMatrix(t *testing.T) {
 			calls100 := []int{1, 15, 33, 64, 100}
 			smalls := []int{1, 15, 33, 64, 140}
 			for _, typ := range formats {
-				// The last shape's row tiles and outputs fill the units at
-				// its capacity and its k is long, so the model leaves k whole
-				// there and cuts it at launch by the call's rows (Cut): run
-				// at the profile's tile and its model's split alone, over
-				// binary16 and the served models' commonest format.
+				// The last two shapes' row tiles and outputs fill the units
+				// at their capacity and their k is long, so the model leaves
+				// k whole there and cuts it at launch by the call's rows
+				// (Cut): the wider on a device of many units, the narrower on
+				// one of few. Each runs at the profile's tile and its model's
+				// split alone, over binary16 and the served models'
+				// commonest format.
 				// The first shapes are a small model's: k of one trip or
 				// less, and calls of fewer rows than a tile.
 				for _, sh := range []struct {
 					n, k, capacity int
 					calls          []int
-				}{{24, 64, 140, smalls}, {96, 64, 140, smalls}, {64, 96, 140, smalls}, {128, 16, 140, smalls}, {128, 32, 140, smalls}, {128, 64, 140, smalls}, {128, 128, 140, smalls}, {128, 64, 64, []int{1, 15, 33, 64}}, {128, 32, 64, []int{1, 15, 33, 64}}, {100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
+				}{{24, 64, 140, smalls}, {96, 64, 140, smalls}, {64, 96, 140, smalls}, {128, 16, 140, smalls}, {128, 32, 140, smalls}, {128, 64, 140, smalls}, {128, 128, 140, smalls}, {128, 64, 64, []int{1, 15, 33, 64}}, {128, 32, 64, []int{1, 15, 33, 64}}, {100, 256, 100, calls100}, {1056, 512, 100, calls100}, {160, 2048, 100, calls100}, {2048, 4096, 512, []int{1, 15, 33, 100, 300, 512}}, {256, 4096, 512, []int{1, 15, 33, 100, 300, 512}}} {
 					// One weight, one call and their oracles a format and shape:
 					// every tile runs the same projection.
 					var w []byte
