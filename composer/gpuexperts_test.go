@@ -42,7 +42,7 @@ func TestComposedGPUExperts(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no device here multiplies binary16 tiles")
 	}
-	const guard, P, rows = 64, 2, 96
+	const guard, P = 64, 2
 	names := slices.Sorted(func(yield func(string) bool) {
 		for n := range devs {
 			if !yield(n) {
@@ -55,19 +55,23 @@ func TestComposedGPUExperts(t *testing.T) {
 		for _, bank := range []struct {
 			capacity, E, K int
 			tiled, grouped bool
-		}{{100, 8, 256, false, true}, {512, 64, 256, false, true}, {64, 64, 256, false, false}, {100, 8, 2048, false, true},
-			{100, 8, 256, true, true}} {
-			capacity, E, K, tiled := bank.capacity, bank.E, bank.K, bank.tiled
+			rows           int
+		}{{100, 8, 256, false, true, 96}, {512, 64, 256, false, true, 96}, {64, 64, 256, false, false, 96}, {100, 8, 2048, false, true, 96},
+			{100, 8, 256, true, true, 96}, {140, 8, 64, false, true, 32}, {140, 8, 32, false, true, 64}, {140, 8, 64, true, true, 32}} {
+			capacity, E, K, tiled, rows := bank.capacity, bank.E, bank.K, bank.tiled, bank.rows
 			calls := []int{1, 17, 64}
 			if capacity != 64 {
 				calls = append(calls, capacity)
 			}
-			t.Run(fmt.Sprintf("%s/%dx%dx%d/tiled=%v", name, capacity, E, K, tiled), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/%dx%dx%dx%d/tiled=%v", name, capacity, E, rows, K, tiled), func(t *testing.T) {
 				dev := gpuDevice(d)
 				dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 				rng := rand.New(rand.NewSource(71))
 				ran := 0
 				for _, typ := range []quant.Type{quant.Q8_0, quant.Q4_K, quant.Q6_K, quant.MXFP4} {
+					if K%256 != 0 && typ != quant.Q8_0 {
+						continue
+					}
 					jt, ok := jlm.TypeOf(typ)
 					q, qok := layout.QuantOf(typ)
 					if !ok || !qok {
