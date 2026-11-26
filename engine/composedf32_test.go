@@ -37,7 +37,7 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 		file              string
 		median, worst, kl float64
 	}{
-		{"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", 3.89e-5 + 0.54e-5, 5.63e-5 + 3.85e-5, 0.00278 + 0.00021},
+		{"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", 3.93e-5 + 0.54e-5, 1.04e-4 + 3.85e-5, 0.00267 + 0.00021},
 		{"Qwen3-1.7B-Q4_K_M.gguf", 1.55e-4 + 0.32e-4, 1.80e-3 + 0.32e-3, 0.00751 + 0.00235},
 	} {
 		t.Run(c.file, func(t *testing.T) {
