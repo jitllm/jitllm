@@ -23,12 +23,13 @@ import (
 //
 // The matrix unit multiplies binary16, so the form is taken only where Half
 // admits binary16 operands: the row factor, the position factors and the
-// second factor rounded, one product a block of dots. The exponentials are
-// staged as their halves and their remainders' halves, two products a
-// block of weighted sums, so a weight carries some 22 bits: rounded to
-// eleven, the weights of synth-apertus's near one-hot rows (q/k-normed
-// heads) put its prompt 1.3e-4 from the CPU with an argmax flip, 1.2e-7
-// with the remainders, for 4-22% of the kernel's time on sm_70.
+// second factor rounded, one product a block of dots, and the exponentials
+// rounded, one product a block of weighted sums. Remainders stages the
+// exponentials' remainders' halves as well, two products a block, so a
+// weight carries some 22 bits: rounded to eleven, the weights of
+// synth-apertus's near one-hot rows (q/k-normed heads) put its prompt
+// 1.3e-4 from the CPU with an argmax flip, 1.2e-7 with the remainders, for
+// 10-20% of the kernel's time on sm_70.
 //
 // A head wide enough that a warp's share of the row factor and of the
 // weighted sums would not fit its registers is sliced: S warps take each
@@ -60,7 +61,7 @@ import (
 // is not split.
 type Flash struct {
 	Rows, Keys, Shared int
-	Half               bool
+	Half, Remainders   bool
 	Split              int
 	Launch, Plane      int
 }
@@ -381,7 +382,7 @@ func (p Flash) form(c expChain, d Device) ([]*Kernel, bool) {
 		return nil, false
 	}
 	b := flashBuild{c: c, dt: dt, sc: sc, g: g, G: G, Dk: Dk, Dv: Dv, R: R, H: H, tm: tm, tn: tn, tk: tk, qx: qx, kx: kx, vx: vx,
-		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, scaleAdd: d.ScaleAdd && !d.ScaleRows, windowed: windowed, NC: 1}
+		tq: map[int]int{}, tr: map[int]int{}, scale: d.ScaleRows, scaleAdd: d.ScaleAdd && !d.ScaleRows, rest: p.Remainders, windowed: windowed, NC: 1}
 	k := b.kernel()
 	nc, past := p.Split, 0
 	if nc == 0 {
@@ -614,6 +615,9 @@ type flashBuild struct {
 	// (Device.ScaleAdd).
 	scale    bool
 	scaleAdd bool
+	// rest stages the exponentials' remainders, a second product a block
+	// (Flash.Remainders).
+	rest     bool
 	sums     []int
 	windowed bool
 	own0     int
@@ -680,10 +684,10 @@ func (b *flashBuild) word(x0, x1 int) int {
 	return m.bin(OpOr, U, m.un(OpHalf, U, x0), m.bin(OpShl, U, m.un(OpHalf, U, x1), m.u32(16)))
 }
 
-// rest is two float32 values' remainders past their binary16 roundings, as
+// remainders is two float32 values' remainders past their binary16 roundings, as
 // the binary16 pair of theirs: a value's word and rest sum to it within some
 // 22 bits, where its word alone holds 11.
-func (b *flashBuild) rest(x0, x1 int) int {
+func (b *flashBuild) remainders(x0, x1 int) int {
 	U, F, m := ir.U32, ir.F32, b.m
 	r := func(x int) int { return m.bin(OpSub, F, x, m.un(OpWidenHalf, F, m.un(OpHalf, U, x))) }
 	return b.word(r(x0), r(x1))
@@ -987,10 +991,18 @@ func (b *flashBuild) rowsPhase() {
 		var pe [2]int
 		for e := range pe {
 			pe[e] = b.sideAt(b.c.wt, row, head, kpos[i+e], 0, map[Operand]int{b.sc.out: scores[i+e], b.c.mx.out: mNew}).at(m, b.c.wt.k.Stores[0].Val)
-			sum = m.bin(OpAdd, F, sum, pe[e])
+			w := pe[e]
+			if !b.rest {
+				// The row's sum is of the weights the products take, so the
+				// normalized weights sum to one.
+				w = m.un(OpWidenHalf, F, m.un(OpHalf, U, w))
+			}
+			sum = m.bin(OpAdd, F, sum, w)
 		}
 		b.store(at(pw, g.pOff+i/2), b.word(pe[0], pe[1]), b.P)
-		b.store(at(pw, g.plOff+i/2), b.rest(pe[0], pe[1]), b.P)
+		if b.rest {
+			b.store(at(pw, g.plOff+i/2), b.remainders(pe[0], pe[1]), b.P)
+		}
 	}
 	for x := 1; x < L; x *= 2 {
 		sum = m.bin(OpAdd, F, sum, m.add(Node{Op: OpShuffle, Type: F, A: sum, Imm: int64(x)}))
@@ -1018,10 +1030,12 @@ func (b *flashBuild) weighted() {
 	ph, pl := make([]int, steps), make([]int, steps)
 	for s := range steps {
 		ph[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.pOff+s*b.tk), g.sp, false, b.P)
-		pl[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.plOff+s*b.tk), g.sp, false, b.P)
+		if b.rest {
+			pl[s] = b.tile(aT, at(b.warpRow, g.sp, 2*g.plOff+s*b.tk), g.sp, false, b.P)
+		}
 	}
 	// A block's products: the exponentials' halves by the second factor,
-	// then their remainders' halves by it.
+	// then, with the remainders, their remainders' halves by it.
 	js := b.sliced(b.Dv / g.S)
 	jt := b.sliced(b.Dv / g.S * g.sv)
 	jv := b.Dv / b.tn / g.S
@@ -1033,6 +1047,9 @@ func (b *flashBuild) weighted() {
 			v = b.tile(bT, b.plus(m.u32(2*g.vOff+s*b.tk*g.sv+j*b.tn), js), g.sv, false, b.P)
 		}
 		acc = m.add(Node{Op: OpTileMMA, Type: ir.Void, A: ph[s], B: v, C: acc, Tile: &cT})
+		if !b.rest {
+			return acc
+		}
 		return m.add(Node{Op: OpTileMMA, Type: ir.Void, A: pl[s], B: v, C: acc, Tile: &cT})
 	}
 	if b.scale || b.scaleAdd {
