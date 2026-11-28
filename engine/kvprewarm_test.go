@@ -36,6 +36,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		grows, prewarm int
 		placed         int
 		used           uint64 // the budget placement spent, before the prompt
+		slack          uint64 // what the room keeps free beside every allocation
 	}
 	run := func(prewarm bool, budget uint64) arm {
 		instOpts := []Option{WithKVF16(false), WithKVPrewarm(prewarm)}
@@ -58,13 +59,13 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		defer st.Close()
 		st.SetDevice(g)
 		before := g.Stats()
-		used := before.BudgetUsed
+		used, slack := before.BudgetUsed, before.Slack
 		lg, err := st.Prefill(in)
 		if err != nil {
 			t.Fatal(err)
 		}
 		after := g.Stats()
-		return arm{append([]float32(nil), lg...), after.KVGrows - before.KVGrows, before.KVPrewarmPages, st.GPULayers(), used}
+		return arm{append([]float32(nil), lg...), after.KVGrows - before.KVGrows, before.KVPrewarmPages, st.GPULayers(), used, slack}
 	}
 	on, off := run(true, 0), run(false, 0)
 	t.Logf("prewarm: %d page(s) grown ahead, %d growth(s) in the first prompt; without: %d growth(s); %d and %d blocks placed",
@@ -86,14 +87,20 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 			t.Fatalf("logit %d: %v with the prewarm, %v without: a pool's size changed the answer", i, on.logits[i], off.logits[i])
 		}
 	}
-	// A budget exactly what placement spent without the prewarm, and a page's
-	// room more: the prewarm finds no room, takes nothing, and the instance
-	// places what the same budget places without it -- it grows into what placement left,
-	// never into a block's room or past the budget.
-	tight := off.used + 1<<16
+	// A budget exactly what placement spent without the prewarm, the slack
+	// its room keeps beside every allocation, and a page's room more: the
+	// prewarm finds no room, takes nothing, and the instance places what the
+	// same budget places without it -- it grows into what placement left,
+	// never into a block's room or past the budget. A budget under the slack
+	// refuses placement's own last reservation (the per-row head's logits) and
+	// leaves its room to the prewarm.
+	tight := off.used + off.slack + 1<<16
 	ton, toff := run(true, tight), run(false, tight)
-	t.Logf("budget %d bytes (placement's own %d): %d and %d blocks placed, %d page(s) grown ahead",
-		tight, off.used, ton.placed, toff.placed, ton.prewarm)
+	t.Logf("budget %d bytes (placement's own %d, its slack %d): %d and %d blocks placed, %d page(s) grown ahead, %d and %d bytes spent",
+		tight, off.used, off.slack, ton.placed, toff.placed, ton.prewarm, ton.used, toff.used)
+	if toff.used != off.used {
+		t.Fatalf("at placement's own budget placement spent %d bytes, %d without a budget: the budget did not reproduce the placement", toff.used, off.used)
+	}
 	if ton.placed != toff.placed || ton.prewarm != 0 {
 		t.Fatalf("at placement's own budget the prewarm grew %d page(s) and placed %d blocks against %d", ton.prewarm, ton.placed, toff.placed)
 	}
