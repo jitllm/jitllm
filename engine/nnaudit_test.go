@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -285,26 +286,46 @@ func composedNothing(t *testing.T, s *Instance, asked map[string]int64) {
 	}
 }
 
-// cardBand is how far a model's card logits may part from the composed
-// CPU's over a prompt and two steps: across the census the band of every
-// block on the card reads up to 2.7e-2 (stablelm-2-1.6b's second step),
-// and a block the card computes wrongly reads in tenths (synth-deepseek4's
-// 2.69).
+// cardBand is how far a model's card logits, as shipped, may part from the
+// composed CPU's as shipped over a prompt and two steps, each side holding
+// a binary16 history, the instance's default on amd64 (a card listed alone
+// would otherwise take float32). Both sides quantize a quantized weight's
+// activations to int8, each in its own windows and order, so the band is the
+// int8 class's: a point the rounding moves far on one side and not the other
+// reads up to it. A block the card computes
+// wrongly reads in tenths (synth-deepseek4's 2.69); cardFloatBand holds the
+// card's structure far tighter than this can.
 const cardBand = 5e-2
 
-// cardMixtureWorst bounds a mixture's one point past cardBand. The card
+// cardFloatBand is how far the card's float forms (Config.ComposedFloat)
+// may part from the CPU's float reference (withCPUFloat) over the same
+// prompt and steps, each side holding a float32 history: no int8 and no
+// binary16 on either side, the f32 reduction-order band. A binary16 history
+// moves a random fixture's logits by itself (synth-qwen2moe's by 3.6e-2, the
+// CPU and the card alike), so this arm does not hold one.
+const cardFloatBand = 1e-4
+
+// cardMixtureWorst bounds a mixture's one point past its band. The card
 // multiplies a routed bank on binary16 tiles, and its error can carry the
 // next block's router across a near-tie: one row takes another expert and
 // its logits part in tenths, then the next step agrees again. synth-gptoss's
 // 13-row prompt reads 0.311 there, and 1.8e-4 with its experts on the CPU
 // at float32, the router still on the card. A mixture is held at the median
-// of its points to cardBand and at every point to this; a wrong block reads
+// of its points to its band and at every point to this; a wrong block reads
 // past it at every point.
 const cardMixtureWorst = 1.0
 
 // cardAgrees holds model m's logits on card g -- a prompt of text through
-// Prefill, then two decode steps of the text -- to the composed CPU's at the
-// card's float32 history, within cardBand at each.
+// Prefill, then two decode steps of the text -- to the composed CPU's: the
+// forms as shipped to the CPU's as shipped within cardBand over a binary16
+// history, and the card's float forms to the CPU's float reference within
+// cardFloatBand over a float32 one. Where the shipped forms read past
+// cardFloatBand the float forms must read below them: the card ran float
+// activations. A model whose graph quantizes its rows (bitnet-b1.58's
+// row_int8) has no float form: its own rounding carries the int8 class into
+// both arms (2.2e-03 on bitnet-b1.58-2B-4T, the CPU's two arms 8.8e-04
+// apart; 2.8e-12 with the rounding taken out), and its float arm is held to
+// cardBand.
 func cardAgrees(t *testing.T, m *model.Model, g *gpu.GPU) {
 	t.Helper()
 	toks := m.Vocab.Encode("The capital of France is Paris, and the river that runs through it is", true)
@@ -314,10 +335,34 @@ func cardAgrees(t *testing.T, m *model.Model, g *gpu.GPU) {
 	if len(toks) < 4 {
 		t.Fatalf("the text is %d tokens", len(toks))
 	}
-	st := cardInstance(t, m, g)
-	defer st.Close()
-	ref := testInstance(t, m, 16, WithKVF16(false))
+	shipped := cardSeries(t, m, g, toks, []Option{WithKVF16(true)})
+	fg, err := openGPU(t, gpu.WithConfig(func(c *gpu.Config) { c.ComposedFloat = true }))
+	if err != nil || fg == nil {
+		t.Fatalf("the card with float forms: %v", err)
+	}
+	defer fg.Close()
+	float := cardSeries(t, m, fg, toks, []Option{WithKVF16(false)}, withCPUFloat())
+	t.Logf("the card against the CPU at each point: %.3e as shipped, %.3e float", shipped, float)
+	cardWithin(t, m, "as shipped", shipped, cardBand)
+	if quantizesRows(m) {
+		cardWithin(t, m, "float", float, cardBand)
+		return
+	}
+	cardWithin(t, m, "float", float, cardFloatBand)
+	if slices.Max(shipped) > cardFloatBand && !(slices.Max(float) < slices.Max(shipped)) {
+		t.Errorf("the float forms read %.3e, the shipped ones %.3e: the card did not run float activations", slices.Max(float), slices.Max(shipped))
+	}
+}
+
+// cardSeries is the NMSE at each point of toks's prompt and steps between
+// card g's instance of m and the CPU's, both under pinned and the CPU's
+// under cpu too.
+func cardSeries(t *testing.T, m *model.Model, g *gpu.GPU, toks []int32, pinned []Option, cpu ...Option) (es []float64) {
+	t.Helper()
+	ref := testInstance(t, m, 16, append(slices.Clone(pinned), cpu...)...)
 	defer ref.Close()
+	st := cardInstance(t, m, g, pinned...)
+	defer st.Close()
 	n := len(toks) - 2
 	got, err := st.Prefill(toks[:n])
 	if err != nil {
@@ -327,20 +372,11 @@ func cardAgrees(t *testing.T, m *model.Model, g *gpu.GPU) {
 	if err != nil {
 		t.Fatalf("Prefill on the CPU: %v", err)
 	}
-	var es []float64
 	for i := n; ; i++ {
 		e, _ := nmseOf(got, want)
 		es = append(es, e)
-		switch {
-		case math.IsNaN(e):
-			t.Errorf("position %d: the card's logits are not finite against the CPU's", i-1)
-		case m.Cfg.NExpert <= 1 && !(e < cardBand):
-			t.Errorf("position %d: the card's logits are %.3e NMSE from the CPU's (bound %.0e)", i-1, e, cardBand)
-		case m.Cfg.NExpert > 1 && !(e < cardMixtureWorst):
-			t.Errorf("position %d: the mixture's card logits are %.3e NMSE from the CPU's (bound %.0e at any point)", i-1, e, cardMixtureWorst)
-		}
 		if i == len(toks) {
-			break
+			return es
 		}
 		if got, err = st.Forward(toks[i]); err != nil {
 			t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
@@ -349,8 +385,25 @@ func cardAgrees(t *testing.T, m *model.Model, g *gpu.GPU) {
 			t.Fatalf("Forward on the CPU: %v", err)
 		}
 	}
-	if med := median(es); m.Cfg.NExpert > 1 && !(med < cardBand) {
-		t.Errorf("the mixture's card logits are %.3e NMSE from the CPU's at the median of %v (bound %.0e)", med, es, cardBand)
+}
+
+// cardWithin holds the series es of the forms named arm to band: every point
+// of a dense model, a mixture's median and its every point to
+// cardMixtureWorst.
+func cardWithin(t *testing.T, m *model.Model, arm string, es []float64, band float64) {
+	t.Helper()
+	for i, e := range es {
+		switch {
+		case math.IsNaN(e):
+			t.Errorf("%s, point %d: the card's logits are not finite against the CPU's", arm, i)
+		case m.Cfg.NExpert <= 1 && !(e < band):
+			t.Errorf("%s, point %d: the card's logits are %.3e NMSE from the CPU's (bound %.0e)", arm, i, e, band)
+		case m.Cfg.NExpert > 1 && !(e < cardMixtureWorst):
+			t.Errorf("%s, point %d: the mixture's card logits are %.3e NMSE from the CPU's (bound %.0e at any point)", arm, i, e, cardMixtureWorst)
+		}
+	}
+	if med := median(es); m.Cfg.NExpert > 1 && !(med < band) {
+		t.Errorf("%s: the mixture's card logits are %.3e NMSE from the CPU's at the median of %v (bound %.0e)", arm, med, es, band)
 	}
 }
 
@@ -493,9 +546,9 @@ func TestTheCensusSeesADeclinedStep(t *testing.T) {
 // instance listing the card alone, on which the model pages and no block
 // runs on the CPU. Any block off the card fails the test, with what the card
 // declined.
-func cardInstance(t *testing.T, m *model.Model, g *gpu.GPU) *Instance {
+func cardInstance(t *testing.T, m *model.Model, g *gpu.GPU, opts ...Option) *Instance {
 	t.Helper()
-	st := testInstance(t, m, 16)
+	st := testInstance(t, m, 16, opts...)
 	if err := st.SetDeviceLayers(g, -1); err != nil {
 		st.Close()
 		t.Fatalf("placement: %v (%s)", err, g.Err())
@@ -507,7 +560,7 @@ func cardInstance(t *testing.T, m *model.Model, g *gpu.GPU) *Instance {
 	st.Close()
 	spec := testdevices.One("cuda:0")
 	card := nn.DeviceName(spec)
-	st = testInstance(t, m, 16, WithDevices(spec))
+	st = testInstance(t, m, 16, append(slices.Clone(opts), WithDevices(spec))...)
 	if err := st.SetDevice(g); err != nil {
 		st.Close()
 		t.Fatalf("the card listed alone: %v (%s); declined with the CPU: %v", err, g.Err(), declined)
