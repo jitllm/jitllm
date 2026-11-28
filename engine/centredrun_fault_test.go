@@ -24,7 +24,7 @@ func TestCentredRunHaloIsSeen(t *testing.T) {
 				v, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.short), a.cpuShort)
 				return v
 			})
-			for _, f := range windowForms {
+			for _, f := range windowForms() {
 				band := bands[f.name]
 				for _, rows := range []int{0, 64} {
 					var faults gpu.Faults

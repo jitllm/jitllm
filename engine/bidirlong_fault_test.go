@@ -23,7 +23,7 @@ func TestLongBidirRunCutIsSeen(t *testing.T) {
 				v, _ := nmseOf(longBidirLogits(t, m, g, m.Cfg.NLayer, longBidirSpans(t, m, false)), a.cpuCau)
 				return v
 			})
-			for _, f := range windowForms {
+			for _, f := range windowForms() {
 				band := bands[f.name]
 				var faults gpu.Faults
 				g := openCentredCard(t, spec, 0, append(f.opts(), gpu.WithFaults(&faults))...)

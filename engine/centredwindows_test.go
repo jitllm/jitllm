@@ -107,11 +107,11 @@ func TestCentredWindowsMatchTheCPU(t *testing.T) {
 				v, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuShort[w:])
 				return v
 			})
-			if shipped := centredBound * max(bands[windowForms[0].name], 1e-6); !(min(open, openPast) > 10*shipped) {
+			if shipped := centredBound * max(bands[windowForms()[0].name], 1e-6); !(min(open, openPast) > 10*shipped) {
 				t.Fatalf("the CPU's rows stand %.3e (%.3e past a submission) from its rows with no windows, inside 10x the bound %.3e: the windows hold nothing to see",
 					open, openPast, shipped)
 			}
-			for _, f := range windowForms {
+			for _, f := range windowForms() {
 				band := bands[f.name]
 				bound := centredBound * max(band, 1e-6)
 				for _, rows := range []int{0, 64} {

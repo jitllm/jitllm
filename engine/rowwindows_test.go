@@ -210,7 +210,7 @@ func TestUnwindowedRunMatchesTheCPU(t *testing.T) {
 				v, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuPrompt[w:])
 				return v
 			})
-			for _, f := range windowForms {
+			for _, f := range windowForms() {
 				band := bands[f.name]
 				bound := centredBound * max(band, 1e-6)
 				for _, rows := range []int{0, 64} {

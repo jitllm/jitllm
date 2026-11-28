@@ -163,7 +163,9 @@ func (f cardForms) opts() []gpu.Option {
 }
 
 // windowForms is the forms a windowed gate holds each card's runs in.
-var windowForms = []cardForms{{name: "as shipped"}, {name: "float", float: true}}
+func windowForms() []cardForms {
+	return []cardForms{{name: "as shipped"}, {name: "float", float: true}}
+}
 
 // formBands is the band a windowed gate holds spec's runs in each form to:
 // measure, a run one submission holds, on a card opened in the form, and as
@@ -184,13 +186,13 @@ func formBands(t *testing.T, spec string, measure func(*gpu.GPU) float64) map[st
 		return v
 	}
 	shipped, int8 := at(), at(gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true }))
-	float := at(windowForms[1].opts()...)
+	float := at(windowForms()[1].opts()...)
 	t.Logf("%s: a run one submission holds, against the CPU's: NMSE %.3e as shipped, %.3e with every projection on the int8 vector form, %.3e float",
 		spec, shipped, int8, float)
 	if !(float < shipped) {
 		t.Fatalf("the float forms read %.3e on %s, the shipped ones %.3e: the card did not run float activations", float, spec, shipped)
 	}
-	return map[string]float64{windowForms[0].name: max(shipped, int8), windowForms[1].name: float}
+	return map[string]float64{windowForms()[0].name: max(shipped, int8), windowForms()[1].name: float}
 }
 
 // TestCentredRunMatchesTheCPU prefills a non-causal decoder whose short
@@ -221,7 +223,7 @@ func TestCentredRunMatchesTheCPU(t *testing.T) {
 				cpu    []float32
 				layers int
 			}
-			for _, f := range windowForms {
+			for _, f := range windowForms() {
 				band := bands[f.name]
 				for _, rows := range []int{0, 64} {
 					g := openCentredCard(t, spec, rows, f.opts()...)

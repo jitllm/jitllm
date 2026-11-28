@@ -114,7 +114,7 @@ func TestLongBidirRunMatchesTheCPU(t *testing.T) {
 					v, _ := nmseOf(longBidirLogits(t, m, g, layers, longBidirSpans(t, m, false)), a.cpuCau)
 					return v
 				})
-				for _, f := range windowForms {
+				for _, f := range windowForms() {
 					band := bands[f.name]
 					g := openCentredCard(t, spec, 0, f.opts()...)
 					before := runPhases(g)
