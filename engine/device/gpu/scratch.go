@@ -539,7 +539,7 @@ func (g *devTier) headReserved() bool {
 // [lo, hi) in the reserved width (composedBlock).
 func (g *devTier) rangeComposed(lo, hi int, part nn.Parts) bool {
 	gen := g.placeGen.Load()
-	if c := g.rangeAt; c.set && c.gen == gen && c.lo == lo && c.hi == hi && c.part == part {
+	if c := g.rangeAt; c.set && c.gen == gen && c.lo == lo && c.hi == hi && c.part == part && c.as == g.formAs {
 		return true
 	}
 	bb := g.reservedFor(part)
@@ -554,7 +554,7 @@ func (g *devTier) rangeComposed(lo, hi int, part nn.Parts) bool {
 		served = true
 	}
 	if served {
-		g.rangeAt = composedAt{set: true, gen: gen, lo: lo, hi: hi, part: part}
+		g.rangeAt = composedAt{set: true, gen: gen, lo: lo, hi: hi, part: part, as: g.formAs}
 	}
 	return served
 }
@@ -720,7 +720,9 @@ func (g *devTier) reservedBlocks() (int, bool) {
 		if l == nil || !l.ok || l.nonCausal {
 			continue
 		}
-		if !g.composedInSet(li) {
+		ok := true
+		g.viewTypes(li, func() { ok = ok && g.composedInSet(li) })
+		if !ok {
 			return n, false
 		}
 		n++
@@ -737,6 +739,8 @@ type composedAt struct {
 	gen       uint64
 	lo, hi, n int
 	part      nn.Parts
+	// as is the history type the answer was asked at (devTier.formAs).
+	as int
 }
 
 // composedInSet is composedBlock asked in block li's own set, at that set's

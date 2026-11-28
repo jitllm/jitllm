@@ -1551,8 +1551,10 @@ func (g *GPU) rowsComposedWalk() bool {
 				continue
 			}
 			placed = true
-			if !d.rangeComposed(li, li+1, nn.ComposedBlock) {
-				ok = false
+			// The device's view holds no session: each history type the
+			// block is held as has its forms.
+			d.viewTypes(li, func() { ok = ok && d.rangeComposed(li, li+1, nn.ComposedBlock) })
+			if !ok {
 				break
 			}
 		}
