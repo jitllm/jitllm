@@ -169,6 +169,17 @@ func (g *devTier) eachHistType(li int, f func()) {
 	}
 }
 
+// viewTypes runs f as eachHistType does where this view neither forms at
+// a type nor holds block li's history (the device's own view, a clone's),
+// and once at the view's own type otherwise. Callers hold g.mu.
+func (g *devTier) viewTypes(li int, f func()) {
+	if _, ok := g.devSess.hist[g.histSrc(li)]; g.formAs > 0 || ok {
+		f()
+		return
+	}
+	g.eachHistType(li, f)
+}
+
 // holdsRows reports that kp holds block li's rows at some type.
 func (kp *kvPool) holdsRows(li int) bool {
 	for key := range kp.layers {

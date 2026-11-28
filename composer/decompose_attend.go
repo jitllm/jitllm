@@ -102,13 +102,13 @@ func (c *Context) attendGeomOf(r graph.StateRef, period, kw int, a graph.Attrs) 
 	if max(1, l.Period) != max(1, period) {
 		return attendGeom{}, fmt.Errorf("an attention over an entry each %d positions of a history of one each %d", period, l.Period)
 	}
-	values, vl := l.values(h)
+	values, vl := l.values(h, r.Hist > 0)
 	for _, p := range []Pool{l.Keys, vl} {
 		if err := p.check(kw); err != nil {
 			return attendGeom{}, err
 		}
 	}
-	g := attendGeom{D: a.HeadDim, KW: kw, Keys: l.Keys.operand(TableKeys.of(h)), Values: values, ValuePool: vl,
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: l.Keys.operand(pastOf(TableKeys.of(h), r.Hist > 0)), Values: values, ValuePool: vl,
 		KeyPool: l.Keys, Slots: l.slots(c.Step.Page), Pages: TablePages.of(h), Period: period}
 	// A block sharing another's history (graph.SharedHistory) reads that
 	// block's pools as it left them.

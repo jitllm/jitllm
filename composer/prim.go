@@ -75,6 +75,10 @@ type Operand struct {
 	// weight's Instance is the first stored row it binds (graph.Binding.From).
 	Table    Table
 	Instance int
+	// Past is a history table of a history past its block's rows' (its
+	// index past 0), the block's own or another's it reads: one whose
+	// values are its own every device keeps at f32 (Halves).
+	Past bool
 	// Rows is a weight held as a row table (Request.Tables).
 	Rows bool
 }
