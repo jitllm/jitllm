@@ -543,26 +543,49 @@ func (g *GPU) BuildLanes(n int) {
 	}
 }
 
-// HoldLane0 holds every device's lane0 until release, so the calls made
-// meanwhile run on the clones BuildLanes made: a session's first step in a
-// lane records its launches there, at a step of the caller's choosing.
-func (g *GPU) HoldLane0() (release func()) {
+// HoldAllBut holds every lane of every device but lane i (0 is lane0, i > 0
+// the i-th clone) until release, so a call made meanwhile runs in lane i: a
+// session's first step in a lane records its launches there, at a step of
+// the caller's choosing. A device with no lane i holds none of its lanes;
+// ok is false when no device has one, and nothing is held then.
+func (g *GPU) HoldAllBut(i int) (release func(), ok bool) {
+	var held []*lane
 	for _, d := range g.devs {
 		d.mu.Lock()
-		for d.lane0.held {
-			d.idle.Wait()
+		d.tidyLanes()
+		if i > len(d.lanes) {
+			d.mu.Unlock()
+			continue
 		}
-		d.lane0.held = true
+		ok = true
+		for j, l := range append([]*lane{d.lane0}, d.lanes...) {
+			if j == i {
+				continue
+			}
+			for l.held {
+				d.idle.Wait()
+			}
+			l.held = true
+			held = append(held, l)
+		}
 		d.mu.Unlock()
 	}
-	return func() {
+	release = func() {
 		for _, d := range g.devs {
 			d.mu.Lock()
-			d.lane0.held = false
+			for _, l := range held {
+				if l == d.lane0 || slices.Contains(d.lanes, l) {
+					l.held = false
+				}
+			}
 			d.idle.Broadcast()
 			d.mu.Unlock()
 		}
 	}
+	if !ok {
+		release()
+	}
+	return release, ok
 }
 
 // freeLane holds a lane for ds if one is free or can be built, nil if not.
