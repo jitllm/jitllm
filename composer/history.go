@@ -88,17 +88,23 @@ func (c *Context) slots() int { return c.History.slots(c.Step.Page) }
 
 // values is the pool the history at table instance n reads its values
 // from, its operand and its layout.
-func (h History) values(n int) (Operand, Pool) {
+func (h History) values(n int, past bool) (Operand, Pool) {
 	if h.ValuesInKeys {
-		return h.Keys.operand(TableKeys.of(n)), h.Keys
+		return h.Keys.operand(pastOf(TableKeys.of(n), past)), h.Keys
 	}
-	return h.Values.operand(TableValues.of(n)), h.Values
+	return h.Values.operand(pastOf(TableValues.of(n), past)), h.Values
+}
+
+// pastOf is o marked a table of a history past its block's rows' where past.
+func pastOf(o Operand, past bool) Operand {
+	o.Past = past
+	return o
 }
 
 // historyOf is the history an op reads or writes (its first, a block's ops
 // touch one history each) as the table instance it is bound at (slotOf),
 // and that history's layout.
-func (c *Context) historyOf(o graph.Op) (int, History, error) {
+func (c *Context) historyOf(o graph.Op) (int, History, bool, error) {
 	var r graph.StateRef
 	switch {
 	case len(o.Reads) > 0:
@@ -108,10 +114,10 @@ func (c *Context) historyOf(o graph.Op) (int, History, error) {
 	}
 	h, err := c.slotOf(r)
 	if err != nil {
-		return 0, History{}, err
+		return 0, History{}, false, err
 	}
 	l, err := c.layoutOf(h)
-	return h, l, err
+	return h, l, r.Hist > 0, err
 }
 
 // slotOf is the table instance history r is bound at: its index, for a
@@ -219,20 +225,24 @@ func (c *Context) poolReadIn(x *exprs, j int, l Pool, pg, w, pid, off, d int) in
 // c.History, its tables at its instance (tab) -- until undo restores the
 // block's.
 func (c *Context) onHistory(o graph.Op) (undo func(), err error) {
-	h, l, err := c.historyOf(o)
+	h, l, past, err := c.historyOf(o)
 	if err != nil {
 		return nil, err
 	}
-	was, wasH := c.History, c.hist
+	was, wasH, wasP := c.History, c.hist, c.past
 	if c.hist == 0 {
 		c.base = c.History
 	}
-	c.History, c.hist = l, h
-	return func() { c.History, c.hist = was, wasH }, nil
+	c.History, c.hist, c.past = l, h, past
+	return func() { c.History, c.hist, c.past = was, wasH, wasP }, nil
 }
 
 // tab is table t of the history the op being decomposed reads.
-func (c *Context) tab(t Table) Operand { return t.of(c.hist) }
+func (c *Context) tab(t Table) Operand {
+	o := t.of(c.hist)
+	o.Past = c.past && (t == TableKeys || t == TableValues)
+	return o
+}
 
 // Slots is a page's slots of a history laid out as h, its pages of page
 // positions: a position each, or an entry each Period and one past them.

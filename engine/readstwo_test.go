@@ -246,7 +246,8 @@ func readsOutside(m *model.Model, lo, hi int) int {
 // selects both (graph.Graph.ReadsMore), each read is load-bearing (the
 // fixture reading block 0's twice answers otherwise, and so does the
 // fixture unrestated), every block on each card answers as every block on
-// the CPU, and each history is held once, by the block that keeps it.
+// the CPU, a binary16 history answers as an f32 one, and each history is
+// held once, by the block that keeps it.
 func TestABlockReadsTwoBlocksHistories(t *testing.T) {
 	base := testmodels.Path("synth-seedoss.gguf")
 	two := jlmOf(t, base+readsTwoSuffix)
@@ -262,12 +263,12 @@ func TestABlockReadsTwoBlocksHistories(t *testing.T) {
 		t.Cleanup(func() { m.Close() })
 		return m
 	}
-	run := func(t *testing.T, m *model.Model, g *gpu.GPU) ([]float32, *Instance) {
+	runAs := func(t *testing.T, m *model.Model, g *gpu.GPU, f16 bool) ([]float32, *Instance) {
 		prompt := make([]int32, 40)
 		for i := range prompt {
 			prompt[i] = int32((7 + 13*i) % m.Cfg.NVocab)
 		}
-		s := testInstance(t, m, 96, WithKVF16(false), withCPUFloat())
+		s := testInstance(t, m, 96, WithKVF16(f16), withCPUFloat())
 		if g != nil {
 			if err := s.SetDeviceLayers(g, m.Cfg.NLayer); err != nil {
 				t.Fatal(err)
@@ -287,6 +288,7 @@ func TestABlockReadsTwoBlocksHistories(t *testing.T) {
 		}
 		return slices.Clone(lg), s
 	}
+	run := func(t *testing.T, m *model.Model, g *gpu.GPU) ([]float32, *Instance) { return runAs(t, m, g, false) }
 	m := open(t, two)
 	li := m.Cfg.NLayer - 1
 	g := m.Composing().BlockGraph(li)
@@ -303,6 +305,14 @@ func TestABlockReadsTwoBlocksHistories(t *testing.T) {
 		if s.kv.layers[b].mem.Len() == 0 {
 			t.Errorf("block %d keeps its history and holds no page", b)
 		}
+	}
+	// A binary16 history reads the blocks' histories as their blocks hold
+	// them: history 0 in halves, as the reading block binds it.
+	half, _ := runAs(t, m, nil, true)
+	if nm, _ := nmseOf(half, cpu); math.IsNaN(nm) || nm > 1e-3 {
+		t.Errorf("block %d over a binary16 history reads NMSE %.3e from its f32 history's logits", li, nm)
+	} else {
+		t.Logf("over a binary16 history: NMSE %.3e from the f32 history's logits", nm)
 	}
 	own, _ := run(t, open(t, jlmOf(t, base)), nil)
 	same, _ := run(t, open(t, twice), nil)

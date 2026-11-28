@@ -22,12 +22,14 @@ func (o Operand) history() bool {
 }
 
 // entries reports the histories past the rows ks read whose values are
-// their own: those every device keeps at f32, keys and values alike.
+// their own (Operand.Past): those every device keeps at f32, keys and
+// values alike. A read of another block's history 0 is not one: it is held
+// as its block holds it.
 func entries(ks []*Kernel) map[int]bool {
 	var own map[int]bool
 	for _, k := range ks {
 		for _, b := range k.Bufs {
-			if o := b.Operand; o.Kind == OperandTable && o.Table == TableValues && o.Instance > 0 {
+			if o := b.Operand; o.Kind == OperandTable && o.Table == TableValues && o.Past {
 				if own == nil {
 					own = map[int]bool{}
 				}
@@ -41,7 +43,7 @@ func entries(ks []*Kernel) map[int]bool {
 func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	own := entries(ks)
 	half := func(o Operand) bool {
-		return o.history() && !(o.Instance > 0 && own[o.Instance] && (o.Table == TableKeys || o.Table == TableValues))
+		return o.history() && !(o.Past && own[o.Instance] && (o.Table == TableKeys || o.Table == TableValues))
 	}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		any := false
