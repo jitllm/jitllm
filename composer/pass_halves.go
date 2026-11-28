@@ -16,17 +16,37 @@ type Halves struct {
 func (Halves) Name() string { return "halves" }
 
 // history reports whether o is a part's history: a table of its own that
-// is not a recurrent state ("rec.") or an entry history ("ent."), which
-// every device keeps at f32.
+// is not a recurrent state ("rec."), which every device keeps at f32.
 func (o Operand) history() bool {
 	return o.Kind == OperandTable && o.PerPart && !o.Table.recurrent()
 }
 
+// entries reports the histories past the rows ks read whose values are
+// their own: those every device keeps at f32, keys and values alike.
+func entries(ks []*Kernel) map[int]bool {
+	var own map[int]bool
+	for _, k := range ks {
+		for _, b := range k.Bufs {
+			if o := b.Operand; o.Kind == OperandTable && o.Table == TableValues && o.Instance > 0 {
+				if own == nil {
+					own = map[int]bool{}
+				}
+				own[o.Instance] = true
+			}
+		}
+	}
+	return own
+}
+
 func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
+	own := entries(ks)
+	half := func(o Operand) bool {
+		return o.history() && !(o.Instance > 0 && own[o.Instance] && (o.Table == TableKeys || o.Table == TableValues))
+	}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		any := false
 		for _, b := range k.Bufs {
-			any = any || b.Operand.history()
+			any = any || half(b.Operand)
 		}
 		if !any {
 			return nil, false, nil
@@ -34,7 +54,7 @@ func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		U := ir.U32
 		for b := range m.Bufs {
-			if m.Bufs[b].Operand.history() {
+			if half(m.Bufs[b].Operand) {
 				m.Bufs[b].Half = true
 			}
 		}
