@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -181,12 +182,13 @@ func TestMixedWindowsMatchTheCPU(t *testing.T) {
 // same rows as the prompt's prefill, the windows changing nothing. On each
 // card -- every block there and half, at the reserved width as placed and
 // narrowed to 64 rows -- both are held to the CPU's within three times the
-// band a prompt's run one submission holds reads on the same card.
+// band a prompt's run one submission holds reads on the same card in the
+// same forms (formBands), as shipped and float.
 func TestUnwindowedRunMatchesTheCPU(t *testing.T) {
 	m := centredModel(t)
 	defer m.Close()
 	long, short := centredPrompt(t, m)
-	n, ns := len(long[0].Tokens), len(short[0].Tokens)
+	n := len(long[0].Tokens)
 	w := m.Cfg.NEmbd
 	wins := segmentWindows(n, windowSpan)
 	prompt := windowedRows(t, m, nil, 0, long, nil)
@@ -204,37 +206,37 @@ func TestUnwindowedRunMatchesTheCPU(t *testing.T) {
 	}
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g := openCentredCard(t, spec, 0)
-			band, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuPrompt[w:])
-			g.Close()
-			bound := centredBound * max(band, 1e-6)
-			t.Logf("%s: a prompt's run of %d rows, one submission, against the CPU's: NMSE %.3e", spec, ns, band)
-			if math.IsNaN(band) {
-				t.Fatalf("a run one submission holds reads NMSE %v on %s", band, spec)
-			}
-			for _, rows := range []int{0, 64} {
-				g := openCentredCard(t, spec, rows)
-				for _, layers := range []int{m.Cfg.NLayer, m.Cfg.NLayer / 2} {
-					for _, arm := range []struct {
-						name string
-						wins []nn.KeyRun
-					}{{"no windows", nil}, {"windows no block reads", wins}} {
-						phases := runPhases(g)
-						got := runRows(t, m, g, layers, long, arm.wins, true)
-						phases = runPhases(g) - phases
-						nm, worst := nmseOf(got[w:], none[w:])
-						t.Logf("%s, reserved %d, %d of %d blocks, %s: against the CPU's, NMSE %.3e (max|d| %.4f); bound %.3e; %d phase calls",
-							spec, rows, layers, m.Cfg.NLayer, arm.name, nm, worst, bound, phases)
-						if phases == 0 {
-							t.Fatalf("the %d-row readout made no phase call: it did not go in pieces", n)
-						}
-						if math.IsNaN(nm) || nm > bound {
-							t.Errorf("a readout of %d rows on %s, reserved %d, %d blocks, %s, reads NMSE %.3e against the CPU's, past %gx the band %.3e",
-								n, spec, rows, layers, arm.name, nm, centredBound, band)
+			bands := formBands(t, spec, func(g *gpu.GPU) float64 {
+				v, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuPrompt[w:])
+				return v
+			})
+			for _, f := range windowForms {
+				band := bands[f.name]
+				bound := centredBound * max(band, 1e-6)
+				for _, rows := range []int{0, 64} {
+					g := openCentredCard(t, spec, rows, f.opts()...)
+					for _, layers := range []int{m.Cfg.NLayer, m.Cfg.NLayer / 2} {
+						for _, arm := range []struct {
+							name string
+							wins []nn.KeyRun
+						}{{"no windows", nil}, {"windows no block reads", wins}} {
+							phases := runPhases(g)
+							got := runRows(t, m, g, layers, long, arm.wins, true)
+							phases = runPhases(g) - phases
+							nm, worst := nmseOf(got[w:], none[w:])
+							t.Logf("%s %s, reserved %d, %d of %d blocks, %s: against the CPU's, NMSE %.3e (max|d| %.4f); bound %.3e; %d phase calls",
+								spec, f.name, rows, layers, m.Cfg.NLayer, arm.name, nm, worst, bound, phases)
+							if phases == 0 {
+								t.Fatalf("the %d-row readout made no phase call: it did not go in pieces", n)
+							}
+							if math.IsNaN(nm) || nm > bound {
+								t.Errorf("a readout of %d rows on %s %s, reserved %d, %d blocks, %s, reads NMSE %.3e against the CPU's, past %gx the band %.3e",
+									n, spec, f.name, rows, layers, arm.name, nm, centredBound, band)
+							}
 						}
 					}
+					g.Close()
 				}
-				g.Close()
 			}
 		})
 	}
