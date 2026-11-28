@@ -14,11 +14,12 @@ import (
 
 // TestTwoInstancesSpillOntoTheNextCard places two instances of one model on
 // one fill-first tier whose first card is capped, so the blocks past its room
-// go to the second, and prefills both: the second's history has no room on
-// the first card beside the first's, so its blocks there spill onto the next
-// card as copies of its own while the first's stay. Each instance keeps every
-// block on the cards, composes none on the CPU while its tokens run, and
-// decodes the host's tokens.
+// go to the second, and prefills both: each prompt is three fifths of the
+// history the first card has room for once both are placed (KVRoom), so the
+// second's history has no room there beside the first's, and its blocks there
+// spill onto the next card as copies of its own while the first's stay. Each
+// instance keeps every block on the cards, composes none on the CPU while its
+// tokens run, and decodes the host's tokens.
 func TestTwoInstancesSpillOntoTheNextCard(t *testing.T) {
 	devs := testdevices.Take(t, 2, "cuda:0,cuda:1")
 	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
@@ -30,25 +31,7 @@ func TestTwoInstancesSpillOntoTheNextCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	prompts := [2][]int32{
-		m.Vocab.Encode("The capital of France is a city that", true),
-		m.Vocab.Encode("Once upon a time, in a small village by the sea", true),
-	}
-	const gen = 8
-	maxSeq := max(len(prompts[0]), len(prompts[1])) + gen + 1
-	var want [2][]int32
-	for i, pr := range prompts {
-		st := testInstance(t, m, maxSeq)
-		lg, err := st.Prefill(pr)
-		for err == nil && len(want[i]) < gen {
-			want[i] = append(want[i], Greedy(lg))
-			lg, err = st.Forward(want[i][len(want[i])-1])
-		}
-		st.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	const gen, maxSeq = 8, 4096
 	spec := devs[0] + "=" + strconv.FormatUint(spillBudget(380_000_000), 10) + "," + devs[1]
 	g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.FillFirst = true }))
@@ -67,6 +50,33 @@ func TestTwoInstancesSpillOntoTheNextCard(t *testing.T) {
 	}
 	if pl := g.Placed(); len(pl) != 2 || pl[0] == 0 || pl[1] == 0 {
 		t.Skipf("the capped card did not spill onto the next one: placed %v -- this gate proved nothing", pl)
+	}
+	room, page := g.KVRoom()
+	n := max(room*3/5, 1)
+	if n+gen >= maxSeq {
+		t.Fatalf("the first card has room for %d positions of history, past the %d an instance holds: the cap leaves a block's room", room, maxSeq)
+	}
+	t.Logf("the first card has room for %d positions (pages of %d): prompts of %d", room, page, n)
+	var prompts [2][]int32
+	for i, s := range []string{"The capital of France is a city that ", "Once upon a time, in a small village by the sea, "} {
+		prompts[i] = m.Vocab.Encode(s, true)
+		for len(prompts[i]) < n {
+			prompts[i] = append(prompts[i], m.Vocab.Encode(s, false)...)
+		}
+		prompts[i] = prompts[i][:n]
+	}
+	var want [2][]int32
+	for i, pr := range prompts {
+		st := testInstance(t, m, n+gen+1)
+		lg, err := st.Prefill(pr)
+		for err == nil && len(want[i]) < gen {
+			want[i] = append(want[i], Greedy(lg))
+			lg, err = st.Forward(want[i][len(want[i])-1])
+		}
+		st.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	var before [2][]int
 	for i, st := range insts {
