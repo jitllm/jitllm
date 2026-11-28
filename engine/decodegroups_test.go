@@ -22,8 +22,9 @@ import (
 // A card builds a lane for a session's call the first time it finds every
 // lane held (takeLane), which two groups meeting on a card at a step do only
 // when they happen to overlap; BuildLanes makes the cards hold a lane per
-// group before the counted steps and a warm-up on the clones, so the counted
-// steps allocate nothing whichever lane a call takes.
+// group before the counted steps, and each group steps alone in each lane
+// (HoldAllBut), so the counted steps allocate nothing whichever lane a call
+// takes.
 func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
 	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
@@ -50,7 +51,8 @@ func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	defer m.Close()
 	prompts := []string{"The capital of France is", "Water boils at a temperature of",
 		"The clerk counted barrels of salt on the upper floor, and", "Once upon a time"}
-	const warm, n = 128, 64
+	// lanePass is two steps of each recurrent parity a hybrid alternates.
+	const warm, n, lanePass = 128, 64, 4
 	groups := [2][]Run{}
 	toks := make([][1]int32, len(prompts))
 	for i, pr := range prompts {
@@ -117,9 +119,26 @@ func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	if built := g.Stats().LaneBuilds - lanes0; built < want {
 		t.Fatalf("%d lane(s) built, want %d: the cards hold no lane for the second group", built, want)
 	}
-	release := g.HoldLane0()
-	cycle(warm / 4)
-	release()
+	// Each group alone in each lane of every card, past the score grain
+	// the warm-up crossed: whichever lane a counted call takes, its group
+	// has recorded there at the counted steps' key. Alone, a group never
+	// finds its lane held, so no lane is built meanwhile.
+	for i := 0; ; i++ {
+		release, ok := g.HoldAllBut(i)
+		if !ok {
+			break
+		}
+		if (i+1)*lanePass > warm/4 {
+			release()
+			t.Fatalf("the cards hold more than %d lanes: the sessions have no room to step each group in each", warm/4/lanePass)
+		}
+		for k := range start {
+			done.Add(1)
+			start[k] <- lanePass
+			done.Wait()
+		}
+		release()
+	}
 	for k, err := range fail {
 		if err != nil {
 			t.Fatalf("group %d: %v", k, err)
