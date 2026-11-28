@@ -145,6 +145,56 @@ func openCentredCard(t *testing.T, spec string, rows int, extra ...gpu.Option) *
 	return g
 }
 
+// cardForms is a way a windowed gate's card forms its blocks: as it ships,
+// where a call of few rows runs a projection's vector form over int8
+// activations (composer's bands), or with float activations everywhere
+// (Config.ComposedFloat), where nothing but the pieces' cutting stands
+// between the card's rows and the CPU's float rows.
+type cardForms struct {
+	name  string
+	float bool
+}
+
+func (f cardForms) opts() []gpu.Option {
+	if !f.float {
+		return nil
+	}
+	return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) { c.ComposedFloat = true })}
+}
+
+// windowForms is the forms a windowed gate holds each card's runs in.
+func windowForms() []cardForms {
+	return []cardForms{{name: "as shipped"}, {name: "float", float: true}}
+}
+
+// formBands is the band a windowed gate holds spec's runs in each form to:
+// measure, a run one submission holds, on a card opened in the form, and as
+// shipped the most of that and measure on a card whose every projection
+// takes the int8 vector form (Config.NoMMA), the class a call of few rows
+// runs -- an arm whose pieces leave a ragged call is held to the forms it
+// ran. The float band must stand below the shipped one, or the float forms
+// were not the ones the card ran.
+func formBands(t *testing.T, spec string, measure func(*gpu.GPU) float64) map[string]float64 {
+	t.Helper()
+	at := func(opts ...gpu.Option) float64 {
+		g := openCentredCard(t, spec, 0, opts...)
+		defer g.Close()
+		v := measure(g)
+		if math.IsNaN(v) {
+			t.Fatalf("a run one submission holds reads NMSE %v on %s", v, spec)
+		}
+		return v
+	}
+	shipped, int8 := at(), at(gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true }))
+	float := at(windowForms()[1].opts()...)
+	t.Logf("%s: a run one submission holds, against the CPU's: NMSE %.3e as shipped, %.3e with every projection on the int8 vector form, %.3e float",
+		spec, shipped, int8, float)
+	if !(float < shipped) {
+		t.Fatalf("the float forms read %.3e on %s, the shipped ones %.3e: the card did not run float activations", float, spec, shipped)
+	}
+	return map[string]float64{windowForms()[0].name: max(shipped, int8), windowForms()[1].name: float}
+}
+
 // TestCentredRunMatchesTheCPU prefills a non-causal decoder whose short
 // convolutions are centred (centredModel) over one bidirectional run of
 // 1150 rows: on the CPU, which runs the run in one call, and with every
@@ -155,7 +205,8 @@ func openCentredCard(t *testing.T, spec string, rows int, extra ...gpu.Option) *
 // reading the rows its convolution needs past its edges (the halo); and
 // with half the blocks there, the rest on the CPU. The card's logits are
 // held to the CPU's within three times the band a run one submission holds
-// reads on the same card; pieces with a halo ran. The violation, a halo of
+// reads on the same card in the same forms (formBands), as shipped and
+// float; pieces with a halo ran. The violation, a halo of
 // no rows, is TestCentredRunHaloIsSeen, under jitllmfault.
 func TestCentredRunMatchesTheCPU(t *testing.T) {
 	m := centredModel(t)
@@ -163,41 +214,41 @@ func TestCentredRunMatchesTheCPU(t *testing.T) {
 	a := newCentredArm(t, m)
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g := openCentredCard(t, spec, 0)
-			band, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.short), a.cpuShort)
-			g.Close()
-			t.Logf("%s: a run of %d rows, one submission, against the CPU's: logit NMSE %.3e", spec, len(a.short[0].Tokens), band)
-			if math.IsNaN(band) {
-				t.Fatalf("a run one submission holds reads NMSE %v on %s", band, spec)
-			}
+			bands := formBands(t, spec, func(g *gpu.GPU) float64 {
+				v, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.short), a.cpuShort)
+				return v
+			})
 			type arm struct {
 				spans  []model.Span
 				cpu    []float32
 				layers int
 			}
-			for _, rows := range []int{0, 64} {
-				g := openCentredCard(t, spec, rows)
-				arms := []arm{{a.long, a.cpuLong, m.Cfg.NLayer}, {a.long, a.cpuLong, m.Cfg.NLayer / 2}}
-				if rows > 0 {
-					arms = append(arms, arm{a.short, a.cpuShort, m.Cfg.NLayer})
-				}
-				for _, c := range arms {
-					n := len(c.spans[0].Tokens)
-					halos, phases := haloPieces(g), runPhases(g)
-					got := centredLogits(t, m, g, c.layers, c.spans)
-					halos, phases = haloPieces(g)-halos, runPhases(g)-phases
-					nm, worst := nmseOf(got, c.cpu)
-					t.Logf("%s, reserved %d, a run of %d rows, %d of %d blocks: against the CPU's, logit NMSE %.3e (max|d| %.4f); band %.3e; %d phase calls, %d pieces with a halo",
-						spec, rows, n, c.layers, m.Cfg.NLayer, nm, worst, band, phases, halos)
-					if halos == 0 || phases == 0 {
-						t.Fatalf("%d phase calls and %d pieces with a halo: the run did not go in pieces", phases, halos)
+			for _, f := range windowForms() {
+				band := bands[f.name]
+				for _, rows := range []int{0, 64} {
+					g := openCentredCard(t, spec, rows, f.opts()...)
+					arms := []arm{{a.long, a.cpuLong, m.Cfg.NLayer}, {a.long, a.cpuLong, m.Cfg.NLayer / 2}}
+					if rows > 0 {
+						arms = append(arms, arm{a.short, a.cpuShort, m.Cfg.NLayer})
 					}
-					if math.IsNaN(nm) || nm > centredBound*max(band, 1e-6) {
-						t.Errorf("a run of %d rows on %s, reserved %d, %d blocks, reads NMSE %.3e against the CPU's, past %gx the band %.3e",
-							n, spec, rows, c.layers, nm, centredBound, band)
+					for _, c := range arms {
+						n := len(c.spans[0].Tokens)
+						halos, phases := haloPieces(g), runPhases(g)
+						got := centredLogits(t, m, g, c.layers, c.spans)
+						halos, phases = haloPieces(g)-halos, runPhases(g)-phases
+						nm, worst := nmseOf(got, c.cpu)
+						t.Logf("%s %s, reserved %d, a run of %d rows, %d of %d blocks: against the CPU's, logit NMSE %.3e (max|d| %.4f); band %.3e; %d phase calls, %d pieces with a halo",
+							spec, f.name, rows, n, c.layers, m.Cfg.NLayer, nm, worst, band, phases, halos)
+						if halos == 0 || phases == 0 {
+							t.Fatalf("%d phase calls and %d pieces with a halo: the run did not go in pieces", phases, halos)
+						}
+						if math.IsNaN(nm) || nm > centredBound*max(band, 1e-6) {
+							t.Errorf("a run of %d rows on %s %s, reserved %d, %d blocks, reads NMSE %.3e against the CPU's, past %gx the band %.3e",
+								n, spec, f.name, rows, c.layers, nm, centredBound, band)
+						}
 					}
+					g.Close()
 				}
-				g.Close()
 			}
 		})
 	}

@@ -85,14 +85,14 @@ func runRows(t *testing.T, m *model.Model, g *gpu.GPU, layers int, spans []model
 // those past its first submission, every block there and half, at the
 // reserved width as placed and narrowed to 64 rows, are held to the CPU's
 // within three times the band a prompt's run one submission holds, with no
-// windows, reads on the same card. The windows are load-bearing: the CPU's
+// windows, reads on the same card in the same forms (formBands). The windows are load-bearing: the CPU's
 // rows with them stand from its rows without them past the bound many times
 // over.
 func TestCentredWindowsMatchTheCPU(t *testing.T) {
 	m := centredModelAs(t, jlm.Flag2MediaPrefix)
 	defer m.Close()
 	long, short := centredPrompt(t, m)
-	n, ns := len(long[0].Tokens), len(short[0].Tokens)
+	n := len(long[0].Tokens)
 	w, past := m.Cfg.NEmbd, nn.MaxDevicePrefillChunk*m.Cfg.NEmbd
 	wins := segmentWindows(n, windowSpan)
 	cpuLong := windowedRows(t, m, nil, 0, long, wins)
@@ -103,37 +103,37 @@ func TestCentredWindowsMatchTheCPU(t *testing.T) {
 	t.Logf("the CPU's rows with the windows against its rows without them: NMSE %.3e past row 0, %.3e past a submission", open, openPast)
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g := openCentredCard(t, spec, 0)
-			band, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuShort[w:])
-			g.Close()
-			t.Logf("%s: a prompt's run of %d rows, one submission, no windows, against the CPU's: NMSE %.3e", spec, ns, band)
-			bound := centredBound * max(band, 1e-6)
-			if math.IsNaN(band) {
-				t.Fatalf("a run one submission holds reads NMSE %v on %s", band, spec)
-			}
-			if !(min(open, openPast) > 10*bound) {
+			bands := formBands(t, spec, func(g *gpu.GPU) float64 {
+				v, _ := nmseOf(windowedRows(t, m, g, m.Cfg.NLayer, short, nil)[w:], cpuShort[w:])
+				return v
+			})
+			if shipped := centredBound * max(bands[windowForms()[0].name], 1e-6); !(min(open, openPast) > 10*shipped) {
 				t.Fatalf("the CPU's rows stand %.3e (%.3e past a submission) from its rows with no windows, inside 10x the bound %.3e: the windows hold nothing to see",
-					open, openPast, bound)
+					open, openPast, shipped)
 			}
-			for _, rows := range []int{0, 64} {
-				g := openCentredCard(t, spec, rows)
-				for _, layers := range []int{m.Cfg.NLayer, m.Cfg.NLayer / 2} {
-					halos, phases := haloPieces(g), runPhases(g)
-					got := windowedRows(t, m, g, layers, long, wins)
-					halos, phases = haloPieces(g)-halos, runPhases(g)-phases
-					nm, worst := nmseOf(got[w:], cpuLong[w:])
-					later, _ := nmseOf(got[past:], cpuLong[past:])
-					t.Logf("%s, reserved %d, %d of %d blocks: against the CPU's, NMSE %.3e past row 0 (max|d| %.4f), %.3e past a submission; bound %.3e; %d phase calls, %d pieces with a halo",
-						spec, rows, layers, m.Cfg.NLayer, nm, worst, later, bound, phases, halos)
-					if halos == 0 || phases == 0 {
-						t.Fatalf("%d phase calls and %d pieces with a halo: the run did not go in pieces", phases, halos)
+			for _, f := range windowForms() {
+				band := bands[f.name]
+				bound := centredBound * max(band, 1e-6)
+				for _, rows := range []int{0, 64} {
+					g := openCentredCard(t, spec, rows, f.opts()...)
+					for _, layers := range []int{m.Cfg.NLayer, m.Cfg.NLayer / 2} {
+						halos, phases := haloPieces(g), runPhases(g)
+						got := windowedRows(t, m, g, layers, long, wins)
+						halos, phases = haloPieces(g)-halos, runPhases(g)-phases
+						nm, worst := nmseOf(got[w:], cpuLong[w:])
+						later, _ := nmseOf(got[past:], cpuLong[past:])
+						t.Logf("%s %s, reserved %d, %d of %d blocks: against the CPU's, NMSE %.3e past row 0 (max|d| %.4f), %.3e past a submission; bound %.3e; %d phase calls, %d pieces with a halo",
+							spec, f.name, rows, layers, m.Cfg.NLayer, nm, worst, later, bound, phases, halos)
+						if halos == 0 || phases == 0 {
+							t.Fatalf("%d phase calls and %d pieces with a halo: the run did not go in pieces", phases, halos)
+						}
+						if math.IsNaN(nm) || nm > bound || math.IsNaN(later) || later > bound {
+							t.Errorf("a windowed run of %d rows on %s %s, reserved %d, %d blocks, reads NMSE %.3e (%.3e past a submission) against the CPU's, past %gx the band %.3e",
+								n, spec, f.name, rows, layers, nm, later, centredBound, band)
+						}
 					}
-					if math.IsNaN(nm) || nm > bound || math.IsNaN(later) || later > bound {
-						t.Errorf("a windowed run of %d rows on %s, reserved %d, %d blocks, reads NMSE %.3e (%.3e past a submission) against the CPU's, past %gx the band %.3e",
-							n, spec, rows, layers, nm, later, centredBound, band)
-					}
+					g.Close()
 				}
-				g.Close()
 			}
 		})
 	}

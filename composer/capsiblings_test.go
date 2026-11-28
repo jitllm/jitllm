@@ -125,7 +125,9 @@ type capacityProjections struct {
 // gate and up over another at a capacity of 512 rows on every GPU device
 // present, a Llama-3.1-8B shape and Qwen2-1.5B's ragged one (outputs of
 // 1536, 256 and 8960), and runs them at calls of 1, 2, 3, 4, 5, 8 and 9
-// rows, the input's rows past the call's poisoned and guard words after
+// rows -- and Qwen2's at a capacity of 64 rows at every call from 1 to 64,
+// across each band of the vector form's row tiles and the matrix unit's --
+// the input's rows past the call's poisoned and guard words after
 // every output, on the device's statement with no matrix unit, where every
 // call runs the vector form, and with the one it lowers: each output's rows
 // the oracle's (the norm, then the int8 matvec over 32-wide windows the
@@ -142,8 +144,17 @@ func TestComposedGPUCapacitySiblings(t *testing.T) {
 	if len(devs) == 0 {
 		testmodels.Missing(t, "no GPU backend on this host: the gate runs on one")
 	}
-	const capacity, guard, most = 512, 64, 9
-	calls := []int{1, 2, 3, 4, 5, 8, 9}
+	const guard = 64
+	few, every := []int{1, 2, 3, 4, 5, 8, 9}, make([]int, 64)
+	for i := range every {
+		every[i] = i + 1
+	}
+	qwen2 := capacityProjections{1536, 1536, 256, 8960}
+	sweeps := []struct {
+		capacity int
+		calls    []int
+		sh       capacityProjections
+	}{{512, few, capacityProjections{4096, 4096, 1024, 14336}}, {512, few, qwen2}, {64, every, qwen2}}
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
@@ -155,8 +166,9 @@ func TestComposedGPUCapacitySiblings(t *testing.T) {
 					}
 					dev.Matrix = [3]int{matrixTile().M, matrixTile().N, matrixTile().K}
 				}
-				for _, sh := range []capacityProjections{{4096, 4096, 1024, 14336}, {1536, 1536, 256, 8960}} {
-					name := fmt.Sprintf("%d: %d/%d/%d, %d/%d, matrix unit %v", sh.embd, sh.q, sh.kv, sh.kv, sh.ffn, sh.ffn, unit)
+				for _, sw := range sweeps {
+					capacity, calls, most, sh := sw.capacity, sw.calls, slices.Max(sw.calls), sw.sh
+					name := fmt.Sprintf("capacity %d, %d: %d/%d/%d, %d/%d, matrix unit %v", capacity, sh.embd, sh.q, sh.kv, sh.kv, sh.ffn, sh.ffn, unit)
 					rng := rand.New(rand.NewSource(int64(sh.embd + sh.ffn)))
 					b := graph.New()
 					b.G.Block = 0
@@ -299,7 +311,7 @@ func TestComposedGPUCapacitySiblings(t *testing.T) {
 							}
 						}
 					}
-					for _, L := range []int{3, 5, 8} {
+					for _, L := range []int{3, 5, most - 1} {
 						if _, past := run(L, L+1, weights); !past {
 							t.Fatalf("%s: a call stating %d rows over %d wrote nothing past them: the gate cannot see a launch not held", name, L+1, L)
 						}

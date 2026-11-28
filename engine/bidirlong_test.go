@@ -93,8 +93,8 @@ func newLongBidirArm(t *testing.T, m *model.Model) *longBidirArm {
 // values first and then every piece's attention over the whole run
 // (gpu.GPU.phased); and with half the blocks there, the rest on the CPU.
 // The card's logits are held to the CPU's within three times the band the
-// same prompt read causally on both shows, at the same seam (measured 1.7x
-// on CUDA, under 1x on Vulkan); the phases ran;
+// same prompt read causally on both shows, at the same seam and in the same
+// forms (formBands), as shipped and float; the phases ran;
 // and the run is load-bearing -- its logits stand far from the causal
 // prompt's. The violation (the run cut at the submission) is
 // TestLongBidirRunCutIsSeen, under jitllmfault.
@@ -109,24 +109,27 @@ func TestLongBidirRunMatchesTheCPU(t *testing.T) {
 	}
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
-			if err != nil || g == nil {
-				noDevice(t, spec, err)
-			}
-			defer g.Close()
 			for _, layers := range []int{m.Cfg.NLayer, m.Cfg.NLayer / 2} {
-				band, _ := nmseOf(longBidirLogits(t, m, g, layers, longBidirSpans(t, m, false)), a.cpuCau)
-				before := runPhases(g)
-				got := longBidirLogits(t, m, g, layers, longBidirSpans(t, m, true))
-				phases := runPhases(g) - before
-				nm, worst := nmseOf(got, a.cpuRun)
-				t.Logf("%s, %d of %d blocks: the run against the CPU's, logit NMSE %.3e (max|d| %.4f); causal band %.3e; %d phase calls",
-					spec, layers, m.Cfg.NLayer, nm, worst, band, phases)
-				if phases < 2*layers {
-					t.Fatalf("%d phase calls for %d blocks: the run did not go in phases", phases, layers)
-				}
-				if math.IsNaN(nm) || nm > longBidirBound*max(band, 1e-6) {
-					t.Errorf("the run on %s, %d blocks, reads NMSE %.3e against the CPU's, past %gx the causal band %.3e", spec, layers, nm, longBidirBound, band)
+				bands := formBands(t, spec, func(g *gpu.GPU) float64 {
+					v, _ := nmseOf(longBidirLogits(t, m, g, layers, longBidirSpans(t, m, false)), a.cpuCau)
+					return v
+				})
+				for _, f := range windowForms() {
+					band := bands[f.name]
+					g := openCentredCard(t, spec, 0, f.opts()...)
+					before := runPhases(g)
+					got := longBidirLogits(t, m, g, layers, longBidirSpans(t, m, true))
+					phases := runPhases(g) - before
+					g.Close()
+					nm, worst := nmseOf(got, a.cpuRun)
+					t.Logf("%s %s, %d of %d blocks: the run against the CPU's, logit NMSE %.3e (max|d| %.4f); causal band %.3e; %d phase calls",
+						spec, f.name, layers, m.Cfg.NLayer, nm, worst, band, phases)
+					if phases < 2*layers {
+						t.Fatalf("%d phase calls for %d blocks: the run did not go in phases", phases, layers)
+					}
+					if math.IsNaN(nm) || nm > longBidirBound*max(band, 1e-6) {
+						t.Errorf("the run on %s %s, %d blocks, reads NMSE %.3e against the CPU's, past %gx the causal band %.3e", spec, f.name, layers, nm, longBidirBound, band)
+					}
 				}
 			}
 		})

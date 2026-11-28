@@ -20,22 +20,26 @@ func TestCentredRunHaloIsSeen(t *testing.T) {
 	a := newCentredArm(t, m)
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g := openCentredCard(t, spec, 0)
-			band, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.short), a.cpuShort)
-			g.Close()
-			for _, rows := range []int{0, 64} {
-				var f gpu.Faults
-				g := openCentredCard(t, spec, rows, gpu.WithFaults(&f))
-				clean, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.long), a.cpuLong)
-				f.SetRowsFault("nohalo")
-				bad, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.long), a.cpuLong)
-				f.SetRowsFault("")
-				g.Close()
-				t.Logf("violation on %s, reserved %d, no halo: NMSE %.3e, %.1fx the band %.3e, %.0fx the clean run's %.3e",
-					spec, rows, bad, bad/max(band, 1e-6), band, bad/max(clean, 1e-9), clean)
-				if !(bad > centredBound*max(band, 1e-6)) || !(bad > 5*clean) {
-					t.Fatalf("pieces with no halo read NMSE %.3e on %s, reserved %d (bound %.3e, clean %.3e): the gate cannot see the halo",
-						bad, spec, rows, centredBound*max(band, 1e-6), clean)
+			bands := formBands(t, spec, func(g *gpu.GPU) float64 {
+				v, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.short), a.cpuShort)
+				return v
+			})
+			for _, f := range windowForms() {
+				band := bands[f.name]
+				for _, rows := range []int{0, 64} {
+					var faults gpu.Faults
+					g := openCentredCard(t, spec, rows, append(f.opts(), gpu.WithFaults(&faults))...)
+					clean, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.long), a.cpuLong)
+					faults.SetRowsFault("nohalo")
+					bad, _ := nmseOf(centredLogits(t, m, g, m.Cfg.NLayer, a.long), a.cpuLong)
+					faults.SetRowsFault("")
+					g.Close()
+					t.Logf("violation on %s %s, reserved %d, no halo: NMSE %.3e, %.1fx the band %.3e, %.0fx the clean run's %.3e",
+						spec, f.name, rows, bad, bad/max(band, 1e-6), band, bad/max(clean, 1e-9), clean)
+					if !(bad > centredBound*max(band, 1e-6)) || !(bad > 5*clean) {
+						t.Fatalf("pieces with no halo read NMSE %.3e on %s %s, reserved %d (bound %.3e, clean %.3e): the gate cannot see the halo",
+							bad, spec, f.name, rows, centredBound*max(band, 1e-6), clean)
+					}
 				}
 			}
 		})
